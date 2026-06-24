@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f3f4f6; color: #0b1b14; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .tnum { font-variant-numeric: tabular-nums lining-nums; }
+  @keyframes drawerIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+  .cellbtn:focus-visible { outline: 2px solid #35644f; outline-offset: -2px; border-radius: 3px; }
+  .lk:focus-visible { outline: 2px solid #35644f; outline-offset: 2px; border-radius: 4px; }
+  input:focus { outline: 2px solid #35644f; outline-offset: -1px; }
+  ::selection { background: #daf1df; }
+</style>
+</helmet>
+<div style="min-height:100vh;background:#f3f4f6;">
+
+  <!-- ===== TOP BAR ===== -->
+  <header style="background:#ffffff;border-bottom:1px solid #ededed;position:sticky;top:0;z-index:30;">
+    <div style="max-width:1440px;margin:0 auto;padding:0 28px;height:56px;display:flex;align-items:center;gap:18px;">
+      <button onClick="{{ goList }}" class="lk" title="All projections" style="display:flex;align-items:center;gap:9px;background:none;border:none;padding:0;cursor:pointer;">
+        <img src="assets/thriftly-logo.svg" alt="Thriftly" style="height:19px;width:auto;display:block;" />
+        <span style="color:#989fa4;font-weight:400;font-size:14px;letter-spacing:-.01em;">· projections</span>
+      </button>
+      <sc-if value="{{ isProjectionView }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;align-items:center;gap:18px;flex:1;min-width:0;">
+      <div style="width:1px;height:22px;background:#ededed;"></div>
+      <div style="display:flex;flex-direction:column;line-height:1.15;min-width:0;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-weight:600;font-size:14px;">House of Hope</span>
+          <span style="font-size:11px;color:#5b5f61;border:1px solid #ededed;border-radius:4px;padding:1px 6px;">v4 · current</span>
+        </div>
+        <span style="font-size:12px;color:#5b5f61;">Longview, TX · <b style="font-weight:600;color:#313335;">31,800</b> households</span>
+      </div>
+      <div style="flex:1;"></div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#5b5f61;margin-right:4px;">
+        <span style="width:7px;height:7px;border-radius:50%;background:#257648;"></span> {{ saveLabel }}
+      </div>
+      <button class="lk" style="height:32px;padding:0 12px;border:1px solid #cacbc2;background:#fff;border-radius:8px;font-size:13px;font-weight:600;color:#313335;cursor:pointer;">Revisions</button>
+      <button class="lk" style="height:32px;padding:0 12px;border:1px solid #cacbc2;background:#fff;border-radius:8px;font-size:13px;font-weight:600;color:#313335;cursor:pointer;display:flex;align-items:center;gap:6px;">
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="#313335"><path d="M13 5a3 3 0 11.83 2.08l-4.2 2.42a3 3 0 010 1l4.2 2.42A3 3 0 1112.6 14l-4.2-2.42a3 3 0 110-3.16L12.6 6A3 3 0 0113 5z"/></svg>
+        Share
+      </button>
+      <button onClick="{{ openFeedback }}" class="lk" title="Share an idea" style="height:32px;width:32px;border:1px solid #cacbc2;background:#fff;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="#5b5f61"><path d="M10 1.5a6 6 0 00-3.6 10.8c.5.38.85.86.98 1.45l.12.55h5l.12-.55c.13-.59.48-1.07.98-1.45A6 6 0 0010 1.5z"/><path d="M7.25 16.25h5.5a.75.75 0 010 1.5l-.4.5a1.5 1.5 0 01-1.2.6h-1.8a1.5 1.5 0 01-1.2-.6l-.4-.5a.75.75 0 010-1.5z"/></svg>
+      </button>
+      </div>
+      </sc-if>
+    </div>
+    <!-- sub nav -->
+    <sc-if value="{{ isProjectionView }}" hint-placeholder-val="{{ true }}">
+    <div style="max-width:1440px;margin:0 auto;padding:0 28px;display:flex;gap:2px;">
+      <button onClick="{{ goDetail }}" class="lk" style="background:none;border:none;cursor:pointer;font-size:13px;font-weight:600;padding:9px 12px;border-bottom:2px solid {{ detailTab.border }};color:{{ detailTab.color }};">Projection</button>
+      <button onClick="{{ goSettings }}" class="lk" style="background:none;border:none;cursor:pointer;font-size:13px;font-weight:600;padding:9px 12px;border-bottom:2px solid {{ settingsTab.border }};color:{{ settingsTab.color }};">Settings &amp; assumptions</button>
+    </div>
+    </sc-if>
+  </header>
+
+  <main style="max-width:1440px;margin:0 auto;padding:24px 28px 80px;">
+
+    <!-- ============ DETAIL VIEW ============ -->
+    <sc-if value="{{ isDetail }}" hint-placeholder-val="{{ true }}">
+    <div>
+
+      <!-- DECISION BANNER -->
+      <div style="background:#fff;border:1px solid #ededed;border-left:4px solid {{ reco.color }};border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.05);padding:18px 20px;display:flex;align-items:stretch;gap:0;margin-bottom:18px;">
+        <div style="flex:1.4;padding-right:24px;display:flex;flex-direction:column;gap:6px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="display:inline-flex;align-items:center;gap:6px;background:{{ reco.bg }};color:{{ reco.color }};font-weight:600;font-size:12px;padding:4px 10px;border-radius:9999px;">
+              {{ recoIcon }} {{ reco.tag }}
+            </span>
+            <span style="font-size:12px;color:#5b5f61;">conservative case · city basis</span>
+          </div>
+          <div style="font-size:21px;font-weight:600;letter-spacing:-.01em;line-height:1.25;">{{ reco.headline }}</div>
+          <div style="font-size:13px;color:#5b5f61;line-height:1.45;">{{ reco.sub }}</div>
+        </div>
+        <div style="display:flex;border-left:1px solid #ededed;">
+          <button onClick="{{ reasonCapital }}" class="cellbtn" style="text-align:left;background:none;border:none;cursor:pointer;padding:4px 22px;display:flex;flex-direction:column;gap:3px;border-right:1px solid #ededed;">
+            <span style="font-size:11px;color:#5b5f61;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Startup capital required</span>
+            <span class="tnum" style="font-size:24px;font-weight:600;letter-spacing:-.02em;">{{ m.capital }}</span>
+            <span style="font-size:11px;color:#35644f;font-weight:600;">Why? →</span>
+          </button>
+          <button onClick="{{ reasonBreakeven }}" class="cellbtn" style="text-align:left;background:none;border:none;cursor:pointer;padding:4px 22px;display:flex;flex-direction:column;gap:3px;border-right:1px solid #ededed;">
+            <span style="font-size:11px;color:#5b5f61;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Break-even (payback)</span>
+            <span class="tnum" style="font-size:24px;font-weight:600;letter-spacing:-.02em;">{{ m.breakeven }}</span>
+            <span style="font-size:11px;color:#35644f;font-weight:600;">Why? →</span>
+          </button>
+          <button onClick="{{ reasonGap }}" class="cellbtn" style="text-align:left;background:none;border:none;cursor:pointer;padding:4px 22px;display:flex;flex-direction:column;gap:3px;">
+            <span style="font-size:11px;color:#5b5f61;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">First-year cash gap</span>
+            <span class="tnum" style="font-size:24px;font-weight:600;letter-spacing:-.02em;color:#dc2626;">{{ m.cashGap }}</span>
+            <span style="font-size:11px;color:#35644f;font-weight:600;">Why? →</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- KPI STRIP -->
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:#ededed;border:1px solid #ededed;border-radius:8px;overflow:hidden;margin-bottom:22px;">
+        <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="6">
+          <div style="background:#fff;padding:12px 14px;display:flex;flex-direction:column;gap:3px;">
+            <span style="font-size:11px;color:#5b5f61;font-weight:600;">{{ k.label }}</span>
+            <span class="tnum" style="font-size:19px;font-weight:600;letter-spacing:-.01em;color:{{ k.color }};">{{ k.value }}</span>
+            <span style="font-size:11px;color:#989fa4;">{{ k.sub }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- TWO COLUMN: cashflow + side -->
+      <div style="display:grid;grid-template-columns:1fr;gap:22px;margin-bottom:22px;">
+        <section style="background:#fff;border:1px solid #ededed;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.05);overflow:hidden;">
+          <div style="padding:14px 18px;border-bottom:1px solid #ededed;display:flex;align-items:center;justify-content:space-between;">
+            <div>
+              <h3 style="margin:0;font-size:15px;font-weight:600;">Monthly launch cash-flow — Year 1</h3>
+              <p style="margin:2px 0 0;font-size:12px;color:#5b5f61;">Startup outflow, revenue ramp, and cash balance. The low point sets the capital you need.</p>
+            </div>
+          </div>
+          <div style="padding:18px 18px 16px;">
+            <div style="position:relative;">
+              <div style="position:absolute;left:0;top:50%;transform:translateY(-50%);width:118px;display:flex;flex-direction:column;gap:12px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="width:16px;height:10px;border-radius:2px;background:#89cc9f;flex:none;"></span>
+                  <span style="font-size:11px;color:#5b5f61;line-height:1.25;">Monthly net<br><span style="color:#989fa4;">(cash in − out)</span></span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="width:16px;height:0;border-top:2px solid #35644f;flex:none;"></span>
+                  <span style="font-size:11px;color:#5b5f61;line-height:1.25;">Cash balance<br><span style="color:#989fa4;">(end of month)</span></span>
+                </div>
+              </div>
+              <div style="padding-left:128px;">{{ chartEl }}</div>
+            </div>
+            <div style="margin-top:6px;">{{ monthlyEl }}</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- 3-YEAR TABLE -->
+      <section style="background:#fff;border:1px solid #ededed;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.05);overflow:hidden;margin-bottom:22px;">
+        <div style="padding:14px 18px;border-bottom:1px solid #ededed;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+          <div>
+            <h3 style="margin:0;font-size:15px;font-weight:600;">3-year projection</h3>
+            <p style="margin:2px 0 0;font-size:12px;color:#5b5f61;">Click an <b style="color:#313335;">input</b> cell to edit a driver, or any expense cell to override it. Derived rows are read-only.</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px;">
+            <div style="display:flex;align-items:center;gap:12px;font-size:11px;color:#5b5f61;">
+              <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#f0f9f3;border:1px solid #89cc9f;"></span>Input</span>
+              <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#fff;border:1px solid #cacbc2;"></span>Computed</span>
+              <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#efede9;border:1px solid #5b5f61;"></span>Overridden</span>
+              <span style="display:flex;align-items:center;gap:5px;"><svg width="11" height="11" viewBox="0 0 20 20" fill="#b45309"><path d="M10 1l9 16H1z"/></svg>Estimated</span>
+            </div>
+            <button onClick="{{ toggleInspector }}" class="lk" style="height:30px;padding:0 12px;border:1px solid #cacbc2;background:#fff;border-radius:8px;font-size:12px;font-weight:600;color:#313335;cursor:pointer;display:flex;align-items:center;gap:6px;">
+              <span style="width:7px;height:7px;border-radius:50%;background:#5b5f61;"></span>Override inspector ({{ overrideCount }})
+            </button>
+          </div>
+        </div>
+        <div style="overflow-x:auto;">{{ tableEl }}</div>
+      </section>
+
+      <!-- EVIDENCE + SENSITIVITY -->
+      <div style="display:grid;grid-template-columns:1.15fr .85fr;gap:22px;">
+        <section style="background:#fff;border:1px solid #ededed;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.05);overflow:hidden;">
+          <div style="padding:14px 18px;border-bottom:1px solid #ededed;">
+            <h3 style="margin:0;font-size:15px;font-weight:600;">Evidence &amp; assumptions</h3>
+            <p style="margin:2px 0 0;font-size:12px;color:#5b5f61;">Every number shows its source, date, method, and confidence.</p>
+          </div>
+          <div>
+            <sc-for list="{{ evidence }}" as="e" hint-placeholder-count="4">
+              <div style="padding:13px 18px;border-bottom:1px solid #f3f4f6;display:flex;gap:12px;">
+                <div style="margin-top:1px;">{{ e.badge }}</div>
+                <div style="flex:1;min-width:0;">
+                  <div style="display:flex;align-items:baseline;gap:8px;justify-content:space-between;">
+                    <span style="font-size:13px;font-weight:600;">{{ e.label }}</span>
+                    <span class="tnum" style="font-size:13px;font-weight:600;color:#313335;white-space:nowrap;">{{ e.value }}</span>
+                  </div>
+                  <div style="font-size:12px;color:#5b5f61;margin-top:3px;line-height:1.5;">{{ e.method }}</div>
+                  <div style="font-size:11px;color:#989fa4;margin-top:4px;">{{ e.meta }}</div>
+                  <div style="font-size:11px;color:#5b5f61;margin-top:5px;"><b style="color:#313335;font-weight:600;">What would change this:</b> {{ e.change }}</div>
+                  <button class="lk" style="margin-top:7px;background:none;border:1px dashed #cacbc2;border-radius:6px;font-size:11px;font-weight:600;color:#5b5f61;padding:3px 9px;cursor:pointer;">+ Attach evidence</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+
+        <section style="background:#fff;border:1px solid #ededed;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.05);overflow:hidden;align-self:start;">
+          <div style="padding:14px 18px;border-bottom:1px solid #ededed;">
+            <h3 style="margin:0;font-size:15px;font-weight:600;">Sensitivity</h3>
+            <p style="margin:2px 0 0;font-size:12px;color:#5b5f61;">Rent &amp; donation swings vs. the base case.</p>
+          </div>
+          <div>{{ sensEl }}</div>
+          <div style="padding:14px 18px;border-top:1px solid #ededed;display:flex;gap:10px;">
+            <button class="lk" style="flex:1;height:40px;border:none;background:#35644f;color:#fff;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Export Board Packet</button>
+            <button class="lk" style="height:40px;padding:0 14px;border:1px solid #cacbc2;background:#fff;border-radius:8px;font-size:13px;font-weight:600;color:#313335;cursor:pointer;">Download .xlsx</button>
+          </div>
+        </section>
+      </div>
+
+    </div>
+    </sc-if>
+
+    <!-- ============ SETTINGS VIEW ============ -->
+    <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ true }}">
+      <div>{{ settingsEl }}</div>
+    </sc-if>
+
+    <!-- ============ LIST VIEW ============ -->
+    <sc-if value="{{ isList }}" hint-placeholder-val="{{ true }}">
+      <div>{{ listEl }}</div>
+    </sc-if>
+
+    <!-- ============ WIZARD VIEW ============ -->
+    <sc-if value="{{ isWizard }}" hint-placeholder-val="{{ true }}">
+      <div>{{ wizardEl }}</div>
+    </sc-if>
+
+  </main>
+
+  <!-- ===== OVERRIDE INSPECTOR DRAWER ===== -->
+  <sc-if value="{{ inspectorOpen }}" hint-placeholder-val="{{ false }}">
+    <div>
+      <div onClick="{{ closeInspector }}" style="position:fixed;inset:0;background:rgba(11,27,20,.32);z-index:50;"></div>
+      <div style="position:fixed;top:0;right:0;height:100vh;width:420px;background:#fff;box-shadow:-12px 0 30px rgba(0,0,0,.12);z-index:51;display:flex;flex-direction:column;">
+        <div style="padding:16px 18px;border-bottom:1px solid #ededed;display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <h3 style="margin:0;font-size:15px;font-weight:600;">Override inspector</h3>
+            <p style="margin:2px 0 0;font-size:12px;color:#5b5f61;">Every pinned cell, what it was, and what it now drives.</p>
+          </div>
+          <button onClick="{{ closeInspector }}" class="lk" style="width:30px;height:30px;border:1px solid #cacbc2;background:#fff;border-radius:8px;cursor:pointer;font-size:16px;color:#5b5f61;">×</button>
+        </div>
+        <div style="flex:1;overflow-y:auto;">{{ inspectorEl }}</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===== REASON / OVERRIDE POPOVER ===== -->
+  <sc-if value="{{ popoverOpen }}" hint-placeholder-val="{{ false }}">
+    <div>
+      <div onClick="{{ closePopover }}" style="position:fixed;inset:0;z-index:60;"></div>
+      <div style="position:fixed;top:{{ pop.top }};left:{{ pop.left }};z-index:61;width:340px;background:#fff;border:1px solid #ededed;border-radius:10px;box-shadow:0 20px 25px -5px rgba(0,0,0,.18);overflow:hidden;">
+        {{ popoverEl }}
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===== FEEDBACK MODAL ===== -->
+  <sc-if value="{{ feedbackOpen }}" hint-placeholder-val="{{ false }}">
+    <div>
+      <div onClick="{{ closeFeedback }}" style="position:fixed;inset:0;background:rgba(11,27,20,.4);z-index:70;"></div>
+      <div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:71;width:440px;max-width:92vw;background:#fff;border-radius:18px;box-shadow:0 25px 50px -12px rgba(0,0,0,.3);overflow:hidden;">{{ feedbackEl }}</div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    const saved = this.load();
+    const driverDefaults = { households: 31800, marketShare: [0.06,0.08,0.10], avgBasket: 17.08, donationsPerDonor: 3, customersPerDonor: 13.1 };
+    const settingDefaults = { laborPct:0.40, marketingPct:0.0375, suppliesPct:0.05, softwarePct:0.028, occupancyY1:90000, escalator:0.03, expenseGrowth:0.04, utilitiesY1:38000, insuranceY1:14000, repairsY1:10000, otherY1:8000, salesFloorSqft:7000, buildingSqft:10000, leaseType:'NNN', fundingAvailable:300000, reserveBuffer:25000, startupConsulting:18000, foundingManagerFees:15000, returnRate:0.02, ecommPct:0 };
+    this.state = {
+      view: 'detail',
+      wizardStep: 0,
+      wizardData: { name:'', city:'', state:'TX', basis:'City', households:'', sqft:'7,000', share:'6', basket:'17.08', rent:'90,000', funding:'250,000' },
+      inspectorOpen: false,
+      feedbackOpen: false,
+      feedbackDone: false,
+      popover: null,        // {kind, top, left, ...}
+      editing: null,        // {key, draft}
+      drivers: { ...driverDefaults, ...(saved.drivers||{}) },
+      settings: { ...settingDefaults, ...(saved.settings||{}) },
+      overrides: saved.overrides || { 'marketing:2': { value:24000, note:'Board approved an expanded grand-reopening campaign for Year 2.', ts:'2026-05-18' } },
+    };
+  }
+  load(){ try { return JSON.parse(localStorage.getItem('hoh_model_v1')||'{}'); } catch(e){ return {}; } }
+  persist(){ try { localStorage.setItem('hoh_model_v1', JSON.stringify({ drivers:this.state.drivers, settings:this.state.settings, overrides:this.state.overrides })); } catch(e){} }
+
+  // ---------- formatting ----------
+  fM(n){ const neg=n<0; const a=Math.round(Math.abs(n)); const s='$'+a.toLocaleString('en-US'); return neg?'('+s+')':s; }
+  fM2(n){ return '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+  fN(n){ return Math.round(n).toLocaleString('en-US'); }
+  fP(p){ return (p*100).toFixed(1)+'%'; }
+  parse(s){ const v=Number(String(s).replace(/[^0-9.\-]/g,'')); return isNaN(v)?0:v; }
+
+  // ---------- model ----------
+  expKeys(){ return [
+    ['payroll','Payroll & benefits', false, 'Driven by labor % of revenue (Settings)'],
+    ['occupancy','Occupancy / rent (NNN)', true, 'Market-rent estimate × building sq ft'],
+    ['utilities','Utilities', false, ''],
+    ['marketing','Marketing & outreach', false, ''],
+    ['insurance','Insurance', false, ''],
+    ['supplies','Supplies & processing', false, ''],
+    ['returns','Returns & refunds', false, ''],
+    ['software','Software & Thriftly fees', false, ''],
+    ['repairs','Repairs & maintenance', false, ''],
+    ['other','Other / contingency', false, ''],
+  ]; }
+
+  calcYears(driversOverride){
+    const d = driversOverride || this.state.drivers, s = this.state.settings, ov = this.state.overrides;
+    return [0,1,2].map(i=>{
+      const yr=i+1;
+      const share=d.marketShare[i];
+      const donors=d.households*share;
+      const donations=donors*d.donationsPerDonor;
+      const customers=donors*d.customersPerDonor;
+      const revenue=customers*d.avgBasket;
+      const salesPerSqft=revenue/s.salesFloorSqft;
+      const ecommRev=revenue*(s.ecommPct||0);
+      const g=Math.pow(1+s.expenseGrowth,i);
+      const base={
+        payroll: revenue*s.laborPct,
+        occupancy: s.occupancyY1*Math.pow(1+s.escalator,i),
+        utilities: s.utilitiesY1*g,
+        marketing: revenue*s.marketingPct,
+        insurance: s.insuranceY1*g,
+        supplies: revenue*s.suppliesPct,
+        returns: revenue*(s.returnRate||0),
+        software: revenue*s.softwarePct,
+        repairs: s.repairsY1*g,
+        other: s.otherY1*g,
+      };
+      const exp={}; for(const k in base){ const ok=k+':'+yr; exp[k]= ov[ok]? ov[ok].value : base[k]; }
+      const totalExp=Object.keys(exp).reduce((a,k)=>a+exp[k],0);
+      const net=revenue-totalExp;
+      return {yr,share,donors,donations,customers,revenue,salesPerSqft,ecommRev,base,exp,totalExp,net,margin:revenue?net/revenue:0};
+    });
+  }
+
+  startupItems(){ return [
+    ['Buildout &amp; fixtures',95000],
+    ['POS &amp; technology',14000],
+    ['Initial inventory processing &amp; supplies',22000],
+    ['Lease deposits (NNN — 3 mo.)',24000],
+    ['Pre-opening payroll &amp; training',20000],
+    ['Signage &amp; launch marketing',10000],
+  ]; }
+  startupTotal(){ return this.startupItems().reduce((a,x)=>a+x[1],0); }
+  paybackYears(years){ const c=Math.round(-this.calcMonthly(years).trough+this.state.settings.reserveBuffer); return years[0].net>0?c/years[0].net:null; }
+  paybackLabel(years){ const p=this.paybackYears(years); return p==null?'Beyond Y1 net':'~Yr '+p.toFixed(1); }
+
+  calcMonthly(years){
+    const y1=years[0], s=this.state.settings;
+    const w=[0.04,0.05,0.06,0.065,0.075,0.085,0.09,0.095,0.10,0.105,0.11,0.125];
+    const sw=w.reduce((a,b)=>a+b,0);
+    const payW=[0.097,0.095,0.09,0.086,0.084,0.08,0.08,0.079,0.077,0.077,0.078,0.077];
+    const spw=payW.reduce((a,b)=>a+b,0);
+    const fixedM=(y1.base.occupancy+y1.base.utilities+y1.base.insurance+y1.base.repairs+y1.base.other)/12;
+    const varRate=s.marketingPct+s.suppliesPct+s.softwarePct+(s.returnRate||0);
+    const months=[]; let cum=0, opCum=0, trough=0, opTrough=0, be=null;
+    for(let m=0;m<12;m++){
+      const rev=y1.revenue*w[m]/sw;
+      const preOpening = m===0 ? ((s.startupConsulting||0)+(s.foundingManagerFees||0)) : 0;
+      const exp=fixedM + rev*varRate + y1.base.payroll*payW[m]/spw + preOpening;
+      const net=rev-exp;
+      opCum+=net; if(opCum<opTrough) opTrough=opCum;
+      cum = -this.startupTotal() + opCum;
+      if(cum<trough) trough=cum;
+      if(be===null && net>=0) be=m+1;
+      months.push({m:m+1,rev,exp,net,cum,opCum});
+    }
+    const startupTrough=-this.startupTotal();
+    if(startupTrough<trough) trough=startupTrough;
+    return {months, trough, opTrough, breakeven:be, startup:this.startupTotal()};
+  }
+
+  scenario(rentMult, shareMult){
+    const d=JSON.parse(JSON.stringify(this.state.drivers));
+    d.marketShare=d.marketShare.map(x=>x*shareMult);
+    const sOld=this.state.settings.occupancyY1;
+    this.state.settings.occupancyY1=sOld*rentMult;
+    const years=this.calcYears(d);
+    const mo=this.calcMonthly(years);
+    this.state.settings.occupancyY1=sOld;
+    const capital=Math.round((-mo.trough + this.state.settings.reserveBuffer)/1000)*1000;
+    return {net:years[0].net, breakeven:mo.breakeven, capital};
+  }
+
+  // ---------- actions ----------
+  set(path, val){ this.setState(s=>{ const n={...s}; path(n); return n; }, ()=>this.persist()); }
+  setView(v){ this.setState({view:v, popover:null}); }
+  startEdit(key, cur){ this.setState({editing:{key, draft:String(cur)}}); }
+  onDraft(e){ const v=e.target.value; this.setState(s=>({editing:{...s.editing, draft:v}})); }
+  commit(){
+    const ed=this.state.editing; if(!ed){ return; }
+    const val=this.parse(ed.draft);
+    const [base, yIdx] = ed.key.split(':');
+    this.setState(s=>{
+      const n={...s, drivers:{...s.drivers}, overrides:{...s.overrides}, settings:{...s.settings}};
+      if(base==='share'){ const ms=[...n.drivers.marketShare]; ms[+yIdx]=val/100; n.drivers.marketShare=ms; }
+      else if(base==='basket'){ n.drivers.avgBasket=val; }
+      else if(base==='households'){ n.drivers.households=val; }
+      else { // expense override
+        const calc=this.calcYears()[+yIdx-1].base[base];
+        if(Math.abs(val-calc)<0.5){ delete n.overrides[base+':'+yIdx]; }
+        else { n.overrides={...n.overrides, [base+':'+yIdx]:{value:val, note:n.overrides[base+':'+yIdx]?n.overrides[base+':'+yIdx].note:'Manual override.', ts:'2026-06-24'}}; }
+      }
+      n.editing=null; return n;
+    }, ()=>this.persist());
+  }
+  cancelEdit(){ this.setState({editing:null}); }
+  resetOverride(key){ this.setState(s=>{ const ov={...s.overrides}; delete ov[key]; return {overrides:ov, popover:null}; }, ()=>this.persist()); }
+  resetAll(){ this.setState({overrides:{}, popover:null}, ()=>this.persist()); }
+  openCellPopover(key, ev){ const r=ev.currentTarget.getBoundingClientRect(); this.setState({popover:{kind:'override', key, top:Math.min(r.bottom+6, window.innerHeight-220)+'px', left:Math.min(r.left, window.innerWidth-356)+'px'}}); }
+  openReason(kind, ev){ const r=ev.currentTarget.getBoundingClientRect(); this.setState({popover:{kind, top:(r.bottom+8)+'px', left:Math.min(r.left, window.innerWidth-356)+'px'}}); }
+  closePopover(){ this.setState({popover:null}); }
+
+  // ---------- table builder ----------
+  buildTable(years){
+    const h=React.createElement, ed=this.state.editing, ov=this.state.overrides;
+    const colW='168px';
+    const cellPad={padding:'7px 14px', fontSize:'13px', textAlign:'right'};
+    const head = h('div',{style:{display:'grid',gridTemplateColumns:`minmax(240px,1fr) ${colW} ${colW} ${colW}`,position:'sticky',top:0,background:'#efede9',borderBottom:'1px solid #cacbc2',zIndex:2}},
+      h('div',{style:{padding:'9px 16px',fontSize:'11px',fontWeight:600,color:'#5b5f61',textTransform:'uppercase',letterSpacing:'.04em',position:'sticky',left:0,background:'#efede9'}},'Line item'),
+      ...years.map(y=>h('div',{key:y.yr,style:{padding:'9px 14px',textAlign:'right',fontSize:'12px',fontWeight:600,color:'#313335'}},'Year '+y.yr,h('span',{style:{display:'block',fontSize:'10px',fontWeight:400,color:'#989fa4'}},this.fP(y.share)+' share')))
+    );
+    const rows=[];
+    const sectionRow=(t)=>rows.push(h('div',{key:'sec'+t,style:{gridColumn:'1 / -1',padding:'8px 16px 5px',fontSize:'11px',fontWeight:700,color:'#35644f',textTransform:'uppercase',letterSpacing:'.05em',background:'#f8faf8',borderTop:'1px solid #ededed',position:'sticky',left:0}},t));
+
+    const labelCell=(txt, sub)=>h('div',{style:{padding:'7px 16px',fontSize:'13px',color:'#0b1b14',position:'sticky',left:0,background:'#fff',display:'flex',flexDirection:'column',justifyContent:'center'}},
+      h('span',null,txt), sub?h('span',{style:{fontSize:'11px',color:'#989fa4'}},sub):null);
+
+    // computed (read-only) value cell
+    const compCell=(val, opts={})=>h('div',{style:{...cellPad, color:opts.color||'#313335', fontWeight:opts.bold?600:400, background:opts.bg||'#fff'}, className:'tnum'}, opts.fmt?opts.fmt(val):this.fM(val));
+
+    // editable input cell
+    const inputCell=(key, cur, fmt, est)=>{
+      const isEd = ed && ed.key===key;
+      const bg='#f0f9f3';
+      if(isEd){
+        return h('div',{style:{...cellPad, background:bg, padding:'3px 8px'}},
+          h('input',{autoFocus:true, value:ed.draft, onChange:e=>this.onDraft(e),
+            onKeyDown:e=>{ if(e.key==='Enter') this.commit(); if(e.key==='Escape') this.cancelEdit(); },
+            onBlur:()=>this.commit(),
+            style:{width:'100%',textAlign:'right',border:'1px solid #35644f',borderRadius:'4px',padding:'4px 6px',fontSize:'13px',fontFamily:'inherit'}, className:'tnum'}));
+      }
+      return h('div',{tabIndex:0, role:'button', className:'cellbtn tnum',
+        onClick:()=>this.startEdit(key,cur),
+        onKeyDown:e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); this.startEdit(key,cur); } },
+        style:{...cellPad, background:bg, cursor:'text', display:'flex',alignItems:'center',justifyContent:'flex-end',gap:'5px', borderBottom:'1px dashed #89cc9f'}},
+        est?h('svg',{width:10,height:10,viewBox:'0 0 20 20',fill:'#b45309'},h('path',{d:'M10 1l9 16H1z'})):null,
+        h('span',null, fmt(cur)));
+    };
+
+    // overridable expense cell
+    const expCell=(base, yIdx, year)=>{
+      const key=base+':'+yIdx;
+      const isEd= ed && ed.key===key;
+      const o=ov[key];
+      const cur = o? o.value : year.base[base];
+      if(isEd){
+        return h('div',{style:{...cellPad, background:'#efede9', padding:'3px 8px'}},
+          h('input',{autoFocus:true, value:ed.draft, onChange:e=>this.onDraft(e),
+            onKeyDown:e=>{ if(e.key==='Enter') this.commit(); if(e.key==='Escape') this.cancelEdit(); },
+            onBlur:()=>this.commit(),
+            style:{width:'100%',textAlign:'right',border:'1px solid #5b5f61',borderRadius:'4px',padding:'4px 6px',fontSize:'13px',fontFamily:'inherit'}, className:'tnum'}));
+      }
+      return h('div',{tabIndex:0, role:'button', className:'cellbtn tnum',
+        onClick:(e)=>{ if(o){ this.openCellPopover(key,e); } else { this.startEdit(key,Math.round(cur)); } },
+        onKeyDown:e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); if(o){ this.openCellPopover(key,e); } else { this.startEdit(key,Math.round(cur)); } } },
+        style:{...cellPad, cursor:'pointer', display:'flex',alignItems:'center',justifyContent:'flex-end',gap:'6px',
+          background:o?'#f6f5f2':'#fff', borderLeft:o?'3px solid #5b5f61':'3px solid transparent'}},
+        o?h('span',{style:{width:'6px',height:'6px',borderRadius:'50%',background:'#5b5f61',flex:'none'}}):null,
+        h('span',{style:{color:o?'#313335':'#313335', fontWeight:o?600:400}}, this.fM(cur)));
+    };
+
+    const dataRow=(label, sub, cells)=>h('div',{key:label,style:{display:'grid',gridTemplateColumns:`minmax(240px,1fr) ${colW} ${colW} ${colW}`,borderBottom:'1px solid #f3f4f6',alignItems:'stretch'}},
+      labelCell(label,sub), ...cells);
+
+    // build
+    sectionRow('Operating drivers');
+    rows.push(dataRow('Households', 'Input · city basis', years.map((y,i)=> i===0? inputCell('households:0', this.state.drivers.households, v=>this.fN(v), false) : compCell(this.state.drivers.households,{fmt:v=>this.fN(v)}))));
+    rows.push(dataRow('Donor market share', 'Input', years.map((y,i)=> inputCell('share:'+i, +(y.share*100).toFixed(1), v=>v.toFixed(1)+'%', false))));
+    rows.push(dataRow('Donors served', 'Computed', years.map(y=>compCell(y.donors,{fmt:v=>this.fN(v)}))));
+    rows.push(dataRow('Donations (drop-offs)', 'Computed', years.map(y=>compCell(y.donations,{fmt:v=>this.fN(v)}))));
+    rows.push(dataRow('Customers', 'Computed', years.map(y=>compCell(y.customers,{fmt:v=>this.fN(v)}))));
+    rows.push(dataRow('Average basket', 'Estimate', years.map((y,i)=> inputCell('basket:'+i, this.state.drivers.avgBasket, v=>this.fM2(v), true))));
+    rows.push(dataRow('Sales per sq ft', 'Computed · 7,000 sq ft floor', years.map(y=>compCell(y.salesPerSqft,{fmt:v=>this.fM2(v),bold:true,color:'#35644f'}))));
+
+    sectionRow('Revenue');
+    rows.push(dataRow('Total revenue', 'Computed', years.map(y=>compCell(y.revenue,{bold:true,bg:'#f8faf8'}))));
+    rows.push(dataRow('E-commerce revenue', 'Computed · online share', years.map(y=>compCell(y.ecommRev,{color:'#5b5f61'}))));
+
+    sectionRow('Operating expenses');
+    this.expKeys().forEach(([k,label,est])=>{
+      rows.push(dataRow(label, est?'Estimate · low confidence':'', years.map((y,i)=>expCell(k,i+1,y))));
+    });
+    rows.push(dataRow('Total operating expenses', 'Computed', years.map(y=>compCell(y.totalExp,{bold:true,bg:'#f8faf8'}))));
+
+    sectionRow('Result');
+    rows.push(dataRow('Net profit', 'Computed', years.map(y=>compCell(y.net,{bold:true, color:y.net<0?'#dc2626':'#257648', bg:'#f8faf8'}))));
+    rows.push(dataRow('Net margin', 'Computed', years.map(y=>compCell(y.margin,{fmt:v=>this.fP(v), color:y.margin<0?'#dc2626':'#313335'}))));
+
+    return h('div',{style:{minWidth:'820px'}}, head, ...rows);
+  }
+
+  // ---------- monthly table ----------
+  buildMonthly(mo){
+    const h=React.createElement;
+    const grid={display:'grid',gridTemplateColumns:'128px repeat(12,1fr)',alignItems:'center'};
+    const lbl=(t,sub)=>h('div',{style:{padding:'6px 12px 6px 0',fontSize:'11px',color:'#5b5f61',fontWeight:600,whiteSpace:'nowrap'}},t,sub?h('span',{style:{color:'#989fa4',fontWeight:400}},sub):null);
+    const cell=(v,i,opt)=>h('div',{key:i,className:'tnum',style:{padding:'6px 6px',fontSize:'11px',textAlign:'center',color:opt.neg&&v<0?'#dc2626':(opt.color||'#313335'),fontWeight:opt.bold?600:400}}, this.fM(v));
+    const mkRow=(label,vals,opt={})=>h('div',{style:{...grid,borderTop:'1px solid #f3f4f6'}}, lbl(label), ...vals.map((v,i)=>cell(v,i,opt)));
+    const headRow=h('div',{style:{...grid,borderBottom:'1px solid #ededed'}},
+      h('div',null),
+      ...mo.months.map(x=>h('div',{key:x.m,style:{padding:'4px 6px',fontSize:'10px',color:'#989fa4',textAlign:'center',fontWeight:600}},'M'+x.m)));
+    return h('div',null, headRow,
+      mkRow('Revenue', mo.months.map(x=>x.rev), {}),
+      mkRow('Expenses', mo.months.map(x=>-x.exp), {neg:true}),
+      mkRow('Monthly net', mo.months.map(x=>x.net), {neg:true,bold:true}),
+      mkRow('Cash balance', mo.months.map(x=>x.cum), {neg:true,bold:true,color:'#35644f'}));
+  }
+
+  // ---------- chart ----------
+  buildChart(mo){
+    const h=React.createElement;
+    // Plotting area spans the 12 month columns only — the 128px label gutter
+    // lives in the wrapping div, so bars line up with the table columns below.
+    const W=1200, H=200, padT=20, padB=14;
+    const colW=W/12;
+    const pts=[{m:0,cum:-mo.startup,net:-mo.startup},...mo.months];
+    const innerH=H-padT-padB;
+    // Shared $0 line near the top; the monthly-net bars and the cumulative cash
+    // line each hang below it on their OWN scale, so the line reads at about the
+    // same height as the bars instead of dominating the frame vertically.
+    const zeroY=padT+innerH*0.16;
+    const downH=(H-padB)-zeroY;
+    const netVals=mo.months.map(p=>p.net);
+    const cumDown=-Math.min(0,...pts.map(p=>p.cum))||1;
+    const netDown=-Math.min(0,...netVals)||1;
+    const lineUnit=(downH*0.80)/cumDown;   // line a touch shorter → less prominent
+    const barUnit=(downH*0.92)/netDown;
+    const x=i=>i===0?0:(i-0.5)*colW;
+    const yBar=v=>zeroY - v*barUnit;
+    const yLine=v=>zeroY - v*lineUnit;
+    const bw=colW*0.46;
+    const bars=mo.months.map((p,i)=>{const y1=yBar(p.net);return h('rect',{key:'b'+i,x:x(i+1)-bw/2,y:Math.min(zeroY,y1),width:bw,height:Math.abs(y1-zeroY),fill:p.net<0?'#cbb7a9':'#89cc9f',opacity:.9,rx:2});});
+    const line=pts.map((p,i)=>i===0?null:((i===1?'M':'L')+x(i).toFixed(1)+' '+yLine(p.cum).toFixed(1))).filter(Boolean).join(' ');
+    const dots=pts.map((p,i)=>i===0?null:h('circle',{key:'d'+i,cx:x(i),cy:yLine(p.cum),r:2.5,fill:'#35644f'}));
+    const beIdx=mo.breakeven;
+    return h('svg',{viewBox:`0 0 ${W} ${H}`,preserveAspectRatio:'none',style:{width:'100%',height:'170px',display:'block',overflow:'visible'}},
+      h('line',{x1:0,x2:W,y1:zeroY,y2:zeroY,stroke:'#9aa0a3',strokeWidth:1,strokeDasharray:'3 3',vectorEffect:'non-scaling-stroke'}),
+      h('text',{x:-8,y:zeroY+3,fontSize:11,fill:'#5b5f61',textAnchor:'end'},'$0'),
+      ...bars,
+      beIdx?h('line',{x1:x(beIdx),x2:x(beIdx),y1:padT,y2:H-padB,stroke:'#257648',strokeWidth:1,strokeDasharray:'4 3',vectorEffect:'non-scaling-stroke'}):null,
+      beIdx?h('text',{x:x(beIdx)+5,y:padT+11,fontSize:11,fill:'#257648',fontWeight:600},'net positive'):null,
+      h('path',{d:line,fill:'none',stroke:'#35644f',strokeWidth:1.75,vectorEffect:'non-scaling-stroke'}),
+      ...dots
+    );
+  }
+
+  // ---------- evidence ----------
+  badgeVerified(){ const h=React.createElement; return h('span',{style:{display:'inline-flex',alignItems:'center',gap:4,background:'#f0f9f3',color:'#257648',fontSize:'10px',fontWeight:600,padding:'3px 7px',borderRadius:'4px',whiteSpace:'nowrap'}},
+    h('svg',{width:10,height:10,viewBox:'0 0 20 20',fill:'#257648'},h('path',{d:'M8 13l-3-3 1.4-1.4L8 10.2l5.6-5.6L15 6z'})),'Verified'); }
+  badgeEst(level){ const h=React.createElement; const c=level==='low'?{bg:'#fef3c7',fg:'#b45309',t:'Estimated · low'}:{bg:'#fef3c7',fg:'#b45309',t:'Estimated'};
+    return h('span',{style:{display:'inline-flex',alignItems:'center',gap:4,background:c.bg,color:c.fg,fontSize:'10px',fontWeight:600,padding:'3px 7px',borderRadius:'4px',whiteSpace:'nowrap'}},
+    h('svg',{width:10,height:10,viewBox:'0 0 20 20',fill:c.fg},h('path',{d:'M10 1l9 16H1z'})),c.t); }
+  badgeAssume(){ const h=React.createElement; return h('span',{style:{display:'inline-flex',alignItems:'center',gap:4,background:'#f3f4f6',color:'#5b5f61',fontSize:'10px',fontWeight:600,padding:'3px 7px',borderRadius:'4px',whiteSpace:'nowrap'}},'Assumption'); }
+
+  // ---------- inspector ----------
+  buildInspector(years){
+    const h=React.createElement, ov=this.state.overrides;
+    const keys=Object.keys(ov);
+    const labelOf={payroll:'Payroll & benefits',occupancy:'Occupancy / rent',utilities:'Utilities',marketing:'Marketing & outreach',insurance:'Insurance',supplies:'Supplies & processing',returns:'Returns & refunds',software:'Software & Thriftly fees',repairs:'Repairs & maintenance',other:'Other / contingency'};
+    if(keys.length===0){
+      return h('div',{style:{padding:'40px 20px',textAlign:'center',color:'#989fa4',fontSize:'13px'}},'No overrides pinned. Click any expense cell in the table to override it.');
+    }
+    const items=keys.map(key=>{
+      const [base,yr]=key.split(':');
+      const calc=years[+yr-1].base[base];
+      const o=ov[key];
+      const downstream = base==='marketing'||base==='supplies'||base==='software'||base==='returns' ? ['Total operating expenses Y'+yr,'Net profit Y'+yr,'Net margin Y'+yr] : ['Total operating expenses Y'+yr,'Net profit Y'+yr,'Break-even & capital'];
+      return h('div',{key,style:{padding:'14px 18px',borderBottom:'1px solid #f3f4f6'}},
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}},
+          h('div',{style:{display:'flex',alignItems:'center',gap:7}},
+            h('span',{style:{width:7,height:7,borderRadius:'50%',background:'#5b5f61'}}),
+            h('span',{style:{fontSize:13,fontWeight:600}}, labelOf[base]+' · Year '+yr)),
+          h('button',{onClick:()=>this.resetOverride(key),className:'lk',style:{fontSize:11,fontWeight:600,color:'#5b5f61',border:'1px solid #cacbc2',background:'#fff',borderRadius:6,padding:'3px 9px',cursor:'pointer'}},'Reset')),
+        h('div',{style:{display:'flex',gap:18,marginTop:9}},
+          h('div',null,h('div',{style:{fontSize:10,color:'#989fa4',fontWeight:600,textTransform:'uppercase',letterSpacing:'.04em'}},'Calculated'),h('div',{className:'tnum',style:{fontSize:14,color:'#5b5f61',textDecoration:'line-through'}},this.fM(calc))),
+          h('div',null,h('div',{style:{fontSize:10,color:'#5b5f61',fontWeight:600,textTransform:'uppercase',letterSpacing:'.04em'}},'Override'),h('div',{className:'tnum',style:{fontSize:14,color:'#313335',fontWeight:600}},this.fM(o.value)))),
+        h('div',{style:{marginTop:9,fontSize:12,color:'#5b5f61',background:'#f6f5f2',border:'1px solid #efede9',borderRadius:6,padding:'8px 10px',lineHeight:1.45}},
+          h('b',{style:{color:'#313335',fontWeight:600}},'Note: '),o.note,h('span',{style:{display:'block',marginTop:4,color:'#989fa4',fontSize:11}},'Pinned '+o.ts)),
+        h('div',{style:{marginTop:9}},h('div',{style:{fontSize:10,color:'#989fa4',fontWeight:600,textTransform:'uppercase',letterSpacing:'.04em',marginBottom:4}},'Affected downstream rows'),
+          h('div',{style:{display:'flex',flexWrap:'wrap',gap:5}}, downstream.map((d,i)=>h('span',{key:i,style:{fontSize:11,color:'#313335',background:'#f3f4f6',borderRadius:4,padding:'2px 7px'}},d)))));
+    });
+    return h('div',null,
+      h('div',{style:{padding:'12px 18px',background:'#fffbeb',borderBottom:'1px solid #fef3c7',fontSize:12,color:'#92400e',lineHeight:1.45}},
+        h('b',{style:{fontWeight:600}},'Prefer driver-level edits. '),'Overrides pin a cell to a fixed value, so it stops responding to assumption changes. Where possible, edit the driver in Settings instead.'),
+      ...items,
+      h('div',{style:{padding:'14px 18px'}},h('button',{onClick:()=>this.resetAll(),className:'lk',style:{width:'100%',height:38,border:'1px solid #cacbc2',background:'#fff',borderRadius:8,fontSize:13,fontWeight:600,color:'#dc2626',cursor:'pointer'}},'Reset all overrides')));
+  }
+
+  // ---------- popover content ----------
+  buildPopover(years, mo){
+    const h=React.createElement, p=this.state.popover; if(!p) return null;
+    const head=(title,sub)=>h('div',{style:{padding:'13px 16px',borderBottom:'1px solid #ededed'}},h('div',{style:{fontSize:13,fontWeight:600}},title),sub?h('div',{style:{fontSize:12,color:'#5b5f61',marginTop:2}},sub):null);
+    if(p.kind==='override'){
+      const [base,yr]=p.key.split(':'); const calc=years[+yr-1].base[base]; const o=this.state.overrides[p.key];
+      const labelOf={payroll:'Payroll & benefits',occupancy:'Occupancy / rent',utilities:'Utilities',marketing:'Marketing & outreach',insurance:'Insurance',supplies:'Supplies & processing',returns:'Returns & refunds',software:'Software & Thriftly fees',repairs:'Repairs & maintenance',other:'Other / contingency'};
+      return h('div',null, head(labelOf[base]+' · Year '+yr,'Overridden cell'),
+        h('div',{style:{padding:'13px 16px',display:'flex',gap:20}},
+          h('div',null,h('div',{style:{fontSize:10,color:'#989fa4',fontWeight:600}},'CALCULATED'),h('div',{className:'tnum',style:{fontSize:16,textDecoration:'line-through',color:'#5b5f61'}},this.fM(calc))),
+          h('div',null,h('div',{style:{fontSize:10,color:'#5b5f61',fontWeight:600}},'OVERRIDE'),h('div',{className:'tnum',style:{fontSize:16,color:'#313335',fontWeight:600}},this.fM(o.value)))),
+        h('div',{style:{padding:'0 16px 12px',fontSize:12,color:'#5b5f61',lineHeight:1.45}},o.note),
+        h('div',{style:{padding:'12px 16px',borderTop:'1px solid #ededed',display:'flex',gap:8}},
+          h('button',{onClick:()=>{this.setState({popover:null});this.startEdit(p.key,Math.round(o.value));},className:'lk',style:{flex:1,height:34,border:'1px solid #cacbc2',background:'#fff',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer'}},'Edit override'),
+          h('button',{onClick:()=>this.resetOverride(p.key),className:'lk',style:{flex:1,height:34,border:'none',background:'#35644f',color:'#fff',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer'}},'Reset to calculated')));
+    }
+    if(p.kind==='capital'){
+      const items=this.startupItems();
+      return h('div',null, head('Startup capital required','One-time costs + worst-case cash trough + reserve'),
+        h('div',{style:{padding:'10px 16px'}},
+          ...items.map((it,i)=>h('div',{key:i,style:{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:12}},h('span',{style:{color:'#5b5f61'},dangerouslySetInnerHTML:{__html:it[0]}}),h('span',{className:'tnum'},this.fM(it[1])))),
+          h('div',{style:{display:'flex',justifyContent:'space-between',padding:'6px 0',fontSize:12,borderTop:'1px solid #ededed',marginTop:4}},h('span',{style:{color:'#5b5f61'}},'Subtotal — startup'),h('span',{className:'tnum',style:{fontWeight:600}},this.fM(mo.startup))),
+          h('div',{style:{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:12}},h('span',{style:{color:'#5b5f61'}},'Pre-opening (consulting + founding mgr)'),h('span',{className:'tnum'},this.fM((this.state.settings.startupConsulting||0)+(this.state.settings.foundingManagerFees||0)))),
+          h('div',{style:{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:12}},h('span',{style:{color:'#5b5f61'}},'Operating cash shortfall (ramp)'),h('span',{className:'tnum'},this.fM(-mo.opTrough-((this.state.settings.startupConsulting||0)+(this.state.settings.foundingManagerFees||0))))),
+          h('div',{style:{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:12}},h('span',{style:{color:'#5b5f61'}},'Reserve buffer'),h('span',{className:'tnum'},this.fM(this.state.settings.reserveBuffer))),
+          h('div',{style:{display:'flex',justifyContent:'space-between',padding:'8px 0 2px',fontSize:13,borderTop:'1px solid #cacbc2',marginTop:6}},h('span',{style:{fontWeight:600}},'Capital required'),h('span',{className:'tnum',style:{fontWeight:600}},this.fM(-mo.trough+this.state.settings.reserveBuffer)))));
+    }
+    if(p.kind==='breakeven'){
+      return h('div',null, head('Break-even (payback)','When the cash balance climbs back to $0'),
+        h('div',{style:{padding:'13px 16px',fontSize:12,color:'#5b5f61',lineHeight:1.5}},
+          'Monthly net first turns positive in ',
+          h('b',{style:{color:'#0b1b14'}},'month '+mo.breakeven),
+          ', but the store has not yet recovered its ',h('b',{style:{color:'#0b1b14'}},this.fM(this.startupTotal())),' startup outlay. True break-even is the point where the cumulative cash balance returns to zero — roughly ',
+          h('b',{style:{color:'#0b1b14'}},this.paybackLabel(years)),' at the current Year-1 net run-rate.'));
+    }
+    if(p.kind==='gap'){
+      return h('div',null, head('First-year cash gap','Deepest operating shortfall before break-even'),
+        h('div',{style:{padding:'13px 16px',fontSize:12,color:'#5b5f61',lineHeight:1.5}},
+          'Cumulative operating cash bottoms out at ',h('b',{style:{color:'#dc2626'}},this.fM(mo.opTrough)),' around mid-year. This is the working capital the store consumes after opening — separate from one-time startup costs — and is covered by the capital plan plus reserve.'));
+    }
+    return null;
+  }
+
+  // ---------- settings ----------
+  setS(k,v){ this.setState(s=>({settings:{...s.settings,[k]:v}}),()=>this.persist()); }
+  setD(k,v){ this.setState(s=>({drivers:{...s.drivers,[k]:v}}),()=>this.persist()); }
+  setShare(i,v){ this.setState(s=>{ const ms=[...s.drivers.marketShare]; ms[i]=v; return {drivers:{...s.drivers,marketShare:ms}}; },()=>this.persist()); }
+
+  buildSettings(){
+    const h=React.createElement, s=this.state.settings, d=this.state.drivers;
+    const card=(title,sub,children)=>h('section',{style:{background:'#fff',border:'1px solid #ededed',borderRadius:8,boxShadow:'0 1px 2px rgba(0,0,0,.05)',overflow:'hidden'}},
+      h('div',{style:{padding:'14px 18px',borderBottom:'1px solid #ededed'}},h('h3',{style:{margin:0,fontSize:15,fontWeight:600}},title),sub?h('p',{style:{margin:'2px 0 0',fontSize:12,color:'#5b5f61'}},sub):null),
+      h('div',{style:{padding:'6px 18px 14px'}},children));
+    const row=(label,control,hint)=>h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:16,padding:'11px 0',borderBottom:'1px solid #f3f4f6'}},
+      h('div',{style:{minWidth:0}},h('div',{style:{fontSize:13,fontWeight:600}},label),hint?h('div',{style:{fontSize:11,color:'#989fa4',marginTop:1}},hint):null),
+      h('div',{style:{flex:'none'}},control));
+    const numIn=(val,on,opts={})=>h('div',{style:{display:'flex',alignItems:'center',gap:6}},
+      opts.prefix?h('span',{style:{fontSize:13,color:'#5b5f61'}},opts.prefix):null,
+      h('input',{type:'number',value:val,step:opts.step||1,onChange:e=>on(this.parse(e.target.value)),
+        style:{width:opts.w||'110px',textAlign:'right',border:'1px solid #cacbc2',borderRadius:8,padding:'7px 10px',fontSize:13,fontFamily:'inherit'},className:'tnum'}),
+      opts.suffix?h('span',{style:{fontSize:13,color:'#5b5f61'}},opts.suffix):null);
+    const slider=(val,on,min,max,step,fmt)=>h('div',{style:{display:'flex',alignItems:'center',gap:12}},
+      h('input',{type:'range',min,max,step,value:val,onChange:e=>on(+e.target.value),style:{width:200,accentColor:'#35644f'}}),
+      h('span',{className:'tnum',style:{fontSize:14,fontWeight:600,width:64,textAlign:'right'}},fmt(val)));
+
+    const labor=card('Cost structure','These percentages drive the expense rows in the projection. Change one and every total, the break-even month, and capital required update automatically.',[
+      row('Labor (payroll) % of revenue','',''),
+      h('div',{style:{padding:'0 0 8px'}}, slider(s.laborPct,v=>this.setS('laborPct',v),0.20,0.60,0.005,v=>(v*100).toFixed(1)+'%')),
+      row('Marketing % of revenue', slider(s.marketingPct,v=>this.setS('marketingPct',v),0,0.10,0.0025,v=>(v*100).toFixed(2)+'%')),
+      row('Supplies & processing % of revenue', slider(s.suppliesPct,v=>this.setS('suppliesPct',v),0,0.12,0.0025,v=>(v*100).toFixed(2)+'%')),
+      row('Software & Thriftly fees % of revenue', slider(s.softwarePct,v=>this.setS('softwarePct',v),0,0.06,0.0025,v=>(v*100).toFixed(2)+'%')),
+      row('Returns & refunds % of revenue', slider(s.returnRate||0,v=>this.setS('returnRate',v),0,0.10,0.0025,v=>(v*100).toFixed(2)+'%')),
+    ]);
+    const lease=card('Building & lease',null,[
+      row('Lease type', h('div',{style:{display:'flex',gap:6}},['Gross','NNN'].map(t=>h('button',{key:t,onClick:()=>this.setS('leaseType',t),className:'lk',style:{height:34,padding:'0 14px',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',border:'1px solid '+(s.leaseType===t?'#35644f':'#cacbc2'),background:s.leaseType===t?'#f0f9f3':'#fff',color:s.leaseType===t?'#35644f':'#5b5f61'}},t)))),
+      row('Year-1 occupancy / rent', numIn(s.occupancyY1,v=>this.setS('occupancyY1',v),{prefix:'$',w:'120px'}),'Market-rent estimate — verify with a broker quote'),
+      row('Annual rent escalator', numIn(+(s.escalator*100).toFixed(1),v=>this.setS('escalator',v/100),{suffix:'%',w:'80px',step:0.5})),
+      row('Sales-floor area', numIn(s.salesFloorSqft,v=>this.setS('salesFloorSqft',v),{suffix:'sq ft',w:'100px',step:100})),
+      row('Total building area', numIn(s.buildingSqft,v=>this.setS('buildingSqft',v),{suffix:'sq ft',w:'100px',step:100})),
+      row('Non-revenue expense growth', numIn(+(s.expenseGrowth*100).toFixed(1),v=>this.setS('expenseGrowth',v/100),{suffix:'%/yr',w:'90px',step:0.5})),
+    ]);
+    const demand=card('Demand drivers',null,[
+      row('Households', numIn(d.households,v=>this.setD('households',v),{w:'120px',step:100})),
+      row('Donor market share — Year 1', numIn(+(d.marketShare[0]*100).toFixed(1),v=>this.setShare(0,v/100),{suffix:'%',w:'80px',step:0.5})),
+      row('Donor market share — Year 2', numIn(+(d.marketShare[1]*100).toFixed(1),v=>this.setShare(1,v/100),{suffix:'%',w:'80px',step:0.5})),
+      row('Donor market share — Year 3', numIn(+(d.marketShare[2]*100).toFixed(1),v=>this.setShare(2,v/100),{suffix:'%',w:'80px',step:0.5})),
+      row('Donations per donor / yr', numIn(d.donationsPerDonor,v=>this.setD('donationsPerDonor',v),{w:'80px',step:0.1})),
+      row('Customers per donor / yr', numIn(d.customersPerDonor,v=>this.setD('customersPerDonor',v),{w:'80px',step:0.1})),
+      row('Average basket', numIn(d.avgBasket,v=>this.setD('avgBasket',v),{prefix:'$',w:'90px',step:0.5}),'Estimated from comparable thrift operations'),
+      row('E-commerce % of sales', numIn(+(((s.ecommPct||0)*100).toFixed(1)),v=>this.setS('ecommPct',v/100),{suffix:'%',w:'80px',step:0.5}),'Share of revenue sold online — defaults to 0'),
+    ]);
+    const funding=card('Source of funds',null,[
+      row('Funding available', numIn(s.fundingAvailable,v=>this.setS('fundingAvailable',v),{prefix:'$',w:'130px',step:1000}),'Capital you have committed'),
+      row('Reserve buffer', numIn(s.reserveBuffer,v=>this.setS('reserveBuffer',v),{prefix:'$',w:'130px',step:1000}),'Held on top of the modeled trough'),
+    ]);
+    const preopen=card('Pre-opening & founding costs','One-time consulting and founding-manager costs incurred at launch. These post to Month 1 of the cash-flow and deepen the capital you must have on hand.',[
+      row('Startup consulting', numIn(s.startupConsulting,v=>this.setS('startupConsulting',v),{prefix:'$',w:'130px',step:500}),'Advisory / setup fees to get the store open'),
+      row('Founding manager fees', numIn(s.foundingManagerFees,v=>this.setS('foundingManagerFees',v),{prefix:'$',w:'130px',step:500}),'Pre-opening compensation for the founding manager'),
+    ]);
+
+    const years=this.calcYears(); const mo=this.calcMonthly(years); const cap=Math.round((-mo.trough+s.reserveBuffer));
+    const live=h('div',{style:{background:'#f0f9f3',border:'1px solid #b8e2c4',borderRadius:8,padding:'14px 18px',display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14}},
+      ...[['Y1 net profit',this.fM(years[0].net),years[0].net<0?'#dc2626':'#257648'],['Y1 margin',this.fP(years[0].margin),'#313335'],['Break-even (payback)',this.paybackLabel(years),'#313335'],['Capital required',this.fM(cap),'#35644f']].map((x,i)=>
+        h('div',{key:i},h('div',{style:{fontSize:11,color:'#5b5f61',fontWeight:600}},x[0]),h('div',{className:'tnum',style:{fontSize:20,fontWeight:600,color:x[2]}},x[1]))));
+
+    return h('div',{style:{display:'flex',flexDirection:'column',gap:18}},
+      h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}},
+        h('div',null,h('h2',{style:{margin:0,fontSize:20,fontWeight:600}},'Settings & assumptions'),h('p',{style:{margin:'3px 0 0',fontSize:13,color:'#5b5f61'}},'Edits here flow straight into the projection. Saved automatically — no login.')),
+        h('button',{onClick:()=>this.setView('detail'),className:'lk',style:{height:38,padding:'0 16px',border:'none',background:'#35644f',color:'#fff',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer'}},'View projection →')),
+      live,
+      h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18}}, labor, lease),
+      h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18}}, demand, funding),
+      preopen);
+  }
+
+  // ---------- projections list ----------
+  listData(){
+    return [
+      {name:'House of Hope', loc:'Longview, TX', reco:'Proceed', tone:'#257648', bg:'#f0f9f3', capital:'$249,000', payback:'~Yr 6.8', margin:'4.2%', mpos:true, updated:'Jun 12, 2026', live:true},
+    ];
+  }
+  buildList(){
+    const h=React.createElement;
+    const rows=this.listData();
+    const cols='2.2fr 1.6fr 1.2fr 1fr 1fr 1fr';
+    const th=(t,r)=>h('div',{style:{fontSize:11,fontWeight:600,color:'#5b5f61',textTransform:'uppercase',letterSpacing:'.04em',textAlign:r?'right':'left'}},t);
+    const header=h('div',{style:{display:'grid',gridTemplateColumns:cols,gap:14,padding:'10px 18px',borderBottom:'1px solid #ededed',background:'#faf9f6'}},
+      th('Store'),th('Location'),th('Recommendation'),th('Capital',true),th('Break-even',true),th('Updated',true));
+    const row=(r,i)=>h('div',{key:i,onClick:r.live?()=>this.setView('detail'):null,className:r.live?'cellbtn':null,
+        style:{display:'grid',gridTemplateColumns:cols,gap:14,padding:'14px 18px',borderBottom:'1px solid #f3f4f6',alignItems:'center',cursor:r.live?'pointer':'default'}},
+      h('div',{style:{display:'flex',flexDirection:'column',gap:2}},
+        h('div',{style:{display:'flex',alignItems:'center',gap:8}},
+          h('span',{style:{fontSize:14,fontWeight:600,color:'#0b1b14'}},r.name),
+          r.live?h('span',{style:{fontSize:10,fontWeight:600,color:'#257648',background:'#f0f9f3',border:'1px solid #b8e2c4',borderRadius:4,padding:'1px 6px'}},'Open'):null),
+        h('div',{style:{fontSize:12,color:'#989fa4'}},r.draft?'Draft · not yet modeled':'Y1 net margin '+r.margin)),
+      h('div',{style:{fontSize:13,color:'#5b5f61'}},r.loc),
+      h('div',null,h('span',{style:{display:'inline-block',fontSize:12,fontWeight:600,color:r.tone,background:r.bg,borderRadius:9999,padding:'3px 11px'}},r.reco)),
+      h('div',{className:'tnum',style:{fontSize:13,textAlign:'right',color:'#313335'}},r.capital),
+      h('div',{className:'tnum',style:{fontSize:13,textAlign:'right',color:'#313335'}},r.payback),
+      h('div',{className:'tnum',style:{fontSize:13,textAlign:'right',color:'#989fa4'}},r.updated));
+    return h('div',null,
+      h('div',{style:{display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,marginBottom:18}},
+        h('div',null,
+          h('h1',{style:{margin:0,fontSize:24,fontWeight:600,letterSpacing:'-.01em'}},'Projections'),
+          h('p',{style:{margin:'4px 0 0',fontSize:13,color:'#5b5f61'}},'Store feasibility models. Open one to review the full projection.')),
+        h('button',{onClick:()=>this.setView('wizard'),className:'lk',style:{height:38,padding:'0 16px',border:'none',background:'#35644f',color:'#fff',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',gap:7}},
+          h('svg',{width:14,height:14,viewBox:'0 0 20 20',fill:'#fff'},h('path',{d:'M9 9V3h2v6h6v2h-6v6H9v-6H3V9z'})),'New projection')),
+      h('div',{style:{background:'#fff',border:'1px solid #ededed',borderRadius:10,boxShadow:'0 1px 2px rgba(0,0,0,.04)',overflow:'hidden'}},
+        header, ...rows.map(row)));
+  }
+
+  // ---------- create-projection wizard ----------
+  setWizardStep(n){ this.setState({wizardStep:n}); }
+  setWizardField(k,v){ this.setState(s=>({wizardData:{...s.wizardData,[k]:v}})); }
+  buildWizard(){
+    const h=React.createElement;
+    const d=this.state.wizardData;
+    const step=this.state.wizardStep;
+    const steps=[
+      {t:'Store & location', s:'Name the store and where it sits.'},
+      {t:'Market', s:'Households, donor share, and basket.'},
+      {t:'Space & costs', s:'Floor area and annual rent.'},
+      {t:'Funding', s:'Capital committed to the launch.'},
+      {t:'Review', s:'Confirm and create the projection.'},
+    ];
+    const fld=(label,k,opts={})=>h('label',{key:k,style:{display:'flex',flexDirection:'column',gap:6}},
+      h('span',{style:{fontSize:12,fontWeight:600,color:'#313335'}},label),
+      opts.help?h('span',{style:{fontSize:11,color:'#989fa4',marginTop:-3}},opts.help):null,
+      h('div',{style:{display:'flex',alignItems:'center',gap:0,border:'1px solid #cacbc2',borderRadius:8,overflow:'hidden',background:'#fff'}},
+        opts.prefix?h('span',{style:{padding:'0 0 0 12px',fontSize:14,color:'#989fa4'}},opts.prefix):null,
+        h('input',{value:d[k],onChange:e=>this.setWizardField(k,e.target.value),placeholder:opts.ph||'',
+          style:{flex:1,height:40,border:'none',outline:'none',padding:'0 12px',fontSize:14,color:'#0b1b14',background:'transparent',fontFamily:'inherit'}}),
+        opts.suffix?h('span',{style:{padding:'0 12px 0 0',fontSize:14,color:'#989fa4'}},opts.suffix):null));
+    const seg=(label,k,options)=>h('div',{key:k,style:{display:'flex',flexDirection:'column',gap:6}},
+      h('span',{style:{fontSize:12,fontWeight:600,color:'#313335'}},label),
+      h('div',{style:{display:'flex',gap:6}},options.map(o=>h('button',{key:o,onClick:()=>this.setWizardField(k,o),className:'lk',
+        style:{height:38,padding:'0 16px',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',
+          border:'1px solid '+(d[k]===o?'#35644f':'#cacbc2'),background:d[k]===o?'#f0f9f3':'#fff',color:d[k]===o?'#1d4733':'#5b5f61'}},o))));
+    const grid=(...kids)=>h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18}},...kids);
+
+    let body;
+    if(step===0) body=h('div',{style:{display:'flex',flexDirection:'column',gap:18}},
+      fld('Store name','name',{ph:'e.g. House of Hope'}),
+      grid(fld('City','city',{ph:'Longview'}), seg('State','state',['TX','OK','LA','AR'])),
+      seg('Trade-area basis','basis',['City','County','Radius']));
+    else if(step===1) body=h('div',{style:{display:'flex',flexDirection:'column',gap:18}},
+      fld('Households','households',{help:'Occupied housing units on the chosen basis.',ph:'31,800'}),
+      grid(fld('Donor market share — Year 1','share',{suffix:'%',ph:'6'}),
+           fld('Average basket','basket',{prefix:'$',help:'Estimated transaction value.'})));
+    else if(step===2) body=h('div',{style:{display:'flex',flexDirection:'column',gap:18}},
+      grid(fld('Sales-floor area','sqft',{suffix:'sq ft',ph:'7,000'}),
+           fld('Annual rent / occupancy','rent',{prefix:'$',help:'Year-1 NNN occupancy cost.'})));
+    else if(step===3) body=h('div',{style:{display:'flex',flexDirection:'column',gap:18}},
+      fld('Committed funding','funding',{prefix:'$',help:'Capital available for startup and the cash ramp.'}));
+    else body=(()=>{
+      const r=(l,v)=>h('div',{style:{display:'flex',justifyContent:'space-between',padding:'9px 0',borderBottom:'1px solid #f3f4f6',fontSize:13}},
+        h('span',{style:{color:'#5b5f61'}},l),h('span',{className:'tnum',style:{color:'#0b1b14',fontWeight:600}},v||'—'));
+      return h('div',null,
+        h('div',{style:{background:'#f0f9f3',border:'1px solid #b8e2c4',borderRadius:8,padding:'12px 16px',fontSize:13,color:'#1d4733',marginBottom:16}},
+          'Thriftly will build a 3-year projection from these inputs using regional cost benchmarks. You can refine every assumption afterward in Settings.'),
+        r('Store name',d.name), r('Location',[d.city,d.state].filter(Boolean).join(', ')), r('Trade-area basis',d.basis),
+        r('Households',d.households), r('Donor market share — Y1',d.share?d.share+'%':''), r('Average basket',d.basket?'$'+d.basket:''),
+        r('Sales-floor area',d.sqft?d.sqft+' sq ft':''), r('Annual rent',d.rent?'$'+d.rent:''), r('Committed funding',d.funding?'$'+d.funding:''));
+    })();
+
+    const rail=h('div',{style:{display:'flex',flexDirection:'column',gap:2}},
+      steps.map((s,i)=>h('button',{key:i,onClick:()=>this.setWizardStep(i),className:'lk',
+        style:{display:'flex',gap:12,alignItems:'flex-start',textAlign:'left',background:i===step?'#f6f5f2':'none',border:'none',borderRadius:8,padding:'11px 12px',cursor:'pointer',width:'100%'}},
+        h('span',{className:'tnum',style:{flex:'none',width:24,height:24,borderRadius:9999,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:600,
+          background:i<step?'#35644f':(i===step?'#35644f':'#fff'),color:i<=step?'#fff':'#989fa4',border:'1px solid '+(i<=step?'#35644f':'#cacbc2')}}, i<step?'✓':String(i+1)),
+        h('span',{style:{display:'flex',flexDirection:'column',gap:1,minWidth:0}},
+          h('span',{style:{fontSize:13,fontWeight:600,color:i===step?'#0b1b14':'#5b5f61'}},s.t),
+          h('span',{style:{fontSize:11,color:'#989fa4'}},s.s)))));
+
+    const footer=h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:24,paddingTop:18,borderTop:'1px solid #ededed'}},
+      h('button',{onClick:()=>step===0?this.setView('list'):this.setWizardStep(step-1),className:'lk',
+        style:{height:38,padding:'0 16px',border:'1px solid #cacbc2',background:'#fff',borderRadius:8,fontSize:13,fontWeight:600,color:'#313335',cursor:'pointer'}}, step===0?'Cancel':'Back'),
+      step<steps.length-1
+        ? h('button',{onClick:()=>this.setWizardStep(step+1),className:'lk',style:{height:38,padding:'0 18px',border:'none',background:'#35644f',color:'#fff',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer'}},'Continue')
+        : h('button',{onClick:()=>this.setView('detail'),className:'lk',style:{height:38,padding:'0 18px',border:'none',background:'#35644f',color:'#fff',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer'}},'Create projection'));
+
+    return h('div',{style:{maxWidth:920,margin:'0 auto'}},
+      h('div',{style:{marginBottom:20}},
+        h('h1',{style:{margin:0,fontSize:24,fontWeight:600,letterSpacing:'-.01em'}},'New projection'),
+        h('p',{style:{margin:'4px 0 0',fontSize:13,color:'#5b5f61'}},'A few inputs to seed the model. Everything is editable afterward.')),
+      h('div',{style:{display:'grid',gridTemplateColumns:'264px 1fr',gap:28,alignItems:'start'}},
+        h('div',{style:{background:'#fff',border:'1px solid #ededed',borderRadius:10,padding:8,position:'sticky',top:84}}, rail),
+        h('div',{style:{background:'#fff',border:'1px solid #ededed',borderRadius:10,boxShadow:'0 1px 2px rgba(0,0,0,.04)',padding:'26px 28px'}},
+          h('div',{style:{fontSize:11,fontWeight:600,color:'#35644f',textTransform:'uppercase',letterSpacing:'.05em',marginBottom:4}},'Step '+(step+1)+' of '+steps.length),
+          h('h2',{style:{margin:'0 0 20px',fontSize:18,fontWeight:600}},steps[step].t),
+          body, footer)));
+  }
+
+  // ---------- feedback ----------
+  buildFeedback(){
+    const h=React.createElement;
+    if(this.state.feedbackDone){
+      return h('div',{style:{padding:'30px 26px',textAlign:'center'}},
+        h('div',{style:{width:46,height:46,borderRadius:'50%',background:'#f0f9f3',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}},h('svg',{width:24,height:24,viewBox:'0 0 20 20',fill:'#257648'},h('path',{d:'M8 13l-3-3 1.4-1.4L8 10.2l5.6-5.6L15 6z'}))),
+        h('h3',{style:{margin:'0 0 6px',fontSize:17,fontWeight:600}},'Thanks for the feedback'),
+        h('p',{style:{margin:'0 0 2px',fontSize:13,color:'#5b5f61',lineHeight:1.5}},'We appreciate you taking the time to share it.'),
+        h('button',{onClick:()=>this.setState({feedbackOpen:false,feedbackDone:false}),className:'lk',style:{marginTop:18,height:40,width:'100%',border:'none',background:'#35644f',color:'#fff',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer'}},'Done'));
+    }
+    return h('div',null,
+      h('div',{style:{padding:'18px 22px 0',display:'flex',justifyContent:'space-between',alignItems:'center'}},h('h3',{style:{margin:0,fontSize:17,fontWeight:600}},'Share an idea'),h('button',{onClick:()=>this.setState({feedbackOpen:false}),className:'lk',style:{width:30,height:30,border:'1px solid #cacbc2',background:'#fff',borderRadius:8,cursor:'pointer',fontSize:16,color:'#5b5f61'}},'×')),
+      h('div',{style:{padding:'14px 22px 22px'}},
+        h('p',{style:{margin:'0 0 12px',fontSize:13,color:'#5b5f61',lineHeight:1.5}},'What would make this app more useful? Tell us what worked, what didn\u2019t, or what you wish it did.'),
+        h('textarea',{autoFocus:true,rows:5,placeholder:'Your feedback…',style:{width:'100%',border:'1px solid #cacbc2',borderRadius:8,padding:'10px 12px',fontSize:13,fontFamily:'inherit',resize:'vertical',marginBottom:14}}),
+        h('button',{onClick:()=>this.setState({feedbackDone:true}),className:'lk',style:{width:'100%',height:42,border:'none',background:'#35644f',color:'#fff',borderRadius:8,fontSize:14,fontWeight:600,cursor:'pointer'}},'Send feedback')));
+  }
+
+  // ---------- render ----------
+  renderVals(){
+    const years=this.calcYears();
+    const mo=this.calcMonthly(years);
+    const y1=years[0];
+    const capital=Math.round(-mo.trough+this.state.settings.reserveBuffer);
+    const withinFunding = capital<=this.state.settings.fundingAvailable && y1.net>0;
+    const reco = withinFunding
+      ? {tag:'Proceed — within funding', color:'#257648', bg:'#f0f9f3', headline:'Proceed. The model clears break-even and stays within committed funding.', sub:'Year-1 net profit is positive and the worst-case cash trough is covered by your '+this.fM(this.state.settings.fundingAvailable)+' in committed funds plus reserve.'}
+      : (y1.net<=0
+        ? {tag:'Revise — no Year-1 profit', color:'#dc2626', bg:'#fee2e2', headline:'Revise. Year 1 does not reach profitability under these assumptions.', sub:'Adjust labor %, rent, or the donation ramp in Settings, or raise additional funding before committing.'}
+        : {tag:'Revise — funding gap', color:'#b45309', bg:'#fef3c7', headline:'Close, but capital required exceeds committed funding.', sub:'Capital required of '+this.fM(capital)+' is above your committed '+this.fM(this.state.settings.fundingAvailable)+'. Raise funds or trim startup scope.'});
+
+    const recoIcon = withinFunding
+      ? React.createElement('svg',{width:13,height:13,viewBox:'0 0 20 20',fill:'#257648'},React.createElement('path',{d:'M8 13l-3-3 1.4-1.4L8 10.2l5.6-5.6L15 6z'}))
+      : React.createElement('svg',{width:13,height:13,viewBox:'0 0 20 20',fill:reco.color},React.createElement('path',{d:'M10 1l9 16H1z'}));
+
+    const kpis=[
+      {label:'Y1 sales per sq ft', value:this.fM2(y1.salesPerSqft), sub:'7,000 sq ft floor', color:'#35644f'},
+      {label:'Y1 revenue', value:this.fM(y1.revenue), sub:this.fN(y1.customers)+' customers', color:'#0b1b14'},
+      {label:'Y1 net margin', value:this.fP(y1.margin), sub:'net '+this.fM(y1.net), color:y1.margin<0?'#dc2626':'#0b1b14'},
+      {label:'Capital required', value:this.fM(capital), sub:'of '+this.fM(this.state.settings.fundingAvailable)+' committed', color:'#0b1b14'},
+      {label:'Payback', value:y1.net>0?'~Yr '+(capital/y1.net).toFixed(1):'N/A', sub:y1.net>0?'on Y1 net':'no Y1 profit', color:'#0b1b14'},
+      {label:'Occupancy ratio', value:this.fP(y1.exp.occupancy/y1.revenue), sub:'rent ÷ revenue', color:'#0b1b14'},
+    ];
+
+    const evidence=[
+      {badge:this.badgeVerified(), label:'Households', value:this.fN(this.state.drivers.households), method:'U.S. Census ACS 5-year, city of Longview, TX — occupied housing units within the city boundary.', meta:'Source: Census ACS · pulled Jun 2026 · method: city basis', change:'A county-basis trade area or a sub-city radius would change this materially.'},
+      {badge:this.badgeEst('low'), label:'Market rent / occupancy (Y1)', value:this.fM(y1.exp.occupancy), method:'Estimated at ~$9.00 / sq ft NNN on a 10,000 sq ft building. Range $7.50–$11.00 / sq ft.', meta:'Source: regional retail comps · Jun 2026 · confidence: low', change:'A signed lease or broker quote replaces the estimate and tightens the range.'},
+      {badge:this.badgeEst(), label:'Average basket', value:this.fM2(this.state.drivers.avgBasket), method:'Estimated transaction value from comparable nonprofit thrift operations of similar size.', meta:'Source: operator comps · confidence: medium', change:'Pricing strategy and category mix once open will refine this.'},
+      {badge:this.badgeAssume(), label:'Labor % of revenue', value:this.fP(this.state.settings.laborPct), method:'Planning assumption for staffing cost as a share of revenue, editable in Settings.', meta:'Assumption · set by operator', change:'A detailed staffing plan (headcount × wage) would replace the ratio.'},
+    ];
+
+    const base={net:y1.net, breakeven:mo.breakeven, capital};
+    const down=this.scenario(1.15,0.85);
+    const up=this.scenario(0.90,1.10);
+    const sensEl=(()=>{ const h=React.createElement;
+      const rowEl=(label,sc,tone)=>h('tr',{style:{borderBottom:'1px solid #f3f4f6'}},
+        h('td',{style:{padding:'9px 16px',fontSize:13,fontWeight:600,color:tone}},label),
+        h('td',{className:'tnum',style:{padding:'9px 12px',fontSize:13,textAlign:'right',color:sc.net<0?'#dc2626':'#313335'}},this.fM(sc.net)),
+        h('td',{className:'tnum',style:{padding:'9px 12px',fontSize:13,textAlign:'right'}},sc.net>0?'~Yr '+(sc.capital/sc.net).toFixed(1):'N/A'),
+        h('td',{className:'tnum',style:{padding:'9px 16px',fontSize:13,textAlign:'right'}},this.fM(sc.capital)));
+      return h('table',{style:{width:'100%',borderCollapse:'collapse'}},
+        h('thead',null,h('tr',{style:{background:'#efede9'}},['Scenario','Y1 net','Break-even','Capital'].map((t,i)=>h('th',{key:i,style:{padding:'8px 16px',fontSize:11,fontWeight:600,color:'#5b5f61',textAlign:i===0?'left':'right',textTransform:'uppercase',letterSpacing:'.04em'}},t)))),
+        h('tbody',null,
+          rowEl('Downside (rent +15%, share −15%)',down,'#b45309'),
+          rowEl('Base case',base,'#35644f'),
+          rowEl('Upside (rent −10%, share +10%)',up,'#257648')));
+    })();
+
+    return {
+      saveLabel:'All changes saved',
+      isDetail: this.state.view==='detail',
+      isSettings: this.state.view==='settings',
+      isList: this.state.view==='list',
+      isWizard: this.state.view==='wizard',
+      isProjectionView: this.state.view==='detail'||this.state.view==='settings',
+      goDetail:()=>this.setView('detail'),
+      goSettings:()=>this.setView('settings'),
+      goList:()=>this.setView('list'),
+      listEl:this.buildList(),
+      wizardEl:this.buildWizard(),
+      detailTab: this.state.view==='detail'?{border:'#35644f',color:'#0b1b14'}:{border:'transparent',color:'#5b5f61'},
+      settingsTab: this.state.view==='settings'?{border:'#35644f',color:'#0b1b14'}:{border:'transparent',color:'#5b5f61'},
+      reco, recoIcon,
+      m:{ capital:this.fM(capital), breakeven:this.paybackLabel(years), cashGap:this.fM(mo.opTrough) },
+      kpis,
+      chartEl:this.buildChart(mo),
+      monthlyEl:this.buildMonthly(mo),
+      tableEl:this.buildTable(years),
+      evidence,
+      sensEl,
+      settingsEl:this.buildSettings(),
+      overrideCount:Object.keys(this.state.overrides).length,
+      toggleInspector:()=>this.setState(s=>({inspectorOpen:!s.inspectorOpen})),
+      closeInspector:()=>this.setState({inspectorOpen:false}),
+      inspectorOpen:this.state.inspectorOpen,
+      inspectorEl:this.buildInspector(years),
+      reasonCapital:(e)=>this.openReason('capital',e),
+      reasonBreakeven:(e)=>this.openReason('breakeven',e),
+      reasonGap:(e)=>this.openReason('gap',e),
+      popoverOpen: !!this.state.popover,
+      pop: this.state.popover||{top:'0',left:'0'},
+      popoverEl: this.buildPopover(years,mo),
+      closePopover:()=>this.closePopover(),
+      openFeedback:()=>this.setState({feedbackOpen:true,feedbackDone:false}),
+      closeFeedback:()=>this.setState({feedbackOpen:false}),
+      feedbackOpen:this.state.feedbackOpen,
+      feedbackEl:this.buildFeedback(),
+    };
+  }
+}
+</script>
+</body>
+</html>

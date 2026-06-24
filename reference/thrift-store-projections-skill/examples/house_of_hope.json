@@ -1,0 +1,12 @@
+{
+  "org_name": "House of Hope",
+  "city": "Longview, Texas",
+  "households": 31798,
+  "share_y1": 0.15,
+  "share_y3": 0.25,
+  "donation_value": 74,
+  "transaction_value": 17,
+  "sqft": 10000,
+  "rent_per_sqft": 16,
+  "labor_pct": 0.60
+}

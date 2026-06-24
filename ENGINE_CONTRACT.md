@@ -1,0 +1,535 @@
+# ENGINE_CONTRACT.md — The Math Authority
+
+> **Status:** Build spec (ready-to-build, not yet built) · **Repo:** `rallytasks/projections` · **Owner:** Andy Downard
+> **Model version this contract defines:** `model_version = "2.0.0"` · `compute_schema_version = "1.0.0"`
+> **Source of truth for requirements:** [`PRD.md`](reference/PRD.md) (cited inline as §) and [`methodology.md`](reference/thrift-store-projections-skill/reference/methodology.md).
+> **Sibling docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [BUILD_PLAN.md](BUILD_PLAN.md) · [DATA_MODEL.md](DATA_MODEL.md) · [API_SPEC.md](API_SPEC.md) · [SECURITY.md](SECURITY.md) · [OPS_RUNBOOK.md](OPS_RUNBOOK.md) · [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CLAUDE.md](CLAUDE.md) · [AGENTS.md](AGENTS.md) · [IDEA_FAB.md](IDEA_FAB.md)
+
+This document is the **single mathematical authority** for the Thrift Store Projection web app. Every number the app shows, exports, or narrates is produced by **one** pure compute core (`engine/compute.py`). If a formula is not in this document, it does not exist. If code and this document disagree, **this document is the bug report** — fix one of them in the same PR (the "Docs Are Code" rule, see [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+Scope of this contract:
+
+1. The driver model and every formula, with named default constants.
+2. The Year-2 = explicit-input rule (the methodology midpoint is **killed**).
+3. The monthly launch cash-flow model and the decision metrics derived from it.
+4. The override DAG and its topological resolution rules (PRD §11/§14).
+5. Edge-case math, N/A sentinels, and the `flags` map (PRD §12.4).
+6. The Excel export contract, cell-by-cell (PRD §18).
+7. The golden-test gate: server compute vs. Python reference vs. LibreOffice recalc.
+
+---
+
+## 0. The #1 correction: the existing engine is a SEED, not the authority
+
+[`generate_projection.py`](reference/thrift-store-projections-skill/scripts/generate_projection.py) is the **calibration reference**, not the v1 engine. A line-by-line read shows it satisfies ~30% of v1: it is **annual-only**, computes **Year-2 = midpoint** (`compute()` line 65; Excel `=AVERAGE(...)` line 209), treats **supplies as a fixed $3,700** (DEFAULTS line 44), has **no Marketing line, no rent escalator, no monthly cash-flow, no decision metrics, no override/DAG**, returns **positional tuples**, and emits **unguarded division formulas** that produce `#DIV/0!` (Excel lines 257 `=net/totrev`, 284 `=startup/Y1net`).
+
+**Build rule (M1):** Treat M1 as a **versioned rewrite**, not a "wire-up." Keep the bottom-up driver chain and the blue-input / live-formula Excel styling. Build monthly cash-flow, decision metrics, the new cost lines, the escalator, and the override DAG as **new code** under `model_version = "2.0.0"`. Retain the legacy annual script only as a **calibration golden** (see §13.7).
+
+The PRD's phrase "reused engine, single math authority" (§13, §23, Appendix A) means **"extract & extend the formulas into a pure core, rebuild the renderers"** — not "wrap the old script behind an API." See the Engine Gap Table in §0.1.
+
+### 0.1 Engine Gap Table (as-built vs. v1 required)
+
+| Concern | `generate_projection.py` as-built | v1 requirement | Status |
+|---|---|---|---|
+| Driver chain (hh→donations→retail→customers→salvage→total) | `compute()` 71–76 | unchanged | **EXISTS** |
+| Year-2 share | midpoint `(y1+y3)/2` line 65 / `=AVERAGE` line 209 | three explicit inputs `share_y1/y2/y3` (§7.1) | **REWRITE** |
+| Supplies | fixed `$3,700` (line 44) | `supplies_pct` × revenue, default 5.0% (§7.3) | **REWRITE** |
+| Marketing & outreach | none | `marketing_pct` × revenue, default 3.75% (§7.3) | **NEW** |
+| Rent | `sqft × rate`, flat all 3 yrs (line 80/247) | escalator 3.0% on Y2–Y3 (§7.3); or annual occupancy $ | **REWRITE** |
+| Reserve buffer | none | `$25,000`, feeds capital-required (§12.1) | **NEW** |
+| Monthly cash-flow M0–M12 | none | full ramp/timed-outflow model (§10) | **NEW** |
+| Decision metrics (break-even mo, capital req, cash gap, runway, sensitivity, recommendation) | none | §12 | **NEW** |
+| Override DAG / pins | none | topological resolve, §11/§14 | **NEW** |
+| Output shape | positional tuple (line 94) | App-D view-model + `computed_json`+`flags` | **REWRITE** |
+| N/A guards / `#DIV/0!` | unguarded (257, 284) | explicit null + `flags`; Excel `IF(denom=0,"",…)` | **REWRITE** |
+| `model_version` stamp | none | stamped into `computed_json` + `.xlsx` | **NEW** |
+| Renderers | `build_xlsx`/`build_docx` mix math + cells | pure core; `engine/xlsx.py`, `engine/packet.py` consume core output | **REWRITE** |
+
+---
+
+## 1. DECISIONS-TO-RESOLVE (must be closed before any golden fixture is frozen)
+
+The PRD leaves three numeric defaults ambiguous. **A builder cannot start golden tests until these are pinned.** The Resolved Defaults table (§2) below states the chosen values. The rule that forces the choice: **the chosen defaults must reproduce the Appendix-D prototype headline numbers** (Y1 revenue ≈ $426,911; capital required ≈ $277,990; Y1 net margin ≈ 11%; break-even ≈ month 5) in the House of Hope conservative golden fixture — **or** the prototype numbers are themselves corrected and re-pinned. Do not ship two "correct" answers.
+
+| Open item | PRD evidence | **Resolved for v1** | Rationale |
+|---|---|---|---|
+| **Labor % of revenue** | DEFAULTS=0.60; methodology=60%; prototype=40%; Appendix-D sample=40%; Appendix-B=0.60 | **0.40** | Only 40% reconciles the design's headline numbers (~11% margin, ~$278k capital, break-even ~month 5). Slider stays editable; benchmark band 25–60% (§12.2). |
+| **Average basket value** | §7.3=$17; Appendix-D=$17.08; example JSON=17 | **17.08** | Required to reproduce Y1 revenue ≈ $426,911 at 6% share. Editable. |
+| **Rent escalator behavior** | §7.3 "applies to Y2–Y3"; compound vs. linear unspecified | **Compound**: `rent_y` = `rent_y1 × (1 + escalator)^(y−1)`. Escalator applies to **rent/occupancy only** (not NNN opex base, not the lease-deposit startup line, which use `rent_y1`). | Single, simplest defensible reading; fixtured. |
+
+> If Thriftly later sets labor to 60%, that is a **new `model_version`** and a new golden fixture set — not a silent default flip. See §3.
+
+---
+
+## 2. Resolved Defaults (named constants)
+
+These live as module constants in `engine/model.py`. Every default is overridable per projection via `assumptions_json` / `inputs_json` (sliders on the Settings tab, PRD §7.3/§19.3). **No formula may hard-code a literal; it must reference a named constant.**
+
+```python
+# engine/model.py
+MODEL_VERSION          = "2.0.0"     # math changes => bump
+COMPUTE_SCHEMA_VERSION = "1.0.0"     # view-model shape changes => bump
+
+# --- demand engine
+DONATIONS_PER_HH_PER_YEAR = 3        # §7.3
+AVG_BASKET_VALUE          = 17.08    # §7.3 (resolved §1) -> customers
+SALVAGE_PCT_OF_RETAIL     = 0.008    # §7.3 (0.8%)
+
+# --- cost structure (% of total revenue unless noted)
+LABOR_PCT_OF_REVENUE      = 0.40     # §7.3 (resolved §1) — band 0.25–0.60
+MARKETING_PCT_OF_REVENUE  = 0.0375   # §7.3 — NEW line
+SUPPLIES_PCT_OF_REVENUE   = 0.05     # §7.3 — REPLACES fixed "Store/office supplies"
+CARD_FEES_PCT_OF_REVENUE  = 0.02     # §7.3
+PAYROLL_TAX_PCT_OF_PAYROLL= 0.075    # §7.3
+
+# --- occupancy
+RENT_ESCALATOR            = 0.03     # §7.3 — compound, Y2–Y3 (resolved §1)
+
+# --- fixed annual operating $ (unchanged from engine; not %-based)
+FIXED_ANNUAL = {
+    "Insurance liability":      2000,   # methodology line 24
+    "Internet, Phones":         3000,
+    "Pest control":              300,
+    "Repairs/maintenance":      1600,
+    "Security system":           900,
+    "Utilities/trash service": 22300,
+}   # NOTE: "Store/office supplies" $3,700 is REMOVED — now SUPPLIES_PCT
+
+# --- one-time startup (Year 0)
+STARTUP = {
+    "Thrift Store Consultant":                         100000,  # methodology line 43
+    "Equipment & Fixtures":                              45000,
+    "Build-out / Renovations / Tenant Improvements":     50000,
+    "Legal, Permits, Insurance Setup, Signage":          13500,
+}   # "Lease Deposit + First Month Rent" = rent_y1 / 12 * 3 (computed, not a literal)
+
+# --- capital & cash
+CASH_RESERVE_BUFFER       = 25000    # §7.3 / §12.1
+SENSITIVITY_DELTA         = 0.25     # §12.2 ±25% on rent & donations
+
+# --- monthly ramp (calibration backlog — label low-confidence, §12.5)
+RAMP_MONTHS               = 5        # donation S-curve to steady state (~3–6, §10.2)
+RAMP_CURVE                = "logistic"
+DONATION_TO_REVENUE_LAG_MONTHS = 1  # §10.2 retail follows donations
+```
+
+**Calibration reference (Longview, TX — methodology lines 51–57):** ~6,900 first-year donations → ~2,300 donating households → ~7% donor share of ~31,800 city households; retail ~$573K → ~$83 resale value/donation; basket ~$15–$20. Use as the reality check the guardrails (§12.2) enforce.
+
+---
+
+## 3. Version locking & the upgrade lifecycle (PRD §13)
+
+- `computed_json` and the `.xlsx` are **stamped** with the `model_version` that produced them.
+- On **read**, if the stored `model_version` ≠ the current engine's `MODEL_VERSION`, **return the stored snapshot verbatim** and set a top-level `flags.model_upgrade_available = true`. **Never silently recompute.**
+- `POST …/upgrade-model` recomputes with the new engine and **writes a NEW revision**; the prior revision is preserved (PRD §13, §24, §25).
+- Track **two** versions independently:
+  - `model_version` — the **math** changed (a formula, a default that changes results, the ramp).
+  - `compute_schema_version` — the **shape** of `computed_json` / the view-model changed (a renamed field, a new KPI key) with no math change.
+  - A renderer/shape change must not be mistaken for a math change. Golden fixtures are pinned to a specific `model_version`.
+
+---
+
+## 4. The driver model (annual P&L)
+
+Bottom-up, donor-market-share driven (methodology §Drivers, lines 8–15). Inputs are explicit and defensible; nothing is a top-line guess.
+
+Let `H` = trade-area households (§8 basis), `freq` = `DONATIONS_PER_HH_PER_YEAR`, `basket` = `AVG_BASKET_VALUE`, `donation_value` = resale value per donation (input).
+
+For each year `y ∈ {1, 2, 3}`:
+
+| Node | Formula | Source |
+|---|---|---|
+| `share[y]` | **explicit input** `share_y1`, `share_y2`, `share_y3` | §7.1 (NOT midpoint) |
+| `donating_hh[y]` | `H × share[y]` | methodology 10 |
+| `donations[y]` | `donating_hh[y] × freq` | methodology 11 |
+| `retail[y]` | `donations[y] × donation_value` | methodology 12 |
+| `customers[y]` | `retail[y] / basket` *(N/A-guarded, §12.4)* | methodology 13 |
+| `salvage[y]` | `retail[y] × SALVAGE_PCT_OF_RETAIL` | methodology 14 |
+| `total_rev[y]` | `retail[y] + salvage[y]` | methodology 15 |
+
+### 4.1 Year-2 is an explicit input — the midpoint is dead
+
+The methodology's "Year 2 = midpoint" (methodology lines 17–18) and the engine's `share={1:y1, 2:(y1+y3)/2, 3:y3}` (line 65) and Excel `=AVERAGE(...)` (line 209) are **superseded by PRD §7.1**. v1 has **three independent blue input cells** for share. The Excel Year-2 row references **its own input cell**, never `AVERAGE`. The wizard's "even ramp" helper may *pre-fill* Year 2 between Year 1 and Year 3, but the value is a real, editable input.
+
+### 4.2 Expense lines (annual)
+
+`rent_y[y] = occupancy_y[y]` where occupancy is **either** `building_sqft × rent_per_sqft` **or** a directly entered annual occupancy dollar (§7.3), then escalated:
+
+```
+occupancy_y[y] = occupancy_y1 × (1 + RENT_ESCALATOR)^(y − 1)     # compound, y∈{1,2,3}; §1
+```
+
+If `lease_type == "nnn"`, add researched/entered NNN opex to occupancy (§7.3, §16.4). The Gross/NNN toggle and the escalator both apply.
+
+| Expense line | Formula | Default constant |
+|---|---|---|
+| Credit card fees | `total_rev[y] × CARD_FEES_PCT_OF_REVENUE` | 2.0% |
+| Payroll | `total_rev[y] × LABOR_PCT_OF_REVENUE` | 40% |
+| Payroll taxes | `Payroll[y] × PAYROLL_TAX_PCT_OF_PAYROLL` | 7.5% |
+| **Marketing & outreach** *(NEW)* | `total_rev[y] × MARKETING_PCT_OF_REVENUE` | 3.75% |
+| **Supplies & processing** *(reclassified)* | `total_rev[y] × SUPPLIES_PCT_OF_REVENUE` | 5.0% |
+| Rent / occupancy | `occupancy_y[y]` (+ NNN opex if applicable) | sqft×rate or annual $ |
+| Insurance liability | `FIXED_ANNUAL[...]` | $2,000 |
+| Internet, Phones | fixed | $3,000 |
+| Pest control | fixed | $300 |
+| Repairs/maintenance | fixed | $1,600 |
+| Security system | fixed | $900 |
+| Utilities/trash service | fixed | $22,300 |
+
+```
+total_exp[y] = sum(all expense lines above)
+net[y]       = total_rev[y] − total_exp[y]
+margin[y]    = net[y] / total_rev[y]        # N/A if total_rev[y] == 0 (§12.4)
+```
+
+**Year-1 reconciliation rule:** the annual Year-1 column is **the roll-up of the 12 monthly P&L rows** (§10), not an independent annual computation. A golden test asserts `annual_Y1 == sum(monthly M1..M12)` **to the penny** (§13.4). Years 2–3 are annual (§10.3).
+
+### 4.3 One-time startup costs (Year 0)
+
+| Line | Value | Source |
+|---|---|---|
+| Thrift Store Consultant | `STARTUP[...]` $100,000 | methodology 43 |
+| Equipment & Fixtures | $45,000 | |
+| Lease Deposit + First Month Rent | `occupancy_y1 / 12 × 3` | methodology 45 (uses `rent_y1`, **not** escalated) |
+| Build-out / Renovations / Tenant Improvements | $50,000 | |
+| Legal, Permits, Insurance Setup, Signage | $13,500 | |
+
+```
+startup_total = sum(startup lines)
+```
+
+---
+
+## 5. Monthly launch cash-flow model (the new core, PRD §10)
+
+A 3-year annual P&L hides early-failure risk. The model is **monthly-first**; Year-1 annual is derived from it (§4.2 reconciliation rule).
+
+### 5.1 Year 1 definition (locked, §10.1)
+**Year 1 = the first 12 operating months**, starting at the planned opening month — not a calendar/fiscal year. This label is identical across UI, KPIs, Excel, narrative, and exports.
+
+### 5.2 Months M0–M12 (§10.2)
+- **`M0`** = pre-open month(s), present only when `opening_status == "pre_launch"`.
+- **`M1…M12`** = the first 12 operating months.
+
+For each month:
+
+| Component | Rule |
+|---|---|
+| **Startup outflows** (timed) | Lease deposit, build-out, fixtures/equipment, opening inventory, legal/permits, consultant placed in **their actual months**, not averaged. |
+| **Donation ramp** | Donations build from opening to steady state over `RAMP_MONTHS` (default 5, S-curve `RAMP_CURVE`), seasonality-adjusted. Steady state = Year-1 annual donations / 12 once ramped. |
+| **Revenue ramp** | `retail[m]` follows `donations[m − DONATION_TO_REVENUE_LAG_MONTHS]`; `salvage[m]` follows `retail[m]`. |
+| **Costs** | Payroll begins at **hire dates** (may precede opening); fixed costs begin at **lease start**; variable costs (`card, marketing, supplies, payroll-tax`) scale with **that month's** revenue. |
+| **Net** | `net[m] = revenue[m] − expenses[m]` (expenses include timed startup outflows in cash terms). |
+| **Cumulative cash** | `cumulativeCash[m] = cumulativeCash[m−1] + net[m]`, with stated funds as the starting balance where modeled. |
+
+> The monthly ramp shape and seasonality are **calibration backlog** (§12.5, PRD §29). They are emitted with a **low-confidence flag** until calibrated against a real opening (§6.3 actuals). A confidently-wrong break-even month is worse than a labeled-uncertain one.
+
+### 5.3 Annual roll-up (§10.3)
+`Year-1 P&L = Σ monthly[M1..M12]`. Years 2–3 are annual, driven by each year's explicit share (§4) and steady-state structure. The monthly model and the 3-year roll-up flow through the **same** override DAG evaluator (§7) so the two surfaces can never disagree.
+
+---
+
+## 6. Decision metrics, guardrails & recommendation (PRD §12)
+
+All computed in the core; all asserted by golden tests (not merely rendered).
+
+### 6.1 Capital & cash (§12.1)
+
+```
+first_year_cash_gap   = min(cumulativeCash[M0..M12])           # most-negative position; ≤ 0
+peak_cash_shortfall   = |min(0, first_year_cash_gap)|
+startup_capital_required = startup_total + peak_cash_shortfall + CASH_RESERVE_BUFFER
+cash_runway_months    = first m where cumulativeCash[m] ≥ 0     # months to cash-positive; null if never
+break_even_revenue    = solve(net == 0 over fixed+variable structure)   # monthly and annual
+break_even_month      = first m where net[m] ≥ 0 AND sustained thereafter   # null if never
+```
+
+The decision banner surfaces `startup_capital_required` prominently (prototype: ~$277,990) with a **"Why? →"** reasons drill-down (§19.3).
+
+### 6.2 Guardrails & sensitivity (§12.2)
+
+Each driver has an advisory benchmark band. Exceeding it sets a `flags` entry **and** requires the user to write a justification note that travels into the packet (§17).
+
+| Metric | Advisory band |
+|---|---|
+| Donor market share (Y1) | ≤ ~8% for a new store |
+| Sales per sq ft | ~$50–$300 |
+| Labor ratio | ~25–60% of revenue |
+| Occupancy ratio | ≤ ~15–20% of revenue |
+| Net margin | flag > ~30% as unusual for a new store |
+
+**Sensitivity:** base / downside / upside at `±SENSITIVITY_DELTA` (25%) on **rent** and **donations**, showing the effect on net profit, break-even month, and capital required. Each scenario is a full re-run of the core. Downside scenarios are **fixtured** (§13.6) so a sign/compounding error cannot ship behind a passing happy path.
+
+### 6.3 Recommendation (rules-based, explainable, §12.3)
+
+The core emits a semantic **`reco.tag`** enum; the **client** maps enum → color/token (the API never hard-codes hex — see §9.3). Resolution order (first match wins), each with the reasons shown:
+
+| `reco.tag` | Condition |
+|---|---|
+| `do_not_proceed` | break-even not reached within horizon under base **or** downside |
+| `raise_cash` | `startup_capital_required` > stated source of funds |
+| `find_cheaper_rent` | occupancy ratio out of band is the **binding** constraint |
+| `delay` | ramp/seasonality makes the chosen opening month cash-infeasible |
+| `revise` | outcome hinges on out-of-band inputs (flagged) |
+| `proceed` | positive Year-1 cash trajectory, capital need ≤ stated funds, ratios in band |
+
+### 6.4 KPIs (§11)
+Per period, recomputed live (subject to §12.4 guards): Total revenue · Net profit · Net margin · **Sales per sales-floor sq ft** · Sales per total sq ft · Revenue per donation · Revenue per customer · Annual donations · Customers · Occupancy cost ratio · Labor ratio · Donations per sq ft · **Break-even month** · **Startup capital required** · **First-year cash gap** · Simple payback (yrs) · Revenue CAGR (Y1→Y3).
+
+```
+sales_per_salesfloor_sqft = total_rev[1] / (building_sqft × salesfloor_pct)   # N/A if denom 0
+occupancy_ratio[y]        = occupancy_y[y] / total_rev[y]                      # N/A if rev 0
+labor_ratio[y]            = Payroll[y] / total_rev[y]                          # N/A if rev 0
+simple_payback_years      = startup_total / net[1]                            # N/A if net[1] ≤ 0
+revenue_cagr              = (total_rev[3] / total_rev[1])^(1/2) − 1           # N/A if rev[1] == 0
+```
+
+### 6.5 Numeric discipline (rounding authority)
+- **Compute in `Decimal` (or integer cents) internally; round only at display/compare** (§12.4).
+- **Money** displays as **whole dollars**; **percentages** to **0.1pp**.
+- The **server is the single formatting authority** and emits both `raw` (numeric) and `display` (formatted string) for every value (§9.2). The client never re-derives money/percent formatting.
+- The golden tolerance (<$0.50 / 0.1pp) exists to absorb the delta between Python `Decimal` and LibreOffice `double` recalc. **Comparison rule:** round **both** sides to whole dollars (money) / 0.1pp (percent) before computing the delta; assert `abs(delta) < 0.50` for dollar cells, `< 0.1` for percent-point cells.
+
+---
+
+## 7. Override DAG & resolution rules (PRD §11, §14)
+
+Cell overrides are **pins** on a DAG; recompute is **topological** so the statement always foots.
+
+### 7.1 The graph (§14)
+
+```
+market_share[y] → donating_households → donations → retail_revenue → customers
+retail_revenue → salvage_sales ; retail + salvage → total_revenue
+total_revenue → card_fees, marketing, supplies, payroll → payroll_taxes ; sqft,rate(,opex),escalator → rent
+{expense lines} → total_expenses → net_profit → net_margin
+```
+The monthly model and the annual roll-up are **both** evaluated through this single graph (§5.3).
+
+### 7.2 Override key format (§24)
+Keys are `"{node}#{year}"`, e.g. `"Payroll#2"`, `"share#1"`, matching `overrides_json` and Appendix B. A pin is `{ value, note, ts }`.
+
+### 7.3 Resolution algorithm
+
+```
+resolve(node):
+    if node is pinned:
+        return pin.value
+    return f(resolve(parent) for parent in parents(node))   # the node's formula over resolved parents
+```
+
+Rules:
+- **Pinned nodes use their value.** Unpinned nodes compute from (possibly pinned) inputs.
+- **No upstream back-solve.** Pinning a downstream node does **not** mutate any upstream input. An upstream row that no longer drives any pinned downstream value gets a **`stale` flag** (rendered as the "no longer drives a pinned value" hint; §14).
+- **Derived rows + totals + margins + KPIs are NEVER pinnable** so the statement always foots. Pin writes to a non-pinnable node are **rejected at the API boundary** (HTTP 4xx), not merely hidden in the UI. The non-pinnable node list:
+  `total_revenue, total_expenses, net_profit, net_margin, customers (derived), salvage_sales, donating_households, donations`, plus **every KPI and every decision metric** (`break_even_month, startup_capital_required, first_year_cash_gap, cash_runway_months, simple_payback_years, revenue_cagr`).
+  **Pinnable** nodes: the input drivers (`share[y]`, `donation_value`, `donations_per_hh`, `basket`, `sqft`, `rent/occupancy`, the `%` assumptions) and the **component expense lines** (`Payroll, Marketing & outreach, Supplies & processing, Credit card fees, Payroll taxes, Rent, Insurance, Internet, Pest control, Repairs, Security, Utilities`).
+- **Reset:** per-pin reset deletes that key; global reset clears all keys.
+- **Totals always derive from resolved component values** so the in-sheet `=SUM(...)` and the server's resolved total are computed from **the same** numbers (this is the case most likely to break the <$0.50 gate — see §11.4).
+
+### 7.4 Required override unit/property tests
+- Pin a component → the total re-foots via formula over the now-hardcoded cell.
+- Pin then reset → returns to the computed value.
+- Attempt to pin a derived/total/KPI/decision node → **rejected** server-side.
+- Pin an upstream input that no longer drives any pinned downstream node → **`stale` flag set**.
+- Property: the statement **always foots** (`total_exp == Σ resolved expense lines`; `net == total_rev − total_exp`) under any subset of legal pins.
+
+---
+
+## 8. Edge-case math & N/A sentinels (PRD §12.4)
+
+All guards live in **one** place in the core and are **mirrored** in Excel (§11.5). `computed_json` carries an explicit `null` for every N/A value **plus** a `flags` map describing why.
+
+| Trigger | Affected outputs | Sentinel |
+|---|---|---|
+| `total_rev == 0` (e.g. 0% share) | `margin`, `sales_per_sqft`, `revenue_per_donation`, `revenue_per_customer`, `occupancy_ratio`, `labor_ratio`, `customers` | `null` + `flags["margin"]="N/A — no revenue"` |
+| `net[1] ≤ 0` | `simple_payback_years` | `null` + `flags["payback"]="N/A — no Year 1 profit"` |
+| `total_rev[1] == 0` | `revenue_cagr` | `null` + `flags["cagr"]="N/A"` |
+| `break_even_month` never reached | `break_even_month`, `cash_runway_months` | `null` + `flags[...]="N/A — not within horizon"` |
+| negative value | any P&L value | render in **parentheses + error color**; never `#NUM!` |
+| `building_sqft == 0` | — | **blocked at input** (validation error; never computed) |
+| out-of-band driver | guardrail metrics | advisory **badge** + requires justification note (§12.2); a flag, **not** a math error |
+
+**`flags` map shape** (top-level in `computed_json`):
+```json
+"flags": {
+  "model_upgrade_available": false,
+  "margin": null,
+  "payback": "N/A — no Year 1 profit",
+  "share_y1_out_of_band": { "value": 0.15, "band": "≤ ~8%", "requires_note": true },
+  "ramp_low_confidence": true
+}
+```
+
+---
+
+## 9. Engine output contract (the view-model, Appendix D)
+
+`engine/compute.py` is **pure, deterministic, side-effect-free**:
+
+```python
+def compute(inputs, assumptions, demand_drivers, trade_area, overrides) -> ComputeResult: ...
+```
+
+It returns the **App-D view-model** as its native output — the **same** structure the React frontend renders and the `.xlsx`/packet builders consume. This prevents a second math/format surface (the §13 anti-goal). It is serialized into `computed_json` (with `monthly_json` and `flags`).
+
+### 9.1 Top-level fields (Appendix D, verbatim names)
+
+| Field | Shape |
+|---|---|
+| `reco` | `{ tag, headline, sub, color, bg, icon }` — `tag` is the §6.3 enum; `color/bg/icon` are **client-derived** (see §9.3) |
+| `metrics` | `{ capital, cashGap, breakeven }` + reasons `{ reasonCapital, reasonGap, reasonBreakeven }` |
+| `kpis[]` | `{ label, value, sub, color }` |
+| `monthly[]` | per month `{ revenue, expenses, net, cumulativeCash }` + top-level `breakevenMonth` |
+| `rows[]` | per 3-year line `{ label, group, y1, y2, y3, class: input\|computed\|overridden\|estimated, editable }` |
+| `overrides[]` | per pin `{ node, year, calculated, value, note, pinnedDate, affected[] }` |
+| `evidence[]` | `{ label, value, method, badge, change, meta }` |
+| `settings` | `{ laborPct, marketingPct, suppliesPct, cardPct, payrollTaxPct, salvagePct, escalator, basket, donationsPerHh, shareY1, shareY2, shareY3, occupancyAnnual, leaseType, salesfloorSqft, reserveBuffer }` |
+| `version`, `model_version`, `compute_schema_version`, `flags` | version stamps (§3) + the N/A flags map (§8) |
+
+### 9.2 Dual-value convention
+Every money/percent value is emitted as `{ raw, display }` — `raw` is the numeric (Decimal-derived) value used for the golden compare; `display` is the server-formatted string (whole dollars / 0.1pp). The client renders `display` and never re-formats (§6.5).
+
+### 9.3 Color is semantic, not API-baked
+The core emits `reco.tag` (`proceed | revise | find_cheaper_rent | raise_cash | delay | do_not_proceed`) and cell `class` (`input | computed | overridden | estimated`). The **client** maps these to brand/semantic tokens. The API never returns hex. This keeps brand-vs-semantic token separation (see DESIGN tokens in [ARCHITECTURE.md](ARCHITECTURE.md)) and lets theming change without an API change. (The legacy prototype's `reco.color/bg` from client compute is reference only.)
+
+> **Prototype is NOT the implementation.** [`House of Hope Projection.dc.html`] computes everything client-side (`support.js` `calcYears/calcMonthly/scenario`). PRD §13 forbids client math in v1. The prototype is a **layout + field-name reference only**; all math is server-side (§13). No `calc*` function survives into production.
+
+---
+
+## 10. Sample-data fixture spec (golden from day one)
+
+Three named projections drive design, the §8 edge-case math, and the golden/LibreOffice reconciliation. They are committed in `engine/tests/golden/` as `inputs → expected computed_json + recalced .xlsx`, pinned to `model_version = "2.0.0"`.
+
+| Fixture | Inputs (deltas from defaults) | Expected headline | Tests |
+|---|---|---|---|
+| **House of Hope (conservative)** | shares 6/8/10%, basket $17.08, labor 40%, marketing 3.75%, supplies 5%, escalator 3%, reserve $25k, `H`=31,798, donation_value $74, 10,000 sqft, 70% salesfloor, NNN | Y1 rev ≈ **$426,911**; Y1 net margin ≈ **11%**; capital required ≈ **$277,990**; break-even ≈ **month 5**; `reco.tag = proceed` | happy path; annual==Σmonthly; no overrides |
+| **Aggressive (flagged)** | shares **15/20/25%**, else defaults | net margin ≈ **39%** → **must trigger** the §12.2 net-margin (>30%) and share (>8%) guardrails; `requires_note = true`; `reco.tag = revise` | guardrail flags fire; not a math error |
+| **Grace Mission (loss case)** | high rent / low share → **Y1 net ≈ ($12,400)**; rent **$14/sqft low-confidence**; **one overridden Payroll cell** (`Payroll#1`) | `simple_payback_years = null` ("N/A — no Year 1 profit"); negatives in parentheses; low-confidence rent badge | N/A sentinels; override + N/A path both recalc clean |
+
+The House of Hope numbers are the **reconciliation target** for the resolved defaults (§1). The Aggressive case mirrors `house_of_hope.json` (which carries the old 15/25% shares) and is the guardrail fixture. The Grace Mission case is the edge-case fixture that the legacy engine's unguarded `=net/totrev` / `=startup/Y1net` would have failed (§0, lines 257/284).
+
+---
+
+## 11. Excel export contract (PRD §18)
+
+Server-generated via `engine/xlsx.py`, consuming the §9 core output. **No web request may import the Excel builder to obtain numbers.**
+
+### 11.1 Cell-class rules (per §18)
+
+| Cell class | Representation |
+|---|---|
+| Inputs / assumptions | hard-coded, **blue** (engine `INPUT_FILL` + `BLUE` font; lines 102/108/116) |
+| Computed, not overridden | **live formula** |
+| **Overridden component** | hard-coded, **orange** fill + comment (exact string §11.2) |
+| Totals / net / margin / KPIs | **always formulas** over components (foots even with overrides) |
+| Monthly cash flow | its **own tab**; the Year-1 P&L column **references the monthly roll-up cells** (never recomputes independently) |
+| N/A (§12.4) | **blank + comment**, never `#DIV/0!` |
+
+### 11.2 Override comment string (exact)
+```
+Manual override — calc was =<formula> → $X; set to $Y on <YYYY-MM-DD>
+```
+Where `<formula>` is the original live formula, `$X` the calculated value, `$Y` the override value. The cell becomes a hard-coded orange value; the enclosing total cell remains `=SUM(...)` over the (now hard-coded) component cells so the sheet foots.
+
+### 11.3 Year-2 share cell
+Three blue input cells for share; the Year-2 projection row references **its own input cell**, **not** `=AVERAGE(...)` (kills engine line 209; §4.1).
+
+### 11.4 Total/override consistency (the gate's hardest case)
+The server's resolved total and the in-sheet `=SUM(...)` **must derive from the same resolved node values** (§7.3). The overridden component cell holds the resolved override value; the total formula sums over it. This is the case the legacy `build_xlsx` never handled and the one most likely to fail the <$0.50 gate.
+
+### 11.5 Division guards (kill `#DIV/0!`)
+Every divided cell uses the guard pattern so LibreOffice recalc never yields `#DIV/0!`:
+```
+=IF(<denom>=0, "", <num>/<denom>)
+```
+Applied to: net margin (`=net/totrev`, was line 257), simple payback (`=startup/Y1net`, was line 284), customers (`=retail/basket`), and every per-unit KPI. A `null` from the core renders as a **blank cell + comment** describing the N/A (§8).
+
+### 11.6 Tabs
+- **`Projection`** — inputs (blue), 3-year P&L (formulas), startup costs, KPIs, decision metrics.
+- **`Monthly Cash Flow`** — M0–M12 rows; the Year-1 P&L column on the `Projection` tab references these cells (§18, §10.3).
+
+---
+
+## 12. Calibration & confidence (PRD §29, §6.3)
+
+The monthly ramp (`RAMP_MONTHS`, `RAMP_CURVE`), seasonality, peak-shortfall timing, and therefore `break_even_month` have **never been calibrated against a real opening**. They are emitted with `flags.ramp_low_confidence = true`, shown with a confidence label and sensitivity (§6.2), and feed the **calibration backlog** that the post-launch actuals store (PRD §6.3, §24) will close. Treat a confidently-wrong break-even month as a defect, not a feature.
+
+---
+
+## 13. The golden-test gate (PRD §13, §18) — CI-blocking
+
+The gate is the **only** thing that keeps the single-authority claim true once the model grows (marketing, escalator, monthly). It is built in **M1, before any UI depth** ([BUILD_PLAN.md](BUILD_PLAN.md) M1).
+
+### 13.1 Three-way reconciliation
+For every fixture, assert all three agree:
+1. **Server Python compute** (`engine/compute.py` output).
+2. **Stored `computed_json`** (the serialized view-model).
+3. **LibreOffice recalc** of the exported `.xlsx` (`recalc.py`, see [`recalc.py`](reference/thrift-store-projections-skill/scripts/recalc.py)).
+
+### 13.2 Tolerances
+- Dollar cells: `abs(delta) < $0.50`.
+- Percent cells: `abs(delta) < 0.1pp`.
+- Formula errors: **zero** (see §13.3).
+- Round both sides per §6.5 before comparing.
+
+### 13.3 Formula-error assertion (verbatim from `recalc.py`)
+Assert `result["status"] == "success"` **AND** `result["total_errors"] == 0` across the recalc error list: `#VALUE!, #DIV/0!, #REF!, #NAME?, #NULL!, #NUM!, #N/A` (`recalc.py` lines 103–111). **Fail closed:** a runner without `soffice` returns an `{"error": ...}` dict (no `status`); the harness must treat a missing/`error` status as a **failure**, never a pass.
+
+### 13.4 Annual == monthly roll-up
+Assert `annual_Y1[line] == sum(monthly[M1..M12][line])` to the penny for every P&L line (§4.2, §5.3).
+
+### 13.5 With AND without overrides
+Run the entire gate in **two states**: (a) no overrides; (b) at least one component override **plus** at least one N/A path (the Grace Mission fixture, §10). The legacy `SKILL.md` step-4 recalc only ever covered the no-override happy path — the build process **extends** it to the override and edge-case fixtures.
+
+### 13.6 Mandatory fixtures
+`happy path (House of Hope)`, `0-revenue (0% share)`, `Y1 net ≤ 0 (Grace Mission)`, `negative-net`, `overridden-component (Payroll#1)`, `sensitivity downside (−25% donations, −25% rent)`. Each must recalc clean and emit the correct N/A sentinels / flags.
+
+### 13.7 Calibration golden (legacy script)
+Freeze the **legacy** annual `generate_projection.py` output for the House of Hope config as a **regression golden** so the v2.0.0 rewrite is provably calibrated against the known-good Longview driver-chain numbers **before** adding monthly/overrides. The legacy script is a calibration reference **only**; it is never the runtime engine (§0).
+
+### 13.8 Environment pinning
+LibreOffice / `soffice` version is **pinned in the build image** (the recalced values can shift across versions and undermine the <$0.50 tolerance). The recalc step is sandboxed and time-boxed (it shells out to `soffice`; `recalc.py` already wraps with `timeout`/`gtimeout`, lines 87–91). See [OPS_RUNBOOK.md](OPS_RUNBOOK.md) for the pinned version and the CI image.
+
+### 13.9 DoD tie-in
+This gate is a **Tier-1 GATE** item in [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md): no engine/contract PR merges unless `pytest -q` is green, the three-way reconcile passes, and `python recalc.py <xlsx>` reports `total_errors: 0` — with fresh command output in the PR (verification-before-completion).
+
+---
+
+## 14. Performance budget (PRD §27)
+
+`compute()` targets **p95 < 50 ms server compute, excluding research/LLM**. The annual model is trivially within budget; the monthly model (M0–M12 × line items × DAG topo-sort) plus per-keystroke (debounced) override resolution is heavier and must have a **perf test in M1**. Research and narrative are bounded async services and are **never** in the compute hot path; compute must work fully with AI disabled (PRD §21 opt-out) — a test runs the full compute + `.xlsx` flow with all AI keys unset.
+
+---
+
+## 15. Module layout (where the math lives)
+
+```
+engine/
+  model.py          # constants + MODEL_VERSION / COMPUTE_SCHEMA_VERSION (§2, §3)
+  compute.py        # PURE core: compute(...) -> ComputeResult (§9). No openpyxl/docx imports.
+  monthly.py        # M0–M12 ramp + cash-flow (§5)
+  dag.py            # override resolution, non-pinnable list, stale flags (§7)
+  decision.py       # capital, cash gap, break-even, guardrails, recommendation (§6)
+  xlsx.py           # consumes compute output -> .xlsx per §11
+  packet.py         # consumes compute output -> Board Packet / .docx (§17)
+  narrative_facts.py# computed_json -> approved facts for grounded narrative (§17)
+  tests/golden/     # fixtures + LibreOffice recalc via recalc.py (§13)
+```
+
+The renderers (`xlsx.py`, `packet.py`) **consume** the core's output; they never re-implement math. This is the structural guarantee behind the single-authority claim.
+
+---
+
+## 16. Summary of binding rules
+
+1. One pure compute core; renderers consume it; **no second math surface** (§0, §9, §15).
+2. Year-2 share is an **explicit input**; the midpoint is dead (§4.1).
+3. Resolved defaults: **labor 40%, basket $17.08, escalator 3% compound** (§1, §2) — must reproduce the Appendix-D headline numbers.
+4. New cost lines: **Marketing 3.75%**, **Supplies 5% (replaces fixed $3,700)**; reserve buffer **$25k** (§2, §4.2).
+5. Monthly-first; **Year-1 annual == Σ monthly** to the penny (§4.2, §5.3, §13.4).
+6. Decision metrics computed in the core and **golden-tested**, not just rendered (§6, §13).
+7. Override DAG: topological, **no back-solve**, derived/total/KPI/decision nodes **non-pinnable (rejected server-side)** (§7).
+8. N/A → explicit `null` + `flags`; negatives in parentheses; **never `#DIV/0!`** (§8, §11.5).
+9. Excel: totals always formulas; overridden components orange + exact comment; monthly tab; division guards (§11).
+10. Golden gate (server == `computed_json` == LibreOffice recalc; <$0.50 / 0.1pp; zero errors; with/without overrides; fail-closed; pinned `soffice`) is **CI-blocking from M1** (§13).
