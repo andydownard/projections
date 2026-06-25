@@ -15,17 +15,26 @@ snapshot is written per settle. The .xlsx export lands in a later slice.
 from __future__ import annotations
 
 import json
+import os
+import re
 import secrets
+import tempfile
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from app.deps import hash_token, parse_if_match, token_matches
 from app.store import Store, get_store
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.viewmodel import to_view_model
+from engine.xlsx import build_xlsx
+
+XLSX_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 router = APIRouter(prefix="/api/projections", tags=["projections"])
 
@@ -127,14 +136,37 @@ def _compute_view_model(body: CreateProjectionIn) -> dict[str, Any]:
     return result.view_model or to_view_model(result)
 
 
+def _compute_result_from_dicts(
+    inputs_d: dict, assumptions_d: Optional[dict], demand_d: dict,
+    trade_d: dict, overrides_d: dict,
+):
+    """Recompute the full ComputeResult from stored inputs (the .xlsx source).
+
+    The workbook builder consumes resolved node values, which equal the stored
+    computed_json by the single-math-authority invariant (golden gate, §18).
+    """
+    inputs, assumptions, demand, trade = _build_engine_args_from_dicts(
+        inputs_d, assumptions_d, demand_d, trade_d)
+    return compute(inputs, assumptions, demand, trade, overrides=overrides_d or {})
+
+
 def _compute_view_model_from_dicts(
     inputs_d: dict, assumptions_d: Optional[dict], demand_d: dict,
     trade_d: dict, overrides_d: dict,
 ) -> dict[str, Any]:
-    inputs, assumptions, demand, trade = _build_engine_args_from_dicts(
-        inputs_d, assumptions_d, demand_d, trade_d)
-    result = compute(inputs, assumptions, demand, trade, overrides=overrides_d or {})
+    result = _compute_result_from_dicts(
+        inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
     return result.view_model or to_view_model(result)
+
+
+def _safe_filename_stem(name: str) -> str:
+    """Sanitize a user-supplied org/projection name for Content-Disposition.
+
+    No path separators, control chars, or quotes ever reach the header — the
+    on-disk path is server-controlled (tempfile); this only labels the download.
+    """
+    stem = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "").strip()
+    return stem or "Projection"
 
 
 # -------------------------------------------------------------------- endpoints
@@ -243,6 +275,45 @@ def get_projection(view_slug: str, response: Response, store: Store = Depends(ge
         vm = {}
     response.headers["ETag"] = str(row["version"])
     return {**vm, "view_slug": view_slug, "version": row["version"], "name": row["name"]}
+
+
+@router.get("/{view_slug}/xlsx")
+def export_xlsx(view_slug: str, store: Store = Depends(get_store)):
+    """Formula-driven .xlsx export (API_SPEC §6.3).
+
+    Owner/edit/view may download (the slug already grants read). Terms acceptance
+    is required first (§21) -> 403 terms_required. The workbook is rendered from
+    the SAME resolved node values as computed_json (one math surface): blue inputs,
+    live formulas, orange overrides + audit comment, guarded IF divisions, monthly
+    tab. Written to a server-controlled temp file, streamed, then deleted.
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    if not row.get("terms_accepted_at"):
+        raise HTTPException(status_code=403, detail={"error": "terms_required"})
+
+    result = _compute_result_from_dicts(
+        json.loads(row["inputs_json"] or "{}"),
+        json.loads(row["assumptions_json"] or "{}"),
+        json.loads(row["demand_drivers_json"] or "{}"),
+        json.loads(row["trade_area_json"] or "{}"),
+        json.loads(row["overrides_json"] or "{}"),
+    )
+
+    fd, path = tempfile.mkstemp(suffix=".xlsx", prefix="projection-")
+    os.close(fd)
+    build_xlsx(result, path)
+
+    stem = _safe_filename_stem(row.get("name") or "")
+    filename = f"{stem} 3-Year Projection.xlsx"
+    return FileResponse(
+        path,
+        media_type=XLSX_CONTENT_TYPE,
+        filename=filename,
+        background=BackgroundTask(lambda: os.path.exists(path) and os.remove(path)),
+    )
 
 
 @router.patch("/{view_slug}")
