@@ -39,4 +39,7 @@ ENV DB_PATH=/data/projections.db
 
 EXPOSE 8000
 # Boot order: migrate -> validate config -> serve (SECURITY.md §11.3).
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Bind Railway's injected $PORT (shell form so it expands); default 8000 locally.
+# Railway routes traffic + the /api/health check to $PORT — a hardcoded port makes
+# the healthcheck fail even though the app booted fine.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
