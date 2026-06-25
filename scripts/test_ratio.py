@@ -115,3 +115,81 @@ def test_excludes_migrations_and_golden_and_init(tmp_path):
     assert not any("migrations" in p for p in files)
     assert not any("golden" in p for p in files)
     assert not any(p.endswith("__init__.py") for p in files)
+
+
+def test_excludes_node_modules_and_build_and_report_artifacts(tmp_path):
+    """The gate must not be fooled by vendored deps, build output, coverage
+    caches, or Playwright's binary report/screenshot artifacts. Each of these
+    contains files whose suffix/path would otherwise be misclassified as a
+    frontend/e2e *spec* and inflate the test numerator dishonestly.
+    """
+    repo = _make_repo(tmp_path)
+
+    # Vendored dep specs under e2e/node_modules — must NOT count as tests.
+    nm = repo / "e2e" / "node_modules" / "some-lib"
+    nm.mkdir(parents=True)
+    (nm / "index.test.js").write_text(
+        "\n".join(f"it('{i}', () => {{}});" for i in range(500)) + "\n"
+    )
+    nm2 = repo / "web" / "node_modules" / "dep"
+    nm2.mkdir(parents=True)
+    (nm2 / "thing.spec.ts").write_text(
+        "\n".join(f"expect({i}).toBe({i});" for i in range(500)) + "\n"
+    )
+
+    # Build output under web/dist — must NOT count.
+    dist = repo / "web" / "dist" / "assets"
+    dist.mkdir(parents=True)
+    (dist / "bundle.spec.js").write_text(
+        "\n".join(f"x={i}" for i in range(500)) + "\n"
+    )
+
+    # Coverage / property cache — must NOT count.
+    hyp = repo / "engine" / "tests" / ".hypothesis" / "examples"
+    hyp.mkdir(parents=True)
+    (hyp / "deadbeef.test.py").write_text(
+        "\n".join(f"a={i}" for i in range(500)) + "\n"
+    )
+
+    # Playwright binary report + screenshot artifacts — must NOT count.
+    tr = repo / "e2e" / "test-results" / "run-1"
+    tr.mkdir(parents=True)
+    # A PNG screenshot (binary) cloc would otherwise tally as "code" lines.
+    (tr / "shot-desktop-1440.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50000)
+    pr = repo / "e2e" / "playwright-report" / "data"
+    pr.mkdir(parents=True)
+    (pr / "trace.spec.js").write_text(
+        "\n".join(f"y={i}" for i in range(500)) + "\n"
+    )
+
+    proc = _run(repo)
+    data = json.loads(proc.stdout)
+    files = {f["path"] for f in data["files"]}
+
+    assert not any("node_modules" in p for p in files), sorted(files)
+    assert not any(("/dist/" in p or p.startswith("dist/") or "/dist" in p)
+                   for p in files), sorted(files)
+    assert not any(".hypothesis" in p for p in files), sorted(files)
+    assert not any("test-results" in p for p in files), sorted(files)
+    assert not any("playwright-report" in p for p in files), sorted(files)
+    assert not any(p.endswith(".png") for p in files), sorted(files)
+
+    # The honest counts are unchanged from the clean fixture: the dishonest
+    # 2500+ artifact lines must have been fully excluded.
+    assert data["repo"]["code_loc"] == 15, data
+    assert data["repo"]["test_loc"] == 87, data
+
+
+def test_excludes_venv(tmp_path):
+    """A vendored .venv with a thousand 'test' lines must not move the gate."""
+    repo = _make_repo(tmp_path)
+    venv = repo / "app" / ".venv" / "lib"
+    venv.mkdir(parents=True)
+    (venv / "test_vendored.py").write_text(
+        "\n".join(f"assert {i}" for i in range(1000)) + "\n"
+    )
+    proc = _run(repo)
+    data = json.loads(proc.stdout)
+    files = {f["path"] for f in data["files"]}
+    assert not any(".venv" in p for p in files), sorted(files)
+    assert data["repo"]["test_loc"] == 87, data

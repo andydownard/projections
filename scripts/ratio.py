@@ -44,6 +44,43 @@ CODE_ROOTS = ("engine", "app")
 CODE_SUFFIXES = (".py",)
 
 
+# Vendored / generated / build / report / cache trees. ANY path component
+# matching one of these is excluded — these never contain hand-authored
+# test or product code, and several of them (test-results, playwright-report)
+# hold binary blobs (.png/.zip/.webm) that cloc would otherwise tally as
+# thousands of phantom "code" lines and dishonestly inflate the gate.
+_EXCLUDED_DIR_PARTS = frozenset(
+    {
+        "node_modules",
+        "vendor",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        ".hypothesis",
+        ".mypy_cache",
+        ".pytest_cache",
+        "__pycache__",
+        ".git",
+        "coverage",
+        "htmlcov",
+        "test-results",
+        "playwright-report",
+    }
+)
+
+# Non-source suffixes that may live under e2e/web roots (screenshots, traces,
+# fixtures, lockfiles). Never counted as test or code.
+_EXCLUDED_SUFFIXES = frozenset(
+    {
+        ".xlsx", ".json", ".csv",
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
+        ".webm", ".zip", ".gz", ".map", ".lock", ".log", ".txt", ".md",
+        ".html", ".css", ".woff", ".woff2", ".ttf",
+    }
+)
+
+
 def _is_excluded(rel: Path) -> bool:
     parts = rel.parts
     if rel.name == "__init__.py":
@@ -53,9 +90,9 @@ def _is_excluded(rel: Path) -> bool:
     # generated/golden fixtures and golden .xlsx blobs
     if "golden" in parts:
         return True
-    if rel.suffix in (".xlsx", ".json", ".csv"):
+    if rel.suffix in _EXCLUDED_SUFFIXES:
         return True
-    if "node_modules" in parts or "vendor" in parts or ".venv" in parts:
+    if _EXCLUDED_DIR_PARTS.intersection(parts):
         return True
     return False
 
