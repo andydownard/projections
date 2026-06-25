@@ -107,3 +107,6 @@ def test_invalid_inputs_return_422(client):
     bad["inputs"].pop("occupancy_annual")  # no occupancy AND no rent_per_sqft -> engine raises
     r = _create(client, bad)
     assert r.status_code == 422, r.text
+
+# PATCH / autosave / If-Match / 409 are covered comprehensively in
+# test_projections_patch.py (the canonical mutation-quad contract).

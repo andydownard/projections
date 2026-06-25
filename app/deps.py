@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from typing import Optional
 
 from fastapi import Header, HTTPException
 
@@ -31,7 +32,7 @@ def token_matches(presented: str, stored_hash: str) -> bool:
     return hmac.compare_digest(hash_token(presented), stored_hash)
 
 
-def parse_if_match(if_match: str | None = Header(default=None)) -> int:
+def parse_if_match(if_match: Optional[str] = Header(default=None)) -> int:
     """Parse the If-Match: <version> header for optimistic concurrency.
 
     Every mutation requires it (SECURITY.md §6.1). Missing/non-integer -> 428.
