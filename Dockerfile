@@ -1,15 +1,13 @@
-# Dockerfile — FastAPI + pinned LibreOffice (soffice) for the recalc gate (M0.7).
-# The CI/build image pins the LibreOffice version so recalc values cannot shift
-# across versions and undermine the <$0.50 tolerance (ENGINE_CONTRACT §13.8).
+# Dockerfile — slim FastAPI runtime. The app builds .xlsx via openpyxl; LibreOffice
+# (soffice) is NOT a runtime dependency — the recalc golden gate runs in CI/local
+# tests only (where soffice is installed separately). Bundling LibreOffice here made
+# the image ~2GB and stalled the Railway image push, so it is intentionally excluded
+# from the runtime image (ENGINE_CONTRACT §13.8 recalc gate stays a CI concern).
 FROM python:3.12-slim AS base
 
-# LibreOffice (pinned) for the recalc gate + coreutils for `timeout`.
+# Only ca-certificates (httpx HTTPS to Places/Census/Anthropic/OpenAI).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        libreoffice-calc-nogui \
-        coreutils \
-        ca-certificates \
-        curl \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
