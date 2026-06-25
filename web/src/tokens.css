@@ -1,0 +1,71 @@
+/* web/src/tokens.css — two-layer design tokens (ARCHITECTURE §7, M2.10).
+ *
+ * brand-* vs semantic-* are SEPARATE layers. Meaning never depends on brand:
+ * negative profit = error, low-confidence = warning, overridden = override-tan,
+ * regardless of theme. Cell-state classes reference SEMANTIC tokens only.
+ * Shipped as a real CSS file (no inline style=) so style-src 'self' holds. */
+
+:root {
+  /* --- brand layer --- */
+  --brand-primary: #35644f;
+  --brand-deep: #1d4733;
+
+  /* --- semantic layer --- */
+  --success: #257648;
+  --warning: #b45309;
+  --error: #dc2626;
+  --override: #cbb7a9;
+
+  /* --- surfaces / text / lines --- */
+  --surface: #ffffff;
+  --surface-alt: #f5f6f4;
+  --line: #d9ddd7;
+  --text: #1a201c;
+  --text-muted: #5b655f;
+
+  --focus-ring: 2px solid var(--brand-primary);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+  background: var(--surface-alt);
+}
+
+/* All numerics use tabular figures, right-aligned (DoD frontend gate). */
+.num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar__brand {
+  font-weight: 600;
+  color: var(--brand-deep);
+}
+
+.chip {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-muted);
+}

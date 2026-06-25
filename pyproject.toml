@@ -1,0 +1,56 @@
+[project]
+name = "projections"
+version = "0.0.0"
+description = "Thrift Store Projection web app — server-authoritative compute"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]",
+    "pydantic>=2",
+    "httpx",
+    "openpyxl",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests", "engine/tests", "scripts"]
+python_files = ["test_*.py"]
+addopts = "-q"
+
+[tool.coverage.run]
+branch = true
+# The pure math authority is where test density is required (DoD: engine/** >=90%).
+# recalc.py / harness.py shell out to LibreOffice and are exercised by the recalc
+# gate, not unit coverage.
+source = ["engine"]
+omit = [
+    "engine/tests/*",
+    "engine/recalc.py",
+    "engine/__init__.py",
+]
+
+[tool.coverage.report]
+# CI fails the build if engine math coverage drops below 90% (paired with the
+# ratio gate so the test:code ratio cannot be gamed by trivial assertions).
+fail_under = 90
+show_missing = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+exclude = [".venv", "web", "reference", "app/store/migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+exclude = ["reference/", "web/", "\\.venv/"]
