@@ -44,11 +44,25 @@ class PostgresStore:
     ) -> int:
         self._stub("update_with_version_check")
 
+    def rotate_tokens(
+        self, id: str, expected_version: int, new_hashes: dict[str, Any]
+    ) -> int:
+        self._stub("rotate_tokens")
+
+    def set_status(self, id: str, status: str, expected_version: int) -> int:
+        self._stub("set_status")
+
+    def soft_delete(self, id: str, expected_version: int) -> int:
+        self._stub("soft_delete")
+
     def insert_revision(self, rev: dict) -> None:
         self._stub("insert_revision")
 
     def list_revisions(self, projection_id: str, limit: int = 50) -> list[dict]:
         self._stub("list_revisions")
+
+    def get_revision(self, revision_id: str) -> dict | None:
+        self._stub("get_revision")
 
     def get_terms_accepted_at(self, id: str) -> str | None:
         self._stub("get_terms_accepted_at")

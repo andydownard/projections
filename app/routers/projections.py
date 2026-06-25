@@ -583,3 +583,182 @@ def rotate_tokens(
             "roles": new_role_secrets,
         },
     }
+
+
+# --------------------------------------------------------- revisions (owner-only)
+@router.get("/{view_slug}/revisions")
+def list_revisions(
+    view_slug: str,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Owner-scoped revision history (API_SPEC §5.1).
+
+    Metadata + change_summary only — snapshot bodies are not inlined. Edit/view
+    tokens cannot browse history (owner_required).
+    """
+    row = _require_owner(store, view_slug, authorization)
+    revs = store.list_revisions(row["id"])
+    return {"revisions": [
+        {
+            "id": r["id"],
+            "version": r["seq"],
+            "change_summary": r.get("change_summary", ""),
+            "actor": "owner",
+            "event": _revision_event(r.get("change_summary", "")),
+            "created_at": r["created_at"],
+        }
+        for r in revs
+    ]}
+
+
+@router.post("/{view_slug}/revisions/{revision_id}/restore")
+def restore_revision(
+    view_slug: str,
+    revision_id: str,
+    response: Response,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Restore a snapshot as a NEW forward revision (API_SPEC §5.2).
+
+    Owner-only. Appends rather than rewinds history: the snapshot's
+    inputs/assumptions/overrides are recomputed and persisted at the next version.
+    """
+    row = _require_owner(store, view_slug, authorization)
+    rev = store.get_revision(revision_id)
+    if rev is None or rev["projection_id"] != row["id"]:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    inputs_d = json.loads(rev["inputs_json"] or "{}")
+    assumptions_d = json.loads(rev["assumptions_json"] or "{}")
+    overrides_d = json.loads(rev["overrides_json"] or "{}")
+    demand_d = json.loads(row["demand_drivers_json"] or "{}")
+    trade_d = json.loads(row["trade_area_json"] or "{}")
+
+    try:
+        vm = _compute_view_model_from_dicts(
+            inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_inputs", "message": str(exc)})
+
+    patch = {
+        "inputs_json": json.dumps(inputs_d),
+        "assumptions_json": json.dumps(assumptions_d),
+        "overrides_json": json.dumps(overrides_d),
+        "computed_json": json.dumps(vm),
+        "model_version": vm.get("model_version", ""),
+    }
+    affected = store.update_with_version_check(row["id"], if_match, patch)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+
+    new_version = if_match + 1
+    token = _bearer(authorization)
+    store.insert_revision({
+        "id": _new_id(),
+        "projection_id": row["id"],
+        "seq": new_version,
+        "inputs_json": patch["inputs_json"],
+        "assumptions_json": patch["assumptions_json"],
+        "overrides_json": patch["overrides_json"],
+        "monthly_json": "{}",
+        "computed_json": patch["computed_json"],
+        "model_version": patch["model_version"],
+        "actor_token_hash": hash_token(token) if token else None,
+        "change_summary": f"restore from v{rev['seq']}",
+        "created_at": _utcnow(),
+    })
+    response.headers["ETag"] = str(new_version)
+    return {**vm, "view_slug": view_slug, "version": new_version, "name": row["name"]}
+
+
+# ------------------------------------------------- trash lifecycle (owner-only)
+def _set_status_or_conflict(store, row, if_match, status):
+    affected = store.set_status(row["id"], status, if_match)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+
+
+@router.post("/{view_slug}/trash")
+def trash_projection(
+    view_slug: str,
+    response: Response,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Soft delete (API_SPEC §4.8): status -> trashed. Owner-only, If-Match required."""
+    row = _require_owner(store, view_slug, authorization)
+    _set_status_or_conflict(store, row, if_match, "trashed")
+    current = store.get_projection_by_slug(view_slug)
+    try:
+        vm = json.loads(current["computed_json"] or "{}") if current else {}
+    except json.JSONDecodeError:
+        vm = {}
+    new_version = if_match + 1
+    response.headers["ETag"] = str(new_version)
+    return {**vm, "view_slug": view_slug, "version": new_version,
+            "name": row["name"], "status": "trashed"}
+
+
+@router.post("/{view_slug}/restore")
+def restore_projection(
+    view_slug: str,
+    response: Response,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Restore from trash (API_SPEC §4.8): status -> active. Owner-only."""
+    row = _require_owner(store, view_slug, authorization)
+    _set_status_or_conflict(store, row, if_match, "active")
+    current = store.get_projection_by_slug(view_slug)
+    try:
+        vm = json.loads(current["computed_json"] or "{}") if current else {}
+    except json.JSONDecodeError:
+        vm = {}
+    new_version = if_match + 1
+    response.headers["ETag"] = str(new_version)
+    return {**vm, "view_slug": view_slug, "version": new_version,
+            "name": row["name"], "status": "active"}
+
+
+@router.delete("/{view_slug}", status_code=204)
+def delete_projection(
+    view_slug: str,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Hard delete / purge (API_SPEC §4.8). Owner-only; permitted ONLY when the
+    projection is already trashed (else 409 not_trashed). Irreversible: sets
+    deleted_at so the row is excluded from every read."""
+    row = _require_owner(store, view_slug, authorization)
+    if row.get("status") != "trashed":
+        raise HTTPException(status_code=409, detail={"error": "not_trashed"})
+    affected = store.soft_delete(row["id"], if_match)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+    return Response(status_code=204)
+
+
+def _revision_event(summary: str) -> str:
+    """Map a change_summary -> the revision event enum (API_SPEC §5.1)."""
+    if "rotate" in summary:
+        return "rotate"
+    if summary.startswith("restore"):
+        return "restore"
+    if "override" in summary or "pin" in summary:
+        return "override"
+    if "upgrade" in summary:
+        return "upgrade_model"
+    return "edit"

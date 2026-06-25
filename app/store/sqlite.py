@@ -150,6 +150,12 @@ class SqliteStore:
             )
         ]
 
+    def get_revision(self, revision_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM revisions WHERE id = ?", (revision_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
     def get_projection_by_role_slug(self, role_slug: str) -> dict | None:
         """Resolve a role-link slug -> (projection_row, role_name).
 
