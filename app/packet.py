@@ -234,3 +234,84 @@ def render_packet_md(pkt: dict[str, Any]) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+# ----------------------------------------------------------------- .docx render
+# A .docx is an OOXML zip. We build it stdlib-only (zipfile) so the export has no
+# third-party dependency on the render path — same discipline as the sanitizer.
+# Content is the SAME grounded packet text as the markdown render (one source of
+# figures); paragraphs map 1:1 from the rendered lines so the export can never
+# carry a figure the markdown packet doesn't.
+import io
+import re
+import zipfile
+from xml.sax.saxutils import escape as _xml_escape
+
+_DOCX_CONTENT_TYPES = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-'
+    'package.relationships+xml"/>'
+    '<Default Extension="xml" ContentType="application/xml"/>'
+    '<Override PartName="/word/document.xml" ContentType="application/vnd.'
+    'openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+    "</Types>"
+)
+_DOCX_RELS = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+    'relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.'
+    'org/officeDocument/2006/relationships/officeDocument" Target="word/'
+    'document.xml"/></Relationships>'
+)
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(s: str) -> str:
+    """Flatten sanitized narrative HTML to text for a .docx paragraph run.
+
+    The body_md is ALREADY allowlist-sanitized (no scripts/handlers); for the
+    Word body we drop the remaining presentational tags and unescape the few
+    entities the sanitizer emitted, then re-escape for XML safety downstream.
+    """
+    text = _TAG_RE.sub(" ", s or "")
+    text = (text.replace("&amp;", "&").replace("&lt;", "<")
+            .replace("&gt;", ">").replace("&quot;", '"'))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _docx_paragraph(text: str) -> str:
+    return (
+        "<w:p><w:r><w:t xml:space=\"preserve\">"
+        f"{_xml_escape(text)}"
+        "</w:t></w:r></w:p>"
+    )
+
+
+def render_packet_docx(pkt: dict[str, Any]) -> bytes:
+    """Render the packet to a minimal valid .docx (OOXML zip), stdlib-only (N11).
+
+    The board's CURRENT stored (possibly edited) narrative prose travels into the
+    document body verbatim (tags flattened). Figures are the same grounded
+    display strings as the markdown packet — one source of truth.
+    """
+    # Reuse the markdown render as the canonical line source, then split into
+    # Word paragraphs so the .docx and .md never diverge in content/figures.
+    md = render_packet_md(pkt)
+    paras = [_docx_paragraph(line) for line in md.split("\n")]
+    body = "".join(paras)
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/'
+        '2006/main"><w:body>'
+        f"{body}"
+        "</w:body></w:document>"
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", _DOCX_CONTENT_TYPES)
+        zf.writestr("_rels/.rels", _DOCX_RELS)
+        zf.writestr("word/document.xml", document_xml)
+    return buf.getvalue()

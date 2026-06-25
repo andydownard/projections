@@ -333,12 +333,25 @@ def compute_hash(vm: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def format_was_now(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """The ONE was->now formatter (N11). Both the narrative ``stale_diff`` and the
+    ``/preview`` ``changed[]`` list route through this so the two surfaces never
+    drift in shape. Each row is normalized to ``{**row, was, now}`` with empty
+    strings (never ``None``) for an added/removed field, preserving any extra keys
+    (``field``, ``label``, ``sign``) the caller attached.
+    """
+    out: list[dict[str, str]] = []
+    for row in rows:
+        out.append({**row, "was": row.get("was") or "", "now": row.get("now") or ""})
+    return out
+
+
 def stale_diff(old_vm: dict[str, Any], new_vm: dict[str, Any]) -> list[dict[str, str]]:
     """Field-level diff of changed figures (API_SPEC §6.1 stale_diff shape)."""
     old, new = _facts(old_vm), _facts(new_vm)
-    diff: list[dict[str, str]] = []
+    rows: list[dict[str, str]] = []
     for field in sorted(set(old) | set(new)):
         was, now = old.get(field), new.get(field)
         if was != now:
-            diff.append({"field": field, "was": was or "", "now": now or ""})
-    return diff
+            rows.append({"field": field, "was": was, "now": now})
+    return format_was_now(rows)

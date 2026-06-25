@@ -34,11 +34,12 @@ from app.narrative import (
     GroundingError,
     canonical_grounded_figures,
     compute_hash,
+    format_was_now,
     sanitize_body_md,
     stale_diff,
     validate_grounding,
 )
-from app.packet import build_packet, render_packet_md
+from app.packet import build_packet, render_packet_docx, render_packet_md
 from app.store import Store, get_store
 from engine import dag
 from engine.compute import (
@@ -333,7 +334,9 @@ def _diff_changed(before: dict, after: dict) -> list[dict]:
             sign = "up" if a_raw > b_raw else "down" if a_raw < b_raw else "flat"
         out.append({"label": label, "was": b.get("display"),
                     "now": a.get("display"), "sign": sign})
-    return out
+    # N11: route through the ONE shared was->now formatter so /preview changed[]
+    # and the narrative stale_diff never drift in shape.
+    return format_was_now(out)
 
 
 def _metrics_subset(vm: dict) -> dict:
@@ -730,18 +733,32 @@ def export_packet(
         live_vm = {}
     live_vm.setdefault("name", row.get("name") or "")
 
-    # Narrative is omitted when AI is disabled (§21) or none is stored / it is stale.
+    # N11: the packet uses the CURRENT stored (possibly edited:true) sanitized
+    # body_md verbatim — the board's last-edited prose. It is NOT dropped just
+    # because it is stale (a stale narrative still carries the operator's words;
+    # the staleness banner lives on the editing surface, not the export). Prose is
+    # omitted ONLY when AI is disabled (§21) or no narrative is stored. The stored
+    # body_md was already allowlist-sanitized at PUT/regenerate time.
     narrative_md = None
     if not _ai_disabled(row):
         nar = store.get_narrative(row["id"]) or {}
-        body = nar.get("body_md") or ""
-        if body and nar.get("computed_hash") == compute_hash(live_vm):
-            narrative_md = body
+        narrative_md = (nar.get("body_md") or "") or None
 
     pkt = build_packet(live_vm, role=role or "board", narrative_md=narrative_md)
-    md = render_packet_md(pkt)
 
     stem = _safe_filename_stem(row.get("name") or "")
+    if (format or "md").lower() == "docx":
+        data = render_packet_docx(pkt)
+        filename = f"{stem} Board Packet.docx"
+        return Response(
+            content=data,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"),
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    md = render_packet_md(pkt)
     filename = f"{stem} Board Packet.md"
     return Response(
         content=md,
