@@ -378,6 +378,57 @@ Every endpoint and PR carries these, enforced as gates (full list in [`DEFINITIO
 
 ---
 
+## 15a. M7 hardening review notes (OWASP / STRIDE)
+
+M7 adds no new HTTP endpoint and no new secret; the new surfaces are an operational
+script (restore-drill verifier), a boot-time static check (additive-migration gate),
+and a client-only presentation component (the degraded/error state). The review
+below is the per-surface STRIDE + OWASP pass for those surfaces.
+
+### Surface 1 — restore-drill verifier (`app/store/verify_restore.py`, `scripts/verify_restore.py`)
+- **STRIDE / Tampering, Repudiation:** the verifier is read-only against a *throwaway*
+  restored file (it never touches `/data` or the live DB). It opens SQLite read-only
+  in intent and only `SELECT`s; no user input reaches SQL except the `--slug` value,
+  which is passed as a **bound parameter** (no string concatenation, per CLAUDE.md).
+- **OWASP A03 (Injection):** parameterised query; the slug is operator-supplied at the
+  CLI, not attacker-supplied over the network.
+- **Information disclosure:** the report dict echoes only **display strings** for the
+  three decision metrics (already non-secret view-model data) plus a row count — never
+  tokens, never raw `inputs_json`. Safe for the deploy log.
+- **DoS:** single fixed-row lookup; not network-reachable.
+
+### Surface 2 — additive-migration safety gate (`app/store/migration_safety.py`)
+- **STRIDE / Tampering, Denial of Service (data-loss class):** this is a *defensive*
+  control. It fails the boot **closed** if a shipped migration contains `DROP TABLE`,
+  `DROP COLUMN`, `RENAME`, `ALTER COLUMN`, `TRUNCATE`, or bulk `DELETE` — the exact
+  destructive DDL a Litestream restore cannot undo because the schema change already
+  ran. It strips comments and quoted literals first, so a column named `drop_off_count`
+  or a default of `'do not drop table'` does not false-positive (no DoS-by-false-trip).
+- **OWASP A08 (Software & Data Integrity):** enforces the additive-only invariant
+  (CLAUDE.md DB discipline) as code, not just docs; ships with the migration that runs.
+
+### Surface 3 — degraded/error states (`web/src/components/DegradedState.tsx`)
+- **STRIDE / Tampering (stored XSS class):** renders only **static, code-owned copy**
+  and an optional caller-supplied `detail` string via React text interpolation (auto-
+  escaped) — **no `dangerouslySetInnerHTML`**, no raw HTML. Consistent with "stored XSS
+  = token theft" (§0): the error surface cannot become an injection vector.
+- **Information disclosure:** the 409/offline/stale copy is generic; it does not leak a
+  `view_slug`, token, or financial figure into a user-visible error (mirrors the
+  feedback-redaction rule, §9). Recovery callbacks are wired by the page, not encoded
+  in a URL.
+- **a11y is a security-adjacent control:** meaning is carried in **text + an icon, never
+  color alone** (role=alert for hard errors, role=status for degraded-but-usable), so a
+  read-only / AI-opt-out / 409 state is unambiguous to every user — reducing the chance
+  a user blind-overwrites on a stale 409.
+
+**Verification:** `app/tests/test_migration_safety.py`, `app/tests/test_verify_restore.py`,
+`web/src/components/DegradedState.test.tsx`, and the 1440/768/375 design-QA pass in
+`e2e/degraded-a11y.spec.ts` (screenshots archived). No new endpoint ⇒ the §16 endpoint
+checklist is N/A for this milestone; the boot-refuse and feedback-redaction tests remain
+green (no regression to §0 invariants).
+
+---
+
 ## 16. Quick checklist for adding an endpoint
 
 1. Does it mutate? → require `Authorization: Bearer` (≥ edit) **and** `If-Match: <version>`; return 409 on stale. (Owner-only for rotate/delete/trash.)

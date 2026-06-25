@@ -293,6 +293,29 @@ The core editing endpoint. Drives autosave (debounced) and every Settings/driver
 - **Response `200`:** the recomputed view-model (§3). `ETag: "<new version>"`. `saveLabel:"All changes saved"`.
 - **Errors:** `428` missing `If-Match`; `409` stale (§1.4 shape); `422` invalid override / out-of-domain input; `403` read-only; `400` malformed.
 
+### 4.4a `POST /api/projections/{view_slug}/preview` — dry-run (read-only)
+
+A **read-only what-if**: merge the same editable-surface partial as `PATCH` (§4.4), recompute via the engine, and return the before/after delta **without touching stored state**. Powers the Settings/driver "preview before you commit" surface.
+
+- **Auth:** owner or edit (Bearer). **Capability:** owner/edit. **No `If-Match`** (it never mutates).
+- **Read-only invariants (CI-blocking, epic-N N12):** it **MUST NOT** persist, **MUST NOT** bump `version`, and **MUST NOT** write a revision. A view-only request (no/invalid bearer) is `403`.
+- **Request body:** identical to the `PATCH` partial (any subset of `inputs`/`assumptions`/`trade_area`/`demand`/`name`/`overrides`).
+- **Behavior:** `before` is the stored snapshot's decision metrics; `after` recomputes the merged partial in memory. Same `422` rejections as `PATCH` (`invalid_inputs`, `node_not_pinnable`). Rate-limited on the **read bucket**.
+- **Response `200`:**
+
+```json
+{
+  "before": { "capital": {"raw":277990,"display":"$277,990"}, "cashGap": {...}, "breakeven": {...} },
+  "after":  { "capital": {"raw":233000,"display":"$233,000"}, "cashGap": {...}, "breakeven": {...} },
+  "changed": [ { "label":"Capital required", "was":"$277,990", "now":"$233,000", "sign":"down" } ],
+  "reco_before": { "tag":"proceed", "headline":"...", "sub":"..." },
+  "reco_after":  { "tag":"proceed", "headline":"...", "sub":"..." }
+}
+```
+
+`changed[].sign` ∈ `up | down | flat` (direction of the raw value). No `ETag` (no version change).
+- **Errors:** `403` read-only; `404` unknown slug; `422` `invalid_inputs` / `node_not_pinnable`; `429` read-bucket rate limit.
+
 ### 4.5 `POST /api/projections/{view_slug}/duplicate`
 
 - **Auth:** owner or edit (Bearer) on the source. **Capability:** owner/edit. **No `If-Match`** (creates a new resource).
@@ -383,18 +406,21 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 - **`GET` response `200`:**
 
 ```json
-{ "body_md":"…sanitized markdown…", "edited":true,
+{ "body_md":"…sanitized markdown…", "edited":true, "edit_origin":"human",
   "computed_hash":"sha256:…", "stale":true,
   "stale_diff":[ {"field":"capital","was":"$262,400","now":"$277,990"} ],
+  "grounded_figures":[ {"raw":277990,"display":"$277,990","variants":["$277,990","$278k"]},
+                       {"raw":-41200,"display":"($41,200)","variants":["($41,200)","-$41,200"]} ],
   "ai_disabled":false, "updated_at":"2026-06-24T16:00:00Z" }
 ```
-`stale` is true when the stored `computed_hash` ≠ the current `computed_json` hash; the client shows "Out of date" + Regenerate and **never auto-overwrites** user-edited prose (§17).
+`stale` is true when the stored `computed_hash` ≠ the current `computed_json` hash; the client shows "Out of date" + Regenerate and **never auto-overwrites** user-edited prose (§17). `edit_origin` ∈ `ai | human | null` records how the stored prose was last produced. **`grounded_figures`** is the **server-built** canonical figure list with display variants ($277,990 / $278k / ($41,200)) derived from `computed_json` — the client never re-derives figures with a regex; the grounding validator checks against the same variant set (epic-N N3).
 
-- **`PUT` request:** `{ "body_md":"…markdown…" }`. The server **sanitizes** `body_md` with an allowlist (Python `bleach`) before storage — no raw HTML, no inline event handlers (stored-XSS → token-theft defense, [SECURITY.md](./SECURITY.md)). Response `200`: `{ "body_md":"…sanitized…", "edited":true, "computed_hash":"…" }`.
+- **`PUT` request:** `{ "body_md":"…markdown…" }`. The server **sanitizes** `body_md` with an allowlist (`p`/headings/`ul`-`ol`-`li`/`strong`/`em`/`blockquote`/`code`/`a[http|https|mailto]`) before storage — no raw HTML, no inline event handlers (stored-XSS → token-theft defense, [SECURITY.md](./SECURITY.md)) — and applies **numeric grounding fail-closed**: an ungrounded figure in a hand-edit is **rejected** (`409 grounding_failed`) and the prior narrative is left untouched (epic-N N4). Sets `edit_origin:"human"`. Response `200`: `{ "body_md":"…sanitized…", "edited":true, "edit_origin":"human", "computed_hash":"…" }`.
 
-- **`:regenerate` behavior:** low-temperature generation, **Anthropic primary → OpenAI fallback**; the result passes the numeric-grounding validator before it is stored. The prose states rent as an **estimate/range**, never a fact.
-  - Response `200`: `{ "body_md":"…", "edited":false, "computed_hash":"…", "provider":"anthropic" }`.
+- **`:regenerate` behavior:** low-temperature generation, **Anthropic primary → OpenAI fallback**; the result passes the numeric-grounding validator before it is stored. The `provider` field reflects the **actual** provider used. The prose states rent as an **estimate/range**, never a fact. Query `?confirm=true` is required to regenerate over a hand-edited narrative (confirm-before-discard, N6).
+  - Response `200`: `{ "body_md":"…", "edited":false, "edit_origin":"ai", "computed_hash":"…", "provider":"anthropic" }`.
   - **`409 grounding_failed`** (validator rejection): `{ "error":"grounding_failed", "ungrounded_figures":["$310,000"] }` — the prior narrative is **not** overwritten.
+  - **`409 edited_confirm_required`** when regenerating over `edit_origin:"human"` without `?confirm=true` — user prose is never silently discarded.
   - **`503 ai_unavailable`** when both providers fail (compute and `.xlsx` still work — §21). Body `{ "error":"ai_unavailable" }`.
 - **AI opt-out (§21):** if the projection (or deployment) has AI disabled, `:regenerate` returns `409 { "error":"ai_disabled" }` and `GET` returns `ai_disabled:true`. Compute, save, and `.xlsx` export remain fully functional with **zero AI calls** — verified by a test running the full flow with all AI keys unset (DoD, [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md)).
 - **Errors:** `403` read-only attempts to `PUT`/regenerate; `428`/`409`; `429` regeneration cap (§2.3).
@@ -554,6 +580,7 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `POST /api/projections` | (none) | no | create | create |
 | `GET …/{slug}` | owner/edit/view | — | no | read |
 | `PATCH …/{slug}` | owner/edit | **yes** | yes | autosave |
+| `POST …/{slug}/preview` | owner/edit | no | **no (read-only)** | read |
 | `POST …/{slug}/duplicate` | owner/edit | no | create | create |
 | `POST …/{slug}/upgrade-model` | owner/edit | **yes** | yes | read |
 | `POST …/{slug}/rotate-tokens` | owner | **yes** | yes | read |
@@ -586,3 +613,5 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 7. **AI opt-out works end-to-end** — compute, save, and `.xlsx` export succeed with all AI keys unset (§21).
 8. **Secrets only via header/fragment** — never path/query; `Authorization` and fragments never logged (§20).
 9. **Excel ↔ computed_json reconcile** (<$0.50 / 0.1 pp, zero formula errors) with and without overrides, CI-blocking (§18) — the only thing keeping "single math authority" true.
+10. **`/preview` is provably read-only** (epic-N N12): a dry-run never persists, never bumps `version`, never writes a revision — CI-asserted over repeated calls.
+11. **No ungrounded LLM figure reaches a render path** (§6.1, SECURITY §6.3): every currency/percent token in narrative/packet prose must be a display string the engine produced; an ungrounded `$`/`%` token is rejected. Injection markers are stripped from untrusted text. AI opt-out runs the full compute/save/`.xlsx` flow with **all AI keys unset**.

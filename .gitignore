@@ -1,0 +1,24 @@
+
+__pycache__/
+.coverage
+.env
+.env.*
+.hypothesis/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.db
+*.db-shm
+*.db-wal
+*.pyc
+/data/
+# Local data / secrets
+# Node / frontend
+# Python
+e2e/node_modules/
+htmlcov/
+playwright-report/
+test-results/
+web/dist/
+web/node_modules/

@@ -1,0 +1,17 @@
+# litestream.yml — continuous WAL replication (M0.7 / OPS_RUNBOOK / SECURITY §11).
+#
+# CRITICAL: replicate /data/projections.db (the DURABLE volume) — NOT /app
+# (the ephemeral container FS). This explicitly avoids the timpager bug that
+# replicated /app/timpager.db and backed up data that disappears on redeploy.
+dbs:
+  - path: /data/projections.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        endpoint: ${LITESTREAM_ENDPOINT}
+        region: ${LITESTREAM_REGION}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        # Retention/purge limits are bounded and disclosed to users (PRD §21).
+        retention: 720h
+        sync-interval: 1s

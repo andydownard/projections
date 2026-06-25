@@ -1,0 +1,1184 @@
+"""app/routers/projections.py — M2 projections API: create / read / owner-list.
+
+The server is the single math authority (CLAUDE.md): every create runs the pure
+engine (`engine.compute`) and persists its native Appendix-D view-model as
+`computed_json`. Reads return that stored snapshot verbatim — never a silent
+recompute (PRD §13). Lists are owner-scoped via the SHA-256 hash of the bearer
+owner token (SECURITY.md §2). Capability tokens are minted with a CSPRNG and
+returned exactly once; only their hashes are stored.
+
+This slice is create/read/list + PATCH (autosave). Every mutation requires a Bearer
+owner/edit token + If-Match: <version>; recompute is server-side; optimistic
+concurrency yields HTTP 409 with current state on a stale If-Match; one revision
+snapshot is written per settle. The .xlsx export lands in a later slice.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import secrets
+import tempfile
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
+
+from app import ratelimit
+from app.deps import hash_token, parse_if_match, token_matches
+from app import narrative_provider
+from app.narrative import (
+    GroundingError,
+    canonical_grounded_figures,
+    compute_hash,
+    format_was_now,
+    sanitize_body_md,
+    stale_diff,
+    validate_grounding,
+)
+from app.packet import build_packet, render_packet_docx, render_packet_md
+from app.store import Store, get_store
+from engine import dag
+from engine.compute import (
+    Assumptions, DemandDrivers, Inputs, TradeArea, compute, compute_annual)
+from engine.money import D
+from engine.viewmodel import to_view_model
+from engine.xlsx import build_xlsx
+
+# Auto-clear-on-equal tolerance (API_SPEC §4.4): a pin within $0.50 of the
+# calculated value deletes the pin (matches the design's commit semantics).
+_AUTO_CLEAR_TOLERANCE = D("0.50")
+
+XLSX_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# Preview is a read-only dry-run on the read bucket (API_SPEC §2.3): generous,
+# since it backs a debounced "what-if" surface, but still capped against abuse.
+_PREVIEW_IP_LIMIT = 600
+_PREVIEW_TOKEN_LIMIT = 600
+_PREVIEW_WINDOW_SECONDS = 300
+
+router = APIRouter(prefix="/api/projections", tags=["projections"])
+
+
+def _client_ip(request: Request) -> str:
+    """Right-most untrusted hop from X-Forwarded-For, else the socket peer."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _new_id() -> str:
+    # App-generated, sortable-ish string PK (no DB autoincrement; Postgres-portable).
+    return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + secrets.token_hex(8)
+
+
+def _bearer(authorization: Optional[str]) -> Optional[str]:
+    if authorization and authorization.startswith("Bearer "):
+        return authorization[7:].strip() or None
+    return None
+
+
+def _is_owner(token: Optional[str], row: dict) -> bool:
+    return token is not None and token_matches(token, row["owner_token_hash"])
+
+
+def _is_editor(token: Optional[str], row: dict) -> bool:
+    return (
+        token is not None
+        and bool(row.get("edit_token_hash"))
+        and token_matches(token, row["edit_token_hash"])
+    )
+
+
+def _require_owner(store: Store, view_slug: str, authorization: Optional[str]) -> dict:
+    """Load the projection and assert the bearer is the OWNER (owner-only routes).
+
+    Edit/view tokens get 403 owner_required (rotate/trash/restore/delete/revisions
+    are owner-scoped — API_SPEC §1.2). Unknown slug -> 404 (never reveal existence
+    beyond what the slug already grants).
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    token = _bearer(authorization)
+    if _is_owner(token, row):
+        return row
+    if _is_editor(token, row):
+        raise HTTPException(status_code=403, detail={"error": "owner_required"})
+    raise HTTPException(status_code=403, detail={"error": "forbidden"})
+
+
+# ----------------------------------------------------------------- request body
+class InputsIn(BaseModel):
+    org_name: str = ""
+    city: str
+    opening_status: str = "pre_launch"
+    share_y1: str
+    share_y2: str
+    share_y3: str
+    donation_value: str
+    building_sqft: str
+    salesfloor_pct: str
+    source_of_funds: str
+    occupancy_annual: Optional[str] = None
+    rent_per_sqft: Optional[str] = None
+    lease_type: str = "gross"
+    nnn_opex_annual: str = "0"
+
+
+class TradeAreaIn(BaseModel):
+    basis: str = "city"
+    households: str = "0"
+    acs_vintage: Optional[str] = None
+
+
+class AssumptionsIn(BaseModel):
+    labor_pct: Optional[str] = None
+    marketing_pct: Optional[str] = None
+    supplies_pct: Optional[str] = None
+    card_pct: Optional[str] = None
+    payroll_tax_pct: Optional[str] = None
+    salvage_pct: Optional[str] = None
+    escalator: Optional[str] = None
+    basket: Optional[str] = None
+
+
+class CreateProjectionIn(BaseModel):
+    name: Optional[str] = None
+    inputs: InputsIn
+    trade_area: TradeAreaIn = Field(default_factory=TradeAreaIn)
+    assumptions: Optional[AssumptionsIn] = None
+    demand: Optional[dict] = None
+    overrides: dict = Field(default_factory=dict)
+    location: dict = Field(default_factory=dict)
+
+
+class PatchProjectionIn(BaseModel):
+    """A partial of the editable surface (API_SPEC §4.4). Every field optional."""
+    name: Optional[str] = None
+    inputs: Optional[dict] = None
+    trade_area: Optional[dict] = None
+    assumptions: Optional[dict] = None
+    demand: Optional[dict] = None
+    overrides: Optional[dict] = None
+
+
+def _build_engine_args(body: CreateProjectionIn):
+    return _build_engine_args_from_dicts(
+        body.inputs.model_dump(),
+        body.assumptions.model_dump() if body.assumptions else None,
+        body.demand or {},
+        body.trade_area.model_dump(),
+    )
+
+
+def _build_engine_args_from_dicts(
+    inputs_d: dict, assumptions_d: Optional[dict], demand_d: dict, trade_d: dict
+):
+    inputs = Inputs(**inputs_d)
+    akw = {k: v for k, v in (assumptions_d or {}).items() if v is not None}
+    assumptions = Assumptions(**akw)
+    demand = DemandDrivers(**(demand_d or {}))
+    trade = TradeArea(**{k: v for k, v in (trade_d or {}).items() if v is not None})
+    return inputs, assumptions, demand, trade
+
+
+def _compute_view_model(body: CreateProjectionIn) -> dict[str, Any]:
+    inputs, assumptions, demand, trade = _build_engine_args(body)
+    result = compute(inputs, assumptions, demand, trade, overrides=body.overrides or {})
+    # Native Appendix-D output; to_view_model is the same dict (defensive).
+    return result.view_model or to_view_model(result)
+
+
+def _compute_result_from_dicts(
+    inputs_d: dict, assumptions_d: Optional[dict], demand_d: dict,
+    trade_d: dict, overrides_d: dict,
+):
+    """Recompute the full ComputeResult from stored inputs (the .xlsx source).
+
+    The workbook builder consumes resolved node values, which equal the stored
+    computed_json by the single-math-authority invariant (golden gate, §18).
+    """
+    inputs, assumptions, demand, trade = _build_engine_args_from_dicts(
+        inputs_d, assumptions_d, demand_d, trade_d)
+    return compute(inputs, assumptions, demand, trade, overrides=overrides_d or {})
+
+
+def _compute_view_model_from_dicts(
+    inputs_d: dict, assumptions_d: Optional[dict], demand_d: dict,
+    trade_d: dict, overrides_d: dict,
+) -> dict[str, Any]:
+    result = _compute_result_from_dicts(
+        inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
+    return result.view_model or to_view_model(result)
+
+
+def _safe_filename_stem(name: str) -> str:
+    """Sanitize a user-supplied org/projection name for Content-Disposition.
+
+    No path separators, control chars, or quotes ever reach the header — the
+    on-disk path is server-controlled (tempfile); this only labels the download.
+    """
+    stem = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "").strip()
+    return stem or "Projection"
+
+
+def _calculated_unpinned(inputs_d, assumptions_d, demand_d, trade_d):
+    """The engine's value for every (node, year) with NO overrides applied.
+
+    Source for auto-clear-on-equal: a pin whose value matches the calculated
+    value is dropped. Pure recompute of the annual chain; no back-solve.
+    """
+    inputs, assumptions, demand, trade = _build_engine_args_from_dicts(
+        inputs_d, assumptions_d, demand_d, trade_d)
+    years, _s, _st, _occ = compute_annual(inputs, assumptions, demand, trade, {})
+    out = {}
+    for y in (1, 2, 3):
+        yr = years[y]
+        out[("share", y)] = D(yr.share)
+        for label, val in yr.expenses.items():
+            out[(label, y)] = D(val)
+    return out
+
+
+def _apply_override_ops(stored: dict, ops, calc):
+    """Translate a set/clear override op (or a full dict) into the storage map.
+
+    storage keys are "{node}#{year}" -> {value, note, ts} (DATA_MODEL §4.6).
+    - set: validate the node is pinnable (else PinRejected -> 422); auto-clear if
+      the value equals the calculated value within $0.50 (auto-clear-on-equal).
+    - clear: drop the pin.
+    A non-dict-ops object (legacy full map) replaces the map wholesale after
+    validating every key.
+    """
+    result = dict(stored)
+    # Legacy/full-map form: a plain dict of "{node}#{year}" -> pin.
+    if not isinstance(ops, dict) or ("set" not in ops and "clear" not in ops):
+        dag.validate_all(ops or {})
+        return dict(ops or {})
+
+    for item in ops.get("clear", []) or []:
+        key = f"{item['node']}#{int(item['year'])}"
+        result.pop(key, None)
+
+    for item in ops.get("set", []) or []:
+        node = item["node"]
+        year = int(item["year"])
+        key = f"{node}#{year}"
+        dag.validate_pin(key)  # raises PinRejected on a derived/unknown node
+        value = D(item["value"])
+        calc_val = calc.get((node, year))
+        if calc_val is not None and abs(value - calc_val) <= _AUTO_CLEAR_TOLERANCE:
+            result.pop(key, None)  # auto-clear-on-equal
+            continue
+        pin = {"value": str(item["value"]), "note": item.get("note", ""),
+               "ts": _utcnow()}
+        result[key] = pin
+    return result
+
+
+def _merge_patch(row: dict, body: "PatchProjectionIn"):
+    """Merge an editable-surface partial onto the stored source-of-truth.
+
+    Returns (inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name). This
+    is the SHARED merge used by both PATCH (persisting) and /preview (read-only)
+    so the two paths can never drift. Raises dag.PinRejected on a non-pinnable
+    node (the caller maps it to 422).
+    """
+    inputs_d = json.loads(row["inputs_json"] or "{}")
+    assumptions_d = json.loads(row["assumptions_json"] or "{}")
+    demand_d = json.loads(row["demand_drivers_json"] or "{}")
+    trade_d = json.loads(row["trade_area_json"] or "{}")
+    overrides_d = json.loads(row["overrides_json"] or "{}")
+    if body.inputs:
+        inputs_d.update(body.inputs)
+    if body.assumptions:
+        assumptions_d.update(body.assumptions)
+    if body.demand:
+        demand_d.update(body.demand)
+    if body.trade_area:
+        trade_d.update(body.trade_area)
+    if body.overrides is not None:
+        calc = _calculated_unpinned(inputs_d, assumptions_d, demand_d, trade_d)
+        overrides_d = _apply_override_ops(overrides_d, body.overrides, calc)
+    name = body.name if body.name is not None else row["name"]
+    return inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name
+
+
+def _diff_changed(before: dict, after: dict) -> list[dict]:
+    """Build the changed[] list of {label, was, now, sign} for the decision metrics.
+
+    Both before/after are subsets of the view-model metrics; we compare display
+    strings and derive a direction sign from the raw values.
+    """
+    out = []
+    for key, label in (("capital", "Capital required"),
+                       ("cashGap", "First-year cash gap"),
+                       ("breakeven", "Break-even month")):
+        b = before.get(key) or {}
+        a = after.get(key) or {}
+        if b.get("display") == a.get("display"):
+            continue
+        b_raw, a_raw = b.get("raw"), a.get("raw")
+        sign = "flat"
+        if isinstance(b_raw, (int, float)) and isinstance(a_raw, (int, float)):
+            sign = "up" if a_raw > b_raw else "down" if a_raw < b_raw else "flat"
+        out.append({"label": label, "was": b.get("display"),
+                    "now": a.get("display"), "sign": sign})
+    # N11: route through the ONE shared was->now formatter so /preview changed[]
+    # and the narrative stale_diff never drift in shape.
+    return format_was_now(out)
+
+
+def _metrics_subset(vm: dict) -> dict:
+    """The three decision metrics as {key: {raw, display}} for before/after."""
+    m = vm.get("metrics") or {}
+    return {k: m.get(k) for k in ("capital", "cashGap", "breakeven") if k in m}
+
+
+# -------------------------------------------------------------------- endpoints
+@router.post("", status_code=201)
+def create_projection(
+    body: CreateProjectionIn,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Create: compute server-side, persist, return the view-model + one-time tokens.
+
+    If a valid owner bearer token is presented the projection joins that workspace;
+    otherwise a new owner token is minted and returned exactly once.
+    """
+    try:
+        vm = _compute_view_model(body)
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
+        raise HTTPException(status_code=422, detail={"error": "invalid_inputs", "message": str(exc)})
+
+    presented_owner = _bearer(authorization)
+    minted_owner = None
+    if presented_owner is None:
+        presented_owner = secrets.token_urlsafe(32)  # ~256-bit
+        minted_owner = presented_owner
+    owner_hash = hash_token(presented_owner)
+
+    view_slug = secrets.token_urlsafe(16)  # ~128-bit
+    edit_token = secrets.token_urlsafe(32)
+    pid = _new_id()
+    now = _utcnow()
+    name = body.name or body.inputs.org_name or "Untitled projection"
+
+    row = {
+        "id": pid,
+        "view_slug": view_slug,
+        "owner_token_hash": owner_hash,
+        "edit_token_hash": hash_token(edit_token),
+        "name": name,
+        "model_version": vm.get("model_version", ""),
+        "compute_schema_version": vm.get("compute_schema_version", ""),
+        "location_json": json.dumps(body.location or {}),
+        "trade_area_json": json.dumps(body.trade_area.model_dump()),
+        "inputs_json": json.dumps(body.inputs.model_dump()),
+        "demand_drivers_json": json.dumps(body.demand or {}),
+        "assumptions_json": json.dumps(body.assumptions.model_dump() if body.assumptions else {}),
+        "overrides_json": json.dumps(body.overrides or {}),
+        "computed_json": json.dumps(vm),
+        "created_at": now,
+        "updated_at": now,
+    }
+    store.create_projection(row)
+
+    out = {
+        **vm,
+        "view_slug": view_slug,
+        "version": 1,
+        "name": name,
+        "edit_token": edit_token,  # one-time
+    }
+    if minted_owner is not None:
+        out["owner_token"] = minted_owner  # one-time; client stores in localStorage
+    return out
+
+
+@router.get("")
+def list_projections(
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Owner-scoped list (never global). No/invalid token -> empty list."""
+    owner = _bearer(authorization)
+    if owner is None:
+        return {"projections": []}
+    rows = store.list_by_owner(hash_token(owner))
+    items = []
+    for r in rows:
+        try:
+            vm = json.loads(r.get("computed_json") or "{}")
+        except json.JSONDecodeError:
+            vm = {}
+        y1_rev = None
+        try:
+            y1_rev = (vm.get("kpis") or [{}])[0]
+        except Exception:
+            y1_rev = None
+        items.append({
+            "view_slug": r["view_slug"],
+            "name": r["name"],
+            "version": r["version"],
+            "updated_at": r["updated_at"],
+            "reco": vm.get("reco", {}).get("tag"),
+            "y1": y1_rev,
+        })
+    return {"projections": items}
+
+
+@router.get("/{view_slug}")
+def get_projection(view_slug: str, response: Response, store: Store = Depends(get_store)):
+    """Read by capability slug: return the STORED snapshot verbatim (no recompute)."""
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    try:
+        vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        vm = {}
+    response.headers["ETag"] = str(row["version"])
+    return {**vm, "view_slug": view_slug, "version": row["version"], "name": row["name"]}
+
+
+@router.get("/{view_slug}/xlsx")
+def export_xlsx(view_slug: str, store: Store = Depends(get_store)):
+    """Formula-driven .xlsx export (API_SPEC §6.3).
+
+    Owner/edit/view may download (the slug already grants read). Terms acceptance
+    is required first (§21) -> 403 terms_required. The workbook is rendered from
+    the SAME resolved node values as computed_json (one math surface): blue inputs,
+    live formulas, orange overrides + audit comment, guarded IF divisions, monthly
+    tab. Written to a server-controlled temp file, streamed, then deleted.
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    if not row.get("terms_accepted_at"):
+        raise HTTPException(status_code=403, detail={"error": "terms_required"})
+
+    result = _compute_result_from_dicts(
+        json.loads(row["inputs_json"] or "{}"),
+        json.loads(row["assumptions_json"] or "{}"),
+        json.loads(row["demand_drivers_json"] or "{}"),
+        json.loads(row["trade_area_json"] or "{}"),
+        json.loads(row["overrides_json"] or "{}"),
+    )
+
+    fd, path = tempfile.mkstemp(suffix=".xlsx", prefix="projection-")
+    os.close(fd)
+    build_xlsx(result, path)
+
+    stem = _safe_filename_stem(row.get("name") or "")
+    filename = f"{stem} 3-Year Projection.xlsx"
+    return FileResponse(
+        path,
+        media_type=XLSX_CONTENT_TYPE,
+        filename=filename,
+        background=BackgroundTask(lambda: os.path.exists(path) and os.remove(path)),
+    )
+
+
+# ============================================================ M5: narrative
+# The narrative is the primary trust surface (API_SPEC §6.1, SECURITY.md §5/§6.3).
+# Three HARD server-side invariants live here: (1) body_md is allowlist-sanitized
+# before storage, (2) every figure in regenerated prose must exist in computed_json
+# or generation is REJECTED, never overwriting the prior narrative, (3) staleness is
+# a stored-hash vs live-hash compare and NEVER auto-overwrites user-edited prose.
+
+
+def _ai_disabled(row: dict) -> bool:
+    """AI opt-out (§21): per-projection flag OR deployment-wide AI kill switch.
+
+    With AI disabled, regenerate -> 409 ai_disabled; compute/save/.xlsx are
+    untouched (verified by test running the full flow with AI keys unset).
+    """
+    if int(row.get("ai_opt_out") or 0):
+        return True
+    return os.environ.get("AI_DISABLED", "").lower() in ("1", "true", "yes")
+
+
+def _generate_narrative_md(vm: dict[str, Any], role: Optional[str] = None) -> str:
+    """Low-temperature, grounded Board-Packet prose drawn from computed_json.
+
+    Every figure inserted here is copied verbatim from a computed_json display
+    string, so the output is grounded BY CONSTRUCTION — the validator that runs
+    after generation is a hard backstop, not the only line of defense (a future
+    LLM provider swaps in here behind the SAME post-generation grounding gate).
+    Rent and other estimates are stated as estimates, never as facts.
+    """
+    metrics = vm.get("metrics") or {}
+    reco = vm.get("reco") or {}
+    cap = (metrics.get("capital") or {}).get("display", "")
+    gap = (metrics.get("cashGap") or {}).get("display", "")
+    be = (metrics.get("breakeven") or {}).get("display", "")
+    headline = reco.get("headline", "")
+    parts = [f"<p><strong>{headline}</strong></p>"]
+    sentence = "<p>The plan requires "
+    if cap:
+        sentence += f"{cap} in startup capital"
+    if be:
+        sentence += f" and reaches break-even at {be}" if cap else f"Break-even is reached at {be}"
+    sentence += ".</p>"
+    parts.append(sentence)
+    if gap:
+        parts.append(f"<p>The most-negative first-year cash position is {gap}; "
+                     "estimated figures (e.g. market rent) are planning ranges, "
+                     "not quotes.</p>")
+    return "".join(parts)
+
+
+def _narrative_response(row: dict, store: Store) -> dict:
+    """Assemble the GET narrative payload: stored prose + staleness + ai flag."""
+    try:
+        live_vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        live_vm = {}
+    nar = store.get_narrative(row["id"]) or {}
+    body_md = nar.get("body_md") or ""
+    stored_hash = nar.get("computed_hash")
+    live_hash = compute_hash(live_vm)
+    stale = bool(body_md) and stored_hash is not None and stored_hash != live_hash
+    diff: list[dict[str, str]] = []
+    if stale and nar.get("snapshot_json"):
+        try:
+            diff = stale_diff(json.loads(nar["snapshot_json"]), live_vm)
+        except (json.JSONDecodeError, TypeError):
+            diff = []
+    return {
+        "body_md": body_md,
+        "edited": bool(nar.get("edited")),
+        "edit_origin": nar.get("edit_origin"),
+        "computed_hash": stored_hash,
+        "stale": stale,
+        "stale_diff": diff,
+        # N3: the server-built canonical grounded-figure list + display variants,
+        # so the client never re-derives figures with a regex (API_SPEC §6.1).
+        "grounded_figures": canonical_grounded_figures(live_vm),
+        "ai_disabled": _ai_disabled(row),
+        "updated_at": nar.get("updated_at"),
+    }
+
+
+@router.get("/{view_slug}/narrative")
+def get_narrative(view_slug: str, store: Store = Depends(get_store)):
+    """Fetch the stored narrative + staleness (owner/edit/view — the slug grants read)."""
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    return _narrative_response(row, store)
+
+
+class NarrativeIn(BaseModel):
+    body_md: str = Field(default="")
+
+
+@router.put("/{view_slug}/narrative")
+def put_narrative(
+    view_slug: str,
+    body: NarrativeIn,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Save user-edited prose. body_md is allowlist-sanitized BEFORE storage.
+
+    Sanitization is the stored-XSS -> localStorage-token-theft defense
+    (SECURITY.md §5). Owner/edit only; view-only is 403.
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    token = _bearer(authorization)
+    if not (_is_owner(token, row) or _is_editor(token, row)):
+        raise HTTPException(status_code=403, detail={"error": "forbidden"})
+
+    clean = sanitize_body_md(body.body_md)
+    try:
+        live_vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        live_vm = {}
+    # N4: numeric grounding is FAIL-CLOSED even for a HUMAN edit — an ungrounded
+    # figure rejects the save and leaves the prior narrative untouched (the board
+    # packet must never carry a hand-typed hallucinated figure, SECURITY §6.3).
+    try:
+        validate_grounding(clean, live_vm)
+    except GroundingError as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "grounding_failed",
+            "ungrounded_figures": exc.ungrounded,
+        })
+    store.upsert_narrative(row["id"], {
+        "body_md": clean,
+        "edited": 1,
+        "edit_origin": "human",
+        "computed_hash": compute_hash(live_vm),
+        "snapshot_json": json.dumps(live_vm),
+        "provider": None,
+        "model_version": live_vm.get("model_version"),
+    })
+    return {"body_md": clean, "edited": True, "edit_origin": "human",
+            "computed_hash": compute_hash(live_vm)}
+
+
+@router.post("/{view_slug}/narrative:regenerate")
+def regenerate_narrative(
+    view_slug: str,
+    confirm: bool = False,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Regenerate grounded prose from current computed_json (owner/edit only).
+
+    N6: provider is Anthropic primary -> OpenAI fallback; the response ``provider``
+    field reflects the ACTUAL provider used. Both providers failing -> 503
+    ai_unavailable (compute/save/.xlsx remain untouched, §21). AI opt-out -> 409
+    ai_disabled. The generated prose passes the HARD numeric-grounding validator
+    before storage; a hallucinated figure -> 409 grounding_failed and the prior
+    narrative is NOT overwritten. A user-edited narrative is NEVER silently
+    discarded: regenerating over ``edit_origin == 'human'`` without ``?confirm=true``
+    -> 409 edited_confirm_required (confirm-before-discard gate).
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    token = _bearer(authorization)
+    if not (_is_owner(token, row) or _is_editor(token, row)):
+        raise HTTPException(status_code=403, detail={"error": "forbidden"})
+    if _ai_disabled(row):
+        raise HTTPException(status_code=409, detail={"error": "ai_disabled"})
+
+    try:
+        live_vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        live_vm = {}
+
+    # Provider failover (Anthropic -> OpenAI). The local grounded builder is the
+    # generator seam (also the patch point for the grounding-rejection test).
+    try:
+        draft, provider = narrative_provider.generate(
+            live_vm, generator=_generate_narrative_md)
+    except narrative_provider.AIUnavailableError:
+        raise HTTPException(status_code=503, detail={"error": "ai_unavailable"})
+
+    # Grounding is checked BEFORE the confirm gate: a failed generation has
+    # nothing to discard, so a hallucinated figure is rejected regardless.
+    try:
+        validate_grounding(draft, live_vm)
+    except GroundingError as exc:
+        # HARD reject — prior narrative is NEVER overwritten.
+        raise HTTPException(status_code=409, detail={
+            "error": "grounding_failed",
+            "ungrounded_figures": exc.ungrounded,
+        })
+
+    # Confirm-before-discard: never silently overwrite hand-edited prose.
+    prior = store.get_narrative(row["id"]) or {}
+    if prior.get("edit_origin") == "human" and not confirm:
+        raise HTTPException(status_code=409, detail={
+            "error": "edited_confirm_required"})
+
+    clean = sanitize_body_md(draft)
+    store.upsert_narrative(row["id"], {
+        "body_md": clean,
+        "edited": 0,
+        "edit_origin": "ai",
+        "computed_hash": compute_hash(live_vm),
+        "snapshot_json": json.dumps(live_vm),
+        "provider": provider,
+        "model_version": live_vm.get("model_version"),
+    })
+    return {"body_md": clean, "edited": False, "edit_origin": "ai",
+            "computed_hash": compute_hash(live_vm), "provider": provider}
+
+
+@router.get("/{view_slug}/packet")
+def export_packet(
+    view_slug: str,
+    role: Optional[str] = None,
+    format: str = "md",
+    store: Store = Depends(get_store),
+):
+    """Board / Funder / Advisor packet (API_SPEC §6.4).
+
+    Built ENTIRELY from the stored computed_json (one math/format surface): banner,
+    verified-vs-estimated assumptions, sensitivity, provenance, KPIs. The grounded
+    narrative is included only when AI is enabled (§21 opt-out keeps every
+    structured/evidence section). Terms acceptance required (§21) -> 403 otherwise.
+    The role flag tailors emphasis/CTAs only — never the numbers.
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    if not row.get("terms_accepted_at"):
+        raise HTTPException(status_code=403, detail={"error": "terms_required"})
+
+    try:
+        live_vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        live_vm = {}
+    live_vm.setdefault("name", row.get("name") or "")
+
+    # N11: the packet uses the CURRENT stored (possibly edited:true) sanitized
+    # body_md verbatim — the board's last-edited prose. It is NOT dropped just
+    # because it is stale (a stale narrative still carries the operator's words;
+    # the staleness banner lives on the editing surface, not the export). Prose is
+    # omitted ONLY when AI is disabled (§21) or no narrative is stored. The stored
+    # body_md was already allowlist-sanitized at PUT/regenerate time.
+    narrative_md = None
+    if not _ai_disabled(row):
+        nar = store.get_narrative(row["id"]) or {}
+        narrative_md = (nar.get("body_md") or "") or None
+
+    pkt = build_packet(live_vm, role=role or "board", narrative_md=narrative_md)
+
+    stem = _safe_filename_stem(row.get("name") or "")
+    if (format or "md").lower() == "docx":
+        data = render_packet_docx(pkt)
+        filename = f"{stem} Board Packet.docx"
+        return Response(
+            content=data,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"),
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    md = render_packet_md(pkt)
+    filename = f"{stem} Board Packet.md"
+    return Response(
+        content=md,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.patch("/{view_slug}")
+def patch_projection(
+    view_slug: str,
+    body: PatchProjectionIn,
+    response: Response,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Autosave (API_SPEC §4.4): merge patch -> recompute server-side -> persist.
+
+    Requires Authorization: Bearer (owner OR this projection's edit token) and
+    If-Match: <version>. Optimistic concurrency: a stale version writes 0 rows and
+    returns HTTP 409 with the current server state. One revision snapshot per settle.
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    token = _bearer(authorization)
+    is_owner = token is not None and token_matches(token, row["owner_token_hash"])
+    is_editor = (
+        token is not None
+        and bool(row.get("edit_token_hash"))
+        and token_matches(token, row["edit_token_hash"])
+    )
+    if not (is_owner or is_editor):
+        # view-only (no/invalid token) cannot mutate (SECURITY.md §2; API_SPEC §4.4).
+        raise HTTPException(status_code=403, detail={"error": "forbidden"})
+
+    # Merge the partial onto the stored source-of-truth, then recompute.
+    try:
+        inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name = _merge_patch(
+            row, body)
+    except dag.PinRejected as exc:
+        node = exc.node if hasattr(exc, "node") else None
+        raise HTTPException(status_code=422, detail={
+            "error": "node_not_pinnable", "node": node, "message": str(exc)})
+
+    try:
+        vm = _compute_view_model_from_dicts(inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
+        raise HTTPException(status_code=422, detail={"error": "invalid_inputs", "message": str(exc)})
+
+    patch = {
+        "name": name,
+        "inputs_json": json.dumps(inputs_d),
+        "assumptions_json": json.dumps(assumptions_d),
+        "demand_drivers_json": json.dumps(demand_d),
+        "trade_area_json": json.dumps(trade_d),
+        "overrides_json": json.dumps(overrides_d),
+        "computed_json": json.dumps(vm),
+        "model_version": vm.get("model_version", ""),
+    }
+    affected = store.update_with_version_check(row["id"], if_match, patch)
+    if affected == 0:
+        current = store.get_projection_by_slug(view_slug)
+        try:
+            cur_vm = json.loads(current["computed_json"] or "{}") if current else {}
+        except json.JSONDecodeError:
+            cur_vm = {}
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict",
+            "current_version": current["version"] if current else None,
+            "your_version": if_match,
+            "current_state": {**cur_vm, "view_slug": view_slug,
+                              "version": current["version"] if current else None},
+            "recovery": "reload | overwrite | save_as_copy",
+        })
+
+    new_version = if_match + 1
+    store.insert_revision({
+        "id": _new_id(),
+        "projection_id": row["id"],
+        "seq": new_version,
+        "inputs_json": patch["inputs_json"],
+        "assumptions_json": patch["assumptions_json"],
+        "overrides_json": patch["overrides_json"],
+        "monthly_json": "{}",
+        "computed_json": patch["computed_json"],
+        "model_version": patch["model_version"],
+        "actor_token_hash": hash_token(token),
+        "change_summary": "autosave",
+        "created_at": _utcnow(),
+    })
+    response.headers["ETag"] = str(new_version)
+    return {**vm, "view_slug": view_slug, "version": new_version, "name": name}
+
+
+@router.post("/{view_slug}/preview")
+def preview_projection(
+    view_slug: str,
+    body: PatchProjectionIn,
+    request: Request,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Dry-run /preview (epic-N N1): merge -> recompute -> diff, READ-ONLY.
+
+    Bearer owner/edit, NO If-Match. It MUST NOT persist, MUST NOT bump version, and
+    MUST NOT write a revision — it only recomputes the merged editable surface in
+    memory and returns {before, after, changed[], reco_before, reco_after}. Same
+    422 rejections as PATCH (invalid input, non-pinnable node). Rate-limited on the
+    read bucket (it backs a debounced "what-if" surface). The provable read-only
+    invariant is a CI gate (test_ai_safety / test_projections_preview).
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    token = _bearer(authorization)
+    if not (_is_owner(token, row) or _is_editor(token, row)):
+        # view-only (no/invalid token) cannot preview (SECURITY.md §2).
+        raise HTTPException(status_code=403, detail={"error": "forbidden"})
+
+    allowed, retry_after = ratelimit.check(
+        "preview",
+        ip=_client_ip(request),
+        token=hash_token(token) if token else None,
+        ip_limit=_PREVIEW_IP_LIMIT,
+        token_limit=_PREVIEW_TOKEN_LIMIT,
+        window_seconds=_PREVIEW_WINDOW_SECONDS,
+    )
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "rate_limited",
+                     "retry_after_seconds": retry_after, "scope": "ip"},
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    # BEFORE = the stored snapshot verbatim (no recompute on the unchanged state).
+    try:
+        before_vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        before_vm = {}
+
+    # AFTER = recompute on the merged partial. NOTHING is written.
+    try:
+        inputs_d, assumptions_d, demand_d, trade_d, overrides_d, _name = _merge_patch(
+            row, body)
+    except dag.PinRejected as exc:
+        node = exc.node if hasattr(exc, "node") else None
+        raise HTTPException(status_code=422, detail={
+            "error": "node_not_pinnable", "node": node, "message": str(exc)})
+
+    try:
+        after_vm = _compute_view_model_from_dicts(
+            inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_inputs", "message": str(exc)})
+
+    before = _metrics_subset(before_vm)
+    after = _metrics_subset(after_vm)
+    return {
+        "before": before,
+        "after": after,
+        "changed": _diff_changed(before, after),
+        "reco_before": before_vm.get("reco") or {},
+        "reco_after": after_vm.get("reco") or {},
+    }
+
+
+# ---------------------------------------------------- rotate / share (owner-only)
+@router.post("/{view_slug}/rotate-tokens")
+def rotate_tokens(
+    view_slug: str,
+    response: Response,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Rotate owner/edit/view_slug + every role link in ONE transaction (API_SPEC §4.7).
+
+    Owner-only. Immediately invalidates every previously-shared link (compromise
+    response, SECURITY.md §3): the old owner/edit tokens and the old view_slug all
+    die at once. Writes a rotation event to the audit/revision log. The new secrets
+    are returned exactly once (never re-derivable from the server).
+    """
+    row = _require_owner(store, view_slug, authorization)
+
+    new_owner = secrets.token_urlsafe(32)   # ~256-bit
+    new_edit = secrets.token_urlsafe(32)
+    new_slug = secrets.token_urlsafe(16)    # ~128-bit
+
+    # Re-mint role links keeping role NAMES, replacing slugs/hashes (atomic).
+    try:
+        old_roles = json.loads(row.get("role_tokens_json") or "{}")
+    except json.JSONDecodeError:
+        old_roles = {}
+    new_role_secrets: dict[str, str] = {}
+    new_role_map: dict[str, str] = {}
+    for old_slug, role_name in old_roles.items():
+        rs = secrets.token_urlsafe(16)
+        new_role_map[rs] = role_name
+        new_role_secrets[role_name] = rs
+
+    new_hashes = {
+        "owner_token_hash": hash_token(new_owner),
+        "edit_token_hash": hash_token(new_edit),
+        "view_slug": new_slug,
+        "role_tokens_json": json.dumps(new_role_map),
+    }
+    affected = store.rotate_tokens(row["id"], if_match, new_hashes)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+
+    new_version = if_match + 1
+    store.insert_revision({
+        "id": _new_id(),
+        "projection_id": row["id"],
+        "seq": new_version,
+        "inputs_json": row.get("inputs_json") or "{}",
+        "assumptions_json": row.get("assumptions_json") or "{}",
+        "overrides_json": row.get("overrides_json") or "{}",
+        "monthly_json": row.get("monthly_json") or "{}",
+        "computed_json": row.get("computed_json") or "{}",
+        "model_version": row.get("model_version") or "",
+        "actor_token_hash": hash_token(new_owner),
+        "change_summary": "tokens_rotated",
+        "created_at": _utcnow(),
+    })
+    response.headers["ETag"] = str(new_version)
+    return {
+        "view_slug": new_slug,
+        "version": new_version,
+        "tokens": {
+            "owner_token": new_owner,
+            "edit_token": new_edit,
+            "view_slug": new_slug,
+            "roles": new_role_secrets,
+        },
+    }
+
+
+# --------------------------------------------------------- revisions (owner-only)
+@router.get("/{view_slug}/revisions")
+def list_revisions(
+    view_slug: str,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Owner-scoped revision history (API_SPEC §5.1).
+
+    Metadata + change_summary only — snapshot bodies are not inlined. Edit/view
+    tokens cannot browse history (owner_required).
+    """
+    row = _require_owner(store, view_slug, authorization)
+    revs = store.list_revisions(row["id"])
+    return {"revisions": [
+        {
+            "id": r["id"],
+            "version": r["seq"],
+            "change_summary": r.get("change_summary", ""),
+            "actor": "owner",
+            "event": _revision_event(r.get("change_summary", "")),
+            "created_at": r["created_at"],
+        }
+        for r in revs
+    ]}
+
+
+@router.post("/{view_slug}/revisions/{revision_id}/restore")
+def restore_revision(
+    view_slug: str,
+    revision_id: str,
+    response: Response,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Restore a snapshot as a NEW forward revision (API_SPEC §5.2).
+
+    Owner-only. Appends rather than rewinds history: the snapshot's
+    inputs/assumptions/overrides are recomputed and persisted at the next version.
+    """
+    row = _require_owner(store, view_slug, authorization)
+    rev = store.get_revision(revision_id)
+    if rev is None or rev["projection_id"] != row["id"]:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    inputs_d = json.loads(rev["inputs_json"] or "{}")
+    assumptions_d = json.loads(rev["assumptions_json"] or "{}")
+    overrides_d = json.loads(rev["overrides_json"] or "{}")
+    demand_d = json.loads(row["demand_drivers_json"] or "{}")
+    trade_d = json.loads(row["trade_area_json"] or "{}")
+
+    try:
+        vm = _compute_view_model_from_dicts(
+            inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_inputs", "message": str(exc)})
+
+    patch = {
+        "inputs_json": json.dumps(inputs_d),
+        "assumptions_json": json.dumps(assumptions_d),
+        "overrides_json": json.dumps(overrides_d),
+        "computed_json": json.dumps(vm),
+        "model_version": vm.get("model_version", ""),
+    }
+    affected = store.update_with_version_check(row["id"], if_match, patch)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+
+    new_version = if_match + 1
+    token = _bearer(authorization)
+    store.insert_revision({
+        "id": _new_id(),
+        "projection_id": row["id"],
+        "seq": new_version,
+        "inputs_json": patch["inputs_json"],
+        "assumptions_json": patch["assumptions_json"],
+        "overrides_json": patch["overrides_json"],
+        "monthly_json": "{}",
+        "computed_json": patch["computed_json"],
+        "model_version": patch["model_version"],
+        "actor_token_hash": hash_token(token) if token else None,
+        "change_summary": f"restore from v{rev['seq']}",
+        "created_at": _utcnow(),
+    })
+    response.headers["ETag"] = str(new_version)
+    return {**vm, "view_slug": view_slug, "version": new_version, "name": row["name"]}
+
+
+# ------------------------------------------------- trash lifecycle (owner-only)
+def _set_status_or_conflict(store, row, if_match, status):
+    affected = store.set_status(row["id"], status, if_match)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+
+
+@router.post("/{view_slug}/trash")
+def trash_projection(
+    view_slug: str,
+    response: Response,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Soft delete (API_SPEC §4.8): status -> trashed. Owner-only, If-Match required."""
+    row = _require_owner(store, view_slug, authorization)
+    _set_status_or_conflict(store, row, if_match, "trashed")
+    current = store.get_projection_by_slug(view_slug)
+    try:
+        vm = json.loads(current["computed_json"] or "{}") if current else {}
+    except json.JSONDecodeError:
+        vm = {}
+    new_version = if_match + 1
+    response.headers["ETag"] = str(new_version)
+    return {**vm, "view_slug": view_slug, "version": new_version,
+            "name": row["name"], "status": "trashed"}
+
+
+@router.post("/{view_slug}/restore")
+def restore_projection(
+    view_slug: str,
+    response: Response,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Restore from trash (API_SPEC §4.8): status -> active. Owner-only."""
+    row = _require_owner(store, view_slug, authorization)
+    _set_status_or_conflict(store, row, if_match, "active")
+    current = store.get_projection_by_slug(view_slug)
+    try:
+        vm = json.loads(current["computed_json"] or "{}") if current else {}
+    except json.JSONDecodeError:
+        vm = {}
+    new_version = if_match + 1
+    response.headers["ETag"] = str(new_version)
+    return {**vm, "view_slug": view_slug, "version": new_version,
+            "name": row["name"], "status": "active"}
+
+
+@router.delete("/{view_slug}", status_code=204)
+def delete_projection(
+    view_slug: str,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Hard delete / purge (API_SPEC §4.8). Owner-only; permitted ONLY when the
+    projection is already trashed (else 409 not_trashed). Irreversible: sets
+    deleted_at so the row is excluded from every read."""
+    row = _require_owner(store, view_slug, authorization)
+    if row.get("status") != "trashed":
+        raise HTTPException(status_code=409, detail={"error": "not_trashed"})
+    affected = store.soft_delete(row["id"], if_match)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+    return Response(status_code=204)
+
+
+def _revision_event(summary: str) -> str:
+    """Map a change_summary -> the revision event enum (API_SPEC §5.1)."""
+    if "rotate" in summary:
+        return "rotate"
+    if summary.startswith("restore"):
+        return "restore"
+    if "override" in summary or "pin" in summary:
+        return "override"
+    if "upgrade" in summary:
+        return "upgrade_model"
+    return "edit"
