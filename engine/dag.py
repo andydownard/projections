@@ -37,7 +37,15 @@ NON_PINNABLE_NODES = frozenset({
 
 
 class PinRejected(ValueError):
-    """Raised when a pin targets a non-pinnable node or has a malformed key."""
+    """Raised when a pin targets a non-pinnable node or has a malformed key.
+
+    Carries the offending ``node`` (when parseable) so the API can echo it in the
+    422 ``node_not_pinnable`` body without re-parsing the key.
+    """
+
+    def __init__(self, message: str, node: str | None = None) -> None:
+        super().__init__(message)
+        self.node = node
 
 
 def parse_key(key: str):
@@ -60,9 +68,10 @@ def validate_pin(key: str):
     """Accept a legal component pin; reject derived/total/KPI/decision pins."""
     node, _year = parse_key(key)
     if node in NON_PINNABLE_NODES:
-        raise PinRejected(f"node is not pinnable (derived/total/KPI): {node!r}")
+        raise PinRejected(
+            f"node is not pinnable (derived/total/KPI): {node!r}", node=node)
     if node not in PINNABLE_NODES:
-        raise PinRejected(f"unknown pinnable node: {node!r}")
+        raise PinRejected(f"unknown pinnable node: {node!r}", node=node)
     return True
 
 
@@ -83,6 +92,28 @@ _UPSTREAM_OF = {
     "Credit card fees": ("share", "card_pct"),
     "Rent": ("occupancy", "escalator"),
 }
+
+
+# Downstream derived rows a pinned component rewrites (foots through to totals).
+# Used only to populate overrides[].affected for the Override Inspector; the engine
+# always re-foots totals over components, so this is descriptive, not computational.
+_TOTALS = ["Total Expenses", "Net profit", "Net margin"]
+_AFFECTED_OF = {
+    "Payroll": ["Payroll taxes", *_TOTALS],
+    "share": ["Donating households", "Annual donations", "Retail Sales",
+              "Salvage Sales", "Total Revenue", "Total Expenses",
+              "Net profit", "Net margin"],
+}
+
+
+def affected_rows(node: str):
+    """Derived/total rows that a pin on ``node`` rewrites (Override Inspector).
+
+    Any pinned expense component foots through to the expense total, net, and
+    margin; a few nodes (Payroll, share) additionally drive an intermediate
+    derived line. Order is presentation order (component-local first, then totals).
+    """
+    return list(_AFFECTED_OF.get(node, list(_TOTALS)))
 
 
 def stale_upstream(overrides: dict):

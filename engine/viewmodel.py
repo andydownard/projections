@@ -126,16 +126,20 @@ def to_view_model(result):
         "cumulativeCash": money_view(m.cumulative_cash),
     } for m in result.monthly]
 
-    # ---- overrides list
+    # ---- overrides list (Override Inspector: calc-vs-override + affected rows)
+    calc_unpinned = _unpinned_annual(result)
     ov_list = []
     for key, pin in overrides.items():
         node, year = dag.parse_key(key)
+        calc = calc_unpinned.get((node, year)) if calc_unpinned else None
+        is_pct = node == "share"
         ov_list.append({
             "node": node, "year": year,
-            "value": money_view(D(pin["value"])),
+            "calculated": (_pct_or_na(calc) if is_pct else _money_or_na(calc)),
+            "value": (pct_view(D(pin["value"])) if is_pct else money_view(D(pin["value"]))),
             "note": pin.get("note", ""),
             "pinnedDate": pin.get("ts", ""),
-            "affected": [],
+            "affected": dag.affected_rows(node),
         })
 
     # ---- settings (raw scalars for sliders)
@@ -174,6 +178,27 @@ def to_view_model(result):
         "model_version": result.model_version,
         "compute_schema_version": result.compute_schema_version,
     }
+
+
+def _unpinned_annual(result):
+    """Recompute the annual chain with NO overrides -> {(node, year): Decimal}.
+
+    Gives the Override Inspector's ``calculated`` value (what the engine derives
+    for a pinned node when the pin is absent), without back-solving anything. Pure
+    and deterministic; reuses compute_annual so the calc matches the live formula.
+    """
+    if not result.overrides_applied:
+        return {}
+    from engine.compute import compute_annual
+    years, _startup, _st, _occ = compute_annual(
+        result.inputs, result.assumptions, None, result.trade_area, {})
+    out = {}
+    for y in (1, 2, 3):
+        yr = years[y]
+        out[("share", y)] = yr.share
+        for label, val in yr.expenses.items():
+            out[(label, y)] = val
+    return out
 
 
 def _money_payback(value):

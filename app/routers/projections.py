@@ -29,9 +29,16 @@ from starlette.background import BackgroundTask
 
 from app.deps import hash_token, parse_if_match, token_matches
 from app.store import Store, get_store
-from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+from engine import dag
+from engine.compute import (
+    Assumptions, DemandDrivers, Inputs, TradeArea, compute, compute_annual)
+from engine.money import D
 from engine.viewmodel import to_view_model
 from engine.xlsx import build_xlsx
+
+# Auto-clear-on-equal tolerance (API_SPEC §4.4): a pin within $0.50 of the
+# calculated value deletes the pin (matches the design's commit semantics).
+_AUTO_CLEAR_TOLERANCE = D("0.50")
 
 XLSX_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -167,6 +174,60 @@ def _safe_filename_stem(name: str) -> str:
     """
     stem = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "").strip()
     return stem or "Projection"
+
+
+def _calculated_unpinned(inputs_d, assumptions_d, demand_d, trade_d):
+    """The engine's value for every (node, year) with NO overrides applied.
+
+    Source for auto-clear-on-equal: a pin whose value matches the calculated
+    value is dropped. Pure recompute of the annual chain; no back-solve.
+    """
+    inputs, assumptions, demand, trade = _build_engine_args_from_dicts(
+        inputs_d, assumptions_d, demand_d, trade_d)
+    years, _s, _st, _occ = compute_annual(inputs, assumptions, demand, trade, {})
+    out = {}
+    for y in (1, 2, 3):
+        yr = years[y]
+        out[("share", y)] = D(yr.share)
+        for label, val in yr.expenses.items():
+            out[(label, y)] = D(val)
+    return out
+
+
+def _apply_override_ops(stored: dict, ops, calc):
+    """Translate a set/clear override op (or a full dict) into the storage map.
+
+    storage keys are "{node}#{year}" -> {value, note, ts} (DATA_MODEL §4.6).
+    - set: validate the node is pinnable (else PinRejected -> 422); auto-clear if
+      the value equals the calculated value within $0.50 (auto-clear-on-equal).
+    - clear: drop the pin.
+    A non-dict-ops object (legacy full map) replaces the map wholesale after
+    validating every key.
+    """
+    result = dict(stored)
+    # Legacy/full-map form: a plain dict of "{node}#{year}" -> pin.
+    if not isinstance(ops, dict) or ("set" not in ops and "clear" not in ops):
+        dag.validate_all(ops or {})
+        return dict(ops or {})
+
+    for item in ops.get("clear", []) or []:
+        key = f"{item['node']}#{int(item['year'])}"
+        result.pop(key, None)
+
+    for item in ops.get("set", []) or []:
+        node = item["node"]
+        year = int(item["year"])
+        key = f"{node}#{year}"
+        dag.validate_pin(key)  # raises PinRejected on a derived/unknown node
+        value = D(item["value"])
+        calc_val = calc.get((node, year))
+        if calc_val is not None and abs(value - calc_val) <= _AUTO_CLEAR_TOLERANCE:
+            result.pop(key, None)  # auto-clear-on-equal
+            continue
+        pin = {"value": str(item["value"]), "note": item.get("note", ""),
+               "ts": _utcnow()}
+        result[key] = pin
+    return result
 
 
 # -------------------------------------------------------------------- endpoints
@@ -361,7 +422,13 @@ def patch_projection(
     if body.trade_area:
         trade_d.update(body.trade_area)
     if body.overrides is not None:
-        overrides_d = body.overrides
+        calc = _calculated_unpinned(inputs_d, assumptions_d, demand_d, trade_d)
+        try:
+            overrides_d = _apply_override_ops(overrides_d, body.overrides, calc)
+        except dag.PinRejected as exc:
+            node = exc.node if hasattr(exc, "node") else None
+            raise HTTPException(status_code=422, detail={
+                "error": "node_not_pinnable", "node": node, "message": str(exc)})
     name = body.name if body.name is not None else row["name"]
 
     try:
