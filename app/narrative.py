@@ -138,8 +138,8 @@ def sanitize_body_md(body_md: str) -> str:
 
 
 # ----------------------------------------------------------------- grounding
-# Money: $1,234 / $1,234.56 / ($42,000) accounting-negative.
-_MONEY_RE = re.compile(r"\(?\$\s?\d[\d,]*(?:\.\d+)?\)?")
+# Money: $1,234 / $1,234.56 / ($42,000) accounting-negative / $278k short form.
+_MONEY_RE = re.compile(r"\(?-?\$\s?\d[\d,]*(?:\.\d+)?[kKmM]?\)?")
 # Percent: 11.0% / 39% .
 _PCT_RE = re.compile(r"\d[\d,]*(?:\.\d+)?\s?%")
 
@@ -179,7 +179,10 @@ def grounded_figures(vm: dict[str, Any]) -> set[str]:
 
     Walks computed_json collecting every ``{raw, display}`` display value plus
     any bare figure embedded in a display string (e.g. "Month 5" carries no
-    figure; "$277,990" does). The grounding check is against these.
+    figure; "$277,990" does). The grounding check is against these AND every
+    server-built display VARIANT (e.g. the "$278k" short form for "$277,990",
+    N3) so an editor may write a rounded form the server itself blessed — never
+    a client regex inventing one.
     """
     approved: set[str] = set()
 
@@ -200,7 +203,91 @@ def grounded_figures(vm: dict[str, Any]) -> set[str]:
                 approved.add(_norm(f))
 
     walk(vm)
+    # N3: fold in every server-built display variant so they ground too.
+    for fig in canonical_grounded_figures(vm):
+        for variant in fig["variants"]:
+            approved.add(_norm(variant))
     return approved
+
+
+# ----------------------------------------------------- N3: canonical figures
+# A canonical grounded figure is one engine-produced money/percent value plus
+# the small set of DISPLAY VARIANTS the server itself blesses for it. The board
+# packet narrative often abbreviates ("$278k", "~$278,000"); the validator and
+# the client must agree on the variant set, and that agreement is SERVER-built
+# from computed_json — never a client-side regex (API_SPEC §6.1, SECURITY §6.3).
+
+
+def _thousands_variant(raw: float) -> str | None:
+    """Short-form ``$278k`` for a round-ish thousands money figure (>= $10,000)."""
+    n = abs(raw)
+    if n < 10_000:
+        return None
+    sign = "-" if raw < 0 else ""
+    k = round(n / 1000)
+    return f"{sign}${k:,}k"
+
+
+def _money_variants(raw: float, display: str) -> list[str]:
+    variants = [display]
+    n = abs(raw)
+    whole = f"${n:,.0f}"
+    if raw < 0:
+        # accounting-negative + plain forms both blessed
+        variants.append(f"(${n:,.0f})")
+        variants.append(f"-${n:,.0f}")
+    else:
+        variants.append(whole)
+    thou = _thousands_variant(raw)
+    if thou:
+        variants.append(thou)
+    # de-dup, preserve order
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in variants:
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def canonical_grounded_figures(vm: dict[str, Any]) -> list[dict[str, Any]]:
+    """Server-built canonical figure list: ``[{raw, display, variants[]}]``.
+
+    Walks computed_json collecting every ``{raw, display}`` money/percent figure
+    and attaches the display variants the server blesses (canonical, plain, the
+    accounting-negative, and a ``$278k`` thousands short form). De-duplicated by
+    (raw, canonical display) so the client and grounding validator share ONE
+    authoritative list (N3).
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[float, str]] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            raw = node.get("raw")
+            disp = node.get("display")
+            if isinstance(disp, str) and isinstance(raw, (int, float)):
+                is_money = "$" in disp
+                is_pct = "%" in disp
+                if is_money or is_pct:
+                    key = (float(raw), disp)
+                    if key not in seen:
+                        seen.add(key)
+                        variants = (
+                            _money_variants(float(raw), disp)
+                            if is_money else [disp]
+                        )
+                        out.append({"raw": float(raw), "display": disp,
+                                    "variants": variants})
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(vm)
+    return out
 
 
 def validate_grounding(body_md: str, vm: dict[str, Any]) -> None:

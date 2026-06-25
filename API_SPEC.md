@@ -406,18 +406,21 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 - **`GET` response `200`:**
 
 ```json
-{ "body_md":"…sanitized markdown…", "edited":true,
+{ "body_md":"…sanitized markdown…", "edited":true, "edit_origin":"human",
   "computed_hash":"sha256:…", "stale":true,
   "stale_diff":[ {"field":"capital","was":"$262,400","now":"$277,990"} ],
+  "grounded_figures":[ {"raw":277990,"display":"$277,990","variants":["$277,990","$278k"]},
+                       {"raw":-41200,"display":"($41,200)","variants":["($41,200)","-$41,200"]} ],
   "ai_disabled":false, "updated_at":"2026-06-24T16:00:00Z" }
 ```
-`stale` is true when the stored `computed_hash` ≠ the current `computed_json` hash; the client shows "Out of date" + Regenerate and **never auto-overwrites** user-edited prose (§17).
+`stale` is true when the stored `computed_hash` ≠ the current `computed_json` hash; the client shows "Out of date" + Regenerate and **never auto-overwrites** user-edited prose (§17). `edit_origin` ∈ `ai | human | null` records how the stored prose was last produced. **`grounded_figures`** is the **server-built** canonical figure list with display variants ($277,990 / $278k / ($41,200)) derived from `computed_json` — the client never re-derives figures with a regex; the grounding validator checks against the same variant set (epic-N N3).
 
-- **`PUT` request:** `{ "body_md":"…markdown…" }`. The server **sanitizes** `body_md` with an allowlist (Python `bleach`) before storage — no raw HTML, no inline event handlers (stored-XSS → token-theft defense, [SECURITY.md](./SECURITY.md)). Response `200`: `{ "body_md":"…sanitized…", "edited":true, "computed_hash":"…" }`.
+- **`PUT` request:** `{ "body_md":"…markdown…" }`. The server **sanitizes** `body_md` with an allowlist (`p`/headings/`ul`-`ol`-`li`/`strong`/`em`/`blockquote`/`code`/`a[http|https|mailto]`) before storage — no raw HTML, no inline event handlers (stored-XSS → token-theft defense, [SECURITY.md](./SECURITY.md)) — and applies **numeric grounding fail-closed**: an ungrounded figure in a hand-edit is **rejected** (`409 grounding_failed`) and the prior narrative is left untouched (epic-N N4). Sets `edit_origin:"human"`. Response `200`: `{ "body_md":"…sanitized…", "edited":true, "edit_origin":"human", "computed_hash":"…" }`.
 
-- **`:regenerate` behavior:** low-temperature generation, **Anthropic primary → OpenAI fallback**; the result passes the numeric-grounding validator before it is stored. The prose states rent as an **estimate/range**, never a fact.
-  - Response `200`: `{ "body_md":"…", "edited":false, "computed_hash":"…", "provider":"anthropic" }`.
+- **`:regenerate` behavior:** low-temperature generation, **Anthropic primary → OpenAI fallback**; the result passes the numeric-grounding validator before it is stored. The `provider` field reflects the **actual** provider used. The prose states rent as an **estimate/range**, never a fact. Query `?confirm=true` is required to regenerate over a hand-edited narrative (confirm-before-discard, N6).
+  - Response `200`: `{ "body_md":"…", "edited":false, "edit_origin":"ai", "computed_hash":"…", "provider":"anthropic" }`.
   - **`409 grounding_failed`** (validator rejection): `{ "error":"grounding_failed", "ungrounded_figures":["$310,000"] }` — the prior narrative is **not** overwritten.
+  - **`409 edited_confirm_required`** when regenerating over `edit_origin:"human"` without `?confirm=true` — user prose is never silently discarded.
   - **`503 ai_unavailable`** when both providers fail (compute and `.xlsx` still work — §21). Body `{ "error":"ai_unavailable" }`.
 - **AI opt-out (§21):** if the projection (or deployment) has AI disabled, `:regenerate` returns `409 { "error":"ai_disabled" }` and `GET` returns `ai_disabled:true`. Compute, save, and `.xlsx` export remain fully functional with **zero AI calls** — verified by a test running the full flow with all AI keys unset (DoD, [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md)).
 - **Errors:** `403` read-only attempts to `PUT`/regenerate; `428`/`409`; `429` regeneration cap (§2.3).

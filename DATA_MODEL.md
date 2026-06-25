@@ -155,8 +155,9 @@ CREATE TABLE IF NOT EXISTS narratives (
   body_md        TEXT NOT NULL DEFAULT '',     -- sanitized markdown (server-side allowlist)
   edited         INTEGER NOT NULL DEFAULT 0,   -- 1 = user has hand-edited; never auto-overwrite
   computed_hash  TEXT,                          -- hash of computed_json at generation (stale detect)
-  provider       TEXT,                          -- 'anthropic' | 'openai' (which produced it)
+  provider       TEXT,                          -- 'anthropic' | 'openai' | 'template' (actual provider used)
   model_version  TEXT,                          -- engine version the facts came from
+  edit_origin    TEXT,                          -- 'ai' | 'human' | NULL — how the stored prose was last produced (m0004)
   updated_at     TEXT NOT NULL
 );
 ```
@@ -166,7 +167,8 @@ CREATE TABLE IF NOT EXISTS narratives (
 | `body_md` | **Server-side sanitized** (allowlist; e.g. `bleach`) before storage AND before render. This is the primary stored-XSS → token-theft vector given bearer tokens in `localStorage` (PRD §20, SECURITY lens). |
 | `edited` | If 1, regeneration must not silently overwrite user prose (PRD §17). UI shows "Out of date" + diff + Regenerate. |
 | `computed_hash` | Stable hash of the `computed_json` facts at generation time. If the live hash differs, the narrative is **stale** (PRD §17). |
-| `provider` | Records which provider generated the prose (Anthropic primary → OpenAI fallback). |
+| `provider` | Records which provider generated the prose (Anthropic primary → OpenAI fallback; `template` when no provider key is configured). Reflects the **actual** provider used (epic-N N6). |
+| `edit_origin` | `ai` (regenerated from `computed_json`) \| `human` (hand-edited via `PUT`) \| NULL (none yet). Drives the confirm-before-discard regenerate gate (N6) and the client's "edited by you" badge (epic-N N4, migration m0004). |
 
 **Grounding invariant (enforced in the service, see [`SECURITY.md`](./SECURITY.md)):** every numeric figure in `body_md` must exist in `computed_json`/approved facts; ungrounded figures are rejected at generation, not stored.
 

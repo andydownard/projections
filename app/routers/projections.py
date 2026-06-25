@@ -29,8 +29,10 @@ from starlette.background import BackgroundTask
 
 from app import ratelimit
 from app.deps import hash_token, parse_if_match, token_matches
+from app import narrative_provider
 from app.narrative import (
     GroundingError,
+    canonical_grounded_figures,
     compute_hash,
     sanitize_body_md,
     stale_diff,
@@ -556,9 +558,13 @@ def _narrative_response(row: dict, store: Store) -> dict:
     return {
         "body_md": body_md,
         "edited": bool(nar.get("edited")),
+        "edit_origin": nar.get("edit_origin"),
         "computed_hash": stored_hash,
         "stale": stale,
         "stale_diff": diff,
+        # N3: the server-built canonical grounded-figure list + display variants,
+        # so the client never re-derives figures with a regex (API_SPEC §6.1).
+        "grounded_figures": canonical_grounded_figures(live_vm),
         "ai_disabled": _ai_disabled(row),
         "updated_at": nar.get("updated_at"),
     }
@@ -602,29 +608,47 @@ def put_narrative(
         live_vm = json.loads(row.get("computed_json") or "{}")
     except json.JSONDecodeError:
         live_vm = {}
+    # N4: numeric grounding is FAIL-CLOSED even for a HUMAN edit — an ungrounded
+    # figure rejects the save and leaves the prior narrative untouched (the board
+    # packet must never carry a hand-typed hallucinated figure, SECURITY §6.3).
+    try:
+        validate_grounding(clean, live_vm)
+    except GroundingError as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "grounding_failed",
+            "ungrounded_figures": exc.ungrounded,
+        })
     store.upsert_narrative(row["id"], {
         "body_md": clean,
         "edited": 1,
+        "edit_origin": "human",
         "computed_hash": compute_hash(live_vm),
         "snapshot_json": json.dumps(live_vm),
         "provider": None,
         "model_version": live_vm.get("model_version"),
     })
-    return {"body_md": clean, "edited": True, "computed_hash": compute_hash(live_vm)}
+    return {"body_md": clean, "edited": True, "edit_origin": "human",
+            "computed_hash": compute_hash(live_vm)}
 
 
 @router.post("/{view_slug}/narrative:regenerate")
 def regenerate_narrative(
     view_slug: str,
+    confirm: bool = False,
     store: Store = Depends(get_store),
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
     """Regenerate grounded prose from current computed_json (owner/edit only).
 
-    AI opt-out -> 409 ai_disabled (the prior narrative is untouched). The generated
-    prose passes the HARD numeric-grounding validator before storage; a hallucinated
-    figure -> 409 grounding_failed and the prior narrative is NOT overwritten.
+    N6: provider is Anthropic primary -> OpenAI fallback; the response ``provider``
+    field reflects the ACTUAL provider used. Both providers failing -> 503
+    ai_unavailable (compute/save/.xlsx remain untouched, §21). AI opt-out -> 409
+    ai_disabled. The generated prose passes the HARD numeric-grounding validator
+    before storage; a hallucinated figure -> 409 grounding_failed and the prior
+    narrative is NOT overwritten. A user-edited narrative is NEVER silently
+    discarded: regenerating over ``edit_origin == 'human'`` without ``?confirm=true``
+    -> 409 edited_confirm_required (confirm-before-discard gate).
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
@@ -640,7 +664,16 @@ def regenerate_narrative(
     except json.JSONDecodeError:
         live_vm = {}
 
-    draft = _generate_narrative_md(live_vm)
+    # Provider failover (Anthropic -> OpenAI). The local grounded builder is the
+    # generator seam (also the patch point for the grounding-rejection test).
+    try:
+        draft, provider = narrative_provider.generate(
+            live_vm, generator=_generate_narrative_md)
+    except narrative_provider.AIUnavailableError:
+        raise HTTPException(status_code=503, detail={"error": "ai_unavailable"})
+
+    # Grounding is checked BEFORE the confirm gate: a failed generation has
+    # nothing to discard, so a hallucinated figure is rejected regardless.
     try:
         validate_grounding(draft, live_vm)
     except GroundingError as exc:
@@ -650,17 +683,24 @@ def regenerate_narrative(
             "ungrounded_figures": exc.ungrounded,
         })
 
+    # Confirm-before-discard: never silently overwrite hand-edited prose.
+    prior = store.get_narrative(row["id"]) or {}
+    if prior.get("edit_origin") == "human" and not confirm:
+        raise HTTPException(status_code=409, detail={
+            "error": "edited_confirm_required"})
+
     clean = sanitize_body_md(draft)
     store.upsert_narrative(row["id"], {
         "body_md": clean,
         "edited": 0,
+        "edit_origin": "ai",
         "computed_hash": compute_hash(live_vm),
         "snapshot_json": json.dumps(live_vm),
-        "provider": "template",
+        "provider": provider,
         "model_version": live_vm.get("model_version"),
     })
-    return {"body_md": clean, "edited": False,
-            "computed_hash": compute_hash(live_vm), "provider": "template"}
+    return {"body_md": clean, "edited": False, "edit_origin": "ai",
+            "computed_hash": compute_hash(live_vm), "provider": provider}
 
 
 @router.get("/{view_slug}/packet")

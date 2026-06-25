@@ -200,7 +200,7 @@ class SqliteStore:
         (``projection_id`` PK), so there is no concurrency window worth a CAS here.
         """
         cols = ("body_md", "edited", "computed_hash", "snapshot_json", "provider",
-                "model_version", "updated_at")
+                "model_version", "edit_origin", "updated_at")
         vals = {c: narrative.get(c) for c in cols}
         vals["updated_at"] = vals["updated_at"] or _utcnow()
         vals["snapshot_json"] = vals["snapshot_json"] or "{}"
