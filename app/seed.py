@@ -87,3 +87,35 @@ def seed_example(store) -> None:
         "updated_at": now,
     }
     store.create_projection(row)
+
+
+def reset_example(store) -> bool:
+    """Reset the seeded `example` projection to its canonical state (E2E only).
+
+    The stateful override/409 flow mutates `example` (labor, name, version). With
+    a single in-memory DB shared by all three viewport projects, that state leaks
+    across tests and makes the gate order-dependent. A per-test reset restores the
+    canonical content (labor 0.4, name "House of Hope", overrides cleared) so each
+    flow starts from a known fixture. Content is reset via the normal version-check
+    UPDATE; the version may advance (the specs read the live version on load and
+    never assume a literal starting number).
+
+    Returns True if the row was reset, False if it was missing (seeds it instead).
+    """
+    row = store.get_projection_by_slug(EXAMPLE_SLUG)
+    if row is None:
+        seed_example(store)
+        return False
+    vm = example_view_model()
+    patch = {
+        "name": "House of Hope",
+        "inputs_json": json.dumps(_INPUTS),
+        "assumptions_json": json.dumps(_ASSUMPTIONS),
+        "demand_drivers_json": json.dumps({}),
+        "trade_area_json": json.dumps(_TRADE),
+        "overrides_json": json.dumps({}),
+        "computed_json": json.dumps(vm),
+        "model_version": vm.get("model_version", ""),
+    }
+    store.update_with_version_check(row["id"], row["version"], patch)
+    return True

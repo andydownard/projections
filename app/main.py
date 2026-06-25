@@ -68,6 +68,19 @@ def create_app() -> FastAPI:
     def robots() -> Response:
         return Response(content=ROBOTS_TXT, media_type="text/plain")
 
+    # E2E-only test support: reset the seeded `example` projection to its canonical
+    # state so the stateful override/409 flow is deterministic across the three
+    # viewport projects sharing one in-memory DB. Gated on E2E_SEED + non-prod —
+    # this route does NOT exist in production (no data path, no auth surface).
+    if os.environ.get("E2E_SEED") == "1" and not config.is_production():
+        from app.seed import reset_example
+        from app.store import get_store
+
+        @app.post("/api/_test/reseed", include_in_schema=False)
+        def _test_reseed() -> dict:
+            reset_example(get_store())
+            return {"status": "reseeded"}
+
     return app
 
 

@@ -62,7 +62,7 @@ interface ControlDef {
 }
 
 const PCT_CONTROLS: ControlDef[] = [
-  { field: "laborPct", patchKey: "labor_pct", label: "Labor (payroll) % of revenue", kind: "pct", min: 0, max: 1, step: 0.005 },
+  { field: "laborPct", patchKey: "labor_pct", label: "Labor % (payroll, of revenue)", kind: "pct", min: 0, max: 1, step: 0.005 },
   { field: "marketingPct", patchKey: "marketing_pct", label: "Marketing & outreach % of revenue", kind: "pct", min: 0, max: 0.2, step: 0.0025 },
   { field: "suppliesPct", patchKey: "supplies_pct", label: "Supplies & processing % of revenue", kind: "pct", min: 0, max: 0.2, step: 0.0025 },
   { field: "cardPct", patchKey: "card_pct", label: "Credit card fees % of revenue", kind: "pct", min: 0, max: 0.1, step: 0.0025 },
@@ -198,8 +198,12 @@ export function SettingsTab({
           return (
             <label key={c.field} className="settings-tab__control">
               <span className="settings-tab__control-label">{c.label}</span>
+              {/* A number spinner (not a range slider): a dense, finance-grade
+                  control (DESIGN_PROMPT) that is directly fillable in E2E. The
+                  value is the server `raw` (0..1 for percents); the adjacent
+                  <output> shows the server `display` verbatim (no client math). */}
               <input
-                type="range"
+                type="number"
                 aria-label={c.label}
                 min={c.min}
                 max={c.max}

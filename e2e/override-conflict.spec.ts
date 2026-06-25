@@ -9,6 +9,13 @@ const M2_READY = process.env.E2E_M2_READY === "1";
 test.describe("override + 409 optimistic-concurrency", () => {
   test.skip(!M2_READY, "M4 override UI / M2 conflict modal not built yet — scaffold pins the flow");
 
+  // This flow MUTATES the seeded `example` projection (labor, name, version). The
+  // three viewport projects share one in-memory DB, so reset to the canonical
+  // fixture before each test to keep the gate order-independent (E2E-only route).
+  test.beforeEach(async ({ request }) => {
+    await request.post("/api/_test/reseed");
+  });
+
   test("editing a settings slider recomputes via the server (no client math)", async ({ page }) => {
     await page.goto("/p/example/edit#edit-secret");
     // Fragment secret is scrubbed from the URL after read (SECURITY.md §2.5).

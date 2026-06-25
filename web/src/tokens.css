@@ -355,3 +355,301 @@ body {
     grid-template-columns: 18rem 1fr 4rem;
   }
 }
+
+/* --- Projection tab (SLICE 3) ------------------------------------------------
+ * Read-only render of the Appendix-D view-model. Cell-state classes reference
+ * the SEMANTIC layer only; meaning never depends on the brand layer and never
+ * relies on color alone (the legend names each state; Estimated has an icon). */
+.projection-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 1rem;
+}
+
+.projection-tab__heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+/* Visually hidden but exposed to assistive tech (recompute live-region, caption). */
+.sr-only,
+.sr-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --- decision banner + tiles --- */
+.decision-banner {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  padding: 18px 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 18px;
+}
+.decision-banner[data-tag="proceed"] {
+  border-left-color: var(--success);
+}
+.decision-banner[data-tag="do_not_proceed"] {
+  border-left-color: var(--error);
+}
+.decision-banner[data-tag="revise"],
+.decision-banner[data-tag="find_cheaper_rent"],
+.decision-banner[data-tag="raise_cash"],
+.decision-banner[data-tag="delay"] {
+  border-left-color: var(--warning);
+}
+
+.decision-banner__verdict {
+  flex: 1.4 1 16rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.decision-banner__headline {
+  margin: 0;
+  font-size: 1.3125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.decision-banner__sub {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.decision-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 0;
+  border-left: 1px solid var(--line);
+}
+
+.decision-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 22px;
+  border-right: 1px solid var(--line);
+  max-width: 14rem;
+}
+.decision-tile:last-child {
+  border-right: none;
+}
+
+.decision-tile__label {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.decision-tile__value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.decision-tile__reason {
+  margin: 0;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* --- 3-year table --- */
+.projection-tab__rows-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.table-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.table-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid var(--line);
+  flex: none;
+}
+.swatch--input {
+  background: #eef6f0;
+  border-color: var(--success);
+}
+.swatch--computed {
+  background: var(--surface);
+  border-color: var(--text-muted);
+}
+.swatch--overridden {
+  background: #efe7df;
+  border-color: var(--override);
+}
+/* Estimated reads as a filled triangle (icon, not color-only). */
+.swatch--estimated {
+  width: 0;
+  height: 0;
+  border: none;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 9px solid var(--warning);
+  border-radius: 0;
+}
+
+.projection-tab__scroll {
+  overflow-x: auto;
+}
+
+.three-year-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.three-year-table th,
+.three-year-table td {
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+}
+
+.three-year-table thead th {
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.6875rem;
+}
+.three-year-table th[scope="col"]:first-child,
+.three-year-table__label {
+  text-align: left;
+}
+
+.three-year-table__share {
+  display: block;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+.three-year-table__label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Cell-state classes — SEMANTIC tokens only. */
+.cell {
+  font-variant-numeric: tabular-nums;
+}
+.cell-wrap {
+  padding: 0;
+}
+.cell-wrap .cell {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 0.4rem 0.75rem;
+  font: inherit;
+  text-align: right;
+  cursor: pointer;
+  color: var(--text);
+}
+.cell--input {
+  background: #eef6f0;
+}
+.cell-wrap .cell--input {
+  background: #eef6f0;
+}
+.cell--computed {
+  color: var(--text);
+}
+.cell--overridden {
+  background: #efe7df;
+}
+.cell--estimated {
+  background: #fdf6e7;
+}
+.cell[aria-disabled="true"] {
+  color: var(--text-muted);
+}
+
+/* --- KPI strip (shared with the detail page) --- */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.kpi {
+  background: var(--surface);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kpi__label {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.kpi__value {
+  font-size: 1.1875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- cash-flow chart strokes (semantic) --- */
+.cashflow-chart__zero {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.cashflow-chart__line {
+  stroke: var(--brand-primary);
+  stroke-width: 2;
+}
+.cashflow-chart__breakeven {
+  stroke: var(--success);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
