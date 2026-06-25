@@ -49,15 +49,15 @@ The PRD's phrase "reused engine, single math authority" (§13, §23, Appendix A)
 
 ## 1. DECISIONS-TO-RESOLVE (must be closed before any golden fixture is frozen)
 
-The PRD leaves three numeric defaults ambiguous. **A builder cannot start golden tests until these are pinned.** The Resolved Defaults table (§2) below states the chosen values. The rule that forces the choice: **the chosen defaults must reproduce the Appendix-D prototype headline numbers** (Y1 revenue ≈ $426,911; capital required ≈ $277,990; Y1 net margin ≈ 11%; break-even ≈ month 5) in the House of Hope conservative golden fixture — **or** the prototype numbers are themselves corrected and re-pinned. Do not ship two "correct" answers.
+The PRD leaves three numeric defaults ambiguous. **A builder cannot start golden tests until these are pinned.** The Resolved Defaults table (§2) below states the chosen values. **Labor is pinned to 60% by owner decision** ([DECISIONS.md](./DECISIONS.md)); the canonical House of Hope golden reproduces the engine at 60% (Y1 revenue ≈ $426,911 is labor-independent and holds; margin/decision-metrics are computed at 60% and need not equal the prototype's 40% headline). A separate **40% design-parity fixture** reproduces the Appendix-D prototype headline (capital ≈ $277,990; net margin ≈ 11%; break-even ≈ month 5) for design-QA only. Both are "correct" for their stated labor input — do not conflate them.
 
 | Open item | PRD evidence | **Resolved for v1** | Rationale |
 |---|---|---|---|
-| **Labor % of revenue** | DEFAULTS=0.60; methodology=60%; prototype=40%; Appendix-D sample=40%; Appendix-B=0.60 | **0.40** | Only 40% reconciles the design's headline numbers (~11% margin, ~$278k capital, break-even ~month 5). Slider stays editable; benchmark band 25–60% (§12.2). |
+| **Labor % of revenue** | DEFAULTS=0.60; methodology=60%; prototype=40%; Appendix-D sample=40%; Appendix-B=0.60 | **0.60** | **Owner decision ([DECISIONS.md](./DECISIONS.md)); matches the original verified engine.** The canonical correctness golden reproduces House of Hope at **60%** (a loss/"revise" case — valid for a math gate). A separate **40% design-parity fixture** reproduces the prototype headline (~11% margin, ~$278k, break-even ~month 5, "Proceed") for design-QA only. Slider editable; band 25–60% (§12.2). |
 | **Average basket value** | §7.3=$17; Appendix-D=$17.08; example JSON=17 | **17.08** | Required to reproduce Y1 revenue ≈ $426,911 at 6% share. Editable. |
 | **Rent escalator behavior** | §7.3 "applies to Y2–Y3"; compound vs. linear unspecified | **Compound**: `rent_y` = `rent_y1 × (1 + escalator)^(y−1)`. Escalator applies to **rent/occupancy only** (not NNN opex base, not the lease-deposit startup line, which use `rent_y1`). | Single, simplest defensible reading; fixtured. |
 
-> If Thriftly later sets labor to 60%, that is a **new `model_version`** and a new golden fixture set — not a silent default flip. See §3.
+> Labor is **60%** (owner decision). The 40% design-parity fixture lives alongside the 60% canonical golden; moving the **default** between them is a **new `model_version`** with a regenerated golden set in the same change — not a silent flip. See §3 and [DECISIONS.md](./DECISIONS.md).
 
 ---
 
@@ -76,7 +76,7 @@ AVG_BASKET_VALUE          = 17.08    # §7.3 (resolved §1) -> customers
 SALVAGE_PCT_OF_RETAIL     = 0.008    # §7.3 (0.8%)
 
 # --- cost structure (% of total revenue unless noted)
-LABOR_PCT_OF_REVENUE      = 0.40     # §7.3 (resolved §1) — band 0.25–0.60
+LABOR_PCT_OF_REVENUE      = 0.60     # §7.3 (owner decision, DECISIONS.md) — band 0.25–0.60
 MARKETING_PCT_OF_REVENUE  = 0.0375   # §7.3 — NEW line
 SUPPLIES_PCT_OF_REVENUE   = 0.05     # §7.3 — REPLACES fixed "Store/office supplies"
 CARD_FEES_PCT_OF_REVENUE  = 0.02     # §7.3
@@ -164,7 +164,7 @@ If `lease_type == "nnn"`, add researched/entered NNN opex to occupancy (§7.3, �
 | Expense line | Formula | Default constant |
 |---|---|---|
 | Credit card fees | `total_rev[y] × CARD_FEES_PCT_OF_REVENUE` | 2.0% |
-| Payroll | `total_rev[y] × LABOR_PCT_OF_REVENUE` | 40% |
+| Payroll | `total_rev[y] × LABOR_PCT_OF_REVENUE` | 60% (owner) |
 | Payroll taxes | `Payroll[y] × PAYROLL_TAX_PCT_OF_PAYROLL` | 7.5% |
 | **Marketing & outreach** *(NEW)* | `total_rev[y] × MARKETING_PCT_OF_REVENUE` | 3.75% |
 | **Supplies & processing** *(reclassified)* | `total_rev[y] × SUPPLIES_PCT_OF_REVENUE` | 5.0% |
@@ -403,11 +403,12 @@ Three named projections drive design, the §8 edge-case math, and the golden/Lib
 
 | Fixture | Inputs (deltas from defaults) | Expected headline | Tests |
 |---|---|---|---|
-| **House of Hope (conservative)** | shares 6/8/10%, basket $17.08, labor 40%, marketing 3.75%, supplies 5%, escalator 3%, reserve $25k, `H`=31,798, donation_value $74, 10,000 sqft, 70% salesfloor, NNN | Y1 rev ≈ **$426,911**; Y1 net margin ≈ **11%**; capital required ≈ **$277,990**; break-even ≈ **month 5**; `reco.tag = proceed` | happy path; annual==Σmonthly; no overrides |
+| **House of Hope (canonical, 60% labor)** | shares 6/8/10%, basket $17.08, **labor 60% (owner default)**, marketing 3.75%, supplies 5%, escalator 3%, reserve $25k, `H`=31,798, donation_value $74, 10,000 sqft, 70% salesfloor, NNN | Y1 rev ≈ **$426,911** (labor-independent); margin / capital / `reco.tag` computed at 60% (a slight-loss / `revise`-class case) and **pinned at fixture-generation time** | happy path; annual==Σmonthly; no overrides |
+| **House of Hope (design-parity, 40% labor)** | as above but **labor 40%** | Y1 net margin ≈ **11%**; capital required ≈ **$277,990**; break-even ≈ **month 5**; `reco.tag = proceed` (reproduces the prototype screenshots) | **design-QA only** — pixel/number parity with the Appendix-D prototype |
 | **Aggressive (flagged)** | shares **15/20/25%**, else defaults | net margin ≈ **39%** → **must trigger** the §12.2 net-margin (>30%) and share (>8%) guardrails; `requires_note = true`; `reco.tag = revise` | guardrail flags fire; not a math error |
 | **Grace Mission (loss case)** | high rent / low share → **Y1 net ≈ ($12,400)**; rent **$14/sqft low-confidence**; **one overridden Payroll cell** (`Payroll#1`) | `simple_payback_years = null` ("N/A — no Year 1 profit"); negatives in parentheses; low-confidence rent badge | N/A sentinels; override + N/A path both recalc clean |
 
-The House of Hope numbers are the **reconciliation target** for the resolved defaults (§1). The Aggressive case mirrors `house_of_hope.json` (which carries the old 15/25% shares) and is the guardrail fixture. The Grace Mission case is the edge-case fixture that the legacy engine's unguarded `=net/totrev` / `=startup/Y1net` would have failed (§0, lines 257/284).
+The **60% canonical** House of Hope fixture is the reconciliation target for the resolved defaults (§1); the **40% design-parity** fixture reproduces the prototype headline for design-QA only ([DECISIONS.md](./DECISIONS.md)). The Aggressive case mirrors `house_of_hope.json` (which carries the old 15/25% shares) and is the guardrail fixture. The Grace Mission case is the edge-case fixture that the legacy engine's unguarded `=net/totrev` / `=startup/Y1net` would have failed (§0, lines 257/284).
 
 ---
 
@@ -525,7 +526,7 @@ The renderers (`xlsx.py`, `packet.py`) **consume** the core's output; they never
 
 1. One pure compute core; renderers consume it; **no second math surface** (§0, §9, §15).
 2. Year-2 share is an **explicit input**; the midpoint is dead (§4.1).
-3. Resolved defaults: **labor 40%, basket $17.08, escalator 3% compound** (§1, §2) — must reproduce the Appendix-D headline numbers.
+3. Resolved defaults: **labor 60% (owner; canonical golden), basket $17.08, escalator 3% compound** (§1, §2). A 40% design-parity fixture reproduces the Appendix-D headline for design-QA.
 4. New cost lines: **Marketing 3.75%**, **Supplies 5% (replaces fixed $3,700)**; reserve buffer **$25k** (§2, §4.2).
 5. Monthly-first; **Year-1 annual == Σ monthly** to the penny (§4.2, §5.3, §13.4).
 6. Decision metrics computed in the core and **golden-tested**, not just rendered (§6, §13).

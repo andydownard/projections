@@ -84,7 +84,7 @@ The PRD calls the Python engine "the single math authority." **As-built it is no
 ### Resolved defaults (close PRD §7.3 open items; the golden fixtures use these)
 | Driver | v1 default | Source |
 |---|---|---|
-| **Labor (payroll) % of revenue** | **40%** (slider editable) | reproduces the Appendix-D headline numbers; methodology's 60% is superseded. **Document the rationale in [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md).** |
+| **Labor (payroll) % of revenue** | **60%** (slider editable) | **Owner decision ([DECISIONS.md](./DECISIONS.md))**; matches the original verified engine. Canonical golden runs at 60%; a 40% **design-parity** fixture reproduces the Appendix-D headline for design-QA. See [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) §1. |
 | Average basket value | **$17.08** | reproduces prototype Y1 revenue ~$426,911 / break-even ~month 5 |
 | Marketing & outreach % | 3.75% | PRD §7.3 |
 | Supplies & processing % | 5.0% (replaces fixed supplies) | PRD §7.3 |
@@ -183,7 +183,7 @@ Compute in **cents/Decimal**; round only at display (whole dollars / 0.1%). The 
 ## Sample fixtures (golden tests, from day one)
 
 Ship these three named projections as golden fixtures pinned to `model_version`; they drive design, edge-case math, and the recalc gate (PRD §12.4/§13/§18):
-1. **House of Hope (conservative)** — shares 6/8/10%, basket $17.08, labor 40%; expect Y1 revenue ~$426,911, ~11% net margin, capital required ~$277,990, break-even ~month 5. (The chosen defaults must reproduce these, or correct them in [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md).)
+1. **House of Hope** — shares 6/8/10%, basket $17.08. **Canonical fixture runs at labor 60%** (owner default): Y1 revenue ~$426,911 (labor-independent), with margin/capital/reco pinned at 60% at fixture-gen. A **40% design-parity twin** reproduces the prototype headline (~11% margin, capital ~$277,990, break-even ~month 5, reco=proceed) for design-QA only. See [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) §1/§10 and [DECISIONS.md](./DECISIONS.md).
 2. **Aggressive (flagged)** — shares 15/20/25% (the legacy `house_of_hope.json` values), ~39% margin; **must** trigger the §12.2 net-margin guardrail and require a justification note that travels into the packet.
 3. **Grace Mission (loss case)** — negative Y1 net, payback **N/A — no Year 1 profit**, low-confidence $14/sqft rent, one **overridden Payroll cell**; must render cleanly (parentheses for negatives, explicit `null`, never `#DIV/0!`) and recalc clean **with the override present**.
 

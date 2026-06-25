@@ -1,7 +1,7 @@
 # IDEA_FAB.md — The §17 Feedback Feature ("Idea Fab") and its GitHub Project Wiring
 
 > **Repo:** `rallytasks/projections` · **Status:** Build/spec doc (not yet built) · **Owner:** Andy Downard
-> **Scope:** This document specifies the in-app feedback feature (the "idea fab"), the `POST /api/feedback` contract, the server-side redaction and abuse controls, and how a redacted feedback item becomes a GitHub Issue tracked on the **"Projections — Idea Fab"** GitHub Project (v2) board.
+> **Scope:** This document specifies the in-app feedback feature (the "idea fab"), the `POST /api/feedback` contract, the server-side redaction and abuse controls, and how a redacted feedback item becomes a GitHub Issue tracked on the **"Projections Roadmap" (GitHub Project #5, `rallytasks`)** GitHub Project (v2) board.
 >
 > This is a **build/spec document only**. It contains no product/app code. It is one of the sibling docs a reader will see alongside [ARCHITECTURE.md](ARCHITECTURE.md), [BUILD_PLAN.md](BUILD_PLAN.md), [ENGINE_CONTRACT.md](ENGINE_CONTRACT.md), [DATA_MODEL.md](DATA_MODEL.md), [API_SPEC.md](API_SPEC.md), [SECURITY.md](SECURITY.md), [OPS_RUNBOOK.md](OPS_RUNBOOK.md), [CLAUDE.md](CLAUDE.md), [AGENTS.md](AGENTS.md), [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md), and [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -209,7 +209,7 @@ A hidden form field (`hp`, see §1.2) that is invisible to humans and screen rea
 
 ---
 
-## 5. GitHub wiring — issues + the "Projections — Idea Fab" Project board
+## 5. GitHub wiring — issues + the "Projections Roadmap" (GitHub Project #5, `rallytasks`) Project board
 
 ### 5.1 Configuration (server-side secrets only)
 
@@ -220,7 +220,7 @@ Per PRD §22/§23 and [SECURITY.md](SECURITY.md) env inventory, GitHub wiring is
 | `GITHUB_TOKEN` | optional (feedback degrades if unset) | Least-scoped PAT/fine-grained token that can create issues and add items to the Project (§5.6). |
 | `GITHUB_ORG` | optional | `rallytasks` |
 | `GITHUB_REPO` | optional | `projections` |
-| `GITHUB_PROJECT_NUMBER` | optional | The org Project (v2) number for **"Projections — Idea Fab"**. **`<FILL IN ONCE THE PROJECT IS CREATED>`** — see §5.7. |
+| `GITHUB_PROJECT_NUMBER` | optional | The org Project (v2) number for **"Projections Roadmap" (GitHub Project #5, `rallytasks`)**. **`<FILL IN ONCE THE PROJECT IS CREATED>`** — see §5.7. |
 
 If any of `GITHUB_TOKEN` / `GITHUB_ORG` / `GITHUB_REPO` is unset in production, the server **does not refuse to boot** (unlike `DB_PATH`, `ANTHROPIC_API_KEY`, etc.) — it logs a structured "feedback→GitHub disabled" event and feedback still persists locally. This is explicitly in the **optional/graceful-degrade** column of the boot-refuse policy in [SECURITY.md](SECURITY.md), matching timpager's treatment of `GH_PAT`.
 
@@ -263,11 +263,11 @@ A small periodic task scans `feedback WHERE github_issue_url IS NULL AND status=
 
 ### 5.6 Least-scoped token
 
-`GITHUB_TOKEN` is provisioned with the **minimum** scope to (a) create issues in `rallytasks/projections` and (b) add items + set a field value on the "Projections — Idea Fab" Project (v2). Recommended: a **fine-grained PAT** (or GitHub App installation token) scoped to the single repo with **Issues: Read & Write** and **Projects: Read & Write**, and nothing else. No `repo` classic-scope blanket token. Rotated on personnel change ([SECURITY.md](SECURITY.md) rotation rule). The token is server-side only and never logged.
+`GITHUB_TOKEN` is provisioned with the **minimum** scope to (a) create issues in `rallytasks/projections` and (b) add items + set a field value on the "Projections Roadmap" (GitHub Project #5, `rallytasks`) Project (v2). Recommended: a **fine-grained PAT** (or GitHub App installation token) scoped to the single repo with **Issues: Read & Write** and **Projects: Read & Write**, and nothing else. No `repo` classic-scope blanket token. Rotated on personnel change ([SECURITY.md](SECURITY.md) rotation rule). The token is server-side only and never logged.
 
-### 5.7 The Project board: "Projections — Idea Fab"
+### 5.7 The Project board: "Projections Roadmap" (GitHub Project #5, `rallytasks`)
 
-A GitHub **Project (v2)** at the **org level** (`rallytasks`) named **"Projections — Idea Fab"** tracks every filed issue. Configuration:
+A GitHub **Project (v2)** at the **org level** (`rallytasks`) named **"Projections Roadmap" (GitHub Project #5, `rallytasks`)** tracks every filed issue. Configuration:
 
 - **Single-select `Status` field** with options, in order: **Inbox → Triage → Planned → Done.**
 - New issues land in **`Inbox`** automatically when added by the server (or via the Project's built-in "auto-add" workflow as a backstop).
@@ -279,8 +279,8 @@ A GitHub **Project (v2)** at the **org level** (`rallytasks`) named **"Projectio
 
 Both steps are best-effort (same circuit breaker / backfill as §5.4–5.5). The Project number and the `Status` field/option node-ids are resolved once and cached (they are stable for the life of the board).
 
-> **PROJECT NUMBER IS A FILL-IN.** The board does not exist yet. **`GITHUB_PROJECT_NUMBER` is set to a placeholder and MUST be filled in once the "Projections — Idea Fab" Project (v2) is created** under the `rallytasks` org. Until it is set, the server skips the add-to-Project step (issues are still created and labeled `idea-fab`, so they are findable; they simply aren't on the board yet). Setup checklist:
-> 1. Create org Project (v2) **"Projections — Idea Fab"** under `rallytasks`.
+> **PROJECT NUMBER IS A FILL-IN.** The board does not exist yet. **`GITHUB_PROJECT_NUMBER` is set to a placeholder and MUST be filled in once the "Projections Roadmap" (GitHub Project #5, `rallytasks`) Project (v2) is created** under the `rallytasks` org. Until it is set, the server skips the add-to-Project step (issues are still created and labeled `idea-fab`, so they are findable; they simply aren't on the board yet). Setup checklist:
+> 1. Create org Project (v2) **"Projections Roadmap" (GitHub Project #5, `rallytasks`)** under `rallytasks`.
 > 2. Add a single-select **`Status`** field with options **Inbox, Triage, Planned, Done** (in that order).
 > 3. Record the Project **number** and set `GITHUB_PROJECT_NUMBER` in Railway (staging + prod).
 > 4. (Optional) enable the Project's "Auto-add to project" workflow filtered to label `idea-fab` as a backstop to the server-side add.
@@ -371,6 +371,6 @@ Notes:
 4. **Rate-limited per IP and per token; honeypot drops bots silently; idempotent.** [§4]
 5. **Least-scoped `GITHUB_TOKEN`; repo may be public or private; feedback safe either way.** [§5.1, §5.2, §5.6]
 6. **GitHub filing is best-effort/non-fatal — feedback persists and returns a support ID even if GitHub is unset or down.** [§5.4, §6.4]
-7. **Issues land on "Projections — Idea Fab" (Project v2) with `Status` Inbox → Triage → Planned → Done; server sets `Inbox`.** [§5.7]
+7. **Issues land on "Projections Roadmap" (GitHub Project #5, `rallytasks`) (Project v2) with `Status` Inbox → Triage → Planned → Done; server sets `Inbox`.** [§5.7]
 8. **`GITHUB_PROJECT_NUMBER` is a placeholder until the board is created** — fill in per the §5.7 checklist. [§5.7]
 9. **`support_id` is the only user-visible handle; `github_issue_url` is server-only; only staff resolve support_id → projection.** [§3.4, §2]
