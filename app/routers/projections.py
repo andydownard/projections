@@ -61,6 +61,36 @@ def _bearer(authorization: Optional[str]) -> Optional[str]:
     return None
 
 
+def _is_owner(token: Optional[str], row: dict) -> bool:
+    return token is not None and token_matches(token, row["owner_token_hash"])
+
+
+def _is_editor(token: Optional[str], row: dict) -> bool:
+    return (
+        token is not None
+        and bool(row.get("edit_token_hash"))
+        and token_matches(token, row["edit_token_hash"])
+    )
+
+
+def _require_owner(store: Store, view_slug: str, authorization: Optional[str]) -> dict:
+    """Load the projection and assert the bearer is the OWNER (owner-only routes).
+
+    Edit/view tokens get 403 owner_required (rotate/trash/restore/delete/revisions
+    are owner-scoped — API_SPEC §1.2). Unknown slug -> 404 (never reveal existence
+    beyond what the slug already grants).
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    token = _bearer(authorization)
+    if _is_owner(token, row):
+        return row
+    if _is_editor(token, row):
+        raise HTTPException(status_code=403, detail={"error": "owner_required"})
+    raise HTTPException(status_code=403, detail={"error": "forbidden"})
+
+
 # ----------------------------------------------------------------- request body
 class InputsIn(BaseModel):
     org_name: str = ""
@@ -479,3 +509,77 @@ def patch_projection(
     })
     response.headers["ETag"] = str(new_version)
     return {**vm, "view_slug": view_slug, "version": new_version, "name": name}
+
+
+# ---------------------------------------------------- rotate / share (owner-only)
+@router.post("/{view_slug}/rotate-tokens")
+def rotate_tokens(
+    view_slug: str,
+    response: Response,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Rotate owner/edit/view_slug + every role link in ONE transaction (API_SPEC §4.7).
+
+    Owner-only. Immediately invalidates every previously-shared link (compromise
+    response, SECURITY.md §3): the old owner/edit tokens and the old view_slug all
+    die at once. Writes a rotation event to the audit/revision log. The new secrets
+    are returned exactly once (never re-derivable from the server).
+    """
+    row = _require_owner(store, view_slug, authorization)
+
+    new_owner = secrets.token_urlsafe(32)   # ~256-bit
+    new_edit = secrets.token_urlsafe(32)
+    new_slug = secrets.token_urlsafe(16)    # ~128-bit
+
+    # Re-mint role links keeping role NAMES, replacing slugs/hashes (atomic).
+    try:
+        old_roles = json.loads(row.get("role_tokens_json") or "{}")
+    except json.JSONDecodeError:
+        old_roles = {}
+    new_role_secrets: dict[str, str] = {}
+    new_role_map: dict[str, str] = {}
+    for old_slug, role_name in old_roles.items():
+        rs = secrets.token_urlsafe(16)
+        new_role_map[rs] = role_name
+        new_role_secrets[role_name] = rs
+
+    new_hashes = {
+        "owner_token_hash": hash_token(new_owner),
+        "edit_token_hash": hash_token(new_edit),
+        "view_slug": new_slug,
+        "role_tokens_json": json.dumps(new_role_map),
+    }
+    affected = store.rotate_tokens(row["id"], if_match, new_hashes)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+
+    new_version = if_match + 1
+    store.insert_revision({
+        "id": _new_id(),
+        "projection_id": row["id"],
+        "seq": new_version,
+        "inputs_json": row.get("inputs_json") or "{}",
+        "assumptions_json": row.get("assumptions_json") or "{}",
+        "overrides_json": row.get("overrides_json") or "{}",
+        "monthly_json": row.get("monthly_json") or "{}",
+        "computed_json": row.get("computed_json") or "{}",
+        "model_version": row.get("model_version") or "",
+        "actor_token_hash": hash_token(new_owner),
+        "change_summary": "tokens_rotated",
+        "created_at": _utcnow(),
+    })
+    response.headers["ETag"] = str(new_version)
+    return {
+        "view_slug": new_slug,
+        "version": new_version,
+        "tokens": {
+            "owner_token": new_owner,
+            "edit_token": new_edit,
+            "view_slug": new_slug,
+            "roles": new_role_secrets,
+        },
+    }

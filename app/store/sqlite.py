@@ -110,6 +110,25 @@ class SqliteStore:
             self._conn.commit()
             return cur.rowcount
 
+    def rotate_tokens(
+        self, id: str, expected_version: int, new_hashes: dict[str, Any]
+    ) -> int:
+        """Atomic owner/edit/view_slug/role rotation (DATA_MODEL §6.1).
+
+        One version-checked UPDATE re-hashes every shared capability so all prior
+        links die at once. Same 0-rows -> 409 contract as every mutation.
+        """
+        return self.update_with_version_check(id, expected_version, dict(new_hashes))
+
+    def set_status(self, id: str, status: str, expected_version: int) -> int:
+        """Trash/restore: flip status under the optimistic-concurrency version check."""
+        return self.update_with_version_check(id, expected_version, {"status": status})
+
+    def soft_delete(self, id: str, expected_version: int) -> int:
+        """Hard-delete marker: set deleted_at so the row is excluded everywhere."""
+        return self.update_with_version_check(
+            id, expected_version, {"deleted_at": _utcnow()})
+
     # --- revisions ---
     def insert_revision(self, rev: dict) -> None:
         cols = list(rev.keys())

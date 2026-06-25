@@ -29,6 +29,13 @@ class Store(Protocol):
     def update_with_version_check(
         self, id: str, expected_version: int, patch: dict[str, Any]
     ) -> int: ...  # rows-affected; 0 -> HTTP 409
+    def rotate_tokens(
+        self, id: str, expected_version: int, new_hashes: dict[str, Any]
+    ) -> int: ...  # atomic owner/edit/view_slug/role rotation; 0 -> HTTP 409
+    def set_status(
+        self, id: str, status: str, expected_version: int
+    ) -> int: ...  # trash/restore; 0 -> HTTP 409
+    def soft_delete(self, id: str, expected_version: int) -> int: ...  # hard purge marker
 
     # --- revisions ---
     def insert_revision(self, rev: dict) -> None: ...
