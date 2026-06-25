@@ -70,6 +70,231 @@ body {
   color: var(--text-muted);
 }
 
+/* --- buttons (brand layer; semantic meaning never depends on brand) --- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 0.875rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn--primary {
+  border-color: var(--brand-primary);
+  background: var(--brand-primary);
+  color: #ffffff;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- owner-scoped list page (SLICE 2) --- */
+.list,
+.list-empty,
+.list-loading {
+  padding: 1rem;
+}
+
+.list__header,
+.list-empty__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.list__header {
+  justify-content: space-between;
+}
+
+.list__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.75rem;
+}
+
+.list__table th,
+.list__table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-size: 0.8125rem;
+}
+
+.list__open {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--brand-deep);
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.list__sub {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.reco-chip {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+.reco-chip[data-tag="proceed"] {
+  border-color: var(--success);
+  color: var(--success);
+}
+.reco-chip[data-tag="do_not_proceed"] {
+  border-color: var(--error);
+  color: var(--error);
+}
+.reco-chip[data-tag="revise"],
+.reco-chip[data-tag="find_cheaper_rent"],
+.reco-chip[data-tag="raise_cash"],
+.reco-chip[data-tag="delay"] {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+/* --- create wizard (SLICE 2) --- */
+.wizard {
+  padding: 1rem;
+  max-width: 44rem;
+}
+
+.wizard__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.wizard__step {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border: none;
+  padding: 0;
+  margin: 0.75rem 0;
+}
+
+.wizard__step label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--text);
+}
+
+.wizard__step input[type="text"],
+.wizard__step input:not([type]),
+.wizard__step input[type="number"] {
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.5rem;
+  background: var(--surface);
+  font-size: 0.875rem;
+}
+
+.wizard__choices {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.wizard__choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+}
+
+.wizard__presets {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.wizard__note,
+.wizard__helper {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.wizard__helper {
+  font-variant-numeric: tabular-nums;
+}
+
+.wizard__actions,
+.wizard__shortcut {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.wizard__recovery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  background: var(--surface);
+  margin-bottom: 1rem;
+}
+
+.wizard__recovery-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.wizard__summary {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.wizard__summary dt {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.wizard__summary dd {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.wizard__terms {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+}
+
 /* --- Settings & assumptions tab (SLICE 4) --- */
 /* Review-first on mobile-375: status banner above the slider controls. */
 .settings-tab {

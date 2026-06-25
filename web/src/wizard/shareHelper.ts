@@ -118,6 +118,61 @@ export interface CreatePayload {
   terms_accepted: boolean;
 }
 
+/**
+ * The flat create body the FastAPI `CreateProjectionIn` model actually accepts
+ * (app/routers/projections.py): a flat `inputs` with string fractions, a single
+ * `source_of_funds` total string, and string `households`. This adapts the nested
+ * API_SPEC §4.2 payload to the in-repo backend shape so the wizard's Generate POSTs
+ * a body the server validates. Still NO client math — only string shaping.
+ */
+export interface ServerCreateBody {
+  name: string;
+  inputs: {
+    org_name: string;
+    city: string;
+    opening_status: string;
+    share_y1: string;
+    share_y2: string;
+    share_y3: string;
+    donation_value: string;
+    building_sqft: string;
+    salesfloor_pct: string;
+    source_of_funds: string;
+    occupancy_annual: string;
+    lease_type: LeaseType;
+    nnn_opex_annual: string;
+  };
+  trade_area: { basis: TradeAreaBasis; households: string };
+  location: { query: string };
+  terms_accepted: boolean;
+}
+
+export function toServerCreateBody(p: CreatePayload): ServerCreateBody {
+  const funds = p.inputs.source_of_funds;
+  const total = (funds.cash || 0) + (funds.grant || 0) + (funds.loan || 0);
+  return {
+    name: p.name,
+    inputs: {
+      org_name: p.name,
+      city: p.location.query,
+      opening_status: "pre_launch",
+      share_y1: String(p.inputs.demand.share_y1),
+      share_y2: String(p.inputs.demand.share_y2),
+      share_y3: String(p.inputs.demand.share_y3),
+      donation_value: String(p.inputs.donation_value),
+      building_sqft: String(p.inputs.building_sqft),
+      salesfloor_pct: String(p.inputs.salesfloor_pct),
+      source_of_funds: String(total),
+      occupancy_annual: String(p.inputs.occupancy_annual),
+      lease_type: p.inputs.lease_type,
+      nnn_opex_annual: "0",
+    },
+    trade_area: { basis: p.trade_area.basis, households: String(p.trade_area.households) },
+    location: { query: p.location.query },
+    terms_accepted: p.terms_accepted,
+  };
+}
+
 /** Map a wizard draft to the POST /api/projections body (API_SPEC §4.2). */
 export function buildCreatePayload(d: WizardDraft): CreatePayload {
   return {

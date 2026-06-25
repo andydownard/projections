@@ -6,6 +6,7 @@ import {
   buildCreatePayload,
   evenRampY2,
   shareHelper,
+  toServerCreateBody,
 } from "./shareHelper";
 
 // SLICE 2 — wizard helper math. This is a PRE-PROJECTION estimate affordance
@@ -105,5 +106,42 @@ describe("buildCreatePayload (maps wizard draft → POST /api/projections body)"
     expect(payload.inputs.lease_type).toBe("nnn");
     expect(payload.inputs.source_of_funds).toEqual({ cash: 150000, grant: 50000, loan: 0 });
     expect(payload.terms_accepted).toBe(true);
+  });
+});
+
+describe("toServerCreateBody (nested wizard payload → flat backend body)", () => {
+  const payload = buildCreatePayload({
+    name: "House of Hope",
+    city: "Longview",
+    state: "TX",
+    basis: "city",
+    households: 31798,
+    buildingSqft: 10000,
+    salesfloorPct: 70,
+    leaseType: "nnn",
+    donationValue: 74,
+    basket: 17.08,
+    donationsPerHh: 3,
+    shareY1: 6,
+    shareY2: 8,
+    shareY3: 10,
+    occupancyAnnual: 90000,
+    cash: 150000,
+    grant: 50000,
+    loan: 0,
+    termsAccepted: true,
+  });
+
+  it("flattens shares to string fractions the backend Inputs model accepts", () => {
+    const body = toServerCreateBody(payload);
+    expect(body.inputs.share_y1).toBe("0.06");
+    expect(body.inputs.share_y2).toBe("0.08");
+    expect(body.inputs.share_y3).toBe("0.1");
+    expect(body.inputs.salesfloor_pct).toBe("0.7");
+    expect(body.inputs.lease_type).toBe("nnn");
+    // source_of_funds collapses to a single total string (backend InputsIn shape).
+    expect(body.inputs.source_of_funds).toBe("200000");
+    expect(body.inputs.city).toBe("Longview, TX");
+    expect(body.trade_area).toEqual({ basis: "city", households: "31798" });
   });
 });
