@@ -22,11 +22,12 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
+from app import ratelimit
 from app.deps import hash_token, parse_if_match, token_matches
 from app.narrative import (
     GroundingError,
@@ -51,7 +52,21 @@ _AUTO_CLEAR_TOLERANCE = D("0.50")
 XLSX_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+# Preview is a read-only dry-run on the read bucket (API_SPEC §2.3): generous,
+# since it backs a debounced "what-if" surface, but still capped against abuse.
+_PREVIEW_IP_LIMIT = 600
+_PREVIEW_TOKEN_LIMIT = 600
+_PREVIEW_WINDOW_SECONDS = 300
+
 router = APIRouter(prefix="/api/projections", tags=["projections"])
+
+
+def _client_ip(request: Request) -> str:
+    """Right-most untrusted hop from X-Forwarded-For, else the socket peer."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
 
 
 def _utcnow() -> str:
@@ -268,6 +283,63 @@ def _apply_override_ops(stored: dict, ops, calc):
     return result
 
 
+def _merge_patch(row: dict, body: "PatchProjectionIn"):
+    """Merge an editable-surface partial onto the stored source-of-truth.
+
+    Returns (inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name). This
+    is the SHARED merge used by both PATCH (persisting) and /preview (read-only)
+    so the two paths can never drift. Raises dag.PinRejected on a non-pinnable
+    node (the caller maps it to 422).
+    """
+    inputs_d = json.loads(row["inputs_json"] or "{}")
+    assumptions_d = json.loads(row["assumptions_json"] or "{}")
+    demand_d = json.loads(row["demand_drivers_json"] or "{}")
+    trade_d = json.loads(row["trade_area_json"] or "{}")
+    overrides_d = json.loads(row["overrides_json"] or "{}")
+    if body.inputs:
+        inputs_d.update(body.inputs)
+    if body.assumptions:
+        assumptions_d.update(body.assumptions)
+    if body.demand:
+        demand_d.update(body.demand)
+    if body.trade_area:
+        trade_d.update(body.trade_area)
+    if body.overrides is not None:
+        calc = _calculated_unpinned(inputs_d, assumptions_d, demand_d, trade_d)
+        overrides_d = _apply_override_ops(overrides_d, body.overrides, calc)
+    name = body.name if body.name is not None else row["name"]
+    return inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name
+
+
+def _diff_changed(before: dict, after: dict) -> list[dict]:
+    """Build the changed[] list of {label, was, now, sign} for the decision metrics.
+
+    Both before/after are subsets of the view-model metrics; we compare display
+    strings and derive a direction sign from the raw values.
+    """
+    out = []
+    for key, label in (("capital", "Capital required"),
+                       ("cashGap", "First-year cash gap"),
+                       ("breakeven", "Break-even month")):
+        b = before.get(key) or {}
+        a = after.get(key) or {}
+        if b.get("display") == a.get("display"):
+            continue
+        b_raw, a_raw = b.get("raw"), a.get("raw")
+        sign = "flat"
+        if isinstance(b_raw, (int, float)) and isinstance(a_raw, (int, float)):
+            sign = "up" if a_raw > b_raw else "down" if a_raw < b_raw else "flat"
+        out.append({"label": label, "was": b.get("display"),
+                    "now": a.get("display"), "sign": sign})
+    return out
+
+
+def _metrics_subset(vm: dict) -> dict:
+    """The three decision metrics as {key: {raw, display}} for before/after."""
+    m = vm.get("metrics") or {}
+    return {k: m.get(k) for k in ("capital", "cashGap", "breakeven") if k in m}
+
+
 # -------------------------------------------------------------------- endpoints
 @router.post("", status_code=201)
 def create_projection(
@@ -282,7 +354,7 @@ def create_projection(
     """
     try:
         vm = _compute_view_model(body)
-    except (ValueError, KeyError, TypeError) as exc:
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
         raise HTTPException(status_code=422, detail={"error": "invalid_inputs", "message": str(exc)})
 
     presented_owner = _bearer(authorization)
@@ -669,32 +741,17 @@ def patch_projection(
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
 
     # Merge the partial onto the stored source-of-truth, then recompute.
-    inputs_d = json.loads(row["inputs_json"] or "{}")
-    assumptions_d = json.loads(row["assumptions_json"] or "{}")
-    demand_d = json.loads(row["demand_drivers_json"] or "{}")
-    trade_d = json.loads(row["trade_area_json"] or "{}")
-    overrides_d = json.loads(row["overrides_json"] or "{}")
-    if body.inputs:
-        inputs_d.update(body.inputs)
-    if body.assumptions:
-        assumptions_d.update(body.assumptions)
-    if body.demand:
-        demand_d.update(body.demand)
-    if body.trade_area:
-        trade_d.update(body.trade_area)
-    if body.overrides is not None:
-        calc = _calculated_unpinned(inputs_d, assumptions_d, demand_d, trade_d)
-        try:
-            overrides_d = _apply_override_ops(overrides_d, body.overrides, calc)
-        except dag.PinRejected as exc:
-            node = exc.node if hasattr(exc, "node") else None
-            raise HTTPException(status_code=422, detail={
-                "error": "node_not_pinnable", "node": node, "message": str(exc)})
-    name = body.name if body.name is not None else row["name"]
+    try:
+        inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name = _merge_patch(
+            row, body)
+    except dag.PinRejected as exc:
+        node = exc.node if hasattr(exc, "node") else None
+        raise HTTPException(status_code=422, detail={
+            "error": "node_not_pinnable", "node": node, "message": str(exc)})
 
     try:
         vm = _compute_view_model_from_dicts(inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
-    except (ValueError, KeyError, TypeError) as exc:
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
         raise HTTPException(status_code=422, detail={"error": "invalid_inputs", "message": str(exc)})
 
     patch = {
@@ -740,6 +797,81 @@ def patch_projection(
     })
     response.headers["ETag"] = str(new_version)
     return {**vm, "view_slug": view_slug, "version": new_version, "name": name}
+
+
+@router.post("/{view_slug}/preview")
+def preview_projection(
+    view_slug: str,
+    body: PatchProjectionIn,
+    request: Request,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Dry-run /preview (epic-N N1): merge -> recompute -> diff, READ-ONLY.
+
+    Bearer owner/edit, NO If-Match. It MUST NOT persist, MUST NOT bump version, and
+    MUST NOT write a revision — it only recomputes the merged editable surface in
+    memory and returns {before, after, changed[], reco_before, reco_after}. Same
+    422 rejections as PATCH (invalid input, non-pinnable node). Rate-limited on the
+    read bucket (it backs a debounced "what-if" surface). The provable read-only
+    invariant is a CI gate (test_ai_safety / test_projections_preview).
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    token = _bearer(authorization)
+    if not (_is_owner(token, row) or _is_editor(token, row)):
+        # view-only (no/invalid token) cannot preview (SECURITY.md §2).
+        raise HTTPException(status_code=403, detail={"error": "forbidden"})
+
+    allowed, retry_after = ratelimit.check(
+        "preview",
+        ip=_client_ip(request),
+        token=hash_token(token) if token else None,
+        ip_limit=_PREVIEW_IP_LIMIT,
+        token_limit=_PREVIEW_TOKEN_LIMIT,
+        window_seconds=_PREVIEW_WINDOW_SECONDS,
+    )
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "rate_limited",
+                     "retry_after_seconds": retry_after, "scope": "ip"},
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    # BEFORE = the stored snapshot verbatim (no recompute on the unchanged state).
+    try:
+        before_vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        before_vm = {}
+
+    # AFTER = recompute on the merged partial. NOTHING is written.
+    try:
+        inputs_d, assumptions_d, demand_d, trade_d, overrides_d, _name = _merge_patch(
+            row, body)
+    except dag.PinRejected as exc:
+        node = exc.node if hasattr(exc, "node") else None
+        raise HTTPException(status_code=422, detail={
+            "error": "node_not_pinnable", "node": node, "message": str(exc)})
+
+    try:
+        after_vm = _compute_view_model_from_dicts(
+            inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_inputs", "message": str(exc)})
+
+    before = _metrics_subset(before_vm)
+    after = _metrics_subset(after_vm)
+    return {
+        "before": before,
+        "after": after,
+        "changed": _diff_changed(before, after),
+        "reco_before": before_vm.get("reco") or {},
+        "reco_after": after_vm.get("reco") or {},
+    }
 
 
 # ---------------------------------------------------- rotate / share (owner-only)
@@ -871,7 +1003,7 @@ def restore_revision(
     try:
         vm = _compute_view_model_from_dicts(
             inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
-    except (ValueError, KeyError, TypeError) as exc:
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
         raise HTTPException(status_code=422, detail={
             "error": "invalid_inputs", "message": str(exc)})
 

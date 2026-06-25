@@ -293,6 +293,29 @@ The core editing endpoint. Drives autosave (debounced) and every Settings/driver
 - **Response `200`:** the recomputed view-model (§3). `ETag: "<new version>"`. `saveLabel:"All changes saved"`.
 - **Errors:** `428` missing `If-Match`; `409` stale (§1.4 shape); `422` invalid override / out-of-domain input; `403` read-only; `400` malformed.
 
+### 4.4a `POST /api/projections/{view_slug}/preview` — dry-run (read-only)
+
+A **read-only what-if**: merge the same editable-surface partial as `PATCH` (§4.4), recompute via the engine, and return the before/after delta **without touching stored state**. Powers the Settings/driver "preview before you commit" surface.
+
+- **Auth:** owner or edit (Bearer). **Capability:** owner/edit. **No `If-Match`** (it never mutates).
+- **Read-only invariants (CI-blocking, epic-N N12):** it **MUST NOT** persist, **MUST NOT** bump `version`, and **MUST NOT** write a revision. A view-only request (no/invalid bearer) is `403`.
+- **Request body:** identical to the `PATCH` partial (any subset of `inputs`/`assumptions`/`trade_area`/`demand`/`name`/`overrides`).
+- **Behavior:** `before` is the stored snapshot's decision metrics; `after` recomputes the merged partial in memory. Same `422` rejections as `PATCH` (`invalid_inputs`, `node_not_pinnable`). Rate-limited on the **read bucket**.
+- **Response `200`:**
+
+```json
+{
+  "before": { "capital": {"raw":277990,"display":"$277,990"}, "cashGap": {...}, "breakeven": {...} },
+  "after":  { "capital": {"raw":233000,"display":"$233,000"}, "cashGap": {...}, "breakeven": {...} },
+  "changed": [ { "label":"Capital required", "was":"$277,990", "now":"$233,000", "sign":"down" } ],
+  "reco_before": { "tag":"proceed", "headline":"...", "sub":"..." },
+  "reco_after":  { "tag":"proceed", "headline":"...", "sub":"..." }
+}
+```
+
+`changed[].sign` ∈ `up | down | flat` (direction of the raw value). No `ETag` (no version change).
+- **Errors:** `403` read-only; `404` unknown slug; `422` `invalid_inputs` / `node_not_pinnable`; `429` read-bucket rate limit.
+
 ### 4.5 `POST /api/projections/{view_slug}/duplicate`
 
 - **Auth:** owner or edit (Bearer) on the source. **Capability:** owner/edit. **No `If-Match`** (creates a new resource).
@@ -554,6 +577,7 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `POST /api/projections` | (none) | no | create | create |
 | `GET …/{slug}` | owner/edit/view | — | no | read |
 | `PATCH …/{slug}` | owner/edit | **yes** | yes | autosave |
+| `POST …/{slug}/preview` | owner/edit | no | **no (read-only)** | read |
 | `POST …/{slug}/duplicate` | owner/edit | no | create | create |
 | `POST …/{slug}/upgrade-model` | owner/edit | **yes** | yes | read |
 | `POST …/{slug}/rotate-tokens` | owner | **yes** | yes | read |
@@ -586,3 +610,5 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 7. **AI opt-out works end-to-end** — compute, save, and `.xlsx` export succeed with all AI keys unset (§21).
 8. **Secrets only via header/fragment** — never path/query; `Authorization` and fragments never logged (§20).
 9. **Excel ↔ computed_json reconcile** (<$0.50 / 0.1 pp, zero formula errors) with and without overrides, CI-blocking (§18) — the only thing keeping "single math authority" true.
+10. **`/preview` is provably read-only** (epic-N N12): a dry-run never persists, never bumps `version`, never writes a revision — CI-asserted over repeated calls.
+11. **No ungrounded LLM figure reaches a render path** (§6.1, SECURITY §6.3): every currency/percent token in narrative/packet prose must be a display string the engine produced; an ungrounded `$`/`%` token is rejected. Injection markers are stripped from untrusted text. AI opt-out runs the full compute/save/`.xlsx` flow with **all AI keys unset**.
