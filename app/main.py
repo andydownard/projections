@@ -8,13 +8,14 @@ Enforcing CSP / noindex / HSTS middleware (M0.5) and CORS locked to the app orig
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import config
 from app.middleware import SecurityHeadersMiddleware
-from app.routers import health, projections
+from app.routers import feedback, health, projections, roles
 from app.store import build_store
 
 logger = logging.getLogger("app")
@@ -34,6 +35,17 @@ def create_app() -> FastAPI:
     # 2) validate config (refuse to boot in prod on a missing required secret).
     config.validate_required()
 
+    # 2b) E2E/demo seed: a deterministic `example` projection for the Playwright
+    # gate. Never runs in production (it is an explicit opt-in flag).
+    if os.environ.get("E2E_SEED") == "1" and not config.is_production():
+        try:
+            from app.seed import seed_example
+            from app.store import get_store
+
+            seed_example(get_store())
+        except Exception as exc:  # seeding is best-effort scaffolding
+            logger.warning("e2e seed skipped: %s", exc)
+
     app = FastAPI(title="Thrift Store Projection API", docs_url=None, redoc_url=None)
 
     # CORS locked to the exact app origin; no credentials (no cookies => no CSRF).
@@ -49,6 +61,8 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(projections.router)
+    app.include_router(roles.router)
+    app.include_router(feedback.router)
 
     @app.get("/robots.txt", include_in_schema=False)
     def robots() -> Response:

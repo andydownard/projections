@@ -131,6 +131,42 @@ class SqliteStore:
             )
         ]
 
+    def get_projection_by_role_slug(self, role_slug: str) -> dict | None:
+        """Resolve a role-link slug -> (projection_row, role_name).
+
+        role_tokens_json maps {role_slug: role_name}. Scanned with a portable
+        LIKE prefilter then matched in Python (no SQLite-only JSON1 above Store).
+        """
+        import json as _json
+
+        rows = self._conn.execute(
+            "SELECT * FROM projections "
+            "WHERE deleted_at IS NULL AND role_tokens_json LIKE ?",
+            (f'%"{role_slug}"%',),
+        ).fetchall()
+        for row in rows:
+            try:
+                mapping = _json.loads(row["role_tokens_json"] or "{}")
+            except _json.JSONDecodeError:
+                continue
+            if role_slug in mapping:
+                d = dict(row)
+                d["_role_name"] = mapping[role_slug]
+                return d
+        return None
+
+    # --- feedback ---
+    def create_feedback(self, fb: dict) -> dict:
+        cols = list(fb.keys())
+        placeholders = ", ".join("?" for _ in cols)
+        with self._write_lock:
+            self._conn.execute(
+                f"INSERT INTO feedback ({', '.join(cols)}) VALUES ({placeholders})",
+                [fb[c] for c in cols],
+            )
+            self._conn.commit()
+        return fb
+
     # --- terms gate ---
     def get_terms_accepted_at(self, id: str) -> str | None:
         row = self._conn.execute(
