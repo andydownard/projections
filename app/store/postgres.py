@@ -76,5 +76,8 @@ class PostgresStore:
     def create_feedback(self, fb: dict) -> dict:
         self._stub("create_feedback")
 
+    def create_intent(self, intent: dict) -> dict:
+        self._stub("create_intent")
+
     def get_terms_accepted_at(self, id: str) -> str | None:
         self._stub("get_terms_accepted_at")

@@ -227,6 +227,18 @@ class SqliteStore:
             self._conn.commit()
         return fb
 
+    # --- intent ---
+    def create_intent(self, intent: dict) -> dict:
+        cols = list(intent.keys())
+        placeholders = ", ".join("?" for _ in cols)
+        with self._write_lock:
+            self._conn.execute(
+                f"INSERT INTO intent ({', '.join(cols)}) VALUES ({placeholders})",
+                [intent[c] for c in cols],
+            )
+            self._conn.commit()
+        return intent
+
     # --- terms gate ---
     def get_terms_accepted_at(self, id: str) -> str | None:
         row = self._conn.execute(

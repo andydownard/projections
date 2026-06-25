@@ -95,6 +95,36 @@ def app_origin(env: Mapping[str, str] | None = None) -> str:
     return env.get("APP_ORIGIN", "http://localhost:5173")
 
 
+def _as_bool(val: str | None) -> bool:
+    return (val or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def pricing_config(env: Mapping[str, str] | None = None) -> dict:
+    """Free-vs-paid price/gate posture (PRD §3 business-model TOGGLE).
+
+    Whether export/share is gated behind the paid expert-review event is a
+    config decision, NOT an access-control bug (SECURITY.md §3): the access
+    layer always permits read+export at the read scope. This surfaces the
+    pricing posture so the UI shows/hides the paid gate. Defaults: free,
+    ungated, $0.
+    """
+    env = _env(env)
+    try:
+        price_cents = int(env.get("PRICE_CENTS", "0"))
+    except (TypeError, ValueError):
+        price_cents = 0
+    return {
+        "tier": env.get("PRICING_TIER", "free").strip().lower() or "free",
+        "export_gated": _as_bool(env.get("EXPORT_GATED")),
+        "price_cents": max(price_cents, 0),
+    }
+
+
+def crm_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Intent -> CRM is optional/graceful-degrade (SECURITY.md §4.2)."""
+    return bool(_env(env).get("CRM_API_KEY"))
+
+
 def litestream_status(env: Mapping[str, str] | None = None) -> str:
     """Reported by /api/health. 'replicating' if LITESTREAM_* configured.
 
