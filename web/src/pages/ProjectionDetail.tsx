@@ -20,6 +20,7 @@ import { ProjectionTab } from "../components/ProjectionTab";
 import { FeedbackModal } from "../components/FeedbackModal";
 import { SaveConflictModal } from "../components/SaveConflictModal";
 import { SettingsTab } from "../components/SettingsTab";
+import { DegradedState } from "../components/DegradedState";
 import type { ConflictBody } from "../state/autosaveReducer";
 import type { ServerValue } from "../api/client";
 import type { PatchHandlerArgs } from "../components/SettingsTab";
@@ -206,7 +207,9 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
 
       {aiOff && (
         <section data-testid="narrative-disabled" className="narrative narrative--disabled">
-          <p>AI narrative is off. The decision and numbers above are computed without AI.</p>
+          {/* Accessible AI-opt-out notice (M7 I2): the surface degrades, never
+              crashes — role="status", meaning in text, not color alone. */}
+          <DegradedState kind="ai-opt-out" />
           {/* Manual rent path: with research off the operator enters rent by hand
               (PRD §21 — compute is AI-independent). */}
           <label className="detail__rent">

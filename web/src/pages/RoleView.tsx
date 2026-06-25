@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import { fetchRoleView, type ViewModel } from "../api/viewModel";
 import { DecisionBanner } from "../components/DecisionBanner";
+import { DegradedState } from "../components/DegradedState";
 
 export interface RoleViewProps {
   slug: string;
@@ -29,6 +30,9 @@ export function RoleView({ slug }: RoleViewProps) {
 
   return (
     <div className="role-view" data-role={vm.role}>
+      {/* Read-only notice (M7 I2): a shared link can read/download/export but not
+          edit — announced politely (role="status"), meaning carried in text. */}
+      <DegradedState kind="read-only" />
       <DecisionBanner reco={vm.reco} metrics={vm.metrics} />
     </div>
   );

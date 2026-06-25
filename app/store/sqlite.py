@@ -12,6 +12,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
+from app.store.migration_safety import assert_migrations_additive
 from app.store.migrations import MIGRATIONS
 
 
@@ -35,6 +36,10 @@ class SqliteStore:
 
     # --- lifecycle ---
     def migrate(self) -> None:
+        # Fail-closed: never run a non-additive migration against the durable
+        # volume (CLAUDE.md DB discipline / OPS_RUNBOOK §8.2). The scan runs every
+        # boot over the migration that is about to apply.
+        assert_migrations_additive(MIGRATIONS)
         with self._write_lock:
             cur = self._conn.cursor()
             cur.execute(

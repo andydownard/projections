@@ -653,3 +653,68 @@ body {
   stroke-width: 1.5;
   stroke-dasharray: 4 3;
 }
+
+/* --- degraded / error states (M7 I2) ---
+ * One accessible surface. Severity is carried in TEXT + a left accent + an icon;
+ * never color alone. Renders identically at 1440 / 768 / 375 (no fixed widths). */
+.degraded {
+  display: flex;
+  gap: 0.625rem;
+  align-items: flex-start;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: var(--surface-alt);
+  margin: 0.75rem 0;
+}
+.degraded--error {
+  border-left-color: var(--error);
+}
+.degraded--warning {
+  border-left-color: var(--warning);
+}
+.degraded--info {
+  border-left-color: var(--brand-primary);
+}
+.degraded__icon {
+  flex: 0 0 1.25rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  line-height: 1;
+  color: var(--surface);
+}
+.degraded--error .degraded__icon {
+  background: var(--error);
+}
+.degraded--warning .degraded__icon {
+  background: var(--warning);
+}
+.degraded--info .degraded__icon {
+  background: var(--brand-primary);
+}
+.degraded__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.degraded__title {
+  margin: 0 0 0.125rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+.degraded__body {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.degraded__action {
+  flex: 0 0 auto;
+  align-self: center;
+}
