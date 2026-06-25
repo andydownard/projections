@@ -82,6 +82,16 @@ def create_app() -> FastAPI:
             reset_example(get_store())
             return {"status": "reseeded"}
 
+    # Serve the built SPA (web/dist) when present (the production Docker image).
+    # Mounted LAST so /api/* and /robots.txt match first; html=True gives the
+    # single-page-app fallback to index.html for client routes. No-op locally/in
+    # tests (web/dist absent there) so the app stays API-only and tests are unchanged.
+    spa_dir = os.environ.get("SPA_DIR", "web/dist")
+    if os.path.isdir(spa_dir):
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/", StaticFiles(directory=spa_dir, html=True), name="spa")
+
     return app
 
 
