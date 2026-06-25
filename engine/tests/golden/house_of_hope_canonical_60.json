@@ -1,0 +1,765 @@
+{
+  "breakevenMonth": 9,
+  "compute_schema_version": "1.0.0",
+  "evidence": [],
+  "flags": {
+    "model_upgrade_available": false,
+    "payback": "N/A \u2014 no Year 1 profit",
+    "ramp_low_confidence": true
+  },
+  "kpis": [
+    {
+      "color": "text",
+      "label": "Total revenue",
+      "sub": "Year 1",
+      "value": {
+        "display": "$426,938",
+        "raw": 426937.75488
+      }
+    },
+    {
+      "color": "text",
+      "label": "Net profit",
+      "sub": "Year 1",
+      "value": {
+        "display": "($44,433)",
+        "raw": -44432.9056672
+      }
+    },
+    {
+      "color": "text",
+      "label": "Net margin",
+      "sub": "Year 1",
+      "value": {
+        "display": "(10.4%)",
+        "raw": -0.10407349820745841
+      }
+    },
+    {
+      "color": "text",
+      "label": "Capital required",
+      "sub": "incl. reserve",
+      "value": {
+        "display": "$560,440",
+        "raw": 560439.7347072
+      }
+    },
+    {
+      "color": "text",
+      "label": "Break-even month",
+      "sub": "operating net",
+      "value": {
+        "display": "Month 9",
+        "raw": 9
+      }
+    },
+    {
+      "color": "text",
+      "label": "Payback (yrs)",
+      "sub": "startup / Y1 net",
+      "value": {
+        "display": "N/A",
+        "raw": null
+      }
+    },
+    {
+      "color": "text",
+      "label": "Revenue CAGR",
+      "sub": "Y1->Y3",
+      "value": {
+        "display": "29.1%",
+        "raw": 0.29099444873580566
+      }
+    }
+  ],
+  "metrics": {
+    "breakeven": {
+      "display": "Month 9",
+      "raw": 9
+    },
+    "capital": {
+      "display": "$560,440",
+      "raw": 560439.7347072
+    },
+    "cashGap": {
+      "display": "($296,940)",
+      "raw": -296939.7347072
+    },
+    "reasonBreakeven": "Break-even is not reached within the first year under base or downside.",
+    "reasonCapital": "One-time startup + worst-case cash trough + reserve.",
+    "reasonGap": "Most-negative cumulative cash across the first year."
+  },
+  "model_version": "2.0.0",
+  "monthly": [
+    {
+      "cumulativeCash": {
+        "display": "($238,500)",
+        "raw": -238500.0
+      },
+      "expenses": {
+        "display": "$0",
+        "raw": 0.0
+      },
+      "month": 0,
+      "net": {
+        "display": "$0",
+        "raw": 0.0
+      },
+      "revenue": {
+        "display": "$0",
+        "raw": 0.0
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($254,879)",
+        "raw": -254878.587443584
+      },
+      "expenses": {
+        "display": "$33,456",
+        "raw": 33456.097638784
+      },
+      "month": 1,
+      "net": {
+        "display": "($16,379)",
+        "raw": -16378.587443584
+      },
+      "revenue": {
+        "display": "$17,078",
+        "raw": 17077.5101952
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($268,628)",
+        "raw": -268627.552108704
+      },
+      "expenses": {
+        "display": "$35,096",
+        "raw": 35095.85240912
+      },
+      "month": 2,
+      "net": {
+        "display": "($13,749)",
+        "raw": -13748.96466512
+      },
+      "revenue": {
+        "display": "$21,347",
+        "raw": 21346.887744
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($278,978)",
+        "raw": -278978.406036576
+      },
+      "expenses": {
+        "display": "$35,967",
+        "raw": 35967.119220672
+      },
+      "month": 3,
+      "net": {
+        "display": "($10,351)",
+        "raw": -10350.853927872
+      },
+      "revenue": {
+        "display": "$25,616",
+        "raw": 25616.2652928
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($287,246)",
+        "raw": -287245.960616432
+      },
+      "expenses": {
+        "display": "$36,019",
+        "raw": 36018.508647056
+      },
+      "month": 4,
+      "net": {
+        "display": "($8,268)",
+        "raw": -8267.554579856
+      },
+      "revenue": {
+        "display": "$27,751",
+        "raw": 27750.9540672
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($292,884)",
+        "raw": -292883.892417824
+      },
+      "expenses": {
+        "display": "$37,658",
+        "raw": 37658.263417392
+      },
+      "month": 5,
+      "net": {
+        "display": "($5,638)",
+        "raw": -5637.931801392
+      },
+      "revenue": {
+        "display": "$32,020",
+        "raw": 32020.331616
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($295,380)",
+        "raw": -295379.876134896
+      },
+      "expenses": {
+        "display": "$38,786",
+        "raw": 38785.692881872
+      },
+      "month": 6,
+      "net": {
+        "display": "($2,496)",
+        "raw": -2495.983717072
+      },
+      "revenue": {
+        "display": "$36,290",
+        "raw": 36289.7091648
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($296,817)",
+        "raw": -296817.211115664
+      },
+      "expenses": {
+        "display": "$39,862",
+        "raw": 39861.732919968
+      },
+      "month": 7,
+      "net": {
+        "display": "($1,437)",
+        "raw": -1437.334980768
+      },
+      "revenue": {
+        "display": "$38,424",
+        "raw": 38424.3979392
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($296,940)",
+        "raw": -296939.7347072
+      },
+      "expenses": {
+        "display": "$40,682",
+        "raw": 40681.610305136
+      },
+      "month": 8,
+      "net": {
+        "display": "($123)",
+        "raw": -122.523591536
+      },
+      "revenue": {
+        "display": "$40,559",
+        "raw": 40559.0867136
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($295,491)",
+        "raw": -295491.284256576
+      },
+      "expenses": {
+        "display": "$41,245",
+        "raw": 41245.325037376
+      },
+      "month": 9,
+      "net": {
+        "display": "$1,448",
+        "raw": 1448.450450624
+      },
+      "revenue": {
+        "display": "$42,694",
+        "raw": 42693.775488
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($292,984)",
+        "raw": -292984.185069648
+      },
+      "expenses": {
+        "display": "$42,321",
+        "raw": 42321.365075472
+      },
+      "month": 10,
+      "net": {
+        "display": "$2,507",
+        "raw": 2507.099186928
+      },
+      "revenue": {
+        "display": "$44,828",
+        "raw": 44828.4642624
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($289,675)",
+        "raw": -289674.599799344
+      },
+      "expenses": {
+        "display": "$43,654",
+        "raw": 43653.567766496
+      },
+      "month": 11,
+      "net": {
+        "display": "$3,310",
+        "raw": 3309.585270304
+      },
+      "revenue": {
+        "display": "$46,963",
+        "raw": 46963.1530368
+      }
+    },
+    {
+      "cumulativeCash": {
+        "display": "($282,933)",
+        "raw": -282932.9056672
+      },
+      "expenses": {
+        "display": "$46,626",
+        "raw": 46625.525227856
+      },
+      "month": 12,
+      "net": {
+        "display": "$6,742",
+        "raw": 6741.694132144
+      },
+      "revenue": {
+        "display": "$53,367",
+        "raw": 53367.21936
+      }
+    }
+  ],
+  "overrides": [],
+  "reco": {
+    "headline": "Do not proceed.",
+    "sub": "Break-even is not reached within the horizon under base or downside.",
+    "tag": "do_not_proceed"
+  },
+  "rows": [
+    {
+      "class": "input",
+      "editable": true,
+      "group": "drivers",
+      "label": "Donor market share",
+      "y1": {
+        "display": "6.0%",
+        "raw": 0.06
+      },
+      "y2": {
+        "display": "8.0%",
+        "raw": 0.08
+      },
+      "y3": {
+        "display": "10.0%",
+        "raw": 0.1
+      }
+    },
+    {
+      "class": "input",
+      "editable": false,
+      "group": "drivers",
+      "label": "Donating households",
+      "y1": {
+        "display": "1,908",
+        "raw": 1907.88
+      },
+      "y2": {
+        "display": "2,544",
+        "raw": 2543.84
+      },
+      "y3": {
+        "display": "3,180",
+        "raw": 3179.8
+      }
+    },
+    {
+      "class": "input",
+      "editable": false,
+      "group": "drivers",
+      "label": "Annual donations",
+      "y1": {
+        "display": "5,724",
+        "raw": 5723.64
+      },
+      "y2": {
+        "display": "7,632",
+        "raw": 7631.52
+      },
+      "y3": {
+        "display": "9,539",
+        "raw": 9539.4
+      }
+    },
+    {
+      "class": "computed",
+      "editable": false,
+      "group": "drivers",
+      "label": "Customers",
+      "y1": {
+        "display": "24,798",
+        "raw": 24797.971896955503
+      },
+      "y2": {
+        "display": "33,064",
+        "raw": 33063.962529274
+      },
+      "y3": {
+        "display": "41,330",
+        "raw": 41329.95316159251
+      }
+    },
+    {
+      "class": "input",
+      "editable": false,
+      "group": "revenue",
+      "label": "Retail Sales",
+      "y1": {
+        "display": "$423,549",
+        "raw": 423549.36
+      },
+      "y2": {
+        "display": "$564,732",
+        "raw": 564732.48
+      },
+      "y3": {
+        "display": "$705,916",
+        "raw": 705915.6
+      }
+    },
+    {
+      "class": "computed",
+      "editable": false,
+      "group": "revenue",
+      "label": "Salvage Sales",
+      "y1": {
+        "display": "$3,388",
+        "raw": 3388.39488
+      },
+      "y2": {
+        "display": "$4,518",
+        "raw": 4517.85984
+      },
+      "y3": {
+        "display": "$5,647",
+        "raw": 5647.3248
+      }
+    },
+    {
+      "class": "computed",
+      "editable": false,
+      "group": "revenue",
+      "label": "Total Revenue",
+      "y1": {
+        "display": "$426,938",
+        "raw": 426937.75488
+      },
+      "y2": {
+        "display": "$569,250",
+        "raw": 569250.33984
+      },
+      "y3": {
+        "display": "$711,563",
+        "raw": 711562.9248
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Credit card fees",
+      "y1": {
+        "display": "$8,539",
+        "raw": 8538.7550976
+      },
+      "y2": {
+        "display": "$11,385",
+        "raw": 11385.0067968
+      },
+      "y3": {
+        "display": "$14,231",
+        "raw": 14231.258496
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Insurance liability",
+      "y1": {
+        "display": "$2,000",
+        "raw": 2000.0
+      },
+      "y2": {
+        "display": "$2,000",
+        "raw": 2000.0
+      },
+      "y3": {
+        "display": "$2,000",
+        "raw": 2000.0
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Internet, Phones",
+      "y1": {
+        "display": "$3,000",
+        "raw": 3000.0
+      },
+      "y2": {
+        "display": "$3,000",
+        "raw": 3000.0
+      },
+      "y3": {
+        "display": "$3,000",
+        "raw": 3000.0
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Marketing & outreach",
+      "y1": {
+        "display": "$16,010",
+        "raw": 16010.165808
+      },
+      "y2": {
+        "display": "$21,347",
+        "raw": 21346.887744
+      },
+      "y3": {
+        "display": "$26,684",
+        "raw": 26683.60968
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Payroll",
+      "y1": {
+        "display": "$256,163",
+        "raw": 256162.652928
+      },
+      "y2": {
+        "display": "$341,550",
+        "raw": 341550.203904
+      },
+      "y3": {
+        "display": "$426,938",
+        "raw": 426937.75488
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Payroll taxes",
+      "y1": {
+        "display": "$19,212",
+        "raw": 19212.1989696
+      },
+      "y2": {
+        "display": "$25,616",
+        "raw": 25616.2652928
+      },
+      "y3": {
+        "display": "$32,020",
+        "raw": 32020.331616
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Pest control",
+      "y1": {
+        "display": "$300",
+        "raw": 300.0
+      },
+      "y2": {
+        "display": "$300",
+        "raw": 300.0
+      },
+      "y3": {
+        "display": "$300",
+        "raw": 300.0
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Rent",
+      "y1": {
+        "display": "$120,000",
+        "raw": 120000.0
+      },
+      "y2": {
+        "display": "$123,600",
+        "raw": 123600.0
+      },
+      "y3": {
+        "display": "$127,308",
+        "raw": 127308.0
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Repairs/maintenance",
+      "y1": {
+        "display": "$1,600",
+        "raw": 1600.0
+      },
+      "y2": {
+        "display": "$1,600",
+        "raw": 1600.0
+      },
+      "y3": {
+        "display": "$1,600",
+        "raw": 1600.0
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Security system",
+      "y1": {
+        "display": "$900",
+        "raw": 900.0
+      },
+      "y2": {
+        "display": "$900",
+        "raw": 900.0
+      },
+      "y3": {
+        "display": "$900",
+        "raw": 900.0
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Supplies & processing",
+      "y1": {
+        "display": "$21,347",
+        "raw": 21346.887744
+      },
+      "y2": {
+        "display": "$28,463",
+        "raw": 28462.516992
+      },
+      "y3": {
+        "display": "$35,578",
+        "raw": 35578.14624
+      }
+    },
+    {
+      "class": "input",
+      "editable": true,
+      "group": "expenses",
+      "label": "Utilities/trash service",
+      "y1": {
+        "display": "$22,300",
+        "raw": 22300.0
+      },
+      "y2": {
+        "display": "$22,300",
+        "raw": 22300.0
+      },
+      "y3": {
+        "display": "$22,300",
+        "raw": 22300.0
+      }
+    },
+    {
+      "class": "computed",
+      "editable": false,
+      "group": "expenses",
+      "label": "Total Expenses",
+      "y1": {
+        "display": "$471,371",
+        "raw": 471370.6605472
+      },
+      "y2": {
+        "display": "$582,061",
+        "raw": 582060.8807296
+      },
+      "y3": {
+        "display": "$692,859",
+        "raw": 692859.100912
+      }
+    },
+    {
+      "class": "computed",
+      "editable": false,
+      "group": "expenses",
+      "label": "Net profit",
+      "y1": {
+        "display": "($44,433)",
+        "raw": -44432.9056672
+      },
+      "y2": {
+        "display": "($12,811)",
+        "raw": -12810.5408896
+      },
+      "y3": {
+        "display": "$18,704",
+        "raw": 18703.823888
+      }
+    },
+    {
+      "class": "computed",
+      "editable": false,
+      "group": "expenses",
+      "label": "Net margin",
+      "y1": {
+        "display": "(10.4%)",
+        "raw": -0.10407349820745841
+      },
+      "y2": {
+        "display": "(2.3%)",
+        "raw": -0.02250423055206375
+      },
+      "y3": {
+        "display": "2.6%",
+        "raw": 0.02628555147565777
+      }
+    }
+  ],
+  "settings": {
+    "basket": 17.08,
+    "cardPct": 0.02,
+    "donationsPerHh": 3,
+    "escalator": 0.03,
+    "laborPct": 0.6,
+    "leaseType": "nnn",
+    "marketingPct": 0.0375,
+    "payrollTaxPct": 0.075,
+    "reserveBuffer": 25000,
+    "salesfloorSqft": 7000.0,
+    "salvagePct": 0.008,
+    "shareY1": 0.06,
+    "shareY2": 0.08,
+    "shareY3": 0.1,
+    "suppliesPct": 0.05
+  },
+  "staleNodes": [],
+  "version": "2.0.0"
+}

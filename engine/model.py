@@ -1,34 +1,29 @@
-"""engine/model.py — named constants + version stamps (ENGINE_CONTRACT §2/§3).
+"""Named constants — the single source of default values (ENGINE_CONTRACT §2).
 
-PURE module: no openpyxl / python-docx / network / filesystem / clock imports.
-This is the single source of the resolved-default constants. No formula elsewhere
-may hard-code a literal; it must reference a named constant here.
-
-Labor is pinned to 0.60 by owner decision (DECISIONS.md / ENGINE_CONTRACT §1).
-The 40% design-parity fixture lives alongside the 60% canonical golden; moving the
-DEFAULT is a NEW model_version with regenerated goldens in the same change.
+No formula in the engine may hard-code a literal; it must reference a named
+constant here. Money/percent literals are kept as strings or exact Decimals at
+the point of use; these module constants name the *default* assumption values.
 """
-from __future__ import annotations
 
-MODEL_VERSION = "2.0.0"           # math changes => bump
+MODEL_VERSION = "2.0.0"          # math changes => bump
 COMPUTE_SCHEMA_VERSION = "1.0.0"  # view-model shape changes => bump
 
 # --- demand engine
-DONATIONS_PER_HH_PER_YEAR = 3       # §7.3
-AVG_BASKET_VALUE = 17.08            # §7.3 (resolved §1)
-SALVAGE_PCT_OF_RETAIL = 0.008       # §7.3 (0.8%)
+DONATIONS_PER_HH_PER_YEAR = 3        # §7.3
+AVG_BASKET_VALUE = "17.08"           # §7.3 (resolved §1) -> customers
+SALVAGE_PCT_OF_RETAIL = "0.008"      # §7.3 (0.8%)
 
 # --- cost structure (% of total revenue unless noted)
-LABOR_PCT_OF_REVENUE = 0.60         # owner decision (DECISIONS.md) — band 0.25–0.60
-MARKETING_PCT_OF_REVENUE = 0.0375   # NEW line
-SUPPLIES_PCT_OF_REVENUE = 0.05      # REPLACES fixed "Store/office supplies"
-CARD_FEES_PCT_OF_REVENUE = 0.02
-PAYROLL_TAX_PCT_OF_PAYROLL = 0.075
+LABOR_PCT_OF_REVENUE = "0.60"        # §7.3 owner decision (DECISIONS.md) — band 0.25–0.60
+MARKETING_PCT_OF_REVENUE = "0.0375"  # §7.3 — NEW line
+SUPPLIES_PCT_OF_REVENUE = "0.05"     # §7.3 — REPLACES fixed "Store/office supplies"
+CARD_FEES_PCT_OF_REVENUE = "0.02"    # §7.3
+PAYROLL_TAX_PCT_OF_PAYROLL = "0.075"  # §7.3
 
 # --- occupancy
-RENT_ESCALATOR = 0.03               # compound, Y2–Y3 (resolved §1)
+RENT_ESCALATOR = "0.03"              # §7.3 — compound, Y2–Y3 (resolved §1)
 
-# --- fixed annual operating $ (not %-based); "Store/office supplies" REMOVED
+# --- fixed annual operating $ (not %-based); "Store/office supplies" REMOVED.
 FIXED_ANNUAL = {
     "Insurance liability": 2000,
     "Internet, Phones": 3000,
@@ -38,7 +33,7 @@ FIXED_ANNUAL = {
     "Utilities/trash service": 22300,
 }
 
-# --- one-time startup (Year 0); lease deposit computed from rent, not a literal
+# --- one-time startup (Year 0). Lease deposit is computed, not a literal.
 STARTUP = {
     "Thrift Store Consultant": 100000,
     "Equipment & Fixtures": 45000,
@@ -47,10 +42,16 @@ STARTUP = {
 }
 
 # --- capital & cash
-CASH_RESERVE_BUFFER = 25000         # §7.3 / §12.1
-SENSITIVITY_DELTA = 0.25            # §12.2 ±25% on rent & donations
+CASH_RESERVE_BUFFER = 25000          # §7.3 / §12.1
+SENSITIVITY_DELTA = "0.25"           # §12.2 ±25% on rent & donations
 
-# --- monthly ramp (calibration backlog — emitted low-confidence, §12.5)
+# --- monthly ramp (calibration backlog — low-confidence, §12.5)
 RAMP_MONTHS = 5
 RAMP_CURVE = "logistic"
 DONATION_TO_REVENUE_LAG_MONTHS = 1
+
+# --- guardrail advisory bands (§12.2)
+SHARE_Y1_BAND_MAX = "0.08"           # donor market share ≤ ~8% for a new store
+NET_MARGIN_FLAG_MAX = "0.30"         # flag > ~30% as unusual for a new store
+LABOR_RATIO_BAND = ("0.25", "0.60")
+OCCUPANCY_RATIO_BAND_MAX = "0.20"
