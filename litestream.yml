@@ -14,8 +14,6 @@ dbs:
         region: ${LITESTREAM_REGION}
         access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
         secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
-        # Cloudflare R2 needs path-style addressing.
-        force-path-style: true
         # Retention/purge limits are bounded and disclosed to users (PRD §21).
         retention: 720h
         sync-interval: 1s
