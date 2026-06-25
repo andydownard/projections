@@ -180,6 +180,41 @@ class SqliteStore:
                 return d
         return None
 
+    # --- narratives (M5 / §6.1) ---
+    def get_narrative(self, projection_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM narratives WHERE projection_id = ?", (projection_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_narrative(self, projection_id: str, narrative: dict[str, Any]) -> dict:
+        """Insert-or-update the single narrative row for a projection.
+
+        Portable upsert (avoids the SQLite-only replace idiom): try UPDATE, fall
+        back to INSERT when no row exists. The narrative is 1:1 with a projection
+        (``projection_id`` PK), so there is no concurrency window worth a CAS here.
+        """
+        cols = ("body_md", "edited", "computed_hash", "snapshot_json", "provider",
+                "model_version", "updated_at")
+        vals = {c: narrative.get(c) for c in cols}
+        vals["updated_at"] = vals["updated_at"] or _utcnow()
+        vals["snapshot_json"] = vals["snapshot_json"] or "{}"
+        with self._write_lock:
+            set_clause = ", ".join(f"{c} = ?" for c in cols)
+            cur = self._conn.execute(
+                f"UPDATE narratives SET {set_clause} WHERE projection_id = ?",
+                [*(vals[c] for c in cols), projection_id],
+            )
+            if cur.rowcount == 0:
+                placeholders = ", ".join("?" for _ in range(len(cols) + 1))
+                self._conn.execute(
+                    "INSERT INTO narratives "
+                    f"(projection_id, {', '.join(cols)}) VALUES ({placeholders})",
+                    [projection_id, *(vals[c] for c in cols)],
+                )
+            self._conn.commit()
+        return {"projection_id": projection_id, **vals}
+
     # --- feedback ---
     def create_feedback(self, fb: dict) -> dict:
         cols = list(fb.keys())

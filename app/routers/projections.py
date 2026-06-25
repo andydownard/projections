@@ -28,6 +28,14 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from app.deps import hash_token, parse_if_match, token_matches
+from app.narrative import (
+    GroundingError,
+    compute_hash,
+    sanitize_body_md,
+    stale_diff,
+    validate_grounding,
+)
+from app.packet import build_packet, render_packet_md
 from app.store import Store, get_store
 from engine import dag
 from engine.compute import (
@@ -404,6 +412,229 @@ def export_xlsx(view_slug: str, store: Store = Depends(get_store)):
         media_type=XLSX_CONTENT_TYPE,
         filename=filename,
         background=BackgroundTask(lambda: os.path.exists(path) and os.remove(path)),
+    )
+
+
+# ============================================================ M5: narrative
+# The narrative is the primary trust surface (API_SPEC §6.1, SECURITY.md §5/§6.3).
+# Three HARD server-side invariants live here: (1) body_md is allowlist-sanitized
+# before storage, (2) every figure in regenerated prose must exist in computed_json
+# or generation is REJECTED, never overwriting the prior narrative, (3) staleness is
+# a stored-hash vs live-hash compare and NEVER auto-overwrites user-edited prose.
+
+
+def _ai_disabled(row: dict) -> bool:
+    """AI opt-out (§21): per-projection flag OR deployment-wide AI kill switch.
+
+    With AI disabled, regenerate -> 409 ai_disabled; compute/save/.xlsx are
+    untouched (verified by test running the full flow with AI keys unset).
+    """
+    if int(row.get("ai_opt_out") or 0):
+        return True
+    return os.environ.get("AI_DISABLED", "").lower() in ("1", "true", "yes")
+
+
+def _generate_narrative_md(vm: dict[str, Any], role: Optional[str] = None) -> str:
+    """Low-temperature, grounded Board-Packet prose drawn from computed_json.
+
+    Every figure inserted here is copied verbatim from a computed_json display
+    string, so the output is grounded BY CONSTRUCTION — the validator that runs
+    after generation is a hard backstop, not the only line of defense (a future
+    LLM provider swaps in here behind the SAME post-generation grounding gate).
+    Rent and other estimates are stated as estimates, never as facts.
+    """
+    metrics = vm.get("metrics") or {}
+    reco = vm.get("reco") or {}
+    cap = (metrics.get("capital") or {}).get("display", "")
+    gap = (metrics.get("cashGap") or {}).get("display", "")
+    be = (metrics.get("breakeven") or {}).get("display", "")
+    headline = reco.get("headline", "")
+    parts = [f"<p><strong>{headline}</strong></p>"]
+    sentence = "<p>The plan requires "
+    if cap:
+        sentence += f"{cap} in startup capital"
+    if be:
+        sentence += f" and reaches break-even at {be}" if cap else f"Break-even is reached at {be}"
+    sentence += ".</p>"
+    parts.append(sentence)
+    if gap:
+        parts.append(f"<p>The most-negative first-year cash position is {gap}; "
+                     "estimated figures (e.g. market rent) are planning ranges, "
+                     "not quotes.</p>")
+    return "".join(parts)
+
+
+def _narrative_response(row: dict, store: Store) -> dict:
+    """Assemble the GET narrative payload: stored prose + staleness + ai flag."""
+    try:
+        live_vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        live_vm = {}
+    nar = store.get_narrative(row["id"]) or {}
+    body_md = nar.get("body_md") or ""
+    stored_hash = nar.get("computed_hash")
+    live_hash = compute_hash(live_vm)
+    stale = bool(body_md) and stored_hash is not None and stored_hash != live_hash
+    diff: list[dict[str, str]] = []
+    if stale and nar.get("snapshot_json"):
+        try:
+            diff = stale_diff(json.loads(nar["snapshot_json"]), live_vm)
+        except (json.JSONDecodeError, TypeError):
+            diff = []
+    return {
+        "body_md": body_md,
+        "edited": bool(nar.get("edited")),
+        "computed_hash": stored_hash,
+        "stale": stale,
+        "stale_diff": diff,
+        "ai_disabled": _ai_disabled(row),
+        "updated_at": nar.get("updated_at"),
+    }
+
+
+@router.get("/{view_slug}/narrative")
+def get_narrative(view_slug: str, store: Store = Depends(get_store)):
+    """Fetch the stored narrative + staleness (owner/edit/view — the slug grants read)."""
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    return _narrative_response(row, store)
+
+
+class NarrativeIn(BaseModel):
+    body_md: str = Field(default="")
+
+
+@router.put("/{view_slug}/narrative")
+def put_narrative(
+    view_slug: str,
+    body: NarrativeIn,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Save user-edited prose. body_md is allowlist-sanitized BEFORE storage.
+
+    Sanitization is the stored-XSS -> localStorage-token-theft defense
+    (SECURITY.md §5). Owner/edit only; view-only is 403.
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    token = _bearer(authorization)
+    if not (_is_owner(token, row) or _is_editor(token, row)):
+        raise HTTPException(status_code=403, detail={"error": "forbidden"})
+
+    clean = sanitize_body_md(body.body_md)
+    try:
+        live_vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        live_vm = {}
+    store.upsert_narrative(row["id"], {
+        "body_md": clean,
+        "edited": 1,
+        "computed_hash": compute_hash(live_vm),
+        "snapshot_json": json.dumps(live_vm),
+        "provider": None,
+        "model_version": live_vm.get("model_version"),
+    })
+    return {"body_md": clean, "edited": True, "computed_hash": compute_hash(live_vm)}
+
+
+@router.post("/{view_slug}/narrative:regenerate")
+def regenerate_narrative(
+    view_slug: str,
+    store: Store = Depends(get_store),
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Regenerate grounded prose from current computed_json (owner/edit only).
+
+    AI opt-out -> 409 ai_disabled (the prior narrative is untouched). The generated
+    prose passes the HARD numeric-grounding validator before storage; a hallucinated
+    figure -> 409 grounding_failed and the prior narrative is NOT overwritten.
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    token = _bearer(authorization)
+    if not (_is_owner(token, row) or _is_editor(token, row)):
+        raise HTTPException(status_code=403, detail={"error": "forbidden"})
+    if _ai_disabled(row):
+        raise HTTPException(status_code=409, detail={"error": "ai_disabled"})
+
+    try:
+        live_vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        live_vm = {}
+
+    draft = _generate_narrative_md(live_vm)
+    try:
+        validate_grounding(draft, live_vm)
+    except GroundingError as exc:
+        # HARD reject — prior narrative is NEVER overwritten.
+        raise HTTPException(status_code=409, detail={
+            "error": "grounding_failed",
+            "ungrounded_figures": exc.ungrounded,
+        })
+
+    clean = sanitize_body_md(draft)
+    store.upsert_narrative(row["id"], {
+        "body_md": clean,
+        "edited": 0,
+        "computed_hash": compute_hash(live_vm),
+        "snapshot_json": json.dumps(live_vm),
+        "provider": "template",
+        "model_version": live_vm.get("model_version"),
+    })
+    return {"body_md": clean, "edited": False,
+            "computed_hash": compute_hash(live_vm), "provider": "template"}
+
+
+@router.get("/{view_slug}/packet")
+def export_packet(
+    view_slug: str,
+    role: Optional[str] = None,
+    format: str = "md",
+    store: Store = Depends(get_store),
+):
+    """Board / Funder / Advisor packet (API_SPEC §6.4).
+
+    Built ENTIRELY from the stored computed_json (one math/format surface): banner,
+    verified-vs-estimated assumptions, sensitivity, provenance, KPIs. The grounded
+    narrative is included only when AI is enabled (§21 opt-out keeps every
+    structured/evidence section). Terms acceptance required (§21) -> 403 otherwise.
+    The role flag tailors emphasis/CTAs only — never the numbers.
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    if not row.get("terms_accepted_at"):
+        raise HTTPException(status_code=403, detail={"error": "terms_required"})
+
+    try:
+        live_vm = json.loads(row.get("computed_json") or "{}")
+    except json.JSONDecodeError:
+        live_vm = {}
+    live_vm.setdefault("name", row.get("name") or "")
+
+    # Narrative is omitted when AI is disabled (§21) or none is stored / it is stale.
+    narrative_md = None
+    if not _ai_disabled(row):
+        nar = store.get_narrative(row["id"]) or {}
+        body = nar.get("body_md") or ""
+        if body and nar.get("computed_hash") == compute_hash(live_vm):
+            narrative_md = body
+
+    pkt = build_packet(live_vm, role=role or "board", narrative_md=narrative_md)
+    md = render_packet_md(pkt)
+
+    stem = _safe_filename_stem(row.get("name") or "")
+    filename = f"{stem} Board Packet.md"
+    return Response(
+        content=md,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

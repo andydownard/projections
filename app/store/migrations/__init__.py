@@ -4,9 +4,10 @@ NEVER DROP TABLE / DROP COLUMN. CREATE TABLE IF NOT EXISTS always; ALTER TABLE A
 COLUMN wrapped to tolerate "duplicate column" (idempotent). Migrations run BEFORE
 the app serves (SECURITY.md §11.3) and are recorded in schema_migrations.
 """
-from app.store.migrations import m0001_init
+from app.store.migrations import m0001_init, m0002_narrative_snapshot
 
 # Ordered list of (name, ddl) migrations. Append-only.
 MIGRATIONS = [
     ("0001_init", m0001_init.SQL),
+    ("0002_narrative_snapshot", m0002_narrative_snapshot.SQL),
 ]

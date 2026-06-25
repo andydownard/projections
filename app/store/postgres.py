@@ -64,5 +64,17 @@ class PostgresStore:
     def get_revision(self, revision_id: str) -> dict | None:
         self._stub("get_revision")
 
+    def get_projection_by_role_slug(self, role_slug: str) -> dict | None:
+        self._stub("get_projection_by_role_slug")
+
+    def get_narrative(self, projection_id: str) -> dict | None:
+        self._stub("get_narrative")
+
+    def upsert_narrative(self, projection_id: str, narrative: dict[str, Any]) -> dict:
+        self._stub("upsert_narrative")
+
+    def create_feedback(self, fb: dict) -> dict:
+        self._stub("create_feedback")
+
     def get_terms_accepted_at(self, id: str) -> str | None:
         self._stub("get_terms_accepted_at")
