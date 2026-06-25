@@ -1,0 +1,27 @@
+# Keep the Docker build context + Railway upload lean. The image builds Python
+# deps from pyproject and the frontend fresh from web/package.json — vendored deps
+# and local artifacts must never ship.
+.git/
+.venv/
+**/node_modules/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+# local SQLite + replication artifacts (the DB lives on the /data volume)
+*.db
+*.db-wal
+*.db-shm
+data/
+# frontend + e2e build outputs (rebuilt in the image)
+web/dist/
+e2e/test-results/
+e2e/playwright-report/
+e2e/.cache/
+# tooling / docs not needed at runtime
+.claude/
+.github/
+backups/
+screenshots/
