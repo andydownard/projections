@@ -718,3 +718,135 @@ body {
   flex: 0 0 auto;
   align-self: center;
 }
+
+/* ---------------------------------------------------------------------------
+ * NarrativeCanvas (epic-N N7) — inline editor over the rendered packet prose.
+ * Meaning lives in TEXT + semantic tokens (AA contrast on white); brand only
+ * tints chrome. All motion is gated behind prefers-reduced-motion. */
+.narrative-canvas {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 0.75rem;
+  color: var(--text);
+}
+.narrative-canvas__toolbar {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.narrative-canvas__tool {
+  min-width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-alt);
+  color: var(--brand-deep);
+  font-weight: 700;
+  cursor: pointer;
+}
+.narrative-canvas__tool:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+.narrative-canvas__tool:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.narrative-canvas__editor {
+  min-height: 6rem;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  line-height: 1.5;
+}
+.narrative-canvas__editor:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+/* edited / stale chrome — the STATE meaning is also in the aria-live text. */
+.narrative-canvas[data-state="edited"] .narrative-canvas__editor {
+  border-color: var(--brand-primary);
+}
+.narrative-canvas[data-state="stale"] {
+  border-color: var(--warning);
+}
+.narrative-canvas[data-state="regenerating"] .narrative-canvas__editor {
+  opacity: 0.6;
+}
+.narrative-canvas__stale {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--warning);
+  background: #fef3c7;
+  color: #7c4a06; /* >= AA on #fef3c7 */
+  border-radius: 4px;
+}
+.narrative-canvas__stale-headline {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+}
+.narrative-canvas__stale-diff {
+  margin: 0 0 0.5rem;
+  padding-left: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+.narrative-canvas__was {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.narrative-canvas__now {
+  font-weight: 600;
+}
+.narrative-canvas__regenerate {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--warning);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--warning);
+  cursor: pointer;
+}
+.narrative-canvas__regenerate:focus-visible {
+  outline: var(--focus-ring);
+}
+.narrative-canvas__grounded {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+}
+.narrative-canvas__grounded-title {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.narrative-canvas__grounded-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.narrative-canvas__figure {
+  display: inline-block;
+  margin-right: 0.25rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-alt);
+  color: var(--brand-deep);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8125rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .narrative-canvas,
+  .narrative-canvas * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
