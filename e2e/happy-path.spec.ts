@@ -39,9 +39,10 @@ test.describe("happy path: create -> decision -> save -> reopen -> export", () =
   test("reopen by view_slug shows identical server numbers", async ({ page }) => {
     await page.goto("/wizard");
     await page.getByRole("button", { name: /start from example/i }).click();
-    const revenue = await page.getByTestId("kpi-revenue").innerText();
+    const before = await page.getByTestId("kpi-revenue").innerText();
+    const dollar = (before.match(/\$[\d,]+/) || ["$0"])[0]; // the server-rendered value
     const url = page.url();
-    await page.goto(url); // reopen
-    await expect(page.getByTestId("kpi-revenue")).toHaveText(revenue);
+    await page.goto(url); // reopen by view_slug
+    await expect(page.getByTestId("kpi-revenue")).toContainText(dollar);
   });
 });

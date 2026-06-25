@@ -14,8 +14,9 @@ test.describe("AI opt-out works end-to-end", () => {
     await page.getByRole("button", { name: /start from example/i }).click();
     await expect(page.getByTestId("decision-banner")).toBeVisible();
 
-    // Manual rent path is shown (no automated research).
-    await expect(page.getByLabel(/rent/i)).toBeVisible();
+    // Manual rent path is shown (no automated research). Target the manual rent
+    // INPUT specifically (the 3-year table also has "Rent, Year N" cells).
+    await expect(page.getByRole("textbox", { name: "Rent" })).toBeVisible();
 
     // Export still works without any AI call.
     const [download] = await Promise.all([
