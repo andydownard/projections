@@ -98,10 +98,34 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
   async function onGenerate(d: WizardDraft) {
     setBusy(true);
     try {
+      const body = toServerCreateBody(buildCreatePayload(d));
+      // Attach the Places->Census provenance so the server persists + emits it
+      // (location for the detail map; trade_area + evidence for the panel).
+      if (resolved) {
+        const alt = resolved.trade_area.alternatives[basis];
+        body.location = {
+          query: body.location.query,
+          place_id: resolved.location.place_id,
+          lat: resolved.location.lat,
+          lng: resolved.location.lng,
+          formatted_address: resolved.location.formatted_address,
+        };
+        body.trade_area = {
+          basis: body.trade_area.basis,
+          households: body.trade_area.households,
+          geography_name: alt?.geography_name ?? resolved.trade_area.geography_name,
+          geography_fips: alt?.fips ?? resolved.trade_area.geography_fips,
+          acs_vintage: resolved.trade_area.acs_vintage,
+          households_source: householdsSource === "edited" ? "user_edited" : "census_acs",
+          moe: alt?.moe ?? resolved.trade_area.moe,
+        };
+      } else {
+        body.trade_area = { ...body.trade_area, households_source: "manual" };
+      }
       const resp = await fetch("/api/projections", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(toServerCreateBody(buildCreatePayload(d))),
+        body: JSON.stringify(body),
       });
       const created = (await resp.json()) as ViewModel & { owner_token?: string };
       // Persist the minted owner token so the owner-scoped list (PRD §20) finds it.

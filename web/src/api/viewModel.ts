@@ -49,6 +49,35 @@ export interface Row {
   node?: string;
 }
 
+export interface LocationInfo {
+  place_id?: string;
+  lat: number;
+  lng: number;
+  formatted_address: string;
+}
+
+export interface TradeAreaInfo {
+  basis: string;
+  households: string | number | null;
+  geography_name?: string | null;
+  geography_fips?: string | null;
+  acs_vintage?: string | null;
+  households_source?: string | null;
+  moe?: number | null;
+}
+
+export interface EvidenceItem {
+  field: string;
+  label: string;
+  value: string | number | null;
+  method: string;
+  source: string;
+  source_date: string;
+  confidence: string;
+  geography?: string | null;
+  moe?: number | null;
+}
+
 export interface ViewModel {
   reco: Reco;
   metrics: Metrics;
@@ -58,7 +87,9 @@ export interface ViewModel {
   rows: Row[];
   settings: Record<string, ServerValue | number | string>;
   flags?: Record<string, unknown>;
-  evidence?: unknown[];
+  evidence?: EvidenceItem[];
+  location?: LocationInfo | null;
+  trade_area?: TradeAreaInfo;
   version: number;
   view_slug: string;
   name: string;
