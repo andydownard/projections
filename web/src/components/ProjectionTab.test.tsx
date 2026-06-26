@@ -78,6 +78,13 @@ describe("ProjectionTab", () => {
     expect(gap).toHaveTextContent(/cumulative cash/i); // reasonGap detail
   });
 
+  it("labels the tiles with the canonical metric vocabulary (UX fix #10)", () => {
+    render(<ProjectionTab vm={vm()} />);
+    expect(within(screen.getByTestId("tile-capital")).getByText("Startup capital required")).toBeInTheDocument();
+    expect(within(screen.getByTestId("tile-breakeven")).getByText("Break-even month")).toBeInTheDocument();
+    expect(within(screen.getByTestId("tile-cashgap")).getByText("First-year cash gap")).toBeInTheDocument();
+  });
+
   it("renders the monthly cash-flow SVG with a break-even marker", () => {
     render(<ProjectionTab vm={vm()} />);
     expect(screen.getByTestId("cashflow-chart")).toBeInTheDocument();

@@ -49,7 +49,7 @@ const TILES: TileDef[] = [
   {
     testid: "tile-breakeven",
     metricTestid: "metric-breakeven",
-    label: "Break-even (payback)",
+    label: "Break-even month",
     value: (m) => m.breakeven,
     reason: (m) => m.reasonBreakeven,
   },

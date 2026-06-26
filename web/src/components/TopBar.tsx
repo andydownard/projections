@@ -5,14 +5,9 @@
 // server response (computed_json.model_version), never derived on the client.
 import type { ReactNode } from "react";
 
-export type SaveState = "saved" | "saving" | "error" | "idle";
+import { SAVE_LABEL, type SaveState } from "../state/saveLabels";
 
-const SAVE_LABEL: Record<SaveState, string> = {
-  saved: "All changes saved",
-  saving: "Saving…",
-  error: "Save failed — retry",
-  idle: "",
-};
+export type { SaveState };
 
 export interface TopBarProps {
   modelVersion?: string;

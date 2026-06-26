@@ -42,6 +42,14 @@ describe("ListPage", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("navigates to /p/example when 'Start from example' is clicked (UX fix #5)", async () => {
+    vi.spyOn(globalThis, "fetch");
+    const pushSpy = vi.spyOn(window.history, "pushState");
+    render(<ListPage />);
+    (await screen.findByRole("button", { name: /start from example/i })).click();
+    expect(pushSpy).toHaveBeenCalledWith(null, "", "/p/example");
+  });
+
   it("renders owner-scoped rows from the server (verbatim display strings)", async () => {
     localStorage.setItem("projections.owner_token", "owner-abc");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
