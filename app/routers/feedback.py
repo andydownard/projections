@@ -19,14 +19,13 @@ import json
 import os
 import re
 import secrets
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app import config, ratelimit
+from app.deps import client_ip, rate_limited_response, utcnow
 from app.feedback.redact import (
     DESCRIPTION_CAP,
     TITLE_CAP,
@@ -45,18 +44,6 @@ _IP_LIMIT_PER_HOUR = 10
 
 def _support_id() -> str:
     return "SUP-" + "".join(secrets.choice(_SUP_ALPHABET) for _ in range(6))
-
-
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _client_ip(request: Request) -> str:
-    """Right-most untrusted hop from X-Forwarded-For, else the socket peer."""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def redact_route(route: str, own_slug: str | None = None) -> str:
@@ -103,20 +90,11 @@ def submit_feedback(
 
     # 1) Rate-limit FIRST (cheapest rejection; no work past the cap).
     allowed, retry_after = ratelimit.check(
-        "feedback", ip=_client_ip(request), ip_limit=_IP_LIMIT_PER_HOUR
+        "feedback", ip=client_ip(request), ip_limit=_IP_LIMIT_PER_HOUR
     )
     if not allowed:
-        # API_SPEC §2.3: the 429 body is a top-level {"error":"rate_limited",…};
-        # return it directly (a raised HTTPException would nest it under "detail").
-        return JSONResponse(
-            status_code=429,
-            content={
-                "error": "rate_limited",
-                "retry_after_seconds": retry_after,
-                "scope": "ip",
-            },
-            headers={"Retry-After": str(retry_after)},
-        )
+        # API_SPEC §2.3: top-level {"error":"rate_limited",…} (not nested under detail).
+        return rate_limited_response(retry_after)
 
     support_id = _support_id()
 
@@ -137,7 +115,7 @@ def submit_feedback(
         "app_version": config.build_sha(),
         "model_version": body.context.model_version,
         "type": body.type,
-        "ts": _utcnow(),
+        "ts": utcnow(),
     }
 
     # 4) Build the GitHub payload from redacted parts only and file it (stubbed
@@ -162,7 +140,7 @@ def submit_feedback(
         "context_json": json.dumps(context),
         "github_issue_url": github_issue_url,
         "status": "open",
-        "created_at": _utcnow(),
+        "created_at": utcnow(),
     })
 
     # Only the support_id is shown to the user (NEVER github_issue_url).

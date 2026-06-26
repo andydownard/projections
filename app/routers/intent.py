@@ -11,10 +11,8 @@ CRM delivery is best-effort and graceful-degrades when CRM_API_KEY is unset
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Request, Response
 import re as _re
 
 from pydantic import BaseModel, validator
@@ -22,22 +20,12 @@ from pydantic import BaseModel, validator
 _EMAIL_RE = _re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 from app import ratelimit
+from app.deps import client_ip, rate_limited_response, utcnow
 from app.store import Store, get_store
 
 router = APIRouter(prefix="/api/intent", tags=["intent"])
 
 _IP_LIMIT_PER_HOUR = 10
-
-
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
 
 
 class IntentIn(BaseModel):
@@ -66,19 +54,10 @@ def submit_intent(
     store: Store = Depends(get_store),
 ):
     allowed, retry_after = ratelimit.check(
-        "intent", ip=_client_ip(request), ip_limit=_IP_LIMIT_PER_HOUR
+        "intent", ip=client_ip(request), ip_limit=_IP_LIMIT_PER_HOUR
     )
     if not allowed:
-        # API_SPEC §2.3 top-level error body (mirrors the feedback path).
-        return JSONResponse(
-            status_code=429,
-            content={
-                "error": "rate_limited",
-                "retry_after_seconds": retry_after,
-                "scope": "ip",
-            },
-            headers={"Retry-After": str(retry_after)},
-        )
+        return rate_limited_response(retry_after)  # API_SPEC §2.3 top-level body
 
     crm_payload = {
         "email": str(body.email),
@@ -99,7 +78,7 @@ def submit_intent(
         "request_expert_review": int(body.request_expert_review),
         "follow_up_consent": int(body.follow_up_consent),
         "crm_status": crm_status,
-        "created_at": _utcnow(),
+        "created_at": utcnow(),
     })
 
     return {"received": True}

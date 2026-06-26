@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app import ratelimit
+from app.deps import client_ip, rate_limited_response
 from app.geo import client
 from app.geo.derive import CensusUnavailable, LocationNotFound, derive_trade_area
 
@@ -29,25 +30,12 @@ _WINDOW_SECONDS = 3600
 _MIN_QUERY_LEN = 3
 
 
-def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
-
-
 def _rate_limited(endpoint: str, request: Request, limit: int):
-    """Return a 429 JSONResponse if over the per-IP cap, else None."""
+    """Return a 429 response if over the per-IP cap, else None."""
     allowed, retry_after = ratelimit.check(
-        endpoint, ip=_client_ip(request), ip_limit=limit, window_seconds=_WINDOW_SECONDS
+        endpoint, ip=client_ip(request), ip_limit=limit, window_seconds=_WINDOW_SECONDS
     )
-    if allowed:
-        return None
-    return JSONResponse(
-        status_code=429,
-        content={"error": "rate_limited", "retry_after_seconds": retry_after, "scope": "ip"},
-        headers={"Retry-After": str(retry_after)},
-    )
+    return None if allowed else rate_limited_response(retry_after)
 
 
 class AutocompleteIn(BaseModel):
