@@ -1144,7 +1144,9 @@ body {
   display: flex;
   flex-direction: column;
 }
-.detail__panel {
+/* Scope the layout to the visible panel so it never overrides the UA
+ * [hidden]{display:none} (author display would otherwise beat the attribute). */
+.detail__panel:not([hidden]) {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
