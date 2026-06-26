@@ -102,3 +102,10 @@ def places_resolve(body: ResolveIn, request: Request):
                 "message": "Could not derive households automatically — enter them manually.",
             },
         )
+    except Exception:
+        # Defense-in-depth: an unforeseen error degrades to the manual-entry
+        # fallback (503), never a 500 with a key-bearing traceback in the logs.
+        return JSONResponse(
+            status_code=503,
+            content={"error": "census_unavailable", "message": "Lookup failed — enter households manually."},
+        )

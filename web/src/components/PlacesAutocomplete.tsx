@@ -35,11 +35,20 @@ export function PlacesAutocomplete({ label, basis, onResolved, onError }: Places
   const [active, setActive] = useState(-1);
   const [busy, setBusy] = useState(false);
   const tokenRef = useRef<string>(newSessionToken());
+  const selectingRef = useRef(false);
   const listId = useId();
 
-  // Debounced autocomplete. A stale response can't reopen the list: the timer is
-  // cleared on each keystroke and we ignore results once a selection is made.
+  // Debounced autocomplete. Two guards keep stale results from re-opening the
+  // list: the timer is cleared on each keystroke (live flag drops late responses),
+  // and selecting a prediction sets selectingRef so the setQuery it triggers does
+  // NOT re-fire a search (which would reopen the dropdown over the chosen value).
   useEffect(() => {
+    if (selectingRef.current) {
+      selectingRef.current = false;
+      setPredictions([]);
+      setOpen(false);
+      return;
+    }
     const q = query.trim();
     if (q.length < MIN_LEN) {
       setPredictions([]);
@@ -61,7 +70,9 @@ export function PlacesAutocomplete({ label, basis, onResolved, onError }: Places
   }, [query]);
 
   async function select(p: Prediction) {
+    selectingRef.current = true; // the setQuery below must NOT re-open the list
     setOpen(false);
+    setActive(-1);
     setQuery(p.description);
     setBusy(true);
     try {
@@ -103,7 +114,7 @@ export function PlacesAutocomplete({ label, basis, onResolved, onError }: Places
           aria-expanded={open}
           aria-controls={listId}
           aria-autocomplete="list"
-          aria-activedescendant={active >= 0 ? `${listId}-opt-${active}` : undefined}
+          aria-activedescendant={open && active >= 0 ? `${listId}-opt-${active}` : undefined}
           autoComplete="off"
           placeholder="Start typing a store address…"
           value={query}

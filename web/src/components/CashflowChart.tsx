@@ -29,6 +29,14 @@ export function CashflowChart({
   width = 660,
   height = 240,
 }: CashflowChartProps) {
+  if (!monthly.length) {
+    return (
+      <figure className="cashflow-chart" data-testid="cashflow-chart">
+        <figcaption className="cashflow-chart__caption">No monthly cash-flow data.</figcaption>
+      </figure>
+    );
+  }
+
   const padT = 16;
   const padB = 26;
   const padL = 12;
@@ -69,6 +77,10 @@ export function CashflowChart({
     if (monthly[i].cumulativeCash.raw < monthly[troughIdx].cumulativeCash.raw) troughIdx = i;
   }
   const trough = monthly[troughIdx];
+
+  // Break-even marker by the actual month value (server month index), not array
+  // position — robust if the series is ever not 0-based-contiguous.
+  const beIdx = breakevenMonth == null ? -1 : monthly.findIndex((m) => m.month === breakevenMonth);
 
   // X ticks: first, ~thirds, last — labeled by the server month index.
   const tickIdx = monthly.length
@@ -125,10 +137,10 @@ export function CashflowChart({
         />
 
         {/* break-even crossing */}
-        {breakevenMonth != null && breakevenMonth >= 0 && (
+        {beIdx >= 0 && (
           <line
-            x1={xAt(breakevenMonth)}
-            x2={xAt(breakevenMonth)}
+            x1={xAt(beIdx)}
+            x2={xAt(beIdx)}
             y1={padT}
             y2={height - padB}
             className="cashflow-chart__breakeven"

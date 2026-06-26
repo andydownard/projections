@@ -121,7 +121,9 @@ def _sensitivity(vm: dict[str, Any]) -> dict[str, Any]:
     metrics = vm.get("metrics") or {}
     rows = [
         {"driver": "Capital required", "base": _disp(metrics.get("capital")),
-         "note": "One-time startup + worst-case cash trough + reserve."},
+         # Source the rationale from the view-model so packet and UI never drift.
+         "note": metrics.get("reasonCapital")
+                 or "Worst-case cumulative cash trough (already includes one-time startup) plus reserve."},
         {"driver": "First-year cash gap", "base": _disp(metrics.get("cashGap")),
          "note": "Most-negative cumulative cash across the first year."},
         {"driver": "Break-even", "base": _disp(metrics.get("breakeven")),

@@ -85,6 +85,10 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
   function handleResolved(result: TradeAreaResolved) {
     setResolved(result);
     setResolveError(null);
+    // Persist the resolved geography into the draft so the saved projection (and
+    // its packet) carry the picked address — not the seeded default city/state.
+    set("city", result.location.formatted_address);
+    set("state", "");
     applyBasis(result.trade_area.basis === "county" ? "county" : "city", result);
   }
 

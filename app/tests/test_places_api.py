@@ -5,6 +5,7 @@ the real autocomplete/resolve/derivation logic — FIPS mapping, ACS parsing,
 basis selection, degraded fallbacks, the per-IP rate-limit, and the hard rule
 that the provider key NEVER reaches the client — without touching the network.
 """
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -144,6 +145,42 @@ def test_resolve_census_unavailable_is_503(client, monkeypatch):
     resp = client.post("/api/places/resolve", json={"place_id": "PID_LONGVIEW"})
     assert resp.status_code == 503
     assert resp.json()["error"] == "census_unavailable"
+
+
+def test_get_json_wraps_httpx_error_without_leaking_key(monkeypatch):
+    # A real upstream failure: httpx error strings embed the key-bearing URL. The
+    # seam must re-raise a clean GeoUpstreamError with NO key and NO chained cause.
+    url_with_key = (
+        f"https://maps.googleapis.com/maps/api/place/details/json?key={SECRET_KEY}"
+    )
+
+    def boom_get(u, params=None, timeout=None):
+        raise httpx.HTTPStatusError(
+            f"Server error '500' for url '{url_with_key}'",
+            request=httpx.Request("GET", url_with_key),
+            response=httpx.Response(500),
+        )
+
+    monkeypatch.setattr(geo_client.httpx, "get", boom_get)
+    with pytest.raises(geo_client.GeoUpstreamError) as ei:
+        geo_client._get_json("https://maps.googleapis.com/x", {"key": SECRET_KEY})
+    assert SECRET_KEY not in str(ei.value)
+    assert ei.value.__cause__ is None  # `from None` drops the key-bearing chain
+
+
+def test_resolve_unexpected_error_degrades_to_503(client, monkeypatch):
+    # Defense-in-depth: a non-GeoUpstreamError on an upstream call still degrades
+    # to the manual-entry fallback (503), never a 500 with a logged traceback.
+    def boom(url, params):
+        if "/acs/acs5" in url:
+            raise RuntimeError("unexpected provider failure")
+        return _fake_get_json(url, params)
+
+    monkeypatch.setattr(geo_client, "_get_json", boom)
+    resp = client.post("/api/places/resolve", json={"place_id": "PID_LONGVIEW"})
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "census_unavailable"
+    assert SECRET_KEY not in resp.text
 
 
 def test_resolve_is_rate_limited_per_ip(client, monkeypatch):

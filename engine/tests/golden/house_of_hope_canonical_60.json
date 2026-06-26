@@ -86,7 +86,7 @@
       "raw": -296939.7347072
     },
     "reasonBreakeven": "Break-even is not reached within the first year under base or downside.",
-    "reasonCapital": "One-time startup + worst-case cash trough + reserve.",
+    "reasonCapital": "Worst-case cumulative cash trough (already includes one-time startup) plus reserve.",
     "reasonGap": "Most-negative cumulative cash across the first year."
   },
   "model_version": "2.1.0",

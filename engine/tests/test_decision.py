@@ -76,6 +76,20 @@ def test_sensitivity_three_scenarios(canonical_result):
     assert D(str(dec.sensitivity["upside"]["net"])) > D(str(dec.sensitivity["base"]["net"]))
 
 
+def test_sensitivity_capital_has_no_startup_double_count(canonical_result):
+    # Guards the _scenario_net capital path (decision.py) against re-introducing the
+    # startup double-count — the base scenario IS the headline run, so its capital
+    # must equal startup_capital_required, and downside is the worst case.
+    dec = canonical_result.decision
+    base_cap = D(str(dec.sensitivity["base"]["capital"]))
+    assert base_cap == D(str(dec.startup_capital_required))
+    assert D(str(dec.sensitivity["downside"]["capital"])) >= base_cap
+    # And it is strictly less than the doubled (startup + trough + reserve) value.
+    peak = abs(min(Decimal("0"), D(str(dec.first_year_cash_gap))))
+    doubled = D(str(canonical_result.startup_total)) + peak + Decimal("25000")
+    assert base_cap < doubled
+
+
 def test_reco_tag_is_semantic_enum(canonical_result):
     valid = {"proceed", "revise", "find_cheaper_rent", "raise_cash", "delay", "do_not_proceed"}
     assert canonical_result.decision.reco_tag in valid

@@ -35,10 +35,19 @@ class GeoUpstreamError(Exception):
 
 
 def _get_json(url: str, params: dict) -> Any:
-    """The single network seam (stubbed in tests). GET url?params -> parsed JSON."""
-    resp = httpx.get(url, params=params, timeout=_TIMEOUT)
-    resp.raise_for_status()
-    return resp.json()
+    """The single network seam (stubbed in tests). GET url?params -> parsed JSON.
+
+    SECURITY: any httpx error string embeds the request URL — which carries the
+    Places/Census ``key=`` — so a raw raise would log the key (CLAUDE.md hard rule
+    7) and surface a 500 instead of the contracted 503. Re-raise a clean
+    GeoUpstreamError ``from None`` so the key-bearing chain never propagates.
+    """
+    try:
+        resp = httpx.get(url, params=params, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+    except (httpx.HTTPError, ValueError) as e:
+        raise GeoUpstreamError(f"upstream request failed: {type(e).__name__}") from None
 
 
 def _places_key() -> str:
