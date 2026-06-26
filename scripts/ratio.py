@@ -228,9 +228,21 @@ def _diff_added(root: Path, base_ref: str) -> dict | None:
     touches — so a behavior-preserving refactor or a deletion is never penalized
     for the surviving code it leaves behind. ratio = added test lines / added code
     lines; a diff that adds no code (pure deletion / test-only) passes.
+
+    Note: numstat is line-based and counts EVERY added physical line (comments and
+    blanks included), unlike the repo-wide cloc counter which excludes them. So a
+    comment-only / docstring-only edit to a code file registers as added code and
+    must be paired with a test edit (or rely on the repo-wide gate). This is the
+    conservative direction — it can only ask for MORE test, never less.
     """
     proc = subprocess.run(
-        ["git", "-C", str(root), "diff", "--numstat", f"{base_ref}...HEAD"],
+        # --no-renames: a detected rename collapses both paths into ONE brace token
+        #   ("a/{x.py => y.py}") that _classify can't read, silently dropping that
+        #   row's added lines -> a gate bypass (rename a big file + append untested
+        #   code in one commit). Force two plain rows (delete + add) so the added
+        #   side is classified. core.quotePath=false keeps non-ASCII paths unquoted.
+        ["git", "-C", str(root), "-c", "core.quotePath=false",
+         "diff", "--numstat", "--no-renames", f"{base_ref}...HEAD"],
         capture_output=True,
         text=True,
     )
