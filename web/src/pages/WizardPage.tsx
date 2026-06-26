@@ -13,6 +13,8 @@ import { useState } from "react";
 import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
 import { DecisionBanner } from "../components/DecisionBanner";
 import { CashflowChart } from "../components/CashflowChart";
+import { PlacesAutocomplete } from "../components/PlacesAutocomplete";
+import type { ResolveErrorKind, TradeAreaResolved } from "../api/places";
 import { buildCreatePayload, toServerCreateBody, type WizardDraft } from "../wizard/shareHelper";
 
 const EXAMPLE_SLUG = "example";
@@ -41,16 +43,16 @@ const EXPRESS_DEFAULT: WizardDraft = {
   termsAccepted: true,
 };
 
-// The express form's fields, declared once and rendered by one map (DRY): the
-// wrapping <label> is each input's accessible name, so no redundant aria-label.
-type FieldKey = "name" | "households" | "shareY1" | "shareY2" | "shareY3";
-const FIELDS: ReadonlyArray<{ key: FieldKey; label: string; numeric: boolean }> = [
-  { key: "name", label: "Store name", numeric: false },
-  { key: "households", label: "Households (trade area)", numeric: true },
-  { key: "shareY1", label: "Year 1 share (%)", numeric: true },
-  { key: "shareY2", label: "Year 2 share (%)", numeric: true },
-  { key: "shareY3", label: "Year 3 share (%)", numeric: true },
+// The three explicit donor-market shares (PRD §7.1 — never an auto-midpoint),
+// rendered by one map. Store name and the Census-derived households are bespoke.
+type ShareKey = "shareY1" | "shareY2" | "shareY3";
+const SHARES: ReadonlyArray<{ key: ShareKey; label: string }> = [
+  { key: "shareY1", label: "Year 1 share (%)" },
+  { key: "shareY2", label: "Year 2 share (%)" },
+  { key: "shareY3", label: "Year 3 share (%)" },
 ];
+
+const fmtInt = (n: number) => new Intl.NumberFormat("en-US").format(n);
 
 export interface WizardPageProps {
   aiOff?: boolean;
@@ -61,8 +63,36 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<WizardDraft>(EXPRESS_DEFAULT);
 
+  const [resolved, setResolved] = useState<TradeAreaResolved | null>(null);
+  const [basis, setBasis] = useState<"city" | "county">("city");
+  const [householdsSource, setHouseholdsSource] = useState<"census" | "edited" | null>(null);
+  const [resolveError, setResolveError] = useState<ResolveErrorKind | null>(null);
+
   function set<K extends keyof WizardDraft>(key: K, value: WizardDraft[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // Apply one geography's Census household count (City/County) from a resolve.
+  function applyBasis(b: "city" | "county", result: TradeAreaResolved) {
+    const alt = result.trade_area.alternatives[b];
+    if (!alt) return;
+    setBasis(b);
+    set("basis", b);
+    set("households", alt.households);
+    setHouseholdsSource("census");
+  }
+
+  function handleResolved(result: TradeAreaResolved) {
+    setResolved(result);
+    setResolveError(null);
+    applyBasis(result.trade_area.basis === "county" ? "county" : "city", result);
+  }
+
+  // Places/Census failed: drop provenance and let the operator type households.
+  function handleResolveError(kind: ResolveErrorKind) {
+    setResolveError(kind);
+    setResolved(null);
+    setHouseholdsSource(null);
   }
 
   async function onGenerate(d: WizardDraft) {
@@ -150,8 +180,9 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
       <header className="wizard__intro">
         <h1>New projection</h1>
         <p className="wizard__lede">
-          Confirm your trade area and the three annual donor-market shares, then
-          generate a board-ready decision.
+          Find your store’s address — we pull the trade-area households from the
+          U.S. Census — then set three annual donor-market shares and generate a
+          board-ready decision.
         </p>
       </header>
 
@@ -162,15 +193,81 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
           void onGenerate(draft);
         }}
       >
-        {FIELDS.map((f) => (
+        <label className="wizard__field">
+          Store name
+          <input
+            type="text"
+            value={draft.name}
+            onChange={(e) => set("name", e.target.value)}
+          />
+        </label>
+
+        <PlacesAutocomplete
+          label="Store address"
+          basis={basis}
+          onResolved={handleResolved}
+          onError={handleResolveError}
+        />
+
+        <div className="wizard__field places__households">
+          <label className="places__households-label" htmlFor="wizard-households">
+            Households (trade area)
+          </label>
+          {resolved && (
+            <div className="places__basis" role="group" aria-label="Trade-area basis">
+              {(["city", "county"] as const).map((b) =>
+                resolved.trade_area.alternatives[b] ? (
+                  <button
+                    key={b}
+                    type="button"
+                    className={
+                      basis === b
+                        ? "places__basis-btn places__basis-btn--on"
+                        : "places__basis-btn"
+                    }
+                    aria-pressed={basis === b}
+                    onClick={() => applyBasis(b, resolved)}
+                  >
+                    {b === "city" ? "City" : "County"}
+                  </button>
+                ) : null,
+              )}
+            </div>
+          )}
+          <input
+            id="wizard-households"
+            type="number"
+            value={draft.households}
+            onChange={(e) => {
+              set("households", Number(e.target.value));
+              if (resolved) setHouseholdsSource("edited");
+            }}
+          />
+          {resolved && householdsSource === "census" && (
+            <p className="places__provenance">
+              {fmtInt(draft.households)} households · {resolved.trade_area.geography_name} ·
+              U.S. Census ACS {resolved.trade_area.acs_vintage} · estimate
+            </p>
+          )}
+          {householdsSource === "edited" && (
+            <p className="places__provenance places__provenance--edited">
+              Edited — overrides the Census estimate.
+            </p>
+          )}
+          {resolveError && (
+            <p className="places__provenance places__provenance--error">
+              Couldn’t look up that location automatically — enter households manually.
+            </p>
+          )}
+        </div>
+
+        {SHARES.map((f) => (
           <label key={f.key} className="wizard__field">
             {f.label}
             <input
-              type={f.numeric ? "number" : "text"}
+              type="number"
               value={draft[f.key]}
-              onChange={(e) =>
-                set(f.key, f.numeric ? Number(e.target.value) : e.target.value)
-              }
+              onChange={(e) => set(f.key, Number(e.target.value))}
             />
           </label>
         ))}
