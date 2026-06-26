@@ -979,6 +979,144 @@ body {
   stroke-dasharray: 4 3;
 }
 
+/* --- detail page: cash-flow dual-encoding, monthly table, shell (crown jewel) - */
+.cashflow-chart {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.cashflow-chart__area {
+  fill: var(--brand-primary);
+  opacity: 0.08;
+}
+.cashflow-chart__bar {
+  fill: var(--success);
+  opacity: 0.5;
+}
+.cashflow-chart__bar--neg {
+  fill: var(--error);
+}
+.cashflow-chart__trough {
+  fill: var(--surface);
+  stroke: var(--error);
+  stroke-width: 2;
+}
+.cashflow-chart__tick {
+  fill: var(--text-muted);
+  font-size: 11px;
+  text-anchor: middle;
+}
+.cashflow-chart__caption {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+.cashflow-chart__caption strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.cashflow-table__scroll {
+  overflow-x: auto;
+}
+.cashflow-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+.cashflow-table th,
+.cashflow-table td {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cashflow-table thead th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.cashflow-table__label {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text);
+  position: sticky;
+  left: 0;
+  background: var(--surface);
+}
+
+.kpi__sub {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.projection-tab__cashflow,
+.projection-tab__rows {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem 1.125rem;
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 60rem;
+  margin: 0 auto;
+}
+.detail--loading {
+  padding: 2rem 0;
+  color: var(--text-muted);
+}
+.detail__name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 24rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.detail__name input {
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.detail__rent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 16rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.detail__rent input {
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.75rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.detail__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.narrative {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem;
+  background: var(--surface);
+}
+.narrative--disabled {
+  color: var(--text-muted);
+}
+
 /* --- degraded / error states (M7 I2) ---
  * One accessible surface. Severity is carried in TEXT + a left accent + an icon;
  * never color alone. Renders identically at 1440 / 768 / 375 (no fixed widths). */
