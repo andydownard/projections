@@ -152,11 +152,16 @@ export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: Projecti
                   >
                     Why?
                   </button>
-                  {openReasons.has(t.testid) && (
-                    <p className="decision-tile__reason" id={`${t.testid}-reason`} role="note">
-                      {t.reason(metrics)}
-                    </p>
-                  )}
+                  {/* Kept in the DOM (so aria-controls always resolves) but hidden
+                      from view + a11y tree until expanded. */}
+                  <p
+                    className="decision-tile__reason"
+                    id={`${t.testid}-reason`}
+                    role="note"
+                    hidden={!openReasons.has(t.testid)}
+                  >
+                    {t.reason(metrics)}
+                  </p>
                 </div>
               )}
             </div>

@@ -820,7 +820,10 @@ body {
   appearance: none;
   border: none;
   background: none;
-  padding: 0;
+  /* >=24px tap target (WCAG 2.2 SC 2.5.8); negative margin keeps the visual spot. */
+  padding: 5px 6px;
+  margin: -5px -6px;
+  min-height: 24px;
   font: inherit;
   font-size: 0.6875rem;
   font-weight: 600;

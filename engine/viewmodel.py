@@ -78,7 +78,8 @@ def to_view_model(result):
     # math); N/A-guarded so a 0-revenue / 0-salesfloor case never divides by zero.
     rev1 = D(str(y1.total_rev))
     salesfloor_sqft = D(result.inputs.building_sqft) * D(result.inputs.salesfloor_pct)
-    sales_per_sqft = (rev1 / salesfloor_sqft) if salesfloor_sqft != 0 else None
+    # N/A on 0 revenue too (ENGINE_CONTRACT §12.4) — consistent with margin/occ/labor.
+    sales_per_sqft = (rev1 / salesfloor_sqft) if (salesfloor_sqft != 0 and rev1 != 0) else None
     occ_ratio = (D(str(y1.expenses.get("Rent", 0))) / rev1) if rev1 != 0 else None
     labor_ratio = (D(str(y1.expenses.get("Payroll", 0))) / rev1) if rev1 != 0 else None
     kpis = [

@@ -194,7 +194,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           with the Input/Computed/Overridden/Estimated legend and cell-state
           classes. No client math. The recompute live-region carries the autosave
           settle label so a recompute is announced (a11y). */}
-      <ProjectionTab vm={vm} recomputeStatus={edit ? saveLabel : ""} />
+      <ProjectionTab key={slug} vm={vm} recomputeStatus={edit ? saveLabel : ""} />
 
       {/* Trade-area map (store pin) + the evidence/confidence panel — the location
           and Census provenance behind the model's top driver. The map degrades to

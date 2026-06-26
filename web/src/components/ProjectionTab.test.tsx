@@ -63,24 +63,33 @@ describe("ProjectionTab", () => {
     expect(screen.getByText(/worst-case trough is covered/i)).toBeInTheDocument();
   });
 
-  it("renders the three decision tiles, each value with a tappable Why? reason", async () => {
+  it("hides each decision reason until its Why? disclosure is tapped", async () => {
     const user = userEvent.setup();
     render(<ProjectionTab vm={vm()} />);
 
     const cap = screen.getByTestId("tile-capital");
     expect(cap).toHaveTextContent("$277,990");
-    await user.click(within(cap).getByRole("button", { name: /why/i }));
-    expect(cap).toHaveTextContent(/reserve/i); // reasonCapital revealed
+    const capWhy = within(cap).getByRole("button", { name: /why/i });
+    // In the DOM (so aria-controls resolves) but hidden + collapsed by default.
+    const capReason = within(cap).getByRole("note", { hidden: true });
+    expect(capWhy).toHaveAttribute("aria-expanded", "false");
+    expect(capReason).not.toBeVisible();
+    await user.click(capWhy);
+    expect(capWhy).toHaveAttribute("aria-expanded", "true");
+    expect(capReason).toBeVisible();
+    expect(capReason).toHaveTextContent(/reserve/i);
+    await user.click(capWhy); // collapses again
+    expect(capReason).not.toBeVisible();
 
     const be = screen.getByTestId("tile-breakeven");
     expect(be).toHaveTextContent("Month 5");
     await user.click(within(be).getByRole("button", { name: /why/i }));
-    expect(be).toHaveTextContent(/operating net/i);
+    expect(within(be).getByRole("note")).toHaveTextContent(/operating net/i);
 
     const gap = screen.getByTestId("tile-cashgap");
     expect(gap).toHaveTextContent("($219,990)");
     await user.click(within(gap).getByRole("button", { name: /why/i }));
-    expect(gap).toHaveTextContent(/cumulative cash/i);
+    expect(within(gap).getByRole("note")).toHaveTextContent(/cumulative cash/i);
   });
 
   it("renders the monthly cash-flow SVG with a break-even marker", () => {
