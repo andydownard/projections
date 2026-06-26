@@ -17,6 +17,8 @@ import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
 import { patchProjection, PatchConflictError } from "../api/patch";
 import { submitFeedback } from "../api/feedback";
 import { ProjectionTab } from "../components/ProjectionTab";
+import { TradeAreaMap } from "../components/TradeAreaMap";
+import { EvidencePanel } from "../components/EvidencePanel";
 import { FeedbackModal } from "../components/FeedbackModal";
 import { SaveConflictModal } from "../components/SaveConflictModal";
 import { SettingsTab } from "../components/SettingsTab";
@@ -193,6 +195,19 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           classes. No client math. The recompute live-region carries the autosave
           settle label so a recompute is announced (a11y). */}
       <ProjectionTab vm={vm} recomputeStatus={edit ? saveLabel : ""} />
+
+      {/* Trade-area map (store pin) + the evidence/confidence panel — the location
+          and Census provenance behind the model's top driver. The map degrades to
+          a placeholder when no address was resolved (never a map over a typed
+          number); the evidence panel renders nothing when evidence[] is empty. */}
+      <TradeAreaMap
+        slug={slug}
+        location={vm.location}
+        basis={vm.trade_area?.basis}
+        geography={vm.trade_area?.geography_name}
+        size="detail"
+      />
+      <EvidencePanel evidence={vm.evidence ?? []} />
 
       {edit && (
         <div data-testid="settings-tab">

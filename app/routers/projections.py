@@ -29,6 +29,7 @@ from starlette.background import BackgroundTask
 
 from app import ratelimit
 from app.deps import hash_token, parse_if_match, token_matches
+from app.geo.client import GeoUpstreamError, static_map_bytes
 from app import narrative_provider
 from app.narrative import (
     GroundingError,
@@ -502,7 +503,7 @@ def list_projections(
             "reco": vm.get("reco", {}).get("tag"),
             "y1": y1_rev,
             # lat/lng for the list-row mini-map; null when location was never resolved.
-            "location": vm.get("location"),
+            "coords": vm.get("location"),
         })
     return {"projections": items}
 
@@ -519,6 +520,36 @@ def get_projection(view_slug: str, response: Response, store: Store = Depends(ge
         vm = {}
     response.headers["ETag"] = str(row["version"])
     return {**vm, "view_slug": view_slug, "version": row["version"], "name": row["name"]}
+
+
+@router.get("/{view_slug}/staticmap")
+def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_store)):
+    """Server-proxied Google Static Map for the projection's resolved location.
+
+    The Places key is appended server-side and never reaches the browser (hard
+    rule 7). 404 when the projection has no resolved lat/lng so the client shows a
+    neutral placeholder instead of a broken image (never a map over a typed count).
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    try:
+        loc = json.loads(row.get("location_json") or "{}")
+    except json.JSONDecodeError:
+        loc = {}
+    lat, lng = loc.get("lat"), loc.get("lng")
+    if lat is None or lng is None:
+        raise HTTPException(status_code=404, detail={"error": "no_location"})
+    kind = "detail" if size == "detail" else "thumb"
+    try:
+        img = static_map_bytes(lat, lng, kind)
+    except GeoUpstreamError:
+        raise HTTPException(status_code=502, detail={"error": "map_unavailable"})
+    return Response(
+        content=img,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.get("/{view_slug}/xlsx")

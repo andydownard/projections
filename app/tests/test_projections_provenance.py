@@ -89,7 +89,7 @@ def test_list_item_carries_location_for_minimap(client):
         "/api/projections", headers={"Authorization": f"Bearer {owner}"}
     ).json()["projections"]
     assert len(items) == 1
-    assert items[0]["location"]["lat"] == pytest.approx(32.5007)
+    assert items[0]["coords"]["lat"] == pytest.approx(32.5007)
 
 
 def test_manual_households_carry_no_evidence_or_location(client):

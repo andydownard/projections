@@ -1117,6 +1117,122 @@ body {
   color: var(--text-muted);
 }
 
+/* --- trade-area map (server-proxied static map) + evidence panel ------------- */
+.map {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.map__img {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.map__caption {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+.map--empty {
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+}
+.map--detail.map--empty {
+  height: 160px;
+}
+.map__placeholder-text {
+  font-size: 0.8125rem;
+}
+/* List-row thumbnail variant (compact, fixed box). */
+.map--thumb {
+  width: 64px;
+  height: 44px;
+}
+.map--thumb .map__img {
+  width: 64px;
+  height: 44px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.map--thumb.map--empty {
+  width: 64px;
+  height: 44px;
+}
+.map--thumb .map__placeholder-text {
+  font-size: 0.5625rem;
+  text-align: center;
+}
+
+.evidence {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem 1.125rem;
+}
+.evidence__heading {
+  margin: 0 0 0.75rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.evidence__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.875rem;
+}
+.evidence__item {
+  border-left: 3px solid var(--line);
+  padding: 0.125rem 0 0.125rem 0.75rem;
+}
+.evidence__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.evidence__label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.evidence__badge {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-muted);
+}
+.evidence__badge--verified {
+  border-color: var(--success);
+  color: var(--success);
+}
+.evidence__badge--estimated {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+.evidence__value {
+  margin-top: 0.125rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.evidence__meta {
+  margin: 0.125rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
 /* --- degraded / error states (M7 I2) ---
  * One accessible surface. Severity is carried in TEXT + a left accent + an icon;
  * never color alone. Renders identically at 1440 / 768 / 375 (no fixed widths). */
