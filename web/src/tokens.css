@@ -1138,6 +1138,40 @@ body {
   gap: 0.5rem;
   flex-wrap: wrap;
 }
+
+/* Projection | Settings tablist (edit mode). */
+.detail__tabs {
+  display: flex;
+  flex-direction: column;
+}
+.detail__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 1.25rem;
+}
+.tabs__tab {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0.5rem 0.875rem;
+  margin-bottom: -1px;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.tabs__tab--active {
+  color: var(--brand-deep);
+  border-bottom-color: var(--brand-primary);
+}
 .narrative {
   border: 1px solid var(--line);
   border-radius: 10px;

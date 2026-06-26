@@ -20,9 +20,13 @@ test.describe("override + 409 optimistic-concurrency", () => {
     await page.goto("/p/example/edit#edit-secret");
     // Fragment secret is scrubbed from the URL after read (SECURITY.md §2.5).
     await expect(page).not.toHaveURL(/#edit-secret/);
-    await page.getByLabel(/labor %/i).fill("40");
-    await expect(page.getByTestId("save-label")).toHaveText(/all changes saved/i);
-    // 40% labor flips House of Hope to a healthier margin server-side.
+    // Settings controls live behind the Settings tab; the pct field is 0-1.
+    await page.getByRole("tab", { name: /settings/i }).click();
+    await page.getByLabel(/labor %/i).fill("0.5"); // change from the seed's 40%
+    // Proof of a SERVER recompute (no client math): the Labor-ratio KPI on the
+    // Projection tab reflects the new 50% — a value the client never computed.
+    await page.getByRole("tab", { name: /projection/i }).click();
+    await expect(page.getByText("50.0%")).toBeVisible();
     await expect(page.getByTestId("metric-capital")).toBeVisible();
   });
 
