@@ -193,3 +193,47 @@ def test_excludes_venv(tmp_path):
     files = {f["path"] for f in data["files"]}
     assert not any(".venv" in p for p in files), sorted(files)
     assert data["repo"]["test_loc"] == 87, data
+
+
+def _git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True)
+
+
+def _commit_base(repo):
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True
+    )
+    return head.stdout.strip()
+
+
+def test_diff_gate_counts_added_lines_not_whole_files(tmp_path):
+    # The diff gate scores LINES ADDED, not whole-file LOC: a behavior-preserving
+    # deletion adds no code and must pass (was a false failure under whole-file).
+    repo = _make_repo(tmp_path)
+    base = _commit_base(repo)
+    (repo / "engine" / "compute.py").unlink()  # delete 10 code lines, add nothing
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "delete code")
+    data = json.loads(_run(repo, "--diff", base).stdout)
+    assert data["diff"]["code_added"] == 0
+    assert data["diff"]["pass"] is True
+
+
+def test_diff_gate_fails_on_untested_added_code(tmp_path):
+    # Adding code with no test still fails the diff gate (the gate's real purpose).
+    repo = _make_repo(tmp_path)
+    base = _commit_base(repo)
+    (repo / "engine" / "feature.py").write_text("\n".join(f"z = {i}" for i in range(100)) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "untested code")
+    proc = _run(repo, "--diff", base)
+    data = json.loads(proc.stdout)
+    assert data["diff"]["code_added"] == 100
+    assert data["diff"]["test_added"] == 0
+    assert data["diff"]["pass"] is False
+    assert proc.returncode == 1
