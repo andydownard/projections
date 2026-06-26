@@ -88,15 +88,20 @@ class SqliteStore:
         sql += " ORDER BY updated_at DESC"
         return [dict(r) for r in self._conn.execute(sql, (owner_token_hash,))]
 
-    def create_projection(self, p: dict) -> dict:
-        cols = list(p.keys())
+    def _insert(self, table: str, row: dict) -> None:
+        """Parameterized INSERT of a full row dict. `table` is always a hard-coded
+        literal at the call site (never user input) — DB discipline preserved."""
+        cols = list(row.keys())
         placeholders = ", ".join("?" for _ in cols)
         with self._write_lock:
             self._conn.execute(
-                f"INSERT INTO projections ({', '.join(cols)}) VALUES ({placeholders})",
-                [p[c] for c in cols],
+                f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
+                [row[c] for c in cols],
             )
             self._conn.commit()
+
+    def create_projection(self, p: dict) -> dict:
+        self._insert("projections", p)
         return p
 
     def update_with_version_check(
@@ -136,14 +141,7 @@ class SqliteStore:
 
     # --- revisions ---
     def insert_revision(self, rev: dict) -> None:
-        cols = list(rev.keys())
-        placeholders = ", ".join("?" for _ in cols)
-        with self._write_lock:
-            self._conn.execute(
-                f"INSERT INTO revisions ({', '.join(cols)}) VALUES ({placeholders})",
-                [rev[c] for c in cols],
-            )
-            self._conn.commit()
+        self._insert("revisions", rev)
 
     def list_revisions(self, projection_id: str, limit: int = 50) -> list[dict]:
         return [
@@ -222,26 +220,12 @@ class SqliteStore:
 
     # --- feedback ---
     def create_feedback(self, fb: dict) -> dict:
-        cols = list(fb.keys())
-        placeholders = ", ".join("?" for _ in cols)
-        with self._write_lock:
-            self._conn.execute(
-                f"INSERT INTO feedback ({', '.join(cols)}) VALUES ({placeholders})",
-                [fb[c] for c in cols],
-            )
-            self._conn.commit()
+        self._insert("feedback", fb)
         return fb
 
     # --- intent ---
     def create_intent(self, intent: dict) -> dict:
-        cols = list(intent.keys())
-        placeholders = ", ".join("?" for _ in cols)
-        with self._write_lock:
-            self._conn.execute(
-                f"INSERT INTO intent ({', '.join(cols)}) VALUES ({placeholders})",
-                [intent[c] for c in cols],
-            )
-            self._conn.commit()
+        self._insert("intent", intent)
         return intent
 
     # --- terms gate ---
