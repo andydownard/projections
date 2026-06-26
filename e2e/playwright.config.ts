@@ -10,7 +10,13 @@ const MANAGE_SERVERS = !process.env.E2E_BASE_URL;
 export default defineConfig({
   testDir: ".",
   testMatch: "**/*.spec.ts",
-  fullyParallel: true,
+  // The webServer boots ONE FastAPI process with an in-memory SQLite DB shared by
+  // every test/project, and the override flow mutates+reseeds the single seeded
+  // `example` row. So the suite MUST run serially — parallel workers race on that
+  // shared state (and a file-backed DB corrupts). Encode it here, not as an
+  // invocation-time flag. (Future: give each worker its own DB to re-enable parallelism.)
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"], ["html", { open: "never" }]],
