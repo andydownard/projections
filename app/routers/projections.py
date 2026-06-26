@@ -29,6 +29,7 @@ from starlette.background import BackgroundTask
 
 from app import ratelimit
 from app.deps import hash_token, parse_if_match, token_matches
+from app.geo.client import GeoUpstreamError, static_map_bytes
 from app import narrative_provider
 from app.narrative import (
     GroundingError,
@@ -165,6 +166,19 @@ class AssumptionsIn(BaseModel):
     basket: Optional[str] = None
 
 
+class LocationIn(BaseModel):
+    """Resolved store location. lat/lng are typed floats so non-numeric input is
+    rejected at create (422) and can never be stored to crash the map proxy."""
+    query: Optional[str] = None
+    place_id: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    formatted_address: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
+
+
 class CreateProjectionIn(BaseModel):
     name: Optional[str] = None
     inputs: InputsIn
@@ -172,7 +186,7 @@ class CreateProjectionIn(BaseModel):
     assumptions: Optional[AssumptionsIn] = None
     demand: Optional[dict] = None
     overrides: dict = Field(default_factory=dict)
-    location: dict = Field(default_factory=dict)
+    location: LocationIn = Field(default_factory=LocationIn)
 
 
 class PatchProjectionIn(BaseModel):
@@ -262,6 +276,14 @@ def _enrich_view_model(vm: dict, location_d: dict, trade_d: dict) -> None:
             "moe": ta.get("moe"),
         })
     vm["evidence"] = evidence
+
+
+def _kpi_value(vm: dict, label: str) -> dict:
+    """The {raw, display} of a named KPI in the view-model (for the list row)."""
+    for k in vm.get("kpis") or []:
+        if isinstance(k, dict) and k.get("label") == label:
+            return k.get("value") or {"raw": 0, "display": "—"}
+    return {"raw": 0, "display": "—"}
 
 
 def _compute_result_from_dicts(
@@ -426,7 +448,7 @@ def create_projection(
         vm = _compute_view_model(body)
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
         raise HTTPException(status_code=422, detail={"error": "invalid_inputs", "message": str(exc)})
-    _enrich_view_model(vm, body.location or {}, body.trade_area.model_dump())
+    _enrich_view_model(vm, body.location.model_dump(), body.trade_area.model_dump())
 
     presented_owner = _bearer(authorization)
     minted_owner = None
@@ -449,7 +471,7 @@ def create_projection(
         "name": name,
         "model_version": vm.get("model_version", ""),
         "compute_schema_version": vm.get("compute_schema_version", ""),
-        "location_json": json.dumps(body.location or {}),
+        "location_json": json.dumps(body.location.model_dump(exclude_none=True)),
         "trade_area_json": json.dumps(body.trade_area.model_dump()),
         "inputs_json": json.dumps(body.inputs.model_dump()),
         "demand_drivers_json": json.dumps(body.demand or {}),
@@ -489,20 +511,23 @@ def list_projections(
             vm = json.loads(r.get("computed_json") or "{}")
         except json.JSONDecodeError:
             vm = {}
-        y1_rev = None
-        try:
-            y1_rev = (vm.get("kpis") or [{}])[0]
-        except Exception:
-            y1_rev = None
+        ta = vm.get("trade_area") or {}
+        loc = vm.get("location") or {}
         items.append({
             "view_slug": r["view_slug"],
             "name": r["name"],
+            "location": ta.get("geography_name") or loc.get("formatted_address") or "",
+            "basis": ta.get("basis") or "",
+            "y1_revenue": _kpi_value(vm, "Total revenue"),
+            "y1_net": _kpi_value(vm, "Net profit"),
+            "capital_required": (vm.get("metrics") or {}).get("capital")
+                                or {"raw": 0, "display": "—"},
+            "reco_tag": (vm.get("reco") or {}).get("tag") or "revise",
+            "status": r.get("status") or "active",
             "version": r["version"],
             "updated_at": r["updated_at"],
-            "reco": vm.get("reco", {}).get("tag"),
-            "y1": y1_rev,
             # lat/lng for the list-row mini-map; null when location was never resolved.
-            "location": vm.get("location"),
+            "coords": vm.get("location"),
         })
     return {"projections": items}
 
@@ -519,6 +544,41 @@ def get_projection(view_slug: str, response: Response, store: Store = Depends(ge
         vm = {}
     response.headers["ETag"] = str(row["version"])
     return {**vm, "view_slug": view_slug, "version": row["version"], "name": row["name"]}
+
+
+@router.get("/{view_slug}/staticmap")
+def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_store)):
+    """Server-proxied Google Static Map for the projection's resolved location.
+
+    The Places key is appended server-side and never reaches the browser (hard
+    rule 7). 404 when the projection has no resolved lat/lng so the client shows a
+    neutral placeholder instead of a broken image (never a map over a typed count).
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    try:
+        loc = json.loads(row.get("location_json") or "{}")
+    except json.JSONDecodeError:
+        loc = {}
+    lat, lng = loc.get("lat"), loc.get("lng")
+    if lat is None or lng is None:
+        raise HTTPException(status_code=404, detail={"error": "no_location"})
+    try:
+        lat_f, lng_f = float(lat), float(lng)
+    except (TypeError, ValueError):
+        # Unparseable stored coords -> treat as no resolved location (never a 500).
+        raise HTTPException(status_code=404, detail={"error": "no_location"})
+    kind = "detail" if size == "detail" else "thumb"
+    try:
+        img = static_map_bytes(lat_f, lng_f, kind)
+    except GeoUpstreamError:
+        raise HTTPException(status_code=502, detail={"error": "map_unavailable"})
+    return Response(
+        content=img,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.get("/{view_slug}/xlsx")

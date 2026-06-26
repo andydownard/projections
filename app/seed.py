@@ -43,7 +43,17 @@ _INPUTS = dict(
     source_of_funds="300000",
 )
 _ASSUMPTIONS = dict(labor_pct="0.40")
-_TRADE = dict(basis="city", households="31798")
+# Census provenance + a resolved location for the demo, so the example shows the
+# trade-area map and the evidence/confidence panel (not just a placeholder).
+_TRADE = dict(
+    basis="city", households="31798",
+    geography_name="Longview city", geography_fips="4843012",
+    acs_vintage="2022", households_source="census_acs", moe=412,
+)
+_LOCATION = dict(
+    place_id="seed-longview-tx", lat=32.5007, lng=-94.7405,
+    formatted_address="Longview, TX, USA",
+)
 
 
 def _utcnow() -> str:
@@ -51,13 +61,20 @@ def _utcnow() -> str:
 
 
 def example_view_model() -> dict:
+    from app.routers.projections import _enrich_view_model
+
     inputs = Inputs(**_INPUTS)
     akw = {k: v for k, v in _ASSUMPTIONS.items() if v is not None}
     result = compute(
         inputs, Assumptions(**akw), DemandDrivers(),
-        TradeArea(**_TRADE), overrides={},
+        # The engine takes only basis/households/acs_vintage; provenance is metadata.
+        TradeArea(basis=_TRADE["basis"], households=_TRADE["households"],
+                  acs_vintage=_TRADE.get("acs_vintage")),
+        overrides={},
     )
-    return result.view_model or to_view_model(result)
+    vm = result.view_model or to_view_model(result)
+    _enrich_view_model(vm, _LOCATION, _TRADE)
+    return vm
 
 
 def seed_example(store) -> None:
@@ -75,7 +92,7 @@ def seed_example(store) -> None:
         "name": "House of Hope",
         "model_version": vm.get("model_version", ""),
         "compute_schema_version": vm.get("compute_schema_version", ""),
-        "location_json": json.dumps({"query": "Longview, Texas"}),
+        "location_json": json.dumps(_LOCATION),
         "trade_area_json": json.dumps(_TRADE),
         "inputs_json": json.dumps(_INPUTS),
         "demand_drivers_json": json.dumps({}),

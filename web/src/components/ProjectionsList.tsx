@@ -6,6 +6,7 @@
 // utilitarian (heading + Create + start-from-example; no marketing illustration).
 import type { ProjectionListItem } from "../api/projections";
 import { RecoChip } from "./RecoChip";
+import { TradeAreaMap } from "./TradeAreaMap";
 
 export interface ProjectionsListProps {
   projections: ProjectionListItem[];
@@ -65,17 +66,30 @@ export function ProjectionsList({ projections, onCreate, onOpen }: ProjectionsLi
           {projections.map((p) => (
             <tr key={p.view_slug} data-testid={`projection-row-${p.view_slug}`}>
               <td>
-                <button
-                  type="button"
-                  className="list__open"
-                  aria-label={`Open ${p.name}`}
-                  onClick={() => onOpen(p.view_slug)}
-                >
-                  {p.name}
-                </button>
-                <span className="list__sub">
-                  {p.location} · {p.basis}
-                </span>
+                <div className="list__cell">
+                  <TradeAreaMap
+                    slug={p.view_slug}
+                    location={
+                      p.coords
+                        ? { lat: p.coords.lat, lng: p.coords.lng, formatted_address: p.location }
+                        : null
+                    }
+                    size="thumb"
+                  />
+                  <div>
+                    <button
+                      type="button"
+                      className="list__open"
+                      aria-label={`Open ${p.name}`}
+                      onClick={() => onOpen(p.view_slug)}
+                    >
+                      {p.name}
+                    </button>
+                    <span className="list__sub">
+                      {p.location} · {p.basis}
+                    </span>
+                  </div>
+                </div>
               </td>
               <td>{formatUpdated(p.updated_at)}</td>
               <td className="num">{p.y1_revenue.display}</td>

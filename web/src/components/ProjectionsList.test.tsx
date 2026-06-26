@@ -21,6 +21,7 @@ const item: ProjectionListItem = {
   status: "active",
   version: 7,
   updated_at: "2026-06-24T17:03:21Z",
+  coords: { lat: 32.5, lng: -94.7 },
 };
 
 describe("ProjectionsList — empty state", () => {
@@ -51,6 +52,12 @@ describe("ProjectionsList — populated", () => {
     expect(within(row).getByText("$426,911")).toBeInTheDocument();
     expect(within(row).getByText("$47,100")).toBeInTheDocument();
     expect(within(row).getByText("$277,990")).toBeInTheDocument();
+  });
+
+  it("renders a per-row trade-area mini-map when coordinates are present", () => {
+    render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
+    const row = screen.getByTestId("projection-row-p_8x");
+    expect(within(row).getByRole("img", { name: /Map of Longview, TX/i })).toBeInTheDocument();
   });
 
   it("shows the recommendation chip per row", () => {

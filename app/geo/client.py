@@ -13,7 +13,9 @@ Providers:
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -32,6 +34,56 @@ _TIMEOUT = 8.0
 
 class GeoUpstreamError(Exception):
     """A geo provider (Places/Census) failed or returned an unusable payload."""
+
+
+# --- Static Maps (server-proxied: the key never reaches the browser) ----------
+_STATIC_SIZES = {
+    "thumb": {"size": "120x80", "zoom": "11"},
+    "detail": {"size": "640x280", "zoom": "12"},
+}
+_static_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+_STATIC_CACHE_MAX = 256
+
+
+def reset_static_cache() -> None:
+    """Test hook: clear the byte cache."""
+    _static_cache.clear()
+
+
+def _get_bytes(url: str) -> bytes:
+    """Network seam for image bytes (stubbed in tests). Key-safe error wrapping."""
+    try:
+        resp = httpx.get(url, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        return resp.content
+    except (httpx.HTTPError, ValueError) as e:
+        raise GeoUpstreamError(f"static map request failed: {type(e).__name__}") from None
+
+
+def static_map_bytes(lat: float, lng: float, kind: str = "thumb") -> bytes:
+    """A Google Static Maps PNG (store pin on a brand-green marker), byte-cached
+    per (lat, lng, kind). The key is appended server-side and never leaves here."""
+    cfg = _STATIC_SIZES.get(kind, _STATIC_SIZES["thumb"])
+    cache_key = (round(float(lat), 4), round(float(lng), 4), kind)
+    cached = _static_cache.get(cache_key)
+    if cached is not None:
+        _static_cache.move_to_end(cache_key)  # LRU touch
+        return cached
+    params = {
+        "center": f"{lat},{lng}",
+        "zoom": cfg["zoom"],
+        "size": cfg["size"],
+        "scale": "2",
+        "markers": f"color:0x35644F|{lat},{lng}",
+        "key": _places_key(),
+    }
+    url = "https://maps.googleapis.com/maps/api/staticmap?" + urlencode(params)
+    img = _get_bytes(url)
+    _static_cache[cache_key] = img
+    _static_cache.move_to_end(cache_key)
+    if len(_static_cache) > _STATIC_CACHE_MAX:
+        _static_cache.popitem(last=False)  # evict least-recently-used
+    return img
 
 
 def _get_json(url: str, params: dict) -> Any:
