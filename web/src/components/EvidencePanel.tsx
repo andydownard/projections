@@ -27,10 +27,10 @@ export function EvidencePanel({ evidence }: EvidencePanelProps) {
     <section className="evidence" aria-label="Evidence and confidence" data-testid="evidence-panel">
       <h3 className="evidence__heading">Evidence &amp; confidence</h3>
       <ul className="evidence__list">
-        {evidence.map((e) => {
+        {evidence.map((e, i) => {
           const verified = e.confidence === "verified";
           return (
-            <li key={e.field} className="evidence__item">
+            <li key={`${e.field}-${i}`} className="evidence__item">
               <div className="evidence__head">
                 <span className="evidence__label">{e.label}</span>
                 <span

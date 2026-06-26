@@ -166,6 +166,19 @@ class AssumptionsIn(BaseModel):
     basket: Optional[str] = None
 
 
+class LocationIn(BaseModel):
+    """Resolved store location. lat/lng are typed floats so non-numeric input is
+    rejected at create (422) and can never be stored to crash the map proxy."""
+    query: Optional[str] = None
+    place_id: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    formatted_address: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
+
+
 class CreateProjectionIn(BaseModel):
     name: Optional[str] = None
     inputs: InputsIn
@@ -173,7 +186,7 @@ class CreateProjectionIn(BaseModel):
     assumptions: Optional[AssumptionsIn] = None
     demand: Optional[dict] = None
     overrides: dict = Field(default_factory=dict)
-    location: dict = Field(default_factory=dict)
+    location: LocationIn = Field(default_factory=LocationIn)
 
 
 class PatchProjectionIn(BaseModel):
@@ -435,7 +448,7 @@ def create_projection(
         vm = _compute_view_model(body)
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
         raise HTTPException(status_code=422, detail={"error": "invalid_inputs", "message": str(exc)})
-    _enrich_view_model(vm, body.location or {}, body.trade_area.model_dump())
+    _enrich_view_model(vm, body.location.model_dump(), body.trade_area.model_dump())
 
     presented_owner = _bearer(authorization)
     minted_owner = None
@@ -458,7 +471,7 @@ def create_projection(
         "name": name,
         "model_version": vm.get("model_version", ""),
         "compute_schema_version": vm.get("compute_schema_version", ""),
-        "location_json": json.dumps(body.location or {}),
+        "location_json": json.dumps(body.location.model_dump(exclude_none=True)),
         "trade_area_json": json.dumps(body.trade_area.model_dump()),
         "inputs_json": json.dumps(body.inputs.model_dump()),
         "demand_drivers_json": json.dumps(body.demand or {}),
@@ -551,9 +564,14 @@ def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_s
     lat, lng = loc.get("lat"), loc.get("lng")
     if lat is None or lng is None:
         raise HTTPException(status_code=404, detail={"error": "no_location"})
+    try:
+        lat_f, lng_f = float(lat), float(lng)
+    except (TypeError, ValueError):
+        # Unparseable stored coords -> treat as no resolved location (never a 500).
+        raise HTTPException(status_code=404, detail={"error": "no_location"})
     kind = "detail" if size == "detail" else "thumb"
     try:
-        img = static_map_bytes(lat, lng, kind)
+        img = static_map_bytes(lat_f, lng_f, kind)
     except GeoUpstreamError:
         raise HTTPException(status_code=502, detail={"error": "map_unavailable"})
     return Response(

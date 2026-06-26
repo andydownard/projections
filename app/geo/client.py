@@ -13,6 +13,7 @@ Providers:
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 from typing import Any, Optional
 from urllib.parse import urlencode
 
@@ -40,7 +41,7 @@ _STATIC_SIZES = {
     "thumb": {"size": "120x80", "zoom": "11"},
     "detail": {"size": "640x280", "zoom": "12"},
 }
-_static_cache: dict[tuple, bytes] = {}
+_static_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
 _STATIC_CACHE_MAX = 256
 
 
@@ -66,6 +67,7 @@ def static_map_bytes(lat: float, lng: float, kind: str = "thumb") -> bytes:
     cache_key = (round(float(lat), 4), round(float(lng), 4), kind)
     cached = _static_cache.get(cache_key)
     if cached is not None:
+        _static_cache.move_to_end(cache_key)  # LRU touch
         return cached
     params = {
         "center": f"{lat},{lng}",
@@ -77,8 +79,10 @@ def static_map_bytes(lat: float, lng: float, kind: str = "thumb") -> bytes:
     }
     url = "https://maps.googleapis.com/maps/api/staticmap?" + urlencode(params)
     img = _get_bytes(url)
-    if len(_static_cache) < _STATIC_CACHE_MAX:
-        _static_cache[cache_key] = img
+    _static_cache[cache_key] = img
+    _static_cache.move_to_end(cache_key)
+    if len(_static_cache) > _STATIC_CACHE_MAX:
+        _static_cache.popitem(last=False)  # evict least-recently-used
     return img
 
 

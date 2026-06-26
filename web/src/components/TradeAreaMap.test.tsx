@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { TradeAreaMap } from "./TradeAreaMap";
@@ -22,6 +22,19 @@ describe("TradeAreaMap", () => {
 
   it("shows a placeholder (never a broken image) when there is no location", () => {
     render(<TradeAreaMap slug="abc" location={null} size="thumb" />);
+    expect(screen.getByRole("img", { name: /no mapped location/i })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /Map of/i })).not.toBeInTheDocument();
+  });
+
+  it("falls back to the placeholder when the map image fails to load (no broken glyph)", () => {
+    render(
+      <TradeAreaMap
+        slug="abc"
+        location={{ lat: 32.5, lng: -94.7, formatted_address: "Longview, TX" }}
+        size="detail"
+      />,
+    );
+    fireEvent.error(screen.getByRole("img", { name: /Map of Longview, TX/i }));
     expect(screen.getByRole("img", { name: /no mapped location/i })).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: /Map of/i })).not.toBeInTheDocument();
   });

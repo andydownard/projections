@@ -21,8 +21,8 @@ def client(monkeypatch):
     return TestClient(app)
 
 
-def _create(client, location):
-    body = {
+def _body(location):
+    return {
         "name": "House of Hope",
         "inputs": {
             "org_name": "House of Hope", "city": "Longview, Texas",
@@ -35,7 +35,17 @@ def _create(client, location):
         "trade_area": {"basis": "city", "households": "31798"},
         "location": location,
     }
-    return client.post("/api/projections", json=body).json()
+
+
+def _create(client, location):
+    return client.post("/api/projections", json=_body(location)).json()
+
+
+def test_create_rejects_non_numeric_coords(client):
+    # Non-numeric lat/lng are rejected at the typed contract boundary (422) so they
+    # can never be stored to crash the map proxy with a 500.
+    r = client.post("/api/projections", json=_body({"lat": "abc", "lng": "xyz"}))
+    assert r.status_code == 422
 
 
 def test_staticmap_returns_png_for_resolved_location(client):

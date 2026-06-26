@@ -5,6 +5,8 @@
 // address — a manual/unresolved trade area shows a neutral placeholder, never a
 // map asserting a location that does not exist. Descriptive alt text; the map is
 // evidence for the top driver, not decoration, and never carries meaning alone.
+import { useEffect, useState } from "react";
+
 import type { LocationInfo } from "../api/viewModel";
 
 export interface TradeAreaMapProps {
@@ -16,7 +18,7 @@ export interface TradeAreaMapProps {
 }
 
 const DIMS = {
-  thumb: { w: 120, h: 80 },
+  thumb: { w: 64, h: 44 },
   detail: { w: 640, h: 280 },
 } as const;
 
@@ -27,7 +29,13 @@ export function TradeAreaMap({
   geography,
   size = "detail",
 }: TradeAreaMapProps) {
-  if (!location || location.lat == null || location.lng == null) {
+  // If the proxy errors (502 quota / 404 race), fall back to the placeholder
+  // instead of the browser's broken-image glyph. Reset when the slug changes.
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [slug]);
+
+  const hasLocation = !!location && location.lat != null && location.lng != null;
+  if (!hasLocation || failed) {
     return (
       <div className={`map map--empty map--${size}`} role="img" aria-label="No mapped location">
         <span className="map__placeholder-text">No mapped location</span>
@@ -35,7 +43,7 @@ export function TradeAreaMap({
     );
   }
   const dims = DIMS[size];
-  const where = geography ?? location.formatted_address ?? "the store location";
+  const where = geography ?? location?.formatted_address ?? "the store location";
   return (
     <figure className={`map map--${size}`}>
       <img
@@ -45,6 +53,7 @@ export function TradeAreaMap({
         loading="lazy"
         width={dims.w}
         height={dims.h}
+        onError={() => setFailed(true)}
       />
       {size === "detail" && geography && (
         <figcaption className="map__caption">
