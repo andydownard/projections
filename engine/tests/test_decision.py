@@ -95,6 +95,18 @@ def test_reco_tag_is_semantic_enum(canonical_result):
     assert canonical_result.decision.reco_tag in valid
 
 
+def test_efficiency_ratio_kpis_present_and_guarded(design_parity_result):
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(design_parity_result)
+    labels = {k["label"]: k for k in vm["kpis"]}
+    # The three contract KPIs are emitted (sales/sqft ~ $61 design headline).
+    assert labels["Sales / sq ft"]["value"]["raw"] > 0
+    assert "$" in labels["Sales / sq ft"]["value"]["display"]
+    # Ratios are percents in (0, 1) for a viable case.
+    assert 0 < labels["Occupancy ratio"]["value"]["raw"] < 1
+    assert 0 < labels["Labor ratio"]["value"]["raw"] < 1
+
+
 def test_canonical_60_labor_is_not_proceed(canonical_result):
     # A loss case must not say "proceed".
     assert canonical_result.decision.reco_tag != "proceed"

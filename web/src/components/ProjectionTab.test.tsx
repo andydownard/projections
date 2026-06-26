@@ -63,19 +63,24 @@ describe("ProjectionTab", () => {
     expect(screen.getByText(/worst-case trough is covered/i)).toBeInTheDocument();
   });
 
-  it("renders the three decision tiles, each with value + downside/confidence detail", () => {
+  it("renders the three decision tiles, each value with a tappable Why? reason", async () => {
+    const user = userEvent.setup();
     render(<ProjectionTab vm={vm()} />);
+
     const cap = screen.getByTestId("tile-capital");
     expect(cap).toHaveTextContent("$277,990");
-    expect(cap).toHaveTextContent(/reserve/i); // reasonCapital detail
+    await user.click(within(cap).getByRole("button", { name: /why/i }));
+    expect(cap).toHaveTextContent(/reserve/i); // reasonCapital revealed
 
     const be = screen.getByTestId("tile-breakeven");
     expect(be).toHaveTextContent("Month 5");
-    expect(be).toHaveTextContent(/operating net/i); // reasonBreakeven detail
+    await user.click(within(be).getByRole("button", { name: /why/i }));
+    expect(be).toHaveTextContent(/operating net/i);
 
     const gap = screen.getByTestId("tile-cashgap");
     expect(gap).toHaveTextContent("($219,990)");
-    expect(gap).toHaveTextContent(/cumulative cash/i); // reasonGap detail
+    await user.click(within(gap).getByRole("button", { name: /why/i }));
+    expect(gap).toHaveTextContent(/cumulative cash/i);
   });
 
   it("renders the monthly cash-flow SVG with a break-even marker", () => {

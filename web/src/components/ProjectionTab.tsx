@@ -15,7 +15,7 @@
 // class is a SEMANTIC token class (cell--input/computed/overridden/estimated) so
 // meaning never depends on the brand layer and never relies on color alone — the
 // legend names each state in text and the Estimated marker is an icon (tokens.css).
-import type { KeyboardEvent } from "react";
+import { useState, type KeyboardEvent } from "react";
 
 import { RecoChip } from "./RecoChip";
 import { CashflowChart } from "./CashflowChart";
@@ -89,6 +89,17 @@ function shareFor(rows: Row[], year: 1 | 2 | 3): string | null {
 export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: ProjectionTabProps) {
   const { reco, metrics, kpis, monthly, breakevenMonth, rows } = vm;
 
+  // Each decision tile's reason is a tappable "Why?" disclosure (touch-safe; no
+  // hover). Independent toggles so a board member can compare reasons side by side.
+  const [openReasons, setOpenReasons] = useState<Set<string>>(() => new Set());
+  const toggleReason = (id: string) =>
+    setOpenReasons((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   return (
     <div className="projection-tab" data-testid="projection-tab">
       {/* Recompute / autosave live-region — a settle is announced to SR users. */}
@@ -131,7 +142,22 @@ export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: Projecti
               <dt className="decision-tile__label">{t.label}</dt>
               <dd className="decision-tile__value num">{t.value(metrics).display}</dd>
               {t.reason(metrics) && (
-                <p className="decision-tile__reason">{t.reason(metrics)}</p>
+                <div className="decision-tile__reason-wrap">
+                  <button
+                    type="button"
+                    className="decision-tile__why"
+                    aria-expanded={openReasons.has(t.testid)}
+                    aria-controls={`${t.testid}-reason`}
+                    onClick={() => toggleReason(t.testid)}
+                  >
+                    Why?
+                  </button>
+                  {openReasons.has(t.testid) && (
+                    <p className="decision-tile__reason" id={`${t.testid}-reason`} role="note">
+                      {t.reason(metrics)}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           ))}

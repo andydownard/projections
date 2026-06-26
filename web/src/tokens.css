@@ -808,10 +808,25 @@ body {
 }
 
 .decision-tile__reason {
-  margin: 0;
+  margin: 0.125rem 0 0;
   font-size: 0.6875rem;
   color: var(--text-muted);
   line-height: 1.4;
+}
+.decision-tile__reason-wrap {
+  margin-top: 2px;
+}
+.decision-tile__why {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--brand-primary);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 /* --- 3-year table --- */
