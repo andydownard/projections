@@ -1,6 +1,6 @@
 {
   "breakevenMonth": 5,
-  "compute_schema_version": "1.0.0",
+  "compute_schema_version": "1.1.0",
   "evidence": [],
   "flags": {
     "model_upgrade_available": false,
@@ -36,6 +36,15 @@
     },
     {
       "color": "text",
+      "label": "Sales / sq ft",
+      "sub": "Year 1",
+      "value": {
+        "display": "$61",
+        "raw": 60.99110784
+      }
+    },
+    {
+      "color": "text",
       "label": "Capital required",
       "sub": "incl. reserve",
       "value": {
@@ -59,6 +68,24 @@
       "value": {
         "display": "~5.0",
         "raw": 5.036032269062973
+      }
+    },
+    {
+      "color": "text",
+      "label": "Occupancy ratio",
+      "sub": "rent / revenue",
+      "value": {
+        "display": "28.1%",
+        "raw": 0.28107141762088617
+      }
+    },
+    {
+      "color": "text",
+      "label": "Labor ratio",
+      "sub": "payroll / revenue",
+      "value": {
+        "display": "40.0%",
+        "raw": 0.4
       }
     },
     {

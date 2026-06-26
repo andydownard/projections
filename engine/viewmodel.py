@@ -74,10 +74,20 @@ def to_view_model(result):
 
     # ---- KPIs
     y1 = annual[1]
+    # Operating-efficiency ratios derived from existing engine outputs (no new
+    # math); N/A-guarded so a 0-revenue / 0-salesfloor case never divides by zero.
+    rev1 = D(str(y1.total_rev))
+    salesfloor_sqft = D(result.inputs.building_sqft) * D(result.inputs.salesfloor_pct)
+    # N/A on 0 revenue too (ENGINE_CONTRACT §12.4) — consistent with margin/occ/labor.
+    sales_per_sqft = (rev1 / salesfloor_sqft) if (salesfloor_sqft != 0 and rev1 != 0) else None
+    occ_ratio = (D(str(y1.expenses.get("Rent", 0))) / rev1) if rev1 != 0 else None
+    labor_ratio = (D(str(y1.expenses.get("Payroll", 0))) / rev1) if rev1 != 0 else None
     kpis = [
         {"label": "Total revenue", "value": money_view(y1.total_rev), "sub": "Year 1", "color": "text"},
         {"label": "Net profit", "value": money_view(y1.net), "sub": "Year 1", "color": "text"},
         {"label": "Net margin", "value": _pct_or_na(y1.margin), "sub": "Year 1", "color": "text"},
+        {"label": "Sales / sq ft", "value": _money_or_na(sales_per_sqft),
+         "sub": "Year 1", "color": "text"},
         {"label": "Capital required", "value": money_view(dec.startup_capital_required),
          "sub": "incl. reserve", "color": "text"},
         {"label": "Break-even month",
@@ -86,6 +96,10 @@ def to_view_model(result):
          "sub": "operating net", "color": "text"},
         {"label": "Payback (yrs)", "value": _money_payback(dec.simple_payback_years),
          "sub": "startup / Y1 net", "color": "text"},
+        {"label": "Occupancy ratio", "value": _pct_or_na(occ_ratio),
+         "sub": "rent / revenue", "color": "text"},
+        {"label": "Labor ratio", "value": _pct_or_na(labor_ratio),
+         "sub": "payroll / revenue", "color": "text"},
         {"label": "Revenue CAGR", "value": _pct_or_na(dec.revenue_cagr),
          "sub": "Y1->Y3", "color": "text"},
     ]

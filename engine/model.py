@@ -6,7 +6,7 @@ the point of use; these module constants name the *default* assumption values.
 """
 
 MODEL_VERSION = "2.1.0"          # math changes => bump (2.1.0: capital double-count fix)
-COMPUTE_SCHEMA_VERSION = "1.0.0"  # view-model shape changes => bump
+COMPUTE_SCHEMA_VERSION = "1.1.0"  # view-model shape changes => bump (1.1.0: +sales/sqft, occupancy & labor ratio KPIs)
 
 # --- demand engine
 DONATIONS_PER_HH_PER_YEAR = 3        # §7.3

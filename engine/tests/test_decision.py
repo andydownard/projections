@@ -95,6 +95,37 @@ def test_reco_tag_is_semantic_enum(canonical_result):
     assert canonical_result.decision.reco_tag in valid
 
 
+def test_efficiency_ratio_kpis_present_and_guarded(design_parity_result):
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(design_parity_result)
+    labels = {k["label"]: k for k in vm["kpis"]}
+    # The three contract KPIs are emitted (sales/sqft ~ $61 design headline).
+    assert labels["Sales / sq ft"]["value"]["raw"] > 0
+    assert "$" in labels["Sales / sq ft"]["value"]["display"]
+    # Ratios are percents in (0, 1) for a viable case.
+    assert 0 < labels["Occupancy ratio"]["value"]["raw"] < 1
+    assert 0 < labels["Labor ratio"]["value"]["raw"] < 1
+
+
+def test_efficiency_kpis_are_na_when_revenue_is_zero():
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    from engine.viewmodel import to_view_model
+    # 0% share -> 0 donations -> 0 revenue: the ratio KPIs must be explicit N/A,
+    # never $0 / 0% masquerading as a value (ENGINE_CONTRACT §12.4; trap #2).
+    inputs = Inputs(
+        org_name="Zero", city="x", opening_status="pre_launch",
+        share_y1="0", share_y2="0", share_y3="0", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    labels = {k["label"]: k for k in to_view_model(res)["kpis"]}
+    for lbl in ("Sales / sq ft", "Occupancy ratio", "Labor ratio"):
+        assert labels[lbl]["value"]["raw"] is None, lbl
+        assert labels[lbl]["value"]["display"] == "N/A", lbl
+
+
 def test_canonical_60_labor_is_not_proceed(canonical_result):
     # A loss case must not say "proceed".
     assert canonical_result.decision.reco_tag != "proceed"
