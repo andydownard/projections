@@ -101,3 +101,25 @@ def test_golden_gate_with_payroll_override(canonical_inputs, tmp_path):
         overrides={"Payroll#1": {"value": "250000", "note": "2 hires", "ts": "t"}},
     )
     assert _reconcile(res, tmp_path) >= 30
+
+
+def test_golden_gate_loss_case_recalcs_clean(tmp_path):
+    # The Grace-Mission loss case (§12.4): a negative-Y1-net fixture with an
+    # overridden Payroll. The guarded blank-string paths — payback
+    # =IF(net<=0,"",...) — only exist on the loss path, so this is the fixture that
+    # proves LibreOffice recalcs them without a #DIV/0! (zero formula errors).
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+
+    inputs = Inputs(
+        org_name="Grace Mission", city="x", opening_status="pre_launch",
+        share_y1="0.02", share_y2="0.02", share_y3="0.02", donation_value="74",
+        building_sqft="8000", salesfloor_pct="0.70", occupancy_annual="400000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(
+        inputs, Assumptions(), DemandDrivers(),
+        TradeArea(basis="city", households="20000"),
+        overrides={"Payroll#1": {"value": "250000", "note": "x", "ts": "t"}},
+    )
+    assert res.annual[1].net < 0, "fixture must be a loss case"
+    assert _reconcile(res, tmp_path) >= 30
