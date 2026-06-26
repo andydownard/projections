@@ -18,43 +18,10 @@ import sys
 
 import openpyxl
 import pytest
-from fastapi.testclient import TestClient
 
-from app.main import create_app
-from app.store import get_store
-from app.store.sqlite import SqliteStore
+from app.tests.conftest import VALID_BODY
 
 XLSX_CT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-VALID_BODY = {
-    "name": "House of Hope",
-    "inputs": {
-        "org_name": "House of Hope",
-        "city": "Longview, Texas",
-        "opening_status": "pre_launch",
-        "share_y1": "0.06", "share_y2": "0.08", "share_y3": "0.10",
-        "donation_value": "74", "building_sqft": "10000", "salesfloor_pct": "0.70",
-        "source_of_funds": "300000", "occupancy_annual": "120000",
-        "lease_type": "nnn", "nnn_opex_annual": "0",
-    },
-    "trade_area": {"basis": "city", "households": "31798"},
-    "assumptions": {"labor_pct": "0.60"},
-}
-
-
-@pytest.fixture()
-def store():
-    s = SqliteStore(":memory:")
-    s.migrate()
-    return s
-
-
-@pytest.fixture()
-def client(store):
-    app = create_app()
-    app.dependency_overrides[get_store] = lambda: store
-    return TestClient(app)
-
 
 def _create(client, body=None):
     return client.post("/api/projections", json=body or VALID_BODY)
