@@ -40,8 +40,8 @@
       "label": "Capital required",
       "sub": "incl. reserve",
       "value": {
-        "display": "$560,440",
-        "raw": 560439.7347072
+        "display": "$321,940",
+        "raw": 321939.7347072
       }
     },
     {
@@ -78,8 +78,8 @@
       "raw": 9
     },
     "capital": {
-      "display": "$560,440",
-      "raw": 560439.7347072
+      "display": "$321,940",
+      "raw": 321939.7347072
     },
     "cashGap": {
       "display": "($296,940)",
@@ -89,7 +89,7 @@
     "reasonCapital": "One-time startup + worst-case cash trough + reserve.",
     "reasonGap": "Most-negative cumulative cash across the first year."
   },
-  "model_version": "2.0.0",
+  "model_version": "2.1.0",
   "monthly": [
     {
       "cumulativeCash": {
@@ -761,5 +761,5 @@
     "suppliesPct": 0.05
   },
   "staleNodes": [],
-  "version": "2.0.0"
+  "version": "2.1.0"
 }

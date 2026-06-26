@@ -76,7 +76,7 @@ The PRD calls the Python engine "the single math authority." **As-built it is no
 | Marketing & outreach | none | **% of revenue, default 3.75%** (new line) | **NEW** |
 | Rent escalator | none | **`rent_y1 × (1+escalator)^(y-1)`, escalator 3.0%, Y2–Y3** | **NEW** |
 | Monthly M0–M12 cash-flow | none | S-curve donation ramp, hire-date payroll, timed startup outflows; **Year-1 annual = roll-up of the 12 months** (PRD §10) | **NEW** |
-| Decision metrics | none | break-even month; **capital required = Σ startup + \|peak cash shortfall\| + reserve buffer**; first-year cash gap; runway; sensitivity (PRD §12) | **NEW** |
+| Decision metrics | none | break-even month; **capital required = \|peak cash shortfall\| + reserve buffer** (the monthly trough already embeds startup; never add it twice); first-year cash gap; runway; sensitivity (PRD §12) | **NEW** |
 | Override DAG | none | topological resolve; **no upstream back-solve**; derived rows/KPIs **non-pinnable** (server-enforced); key `"{node}#{year}"` (PRD §14) | **NEW** |
 | Edge-case N/A | unguarded → `#DIV/0!` | explicit `null` + `flags` map; Excel `IF(denom=0,"",num/denom)` (PRD §12.4) | **NEW** |
 | Output shape | positional tuples | the **Appendix-D view-model** as native output (below) | **NEW** |

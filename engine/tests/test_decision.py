@@ -15,11 +15,26 @@ def test_first_year_cash_gap_is_most_negative_cumulative(canonical_result):
     assert D(str(dec.first_year_cash_gap)) <= 0
 
 
-def test_capital_required_includes_reserve_buffer(canonical_result):
+def test_capital_required_is_peak_shortfall_plus_reserve(canonical_result):
+    # The monthly trough already embeds the M0 startup outflow, so capital required
+    # = |peak cash shortfall| + reserve buffer — startup is NOT added a second time
+    # (regression guard for the §6.1 double-count). startup_total must NOT appear.
     dec = canonical_result.decision
     peak_shortfall = abs(min(Decimal("0"), D(str(dec.first_year_cash_gap))))
-    expected = D(str(canonical_result.startup_total)) + peak_shortfall + Decimal("25000")
-    assert D(str(dec.startup_capital_required)) == expected
+    assert D(str(dec.startup_capital_required)) == peak_shortfall + Decimal("25000")
+    # And the doubled value is strictly larger — prove we are not emitting it.
+    doubled = D(str(canonical_result.startup_total)) + peak_shortfall + Decimal("25000")
+    assert D(str(dec.startup_capital_required)) < doubled
+
+
+def test_design_parity_capital_matches_appendix_d_headline(design_parity_result):
+    # Contract anchor (ENGINE_CONTRACT §6.1 / DESIGN_PROMPT): the 40% design-parity
+    # case is the prototype headline — reco "proceed" and capital ≈ $278k (the board
+    # screenshots show ~$277,990; the monthly model lands a touch higher). A range,
+    # not a to-the-dollar match, since the prototype used a different calc.
+    cap = D(str(design_parity_result.decision.startup_capital_required))
+    assert Decimal("275000") <= cap <= Decimal("282000")
+    assert design_parity_result.decision.reco_tag == "proceed"
 
 
 def test_payback_null_when_y1_net_not_positive(canonical_result):

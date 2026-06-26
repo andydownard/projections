@@ -39,8 +39,8 @@
       "label": "Capital required",
       "sub": "incl. reserve",
       "value": {
-        "display": "$517,946",
-        "raw": 517946.467597776
+        "display": "$279,446",
+        "raw": 279446.467597776
       }
     },
     {
@@ -77,18 +77,18 @@
       "raw": 5
     },
     "capital": {
-      "display": "$517,946",
-      "raw": 517946.467597776
+      "display": "$279,446",
+      "raw": 279446.467597776
     },
     "cashGap": {
       "display": "($254,446)",
       "raw": -254446.467597776
     },
     "reasonBreakeven": "First month operating net turns and stays non-negative.",
-    "reasonCapital": "Capital required exceeds the stated source of funds.",
+    "reasonCapital": "One-time startup + worst-case cash trough + reserve.",
     "reasonGap": "Most-negative cumulative cash across the first year."
   },
-  "model_version": "2.0.0",
+  "model_version": "2.1.0",
   "monthly": [
     {
       "cumulativeCash": {
@@ -340,9 +340,9 @@
   ],
   "overrides": [],
   "reco": {
-    "headline": "Raise cash.",
-    "sub": "Capital required exceeds your committed funds.",
-    "tag": "raise_cash"
+    "headline": "Proceed.",
+    "sub": "Positive Year-1 cash trajectory; capital need within funds; ratios in band.",
+    "tag": "proceed"
   },
   "rows": [
     {
@@ -760,5 +760,5 @@
     "suppliesPct": 0.05
   },
   "staleNodes": [],
-  "version": "2.0.0"
+  "version": "2.1.0"
 }

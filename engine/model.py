@@ -5,7 +5,7 @@ constant here. Money/percent literals are kept as strings or exact Decimals at
 the point of use; these module constants name the *default* assumption values.
 """
 
-MODEL_VERSION = "2.0.0"          # math changes => bump
+MODEL_VERSION = "2.1.0"          # math changes => bump (2.1.0: capital double-count fix)
 COMPUTE_SCHEMA_VERSION = "1.0.0"  # view-model shape changes => bump
 
 # --- demand engine
