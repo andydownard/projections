@@ -37,7 +37,7 @@ def test_canonical_is_a_loss_case():
     # margin display negative (parentheses) and reco is not proceed.
     assert vm["rows"][-1]["y1"]["display"].startswith("(")
     assert vm["reco"]["tag"] != "proceed"
-    assert vm["model_version"] == "2.0.0"
+    assert vm["model_version"] == "2.1.0"
 
 
 def test_design_parity_reproduces_headline():

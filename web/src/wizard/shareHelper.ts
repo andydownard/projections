@@ -142,8 +142,23 @@ export interface ServerCreateBody {
     lease_type: LeaseType;
     nnn_opex_annual: string;
   };
-  trade_area: { basis: TradeAreaBasis; households: string };
-  location: { query: string };
+  trade_area: {
+    basis: TradeAreaBasis;
+    households: string;
+    // Places->Census provenance (optional; server persists + emits it).
+    geography_name?: string;
+    geography_fips?: string;
+    acs_vintage?: string;
+    households_source?: string;
+    moe?: number | null;
+  };
+  location: {
+    query: string;
+    place_id?: string;
+    lat?: number;
+    lng?: number;
+    formatted_address?: string;
+  };
   terms_accepted: boolean;
 }
 

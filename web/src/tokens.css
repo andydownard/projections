@@ -24,6 +24,9 @@
   --text-muted: #5b655f;
 
   --focus-ring: 2px solid var(--brand-primary);
+
+  /* Shared content frame: the topbar inner row and the main column align to it. */
+  --frame: 72rem;
 }
 
 * {
@@ -45,21 +48,104 @@ body {
 
 :focus-visible {
   outline: var(--focus-ring);
-  outline-offset: -2px;
+  /* Positive offset so the ring is never clipped inside overflow:hidden parents. */
+  outline-offset: 2px;
 }
 
-.topbar {
+/* --- app shell: one centered content column under a sticky branded header --- */
+.app {
+  min-height: 100vh;
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
+  flex-direction: column;
+  background: var(--surface-alt);
+}
+
+.app__main {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: var(--frame);
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 4rem;
+}
+.app__main:focus {
+  outline: none;
+}
+
+/* Skip link: off-screen until focused, then pinned top-left over the header. */
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: 0.5rem;
+  z-index: 100;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--brand-primary);
+  border-radius: 8px;
+  color: var(--brand-deep);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-150%);
+  transition: transform 0.15s ease;
+}
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.notfound {
+  padding: 3rem 1.25rem;
+  color: var(--text-muted);
+}
+
+/* --- topbar: sticky, brand-led, inner row aligned to the content frame --- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 
+.topbar__inner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: var(--frame);
+  margin: 0 auto;
+  padding: 0.625rem 1.25rem;
+  min-height: 56px;
+}
+
+.topbar__home {
+  display: inline-flex;
+  align-items: center;
+  color: var(--brand-primary);
+  text-decoration: none;
+  border-radius: 6px;
+}
+
+.topbar__logo {
+  display: block;
+  height: 22px;
+  width: auto;
+}
+
 .topbar__brand {
   font-weight: 600;
-  color: var(--brand-deep);
+  font-size: 0.875rem;
+  color: var(--text);
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--line);
+}
+
+.topbar__spacer {
+  flex: 1 1 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skip-link {
+    transition: none;
+  }
 }
 
 .chip {
@@ -174,8 +260,9 @@ body {
 
 /* --- create wizard (SLICE 2) --- */
 .wizard {
-  padding: 1rem;
-  max-width: 44rem;
+  padding: 0;
+  max-width: 34rem;
+  margin: 0 auto;
 }
 
 .wizard__head {
@@ -183,6 +270,149 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+/* Contextual page intro (title + lede) — the brand lives once, in the topbar. */
+.wizard__intro {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-bottom: 1.5rem;
+}
+.wizard__intro h1 {
+  margin: 0;
+  font-size: 1.625rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text);
+}
+.wizard__lede {
+  margin: 0;
+  max-width: 46ch;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* The express create form: a calm single column of label-above-input fields, all
+ * the same width so the inputs share one left AND right edge (tight alignment). */
+.wizard__form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.125rem;
+  max-width: 20rem;
+}
+
+.wizard__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wizard__field > input,
+.wizard__field > select {
+  height: 40px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.75rem;
+  background: var(--surface);
+  font-size: 0.9375rem;
+  font-weight: 400;
+  color: var(--text);
+}
+.wizard__field > input::placeholder {
+  color: var(--text-muted);
+}
+/* Numeric inputs: tabular and right-aligned so values share one right edge and
+ * read down the column like a ledger (the form caps width; no per-input cap). */
+.wizard__field > input[type="number"] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Result view (decision banner + KPI strip + cash-flow + export) after Generate. */
+.wizard__result {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.wizard__rent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  max-width: 16rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.wizard__rent input {
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.75rem;
+  background: var(--surface);
+  font-size: 0.9375rem;
+  font-weight: 400;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Decision-banner metric cells (the <dl> the banner renders) — mirrors the
+ * .decision-tile pattern so the verdict + the three decision numbers read as one
+ * finance-grade artifact. SEMANTIC tokens only; the tag color is on the banner. */
+.decision-banner__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border-left: 1px solid var(--line);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 22px;
+  border-right: 1px solid var(--line);
+  max-width: 14rem;
+}
+.metric:last-child {
+  border-right: none;
+}
+
+.metric__label {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metric__value {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Below 560px the metric cells stack under the verdict instead of crowding. */
+@media (max-width: 560px) {
+  .decision-banner__metrics {
+    border-left: none;
+    border-top: 1px solid var(--line);
+    width: 100%;
+  }
+  .metric {
+    max-width: none;
+  }
 }
 
 .wizard__step {
@@ -293,6 +523,101 @@ body {
   align-items: flex-start;
   gap: 0.5rem;
   font-size: 0.8125rem;
+}
+
+/* --- address autocomplete + Census-derived households (M3 location) --------- */
+.places {
+  position: relative;
+}
+
+.places__field {
+  width: 100%;
+}
+
+.places__households {
+  gap: 0.5rem;
+}
+
+.places__status {
+  margin: 0.375rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.places__list {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  top: 100%;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  max-height: 15rem;
+  overflow-y: auto;
+}
+
+.places__option {
+  padding: 0.5rem 0.625rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: var(--text);
+  cursor: pointer;
+}
+.places__option--active {
+  background: var(--surface-alt);
+}
+
+/* Households block: a flex column (via .wizard__field) of label, basis toggle,
+ * input, and the provenance line. */
+.places__households-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.places__basis {
+  align-self: flex-start;
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.places__basis-btn {
+  appearance: none;
+  border: none;
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+}
+.places__basis-btn + .places__basis-btn {
+  border-left: 1px solid var(--line);
+}
+.places__basis-btn--on {
+  background: var(--brand-primary);
+  color: #ffffff;
+}
+
+.places__provenance {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.places__provenance--edited {
+  color: var(--brand-deep);
+}
+.places__provenance--error {
+  color: var(--warning);
 }
 
 /* --- Settings & assumptions tab (SLICE 4) --- */
@@ -652,6 +977,144 @@ body {
   stroke: var(--success);
   stroke-width: 1.5;
   stroke-dasharray: 4 3;
+}
+
+/* --- detail page: cash-flow dual-encoding, monthly table, shell (crown jewel) - */
+.cashflow-chart {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.cashflow-chart__area {
+  fill: var(--brand-primary);
+  opacity: 0.08;
+}
+.cashflow-chart__bar {
+  fill: var(--success);
+  opacity: 0.5;
+}
+.cashflow-chart__bar--neg {
+  fill: var(--error);
+}
+.cashflow-chart__trough {
+  fill: var(--surface);
+  stroke: var(--error);
+  stroke-width: 2;
+}
+.cashflow-chart__tick {
+  fill: var(--text-muted);
+  font-size: 11px;
+  text-anchor: middle;
+}
+.cashflow-chart__caption {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+.cashflow-chart__caption strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.cashflow-table__scroll {
+  overflow-x: auto;
+}
+.cashflow-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+.cashflow-table th,
+.cashflow-table td {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cashflow-table thead th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.cashflow-table__label {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text);
+  position: sticky;
+  left: 0;
+  background: var(--surface);
+}
+
+.kpi__sub {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.projection-tab__cashflow,
+.projection-tab__rows {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem 1.125rem;
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 60rem;
+  margin: 0 auto;
+}
+.detail--loading {
+  padding: 2rem 0;
+  color: var(--text-muted);
+}
+.detail__name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 24rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.detail__name input {
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.detail__rent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 16rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.detail__rent input {
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.75rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.detail__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.narrative {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem;
+  background: var(--surface);
+}
+.narrative--disabled {
+  color: var(--text-muted);
 }
 
 /* --- degraded / error states (M7 I2) ---

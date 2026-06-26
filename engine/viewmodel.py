@@ -65,7 +65,7 @@ def to_view_model(result):
                        "display": f"Month {dec.break_even_month}"}
                       if dec.break_even_month is not None else na_view()),
         "reasonCapital": dec.reco_reasons.get("capital",
-            "One-time startup + worst-case cash trough + reserve."),
+            "Worst-case cumulative cash trough (already includes one-time startup) plus reserve."),
         "reasonGap": dec.reco_reasons.get("gap",
             "Most-negative cumulative cash across the first year."),
         "reasonBreakeven": dec.reco_reasons.get("breakeven",

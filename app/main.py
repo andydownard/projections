@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import config
 from app.middleware import SecurityHeadersMiddleware
-from app.routers import feedback, health, intent, projections, roles
+from app.routers import feedback, health, intent, places, projections, roles
 from app.store import build_store
 
 logger = logging.getLogger("app")
@@ -64,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(roles.router)
     app.include_router(feedback.router)
     app.include_router(intent.router)
+    app.include_router(places.router)
 
     @app.get("/robots.txt", include_in_schema=False)
     def robots() -> Response:

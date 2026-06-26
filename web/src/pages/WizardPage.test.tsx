@@ -67,4 +67,44 @@ describe("WizardPage express form", () => {
       expect.objectContaining({ method: "POST" }),
     );
   });
+
+  it("saves the RESOLVED address + Census provenance in the create payload", async () => {
+    const RESOLVED = {
+      location: { place_id: "PID_DAL", lat: 32.78, lng: -96.8, formatted_address: "Dallas, TX, USA" },
+      trade_area: {
+        basis: "city", households: 512000, geography_name: "Dallas city",
+        geography_fips: "4819000", acs_vintage: "2022", households_source: "census_acs", moe: 1500,
+        alternatives: { city: { geography_name: "Dallas city", fips: "4819000", households: 512000, moe: 1500 } },
+      },
+      evidence: { field: "households", label: "", value: 512000, method: "census_acs", source: "", source_date: "2022", confidence: "estimated", geography: "Dallas city" },
+    };
+    const json = (b: unknown) =>
+      Promise.resolve(new Response(JSON.stringify(b), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const bodies: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/api/places/autocomplete"))
+        return json({ predictions: [{ description: "Dallas, TX, USA", place_id: "PID_DAL" }] });
+      if (url.includes("/api/places/resolve")) return json(RESOLVED);
+      bodies[url] = JSON.parse(String(init?.body)); // /api/projections
+      return json({ ...VM, owner_token: "tok" });
+    });
+    const user = userEvent.setup();
+    render(<WizardPage />);
+    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
+    await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
+    await user.click(screen.getByRole("button", { name: /generate/i }));
+    await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
+
+    const body = bodies["/api/projections"] as {
+      location: { formatted_address: string; place_id: string; query: string };
+      inputs: { city: string };
+      trade_area: { households_source: string };
+    };
+    expect(body.location.formatted_address).toBe("Dallas, TX, USA");
+    expect(body.location.place_id).toBe("PID_DAL");
+    expect(body.location.query).toBe("Dallas, TX, USA");
+    expect(body.inputs.city).toBe("Dallas, TX, USA");
+    expect(body.trade_area.households_source).toBe("census_acs");
+  });
 });

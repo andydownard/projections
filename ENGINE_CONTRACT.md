@@ -238,7 +238,7 @@ All computed in the core; all asserted by golden tests (not merely rendered).
 ```
 first_year_cash_gap   = min(cumulativeCash[M0..M12])           # most-negative position; ≤ 0
 peak_cash_shortfall   = |min(0, first_year_cash_gap)|
-startup_capital_required = startup_total + peak_cash_shortfall + CASH_RESERVE_BUFFER
+startup_capital_required = peak_cash_shortfall + CASH_RESERVE_BUFFER   # trough already embeds startup (spent at M0) — NEVER add startup_total again
 cash_runway_months    = first m where cumulativeCash[m] ≥ 0     # months to cash-positive; null if never
 break_even_revenue    = solve(net == 0 over fixed+variable structure)   # monthly and annual
 break_even_month      = first m where net[m] ≥ 0 AND sustained thereafter   # null if never
