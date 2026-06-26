@@ -45,13 +45,7 @@ STARTUP = {
 CASH_RESERVE_BUFFER = 25000          # §7.3 / §12.1
 SENSITIVITY_DELTA = "0.25"           # §12.2 ±25% on rent & donations
 
-# --- monthly ramp (calibration backlog — low-confidence, §12.5)
-RAMP_MONTHS = 5
-RAMP_CURVE = "logistic"
-DONATION_TO_REVENUE_LAG_MONTHS = 1
-
 # --- guardrail advisory bands (§12.2)
 SHARE_Y1_BAND_MAX = "0.08"           # donor market share ≤ ~8% for a new store
 NET_MARGIN_FLAG_MAX = "0.30"         # flag > ~30% as unusual for a new store
-LABOR_RATIO_BAND = ("0.25", "0.60")
 OCCUPANCY_RATIO_BAND_MAX = "0.20"

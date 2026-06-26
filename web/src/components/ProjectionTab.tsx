@@ -304,5 +304,3 @@ function Cell({
     </td>
   );
 }
-
-export default ProjectionTab;

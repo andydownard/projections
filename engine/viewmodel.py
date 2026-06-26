@@ -23,8 +23,8 @@ _RECO_HEADLINES = {
 }
 
 # Rows that are component (pinnable / editable) vs derived (computed, never editable).
-_EDITABLE_ROWS = set(dag.PINNABLE_NODES) | {"Payroll", "Marketing & outreach",
-    "Supplies & processing", "Credit card fees", "Payroll taxes", "Rent"}
+# (All six expense labels are already in PINNABLE_NODES — dag is the source of truth.)
+_EDITABLE_ROWS = frozenset(dag.PINNABLE_NODES)
 
 
 def _row_class(label, year_keys_pinned):

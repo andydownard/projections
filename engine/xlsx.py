@@ -107,7 +107,6 @@ def build_xlsx(result, path):
 
     # ---------- 3-YEAR PROJECTION ------------------------------------------
     row += 1
-    proj_top = row
     ws[f"A{row}"] = "3-YEAR PROJECTION"
     ws[f"A{row}"].font = BOLD
     row += 1
@@ -174,7 +173,6 @@ def build_xlsx(result, path):
             year = i + 1
             if (label, year) in pinned:
                 pin = pinned[(label, year)]
-                calc_value = round_dollars(result.annual[year].expenses[label])
                 # recompute the *pre-override* calc value for the comment
                 pre = _precalc_expense(label, year, result)
                 cell = ws.cell(row=r, column=2 + i)

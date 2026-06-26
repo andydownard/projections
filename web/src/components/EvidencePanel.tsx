@@ -56,5 +56,3 @@ export function EvidencePanel({ evidence }: EvidencePanelProps) {
     </section>
   );
 }
-
-export default EvidencePanel;

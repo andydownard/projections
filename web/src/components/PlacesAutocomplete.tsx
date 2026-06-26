@@ -151,5 +151,3 @@ export function PlacesAutocomplete({ label, basis, onResolved, onError }: Places
     </div>
   );
 }
-
-export default PlacesAutocomplete;

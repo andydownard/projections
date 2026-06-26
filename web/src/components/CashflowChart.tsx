@@ -194,5 +194,3 @@ export function CashflowChart({
     </figure>
   );
 }
-
-export default CashflowChart;

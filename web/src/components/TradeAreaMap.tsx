@@ -64,5 +64,3 @@ export function TradeAreaMap({
     </figure>
   );
 }
-
-export default TradeAreaMap;

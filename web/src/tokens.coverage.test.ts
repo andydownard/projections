@@ -35,7 +35,6 @@ const KNOWN_ORPHANS = new Set<string>([
   "narrative-canvas__status",
   "role-view",
   "role-view--loading",
-  "wizard__review",
 ]);
 
 function tsxFiles(dir: string): string[] {

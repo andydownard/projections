@@ -45,5 +45,3 @@ export function SaveConflictModal({
     </div>
   );
 }
-
-export default SaveConflictModal;

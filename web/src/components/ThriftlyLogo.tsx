@@ -31,5 +31,3 @@ export function ThriftlyLogo({ className }: ThriftlyLogoProps) {
     </svg>
   );
 }
-
-export default ThriftlyLogo;
