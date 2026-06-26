@@ -265,6 +265,14 @@ def _enrich_view_model(vm: dict, location_d: dict, trade_d: dict) -> None:
     vm["evidence"] = evidence
 
 
+def _kpi_value(vm: dict, label: str) -> dict:
+    """The {raw, display} of a named KPI in the view-model (for the list row)."""
+    for k in vm.get("kpis") or []:
+        if isinstance(k, dict) and k.get("label") == label:
+            return k.get("value") or {"raw": 0, "display": "—"}
+    return {"raw": 0, "display": "—"}
+
+
 def _compute_result_from_dicts(
     inputs_d: dict, assumptions_d: Optional[dict], demand_d: dict,
     trade_d: dict, overrides_d: dict,
@@ -490,18 +498,21 @@ def list_projections(
             vm = json.loads(r.get("computed_json") or "{}")
         except json.JSONDecodeError:
             vm = {}
-        y1_rev = None
-        try:
-            y1_rev = (vm.get("kpis") or [{}])[0]
-        except Exception:
-            y1_rev = None
+        ta = vm.get("trade_area") or {}
+        loc = vm.get("location") or {}
         items.append({
             "view_slug": r["view_slug"],
             "name": r["name"],
+            "location": ta.get("geography_name") or loc.get("formatted_address") or "",
+            "basis": ta.get("basis") or "",
+            "y1_revenue": _kpi_value(vm, "Total revenue"),
+            "y1_net": _kpi_value(vm, "Net profit"),
+            "capital_required": (vm.get("metrics") or {}).get("capital")
+                                or {"raw": 0, "display": "—"},
+            "reco_tag": (vm.get("reco") or {}).get("tag") or "revise",
+            "status": r.get("status") or "active",
             "version": r["version"],
             "updated_at": r["updated_at"],
-            "reco": vm.get("reco", {}).get("tag"),
-            "y1": y1_rev,
             # lat/lng for the list-row mini-map; null when location was never resolved.
             "coords": vm.get("location"),
         })

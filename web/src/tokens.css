@@ -233,6 +233,19 @@ body {
   color: var(--text-muted);
 }
 
+/* Name cell: the trade-area mini-map sits as a row avatar beside the name. */
+.list__cell {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+/* Honest mobile (≤560px): drop the row mini-maps so the data isn't crowded. */
+@media (max-width: 560px) {
+  .list__cell .map {
+    display: none;
+  }
+}
+
 .reco-chip {
   display: inline-block;
   font-size: 0.75rem;
