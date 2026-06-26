@@ -15,11 +15,12 @@ describe("App shell", () => {
     expect(screen.getByText(/Thrift Store Projection/i)).toBeInTheDocument();
   });
 
-  it("shows the model version chip from the server, not computed locally", () => {
+  it("renders no model version chip until the server provides one", () => {
     render(<App />);
-    // The version chip is server-owned; the shell renders a placeholder until a
-    // projection is loaded. No arithmetic happens on the client.
-    expect(screen.getByTestId("version-chip")).toBeInTheDocument();
+    // The version chip is server-owned: the bare shell (no projection loaded)
+    // shows no chip at all — no client-rendered "model —" placeholder, and no
+    // arithmetic on the client. It appears only when a projection supplies it.
+    expect(screen.queryByTestId("version-chip")).not.toBeInTheDocument();
   });
 });
 

@@ -41,6 +41,17 @@ const EXPRESS_DEFAULT: WizardDraft = {
   termsAccepted: true,
 };
 
+// The express form's fields, declared once and rendered by one map (DRY): the
+// wrapping <label> is each input's accessible name, so no redundant aria-label.
+type FieldKey = "name" | "households" | "shareY1" | "shareY2" | "shareY3";
+const FIELDS: ReadonlyArray<{ key: FieldKey; label: string; numeric: boolean }> = [
+  { key: "name", label: "Store name", numeric: false },
+  { key: "households", label: "Households (trade area)", numeric: true },
+  { key: "shareY1", label: "Year 1 share (%)", numeric: true },
+  { key: "shareY2", label: "Year 2 share (%)", numeric: true },
+  { key: "shareY3", label: "Year 3 share (%)", numeric: true },
+];
+
 export interface WizardPageProps {
   aiOff?: boolean;
 }
@@ -136,8 +147,8 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
 
   return (
     <div className="wizard">
-      <header className="wizard__head">
-        <h1>Thrift Store Projection</h1>
+      <header className="wizard__intro">
+        <h1>New projection</h1>
         <p className="wizard__lede">
           Confirm your trade area and the three annual donor-market shares, then
           generate a board-ready decision.
@@ -151,54 +162,18 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
           void onGenerate(draft);
         }}
       >
-        <label className="wizard__field">
-          Store name
-          <input
-            aria-label="Store name"
-            value={draft.name}
-            onChange={(e) => set("name", e.target.value)}
-          />
-        </label>
-
-        <label className="wizard__field">
-          Households (trade area)
-          <input
-            aria-label="Households"
-            type="number"
-            value={draft.households}
-            onChange={(e) => set("households", Number(e.target.value))}
-          />
-        </label>
-
-        <label className="wizard__field">
-          Year 1 share (%)
-          <input
-            aria-label="Year 1 share"
-            type="number"
-            value={draft.shareY1}
-            onChange={(e) => set("shareY1", Number(e.target.value))}
-          />
-        </label>
-
-        <label className="wizard__field">
-          Year 2 share (%)
-          <input
-            aria-label="Year 2 share"
-            type="number"
-            value={draft.shareY2}
-            onChange={(e) => set("shareY2", Number(e.target.value))}
-          />
-        </label>
-
-        <label className="wizard__field">
-          Year 3 share (%)
-          <input
-            aria-label="Year 3 share"
-            type="number"
-            value={draft.shareY3}
-            onChange={(e) => set("shareY3", Number(e.target.value))}
-          />
-        </label>
+        {FIELDS.map((f) => (
+          <label key={f.key} className="wizard__field">
+            {f.label}
+            <input
+              type={f.numeric ? "number" : "text"}
+              value={draft[f.key]}
+              onChange={(e) =>
+                set(f.key, f.numeric ? Number(e.target.value) : e.target.value)
+              }
+            />
+          </label>
+        ))}
 
         <div className="wizard__actions">
           <button type="submit" className="btn btn--primary" disabled={busy}>

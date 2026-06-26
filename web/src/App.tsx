@@ -30,8 +30,11 @@ export function App() {
 
   return (
     <div className="app">
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
       <TopBar />
-      <main className="app__main">
+      <main id="main" className="app__main" tabIndex={-1}>
         {route.kind === "home" && <ListPage />}
         {route.kind === "wizard" && <WizardPage aiOff={route.aiOff} />}
         {route.kind === "detail" && (
