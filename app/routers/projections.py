@@ -23,12 +23,19 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from app import ratelimit
-from app.deps import hash_token, parse_if_match, token_matches
+from app.deps import (
+    client_ip,
+    hash_token,
+    parse_if_match,
+    rate_limited_response,
+    token_matches,
+    utcnow,
+)
 from app.geo.client import GeoUpstreamError, static_map_bytes
 from app import narrative_provider
 from app.narrative import (
@@ -65,16 +72,6 @@ _PREVIEW_WINDOW_SECONDS = 300
 router = APIRouter(prefix="/api/projections", tags=["projections"])
 
 
-def _client_ip(request: Request) -> str:
-    """Right-most untrusted hop from X-Forwarded-For, else the socket peer."""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
-
-
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _new_id() -> str:
@@ -368,7 +365,7 @@ def _apply_override_ops(stored: dict, ops, calc):
             result.pop(key, None)  # auto-clear-on-equal
             continue
         pin = {"value": str(item["value"]), "note": item.get("note", ""),
-               "ts": _utcnow()}
+               "ts": utcnow()}
         result[key] = pin
     return result
 
@@ -460,7 +457,7 @@ def create_projection(
     view_slug = secrets.token_urlsafe(16)  # ~128-bit
     edit_token = secrets.token_urlsafe(32)
     pid = _new_id()
-    now = _utcnow()
+    now = utcnow()
     name = body.name or body.inputs.org_name or "Untitled projection"
 
     row = {
@@ -983,7 +980,7 @@ def patch_projection(
         "model_version": patch["model_version"],
         "actor_token_hash": hash_token(token),
         "change_summary": "autosave",
-        "created_at": _utcnow(),
+        "created_at": utcnow(),
     })
     response.headers["ETag"] = str(new_version)
     return {**vm, "view_slug": view_slug, "version": new_version, "name": name}
@@ -1017,19 +1014,14 @@ def preview_projection(
 
     allowed, retry_after = ratelimit.check(
         "preview",
-        ip=_client_ip(request),
+        ip=client_ip(request),
         token=hash_token(token) if token else None,
         ip_limit=_PREVIEW_IP_LIMIT,
         token_limit=_PREVIEW_TOKEN_LIMIT,
         window_seconds=_PREVIEW_WINDOW_SECONDS,
     )
     if not allowed:
-        return JSONResponse(
-            status_code=429,
-            content={"error": "rate_limited",
-                     "retry_after_seconds": retry_after, "scope": "ip"},
-            headers={"Retry-After": str(retry_after)},
-        )
+        return rate_limited_response(retry_after)
 
     # BEFORE = the stored snapshot verbatim (no recompute on the unchanged state).
     try:
@@ -1123,7 +1115,7 @@ def rotate_tokens(
         "model_version": row.get("model_version") or "",
         "actor_token_hash": hash_token(new_owner),
         "change_summary": "tokens_rotated",
-        "created_at": _utcnow(),
+        "created_at": utcnow(),
     })
     response.headers["ETag"] = str(new_version)
     return {
@@ -1224,7 +1216,7 @@ def restore_revision(
         "model_version": patch["model_version"],
         "actor_token_hash": hash_token(token) if token else None,
         "change_summary": f"restore from v{rev['seq']}",
-        "created_at": _utcnow(),
+        "created_at": utcnow(),
     })
     response.headers["ETag"] = str(new_version)
     return {**vm, "view_slug": view_slug, "version": new_version, "name": row["name"]}

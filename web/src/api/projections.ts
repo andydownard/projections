@@ -6,7 +6,7 @@
 // it is never put in a URL path/query and never logged. No client-side math: list
 // rows arrive as { raw, display } and are rendered verbatim.
 
-import type { ServerValue } from "./client";
+import { request, type ServerValue } from "./client";
 import type { CreatePayload } from "../wizard/shareHelper";
 
 export const OWNER_TOKEN_KEY = "projections.owner_token";
@@ -60,18 +60,6 @@ export interface CreateResponse {
   tokens: CreateTokens;
 }
 
-const BASE = "/api";
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  if (!resp.ok) {
-    throw new Error(`API ${resp.status}: ${path}`);
-  }
-  return (await resp.json()) as T;
-}
 
 /** Owner-scoped list. Without an owner token there is nothing to list (no global index). */
 export async function listProjections(): Promise<ProjectionListResponse> {

@@ -13,9 +13,34 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
+from fastapi.responses import JSONResponse
+
+
+def client_ip(request: Request) -> str:
+    """The client IP for per-IP rate limiting: the right-most untrusted
+    X-Forwarded-For hop, else the socket peer. Shared by every router."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def utcnow() -> str:
+    """UTC timestamp in the API_SPEC wire format (YYYY-MM-DDTHH:MM:SSZ)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def rate_limited_response(retry_after: int, scope: str = "ip") -> JSONResponse:
+    """The shared 429 body + Retry-After header (API_SPEC §2.3)."""
+    return JSONResponse(
+        status_code=429,
+        content={"error": "rate_limited", "retry_after_seconds": retry_after, "scope": scope},
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 def hash_token(token: str) -> str:

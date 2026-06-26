@@ -6,47 +6,8 @@ appends the named snapshot's inputs/assumptions/overrides as a NEW forward revis
 
 RED-first: the endpoints + store.get_revision do not exist yet.
 """
-import pytest
-from fastapi.testclient import TestClient
 
-from app.main import create_app
-from app.store import get_store
-from app.store.sqlite import SqliteStore
-
-
-@pytest.fixture()
-def store():
-    s = SqliteStore(":memory:")
-    s.migrate()
-    return s
-
-
-@pytest.fixture()
-def client(store):
-    app = create_app()
-    app.dependency_overrides[get_store] = lambda: store
-    return TestClient(app)
-
-
-VALID_BODY = {
-    "name": "House of Hope",
-    "inputs": {
-        "org_name": "House of Hope", "city": "Longview, Texas",
-        "opening_status": "pre_launch",
-        "share_y1": "0.06", "share_y2": "0.08", "share_y3": "0.10",
-        "donation_value": "74", "building_sqft": "10000", "salesfloor_pct": "0.70",
-        "source_of_funds": "300000", "occupancy_annual": "120000",
-        "lease_type": "nnn", "nnn_opex_annual": "0",
-    },
-    "trade_area": {"basis": "city", "households": "31798"},
-    "assumptions": {"labor_pct": "0.60"},
-}
-
-
-def _create(client):
-    r = client.post("/api/projections", json=VALID_BODY)
-    assert r.status_code == 201, r.text
-    return r.json()
+from app.tests.conftest import _create
 
 
 def test_revisions_list_owner_only(client):

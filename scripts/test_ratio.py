@@ -193,3 +193,68 @@ def test_excludes_venv(tmp_path):
     files = {f["path"] for f in data["files"]}
     assert not any(".venv" in p for p in files), sorted(files)
     assert data["repo"]["test_loc"] == 87, data
+
+
+def _git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True)
+
+
+def _commit_base(repo):
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True
+    )
+    return head.stdout.strip()
+
+
+def test_diff_gate_counts_added_lines_not_whole_files(tmp_path):
+    # The diff gate scores LINES ADDED, not whole-file LOC: a behavior-preserving
+    # deletion adds no code and must pass (was a false failure under whole-file).
+    repo = _make_repo(tmp_path)
+    base = _commit_base(repo)
+    (repo / "engine" / "compute.py").unlink()  # delete 10 code lines, add nothing
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "delete code")
+    data = json.loads(_run(repo, "--diff", base).stdout)
+    assert data["diff"]["code_added"] == 0
+    assert data["diff"]["pass"] is True
+
+
+def test_diff_gate_fails_on_untested_added_code(tmp_path):
+    # Adding code with no test still fails the diff gate (the gate's real purpose).
+    repo = _make_repo(tmp_path)
+    base = _commit_base(repo)
+    (repo / "engine" / "feature.py").write_text("\n".join(f"z = {i}" for i in range(100)) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "untested code")
+    proc = _run(repo, "--diff", base)
+    data = json.loads(proc.stdout)
+    assert data["diff"]["code_added"] == 100
+    assert data["diff"]["test_added"] == 0
+    assert data["diff"]["pass"] is False
+    assert proc.returncode == 1
+
+
+def test_diff_gate_not_bypassable_via_rename(tmp_path):
+    # A rename + untested additions in ONE commit must NOT slip past the gate.
+    # git's rename detection collapses the path to a brace token ("a/{x => y}") the
+    # classifier can't read; --no-renames forces a plain add row so lines are counted.
+    # The original must be LARGER than the append (>50% similar) or git won't treat
+    # it as a rename — that's exactly the realistic refactor-plus-feature commit.
+    repo = _make_repo(tmp_path)
+    (repo / "engine" / "compute.py").write_text("\n".join(f"a = {i}" for i in range(600)) + "\n")
+    base = _commit_base(repo)
+    (repo / "engine" / "compute.py").rename(repo / "engine" / "compute_v2.py")
+    with open(repo / "engine" / "compute_v2.py", "a") as fh:
+        fh.write("\n".join(f"b = {i}" for i in range(200)) + "\n")  # untested code
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "rename + untested code")
+    proc = _run(repo, "--diff", base)
+    data = json.loads(proc.stdout)
+    # without --no-renames the brace row drops to code_added==0 -> diff PASS (the bug)
+    assert data["diff"]["code_added"] >= 200, data["diff"]
+    assert data["diff"]["pass"] is False

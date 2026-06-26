@@ -221,15 +221,57 @@ def _measure(root: Path, paths: list[tuple[Path, str]]) -> dict:
     }
 
 
-def _diff_files(root: Path, base_ref: str) -> set[Path]:
+def _diff_added(root: Path, base_ref: str) -> dict | None:
+    """Test/code ratio of the LINES ADDED in the diff vs base_ref (git --numstat).
+
+    A diff is gated on what it ADDS, not on the whole size of every file it
+    touches — so a behavior-preserving refactor or a deletion is never penalized
+    for the surviving code it leaves behind. ratio = added test lines / added code
+    lines; a diff that adds no code (pure deletion / test-only) passes.
+
+    Note: numstat is line-based and counts EVERY added physical line (comments and
+    blanks included), unlike the repo-wide cloc counter which excludes them. So a
+    comment-only / docstring-only edit to a code file registers as added code and
+    must be paired with a test edit (or rely on the repo-wide gate). This is the
+    conservative direction — it can only ask for MORE test, never less.
+    """
     proc = subprocess.run(
-        ["git", "-C", str(root), "diff", "--name-only", f"{base_ref}...HEAD"],
+        # --no-renames: a detected rename collapses both paths into ONE brace token
+        #   ("a/{x.py => y.py}") that _classify can't read, silently dropping that
+        #   row's added lines -> a gate bypass (rename a big file + append untested
+        #   code in one commit). Force two plain rows (delete + add) so the added
+        #   side is classified. core.quotePath=false keeps non-ASCII paths unquoted.
+        ["git", "-C", str(root), "-c", "core.quotePath=false",
+         "diff", "--numstat", "--no-renames", f"{base_ref}...HEAD"],
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
-        return set()
-    return {Path(line) for line in proc.stdout.splitlines() if line.strip()}
+        return None
+    test_added = 0
+    code_added = 0
+    files = []
+    for line in proc.stdout.splitlines():
+        cols = line.split("\t")
+        if len(cols) != 3 or cols[0] == "-":  # malformed, or binary file ("-\t-")
+            continue
+        kind = _classify(Path(cols[2]))
+        if kind is None:
+            continue
+        added = int(cols[0])
+        if kind == "test":
+            test_added += added
+        else:
+            code_added += added
+        files.append({"path": cols[2], "kind": kind, "added": added})
+    ratio = (test_added / code_added) if code_added else float("inf")
+    return {
+        "test_added": test_added,
+        "code_added": code_added,
+        "ratio": ratio,
+        "pass": code_added == 0 or ratio > THRESHOLD,
+        "files": files,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -250,13 +292,12 @@ def main(argv: list[str] | None = None) -> int:
                     "files": repo["files"]}
 
     if args.diff:
-        changed = _diff_files(root, args.diff)
-        diff_paths = [(p, k) for p, k in all_paths if p.relative_to(root) in changed]
-        diff = _measure(root, diff_paths)
-        result["diff"] = {k: v for k, v in diff.items() if k != "files"}
-        # An empty diff (no code/test touched) does not fail the gate.
-        if diff["code_loc"] > 0:
-            overall_pass = overall_pass and diff["pass"]
+        diff = _diff_added(root, args.diff)
+        if diff is not None:
+            result["diff"] = {k: v for k, v in diff.items() if k != "files"}
+            # A diff that adds no code (pure deletion / test-only) does not fail.
+            if diff["code_added"] > 0:
+                overall_pass = overall_pass and diff["pass"]
 
     result["pass"] = overall_pass
 
@@ -271,8 +312,8 @@ def main(argv: list[str] | None = None) -> int:
         if "diff" in result:
             d = result["diff"]
             dr = "inf" if d["ratio"] == float("inf") else f"{d['ratio']:.3f}"
-            print(f"test:code ratio (PR diff):   {dr}  "
-                  f"[test={d['test_loc']} / code={d['code_loc']}]  "
+            print(f"test:code ratio (PR diff, lines added): {dr}  "
+                  f"[+test={d['test_added']} / +code={d['code_added']}]  "
                   f"-> {'PASS' if d['pass'] else 'FAIL'}")
         print(f"cloc: {'binary' if _cloc_available() else 'fallback line-counter'}")
 
