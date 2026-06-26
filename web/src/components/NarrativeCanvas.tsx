@@ -209,5 +209,3 @@ export function NarrativeCanvas({
     </section>
   );
 }
-
-export default NarrativeCanvas;

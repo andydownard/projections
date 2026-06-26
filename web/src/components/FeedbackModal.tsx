@@ -93,5 +93,3 @@ export function FeedbackModal({ onSubmit, onClose }: FeedbackModalProps) {
     </div>
   );
 }
-
-export default FeedbackModal;

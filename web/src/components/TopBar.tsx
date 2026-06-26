@@ -53,5 +53,3 @@ export function TopBar({ modelVersion, saveState = "idle", children }: TopBarPro
     </header>
   );
 }
-
-export default TopBar;

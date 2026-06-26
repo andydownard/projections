@@ -105,5 +105,3 @@ export function ProjectionsList({ projections, onCreate, onOpen }: ProjectionsLi
     </section>
   );
 }
-
-export default ProjectionsList;

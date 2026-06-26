@@ -50,5 +50,3 @@ export function DecisionBanner({ reco, metrics }: DecisionBannerProps) {
     </section>
   );
 }
-
-export default DecisionBanner;

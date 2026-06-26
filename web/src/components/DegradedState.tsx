@@ -126,5 +126,3 @@ export function DegradedState({ kind, detail, onAction, actionLabel }: DegradedS
     </section>
   );
 }
-
-export default DegradedState;

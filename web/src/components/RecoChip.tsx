@@ -30,5 +30,3 @@ export function RecoChip({ tag }: RecoChipProps) {
     </span>
   );
 }
-
-export default RecoChip;

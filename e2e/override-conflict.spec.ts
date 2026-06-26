@@ -10,8 +10,8 @@ test.describe("override + 409 optimistic-concurrency", () => {
   test.skip(!M2_READY, "M4 override UI / M2 conflict modal not built yet — scaffold pins the flow");
 
   // This flow MUTATES the seeded `example` projection (labor, name, version) and
-  // reseeds per test, so run it SERIALLY — the suite is otherwise fullyParallel and
-  // a parallel sibling would clobber the shared example row mid-test.
+  // reseeds per test. The whole suite already runs workers:1 (one shared in-memory
+  // DB — playwright.config.ts); this serial guard is belt-and-suspenders.
   test.describe.configure({ mode: "serial" });
 
   test.beforeEach(async ({ request }) => {

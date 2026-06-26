@@ -220,5 +220,3 @@ export function SettingsTab({
     </section>
   );
 }
-
-export default SettingsTab;

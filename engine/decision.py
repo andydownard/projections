@@ -135,8 +135,7 @@ def _recommend(result, capital, assumptions, inputs, flags, sensitivity, break_e
         return "do_not_proceed", reasons
 
     if capital > funds:
-        reasons["capital"] = (
-            f"Capital required exceeds the stated source of funds.")
+        reasons["capital"] = "Capital required exceeds the stated source of funds."
         return "raise_cash", reasons
 
     occ_ratio = (D(str(y1.expenses["Rent"])) / D(str(y1.total_rev))
