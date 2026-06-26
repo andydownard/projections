@@ -4,7 +4,9 @@
 // outbound payload carries NO view_slug / token / financial field — redaction is
 // server-enforced (app/routers/feedback.py); this modal also warns the user not
 // to paste sensitive financial details, and never echoes a resolvable link.
-import { useState } from "react";
+import { useRef, useState } from "react";
+
+import { useModalDialog } from "./useModalDialog";
 
 export interface FeedbackModalProps {
   /** Submit handler -> returns the server support_id (SUP-…). */
@@ -18,6 +20,14 @@ export function FeedbackModal({ onSubmit, onClose }: FeedbackModalProps) {
   const [supportId, setSupportId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const containerRef = useRef<HTMLDivElement>(null);
+  // The primary action (Send) is disabled until a title is entered, so on mount
+  // useModalDialog falls back to the first field; once enabled it is the trap's
+  // primary. Escape always closes the modal.
+  const primaryRef = useRef<HTMLButtonElement>(null);
+
+  useModalDialog({ containerRef, initialFocusRef: primaryRef, onEscape: onClose });
+
   async function send() {
     setSubmitting(true);
     try {
@@ -30,6 +40,7 @@ export function FeedbackModal({ onSubmit, onClose }: FeedbackModalProps) {
 
   return (
     <div
+      ref={containerRef}
       className="feedback-modal"
       data-testid="feedback-modal"
       role="dialog"
@@ -46,7 +57,7 @@ export function FeedbackModal({ onSubmit, onClose }: FeedbackModalProps) {
             <p className="feedback-modal__note">
               Quote this support ID to our team. We never attach your projection.
             </p>
-            <button type="button" onClick={onClose}>
+            <button type="button" className="btn btn--primary" onClick={onClose}>
               Close
             </button>
           </div>
@@ -80,10 +91,15 @@ export function FeedbackModal({ onSubmit, onClose }: FeedbackModalProps) {
               />
             </label>
             <div className="feedback-modal__actions">
-              <button type="button" onClick={onClose}>
+              <button type="button" className="btn" onClick={onClose}>
                 Cancel
               </button>
-              <button type="submit" disabled={submitting || !title.trim()}>
+              <button
+                ref={primaryRef}
+                type="submit"
+                className="btn btn--primary"
+                disabled={submitting || !title.trim()}
+              >
                 Send
               </button>
             </div>

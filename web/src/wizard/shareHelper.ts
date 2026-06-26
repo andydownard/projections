@@ -36,14 +36,17 @@ export function shareHelper(input: ShareHelperInput): ShareHelperResult {
   const donationsPerYear = households * (sharePct / 100) * donationsPerHh;
   const donationsPerWeek = Math.round(donationsPerYear / WEEKS_PER_YEAR);
   const annualRevenue = Math.round(donationsPerYear * basket);
-  const nf = new Intl.NumberFormat("en-US");
+  // NO client-side number formatting (PRD §13 / CLAUDE.md): the server is the sole
+  // formatting authority. This is a pre-create estimate affordance with no server
+  // {display} string to defer to, so the raw values are rendered without any
+  // client-side grouping (no client number formatting at all).
   return {
     donationsPerWeek,
     annualRevenue,
     text:
-      `${sharePct}% of ~${nf.format(households)} households → ` +
-      `~${nf.format(donationsPerWeek)} donations/week → ` +
-      `~$${nf.format(annualRevenue)}/yr revenue`,
+      `${sharePct}% of ~${households} households → ` +
+      `~${donationsPerWeek} donations/week → ` +
+      `~$${annualRevenue}/yr revenue`,
   };
 }
 

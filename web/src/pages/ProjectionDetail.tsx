@@ -22,6 +22,7 @@ import { SaveConflictModal } from "../components/SaveConflictModal";
 import { SettingsTab } from "../components/SettingsTab";
 import { DegradedState } from "../components/DegradedState";
 import type { ConflictBody } from "../state/autosaveReducer";
+import { SAVE_LABEL, type SaveState } from "../state/saveLabels";
 import type { ServerValue } from "../api/client";
 import type { PatchHandlerArgs } from "../components/SettingsTab";
 import { readFragmentSecret } from "../router/route";
@@ -31,8 +32,6 @@ export interface ProjectionDetailProps {
   edit: boolean;
   aiOff?: boolean;
 }
-
-type SaveLabel = "All changes saved" | "Saving…" | "Save failed — retry" | "";
 
 function sv(v: ServerValue | number | string | undefined): ServerValue {
   if (v && typeof v === "object" && "raw" in v) return v;
@@ -60,10 +59,13 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const [vm, setVm] = useState<ViewModel | null>(null);
   const [version, setVersion] = useState(0);
   const [name, setName] = useState("");
-  const [saveLabel, setSaveLabel] = useState<SaveLabel>("");
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [conflict, setConflict] = useState<ConflictBody | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
   const nameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The last PATCH body we attempted, so the failure-state retry button can
+  // re-fire exactly that mutation (UX fix #10) at the current If-Match version.
+  const lastPatch = useRef<Record<string, unknown> | null>(null);
   // Capture the edit secret from the fragment ONCE on first render (a lazy ref
   // initializer), BEFORE StrictMode's double-invoke can re-read the (scrubbed)
   // hash. Fall back to the owner token. Then scrub the fragment from the URL so
@@ -95,6 +97,8 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   }, [slug]);
 
   async function doPatch(body: Record<string, unknown>, ver: number) {
+    // Remember the last attempted mutation so a failed save can be retried verbatim.
+    lastPatch.current = body;
     const res = await patchProjection({
       viewSlug: slug,
       token: token.current ?? "",
@@ -108,35 +112,51 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
 
   function onNameChange(value: string) {
     setName(value);
-    setSaveLabel("Saving…");
+    setSaveState("saving");
     if (nameTimer.current) clearTimeout(nameTimer.current);
     nameTimer.current = setTimeout(() => {
       doPatch({ name: value }, version)
-        .then(() => setSaveLabel("All changes saved"))
+        .then(() => setSaveState("saved"))
         .catch((err) => {
           if (err instanceof PatchConflictError) {
             setConflict(err.conflict);
           } else {
-            setSaveLabel("Save failed — retry");
+            setSaveState("error");
           }
         });
     }, 150);
   }
 
   async function onSettingsPatch(args: PatchHandlerArgs) {
-    setSaveLabel("Saving…");
+    setSaveState("saving");
     try {
       const v = await doPatch(args.body as Record<string, unknown>, args.version);
-      setSaveLabel("All changes saved");
+      setSaveState("saved");
       return { version: v, viewModel: vm };
     } catch (err) {
       if (err instanceof PatchConflictError) {
         setConflict(err.conflict);
       } else {
-        setSaveLabel("Save failed — retry");
+        setSaveState("error");
       }
       throw err;
     }
+  }
+
+  // Failure-state recovery: re-fire the last PATCH body at the current version.
+  function retry() {
+    const body = lastPatch.current;
+    if (!body) return;
+    setSaveState("saving");
+    doPatch(body, version)
+      .then(() => setSaveState("saved"))
+      .catch((err) => {
+        if (err instanceof PatchConflictError) {
+          setConflict(err.conflict);
+        } else {
+          setSaveState("error");
+        }
+      });
   }
 
   function resolveReload() {
@@ -148,31 +168,60 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       setName(data.name);
     });
     setVersion(v);
-    setSaveLabel("All changes saved");
+    setSaveState("saved");
   }
 
   function resolveOverwrite() {
     const v = conflict?.current_version ?? version;
     setConflict(null);
     doPatch({ name }, v)
-      .then(() => setSaveLabel("All changes saved"))
-      .catch(() => setSaveLabel("Save failed — retry"));
+      .then(() => setSaveState("saved"))
+      .catch(() => setSaveState("error"));
   }
 
   function resolveSaveAsCopy() {
     setConflict(null);
-    setSaveLabel("All changes saved");
+    setSaveState("saved");
   }
 
   if (!vm) {
-    return <div className="detail detail--loading">Loading…</div>;
+    // First-class loading state (UX fix #9): a skeleton that reserves the real
+    // layout — banner block, a 5-tile KPI strip, ~8 table rows — so first paint
+    // does not jump the viewport. Shimmer is gated behind prefers-reduced-motion
+    // in the CSS (.skeleton); markup stays inert (aria-hidden under aria-busy).
+    return (
+      <div className="detail detail--loading" aria-busy="true" data-testid="detail-skeleton">
+        <span className="sr-only" role="status" aria-live="polite">
+          Loading projection…
+        </span>
+        <div className="skeleton skeleton--banner" aria-hidden="true" />
+        <div className="skeleton-kpis" aria-hidden="true">
+          {Array.from({ length: 5 }, (_, i) => (
+            <div key={i} className="skeleton skeleton--kpi" />
+          ))}
+        </div>
+        <div className="skeleton-rows" aria-hidden="true">
+          {Array.from({ length: 8 }, (_, i) => (
+            <div key={i} className="skeleton skeleton--row" />
+          ))}
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="detail">
-      {edit && (
+      {edit && saveState !== "idle" && (
         <span data-testid="save-label" role="status" aria-live="polite">
-          {saveLabel}
+          {saveState === "error" ? (
+            // The failure state is a real recovery affordance, not the bare word
+            // "retry": clicking it re-fires the last PATCH (UX fix #10).
+            <button type="button" className="save-label__retry" onClick={retry}>
+              {SAVE_LABEL.error}
+            </button>
+          ) : (
+            SAVE_LABEL[saveState]
+          )}
         </span>
       )}
 
@@ -192,7 +241,10 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           with the Input/Computed/Overridden/Estimated legend and cell-state
           classes. No client math. The recompute live-region carries the autosave
           settle label so a recompute is announced (a11y). */}
-      <ProjectionTab vm={vm} recomputeStatus={edit ? saveLabel : ""} />
+      <ProjectionTab
+        vm={vm}
+        recomputeStatus={edit && saveState !== "idle" ? SAVE_LABEL[saveState] : ""}
+      />
 
       {edit && (
         <div data-testid="settings-tab">

@@ -39,12 +39,12 @@ describe("TopBar", () => {
 
   it("renders the saved state with explicit text (not color alone)", () => {
     render(<TopBar saveState="saved" />);
-    expect(screen.getByTestId("save-label")).toHaveTextContent("All changes saved");
+    expect(screen.getByTestId("save-label")).toHaveTextContent("Saved");
   });
 
   it("renders a retry-able error state", () => {
     render(<TopBar saveState="error" />);
-    expect(screen.getByTestId("save-label")).toHaveTextContent("Save failed — retry");
+    expect(screen.getByTestId("save-label")).toHaveTextContent("Couldn't save — retry");
   });
 
   it("hides the save label when idle", () => {

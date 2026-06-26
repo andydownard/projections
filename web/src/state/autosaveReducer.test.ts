@@ -107,12 +107,12 @@ describe("saveLabel — the status strings shown in the bar", () => {
   const at = (status: AutosaveState["status"]): string =>
     saveLabel({ ...initialAutosaveState(1), status });
 
-  it("maps each status to its human label", () => {
-    expect(at("idle")).toMatch(/saved automatically/i);
-    expect(at("saved")).toMatch(/saved automatically/i);
-    expect(at("dirty")).toMatch(/saving|unsaved/i);
-    expect(at("saving")).toMatch(/saving…|saving/i);
-    expect(at("error")).toMatch(/couldn’t save|could not save|retry/i);
+  it("maps each status to its human label (one shared vocabulary, UX fix #10)", () => {
+    expect(at("idle")).toBe("Saved");
+    expect(at("saved")).toBe("Saved");
+    expect(at("dirty")).toBe("Saving…");
+    expect(at("saving")).toBe("Saving…");
+    expect(at("error")).toBe("Couldn't save — retry");
     expect(at("conflict")).toMatch(/changed/i);
   });
 });

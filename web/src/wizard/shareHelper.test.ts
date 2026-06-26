@@ -29,9 +29,22 @@ describe("shareHelper (wizard estimate, not the projection)", () => {
     });
     expect(h.donationsPerWeek).toBe(110);
     expect(h.annualRevenue).toBe(97766); // round(5724 * 17.08)
+    // NO client-side number formatting (PRD §13): raw values, no Intl grouping.
     expect(h.text).toBe(
-      "6% of ~31,800 households → ~110 donations/week → ~$97,766/yr revenue",
+      "6% of ~31800 households → ~110 donations/week → ~$97766/yr revenue",
     );
+  });
+
+  it("renders without any client-side digit grouping (no thousands separators)", () => {
+    const h = shareHelper({
+      households: 31800,
+      sharePct: 6,
+      donationsPerHh: 3,
+      basket: 17.08,
+    });
+    // The server is the sole formatting authority; the wizard estimate must not
+    // inject commas/locale grouping of its own.
+    expect(h.text).not.toMatch(/\d,\d/);
   });
 
   it("returns a null/dashed helper when households are unknown", () => {

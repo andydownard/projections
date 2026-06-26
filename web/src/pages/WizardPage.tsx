@@ -45,10 +45,24 @@ export interface WizardPageProps {
   aiOff?: boolean;
 }
 
+/**
+ * SPA navigation without a router dependency: push the new path and emit a
+ * popstate so the App shell (useSyncExternalStore) re-renders the new route.
+ * Mirrors the existing startFromExample push-state + popstate pattern.
+ */
+function navigate(path: string) {
+  window.history.pushState(null, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 export function WizardPage({ aiOff = false }: WizardPageProps) {
   const [vm, setVm] = useState<ViewModel | null>(null);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<WizardDraft>(EXPRESS_DEFAULT);
+  // The edit-secret minted on create. It rides in the URL fragment only — never
+  // the path/query/logs (SECURITY.md §2.5) — so "Open full projection" can deep
+  // link straight into the editable detail view.
+  const [editSecret, setEditSecret] = useState<string | null>(null);
 
   function set<K extends keyof WizardDraft>(key: K, value: WizardDraft[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -62,15 +76,30 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(toServerCreateBody(buildCreatePayload(d))),
       });
-      const created = (await resp.json()) as ViewModel & { owner_token?: string };
+      const created = (await resp.json()) as ViewModel & {
+        owner_token?: string;
+        edit_token?: string;
+        tokens?: { owner_token?: string; edit_token?: string };
+      };
       // Persist the minted owner token so the owner-scoped list (PRD §20) finds it.
-      if (created.owner_token) {
-        localStorage.setItem("projections.owner_token", created.owner_token);
+      const ownerToken = created.owner_token ?? created.tokens?.owner_token;
+      if (ownerToken) {
+        localStorage.setItem("projections.owner_token", ownerToken);
       }
+      // Capture the edit secret for the deep link into the editable detail view.
+      // Fall back to the owner token if the server returns only that (legacy shape).
+      setEditSecret(
+        created.edit_token ?? created.tokens?.edit_token ?? ownerToken ?? null,
+      );
       setVm(created);
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Return to the prefilled form with the draft intact (keep draft, clear vm). */
+  function editAssumptions() {
+    setVm(null);
   }
 
   async function startFromExample() {
@@ -83,17 +112,36 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
       // Preserve the AI opt-out flag across the navigation so the read view keeps
       // the manual-rent path (AI-disabled flow, PRD §21).
       const qs = aiOff ? "?ai=off" : "";
-      window.history.pushState(null, "", `/p/${EXAMPLE_SLUG}${qs}`);
-      window.dispatchEvent(new PopStateEvent("popstate"));
+      navigate(`/p/${EXAMPLE_SLUG}${qs}`);
     } finally {
       setBusy(false);
     }
   }
 
   if (vm) {
+    // Preserve the AI opt-out flag across navigation (AI-disabled flow, PRD §21).
+    const qs = aiOff ? "?ai=off" : "";
+    // The edit secret rides in the fragment only (SECURITY.md §2.5), after any query.
+    const frag = editSecret ? `#${editSecret}` : "";
     return (
       <div className="wizard">
         <div className="wizard__result">
+          {/* Persistent return-to-form affordance: clears the result but keeps the
+              draft in state so the operator can tweak assumptions and re-generate. */}
+          <button
+            type="button"
+            className="link wizard__edit-assumptions"
+            data-testid="edit-assumptions"
+            onClick={editAssumptions}
+          >
+            ← Edit assumptions
+          </button>
+
+          <p className="wizard__lede" data-testid="result-lede">
+            Here's your decision. Open the full projection to see the evidence behind
+            every number, or share a read-only view with your board.
+          </p>
+
           <DecisionBanner reco={vm.reco} metrics={vm.metrics} />
 
           <div className="kpis" data-testid="kpi-strip">
@@ -120,9 +168,40 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
             </label>
           )}
 
+          <div className="wizard__result-actions">
+            {/* PRIMARY: open the canonical, reopenable editable projection the
+                server just minted (push state + popstate, mirroring startFromExample). */}
+            <button
+              type="button"
+              className="btn btn--primary"
+              data-testid="open-full-projection"
+              onClick={() => navigate(`/p/${vm.view_slug}/edit${qs}${frag}`)}
+            >
+              Open full projection
+            </button>
+            {/* SECONDARY: the read-only view is the link a board member receives. */}
+            <button
+              type="button"
+              className="btn"
+              data-testid="share-board"
+              onClick={() => navigate(`/p/${vm.view_slug}${qs}`)}
+            >
+              Share with your board
+            </button>
+            {/* SECONDARY: the board packet is exported from the read view. */}
+            <button
+              type="button"
+              className="btn"
+              data-testid="export-packet"
+              onClick={() => navigate(`/p/${vm.view_slug}${qs}`)}
+            >
+              Export Board Packet
+            </button>
+          </div>
+
+          {/* TERTIARY: the raw spreadsheet, demoted to a plain text link. */}
           <a
-            className="btn"
-            role="button"
+            className="wizard__xlsx-link"
             data-testid="download-xlsx"
             href={xlsxHref(vm.view_slug)}
             download

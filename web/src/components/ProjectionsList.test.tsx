@@ -25,25 +25,76 @@ const item: ProjectionListItem = {
 
 describe("ProjectionsList — empty state", () => {
   it("renders a utilitarian empty state with Create and start-from-example", () => {
-    render(<ProjectionsList projections={[]} onCreate={() => {}} onOpen={() => {}} />);
+    render(
+      <ProjectionsList
+        projections={[]}
+        onCreate={() => {}}
+        onStartExample={() => {}}
+        onOpen={() => {}}
+      />,
+    );
     expect(screen.getByRole("heading", { name: /no projections yet/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /create/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start from example/i })).toBeInTheDocument();
   });
 
-  it("fires onCreate when Create is clicked in the empty state", () => {
-    let created = false;
+  it("states the outcome (not the artifact) in the empty-state body", () => {
     render(
-      <ProjectionsList projections={[]} onCreate={() => (created = true)} onOpen={() => {}} />,
+      <ProjectionsList
+        projections={[]}
+        onCreate={() => {}}
+        onStartExample={() => {}}
+        onOpen={() => {}}
+      />,
+    );
+    expect(screen.getByText(/whether your store can launch/i)).toBeInTheDocument();
+    expect(screen.getByText(/breaks even/i)).toBeInTheDocument();
+    expect(screen.getByText(/board-ready packet/i)).toBeInTheDocument();
+  });
+
+  it("fires onCreate (not onStartExample) when Create is clicked in the empty state", () => {
+    let created = false;
+    let exampled = false;
+    render(
+      <ProjectionsList
+        projections={[]}
+        onCreate={() => (created = true)}
+        onStartExample={() => (exampled = true)}
+        onOpen={() => {}}
+      />,
     );
     screen.getByRole("button", { name: /^create/i }).click();
     expect(created).toBe(true);
+    expect(exampled).toBe(false);
+  });
+
+  it("fires onStartExample (not onCreate) when 'Start from example' is clicked", () => {
+    let created = false;
+    let exampled = false;
+    render(
+      <ProjectionsList
+        projections={[]}
+        onCreate={() => (created = true)}
+        onStartExample={() => (exampled = true)}
+        onOpen={() => {}}
+      />,
+    );
+    screen.getByRole("button", { name: /start from example/i }).click();
+    expect(exampled).toBe(true);
+    expect(created).toBe(false);
   });
 });
 
 describe("ProjectionsList — populated", () => {
   it("renders one row per projection with server display strings (no client math)", () => {
-    render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
+    render(
+      <ProjectionsList
+        projections={[item]}
+        onCreate={() => {}}
+        onStartExample={() => {}}
+        onOpen={() => {}}
+      />,
+    );
     const row = screen.getByTestId("projection-row-p_8x");
     expect(within(row).getByText("House of Hope — Longview, TX")).toBeInTheDocument();
     // location + basis sub-line (a single node combining both)
@@ -54,7 +105,14 @@ describe("ProjectionsList — populated", () => {
   });
 
   it("shows the recommendation chip per row", () => {
-    render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
+    render(
+      <ProjectionsList
+        projections={[item]}
+        onCreate={() => {}}
+        onStartExample={() => {}}
+        onOpen={() => {}}
+      />,
+    );
     const row = screen.getByTestId("projection-row-p_8x");
     expect(within(row).getByText(/proceed/i)).toBeInTheDocument();
   });
@@ -62,14 +120,42 @@ describe("ProjectionsList — populated", () => {
   it("opens a projection by view_slug when its row is activated", () => {
     let opened = "";
     render(
-      <ProjectionsList projections={[item]} onCreate={() => {}} onOpen={(s) => (opened = s)} />,
+      <ProjectionsList
+        projections={[item]}
+        onCreate={() => {}}
+        onStartExample={() => {}}
+        onOpen={(s) => (opened = s)}
+      />,
     );
     screen.getByRole("button", { name: /open house of hope/i }).click();
     expect(opened).toBe("p_8x");
   });
 
+  it("uses the canonical, spelled-out column headers (unified vocabulary)", () => {
+    render(
+      <ProjectionsList
+        projections={[item]}
+        onCreate={() => {}}
+        onStartExample={() => {}}
+        onOpen={() => {}}
+      />,
+    );
+    expect(screen.getByRole("columnheader", { name: "Year 1 revenue" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Year 1 net" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: "Startup capital required" }),
+    ).toBeInTheDocument();
+  });
+
   it("offers a Create action in the header when projections exist", () => {
-    render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
+    render(
+      <ProjectionsList
+        projections={[item]}
+        onCreate={() => {}}
+        onStartExample={() => {}}
+        onOpen={() => {}}
+      />,
+    );
     expect(screen.getByRole("button", { name: /new projection/i })).toBeInTheDocument();
   });
 });

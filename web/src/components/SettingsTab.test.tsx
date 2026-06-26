@@ -71,9 +71,33 @@ describe("SettingsTab — renders the server settings", () => {
     expect(screen.getByText("$150,000")).toBeInTheDocument();
   });
 
+  it("edits percents in percent space: the labor control shows '60', not '0.6'", () => {
+    renderTab();
+    const labor = screen.getByLabelText(/labor/i) as HTMLInputElement;
+    // Edited value is in percent space (60), not the 0..1 fraction (0.6).
+    expect(labor.value).toBe("60");
+    // Bounds and step are scaled into percent space too.
+    expect(labor.min).toBe("0");
+    expect(labor.max).toBe("100");
+    expect(labor.step).toBe("0.5");
+    expect(labor.inputMode).toBe("decimal");
+    // A trailing '%' adornment marks the unit on the editable surface.
+    const control = labor.closest("label") as HTMLElement;
+    expect(within(control).getByText("%")).toBeInTheDocument();
+  });
+
+  it("leaves money controls in raw space (occupancy shows its dollar raw, no '%')", () => {
+    renderTab();
+    const occupancy = screen.getByLabelText(/occupancy/i) as HTMLInputElement;
+    expect(occupancy.value).toBe("150000");
+    expect(occupancy.max).toBe("600000");
+    const control = occupancy.closest("label") as HTMLElement;
+    expect(within(control).queryByText("%")).not.toBeInTheDocument();
+  });
+
   it("starts in the saved state", () => {
     renderTab();
-    expect(screen.getByText(/saved automatically/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Saved$/)).toBeInTheDocument();
   });
 });
 
@@ -82,7 +106,9 @@ describe("SettingsTab — debounced autosave (API_SPEC §1.3/§4.4)", () => {
     const onPatch = vi.fn().mockResolvedValue({ version: 8, viewModel: {} });
     renderTab({ onPatch });
 
-    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "0.45" } });
+    // The user types in percent space ("45"); the PATCH body still carries the
+    // 0..1 raw fraction (0.45) the API expects.
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     expect(screen.getByText(/saving/i)).toBeInTheDocument();
 
     await vi.advanceTimersByTimeAsync(20);
@@ -92,18 +118,32 @@ describe("SettingsTab — debounced autosave (API_SPEC §1.3/§4.4)", () => {
     expect(call.body.assumptions.labor_pct).toBeCloseTo(0.45);
   });
 
+  it("sends the 0..1 raw fraction when the user types a percent (60 -> 0.6)", async () => {
+    const onPatch = vi.fn().mockResolvedValue({ version: 8, viewModel: {} });
+    // Seed labor at 45% so typing "60" is a genuine change off the default.
+    const settings = { ...settingsViewModel(), laborPct: sv(0.45, "45%") };
+    renderTab({ onPatch, settings });
+
+    const labor = screen.getByLabelText(/labor/i) as HTMLInputElement;
+    expect(labor.value).toBe("45");
+    fireEvent.change(labor, { target: { value: "60" } });
+    await vi.advanceTimersByTimeAsync(20);
+    await waitFor(() => expect(onPatch).toHaveBeenCalledTimes(1));
+    expect(onPatch.mock.calls[0][0].body.assumptions.labor_pct).toBeCloseTo(0.6);
+  });
+
   it("collapses rapid edits into one PATCH and shows Saved automatically after", async () => {
     const onPatch = vi.fn().mockResolvedValue({ version: 8, viewModel: {} });
     renderTab({ onPatch });
     const labor = screen.getByLabelText(/labor/i);
-    fireEvent.change(labor, { target: { value: "0.5" } });
-    fireEvent.change(labor, { target: { value: "0.55" } });
-    fireEvent.change(labor, { target: { value: "0.45" } });
+    fireEvent.change(labor, { target: { value: "50" } });
+    fireEvent.change(labor, { target: { value: "55" } });
+    fireEvent.change(labor, { target: { value: "45" } });
 
     await vi.advanceTimersByTimeAsync(20);
     await waitFor(() => expect(onPatch).toHaveBeenCalledTimes(1));
     expect(onPatch.mock.calls[0][0].body.assumptions.labor_pct).toBeCloseTo(0.45);
-    await waitFor(() => expect(screen.getByText(/saved automatically/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/^Saved$/)).toBeInTheDocument());
   });
 });
 
@@ -124,7 +164,7 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
   it("shows the conflict banner with all three recovery actions on a 409", async () => {
     const onPatch = conflictingPatch();
     renderTab({ onPatch });
-    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "0.45" } });
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     await vi.advanceTimersByTimeAsync(20);
 
     const banner = await screen.findByRole("alert");
@@ -137,7 +177,7 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
   it("Reload discards local edits and adopts the server's current version (no PATCH)", async () => {
     const onPatch = conflictingPatch();
     renderTab({ onPatch });
-    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "0.45" } });
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     await vi.advanceTimersByTimeAsync(20);
     await screen.findByRole("alert");
 
@@ -145,7 +185,7 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
     await waitFor(() =>
       expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
     );
-    expect(screen.getByText(/saved automatically/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Saved$/)).toBeInTheDocument();
   });
 
   it("Overwrite re-issues the PATCH with If-Match: <current_version>", async () => {
@@ -164,7 +204,7 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
       .mockResolvedValueOnce({ version: 10, viewModel: {} });
 
     renderTab({ onPatch });
-    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "0.45" } });
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     await vi.advanceTimersByTimeAsync(20);
     await screen.findByRole("alert");
 
@@ -178,7 +218,7 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
     const onPatch = conflictingPatch();
     const onSaveAsCopy = vi.fn();
     renderTab({ onPatch, onSaveAsCopy });
-    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "0.45" } });
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     await vi.advanceTimersByTimeAsync(20);
     await screen.findByRole("alert");
 

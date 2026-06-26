@@ -10,6 +10,7 @@ import { RecoChip } from "./RecoChip";
 export interface ProjectionsListProps {
   projections: ProjectionListItem[];
   onCreate: () => void;
+  onStartExample: () => void;
   onOpen: (viewSlug: string) => void;
 }
 
@@ -18,19 +19,30 @@ function formatUpdated(iso: string): string {
   return iso.slice(0, 10);
 }
 
-export function ProjectionsList({ projections, onCreate, onOpen }: ProjectionsListProps) {
+export function ProjectionsList({
+  projections,
+  onCreate,
+  onStartExample,
+  onOpen,
+}: ProjectionsListProps) {
   if (projections.length === 0) {
     return (
       <section className="list-empty" aria-labelledby="empty-heading">
-        <h1 id="empty-heading">No projections yet</h1>
-        <p>Build a board-ready 3-year projection from a few inputs.</p>
-        <div className="list-empty__actions">
-          <button type="button" className="btn btn--primary" onClick={onCreate}>
-            Create projection
-          </button>
-          <button type="button" className="btn" onClick={onCreate}>
-            Start from example
-          </button>
+        <div className="list-empty__card">
+          <h1 id="empty-heading">No projections yet</h1>
+          <p>
+            See whether your store can launch, how much startup cash you'll need, and when it
+            breaks even — then share a board-ready packet. Start from a finished example, or build
+            your own.
+          </p>
+          <div className="list-empty__actions">
+            <button type="button" className="btn btn--primary" onClick={onCreate}>
+              Create projection
+            </button>
+            <button type="button" className="btn" onClick={onStartExample}>
+              Start from example
+            </button>
+          </div>
         </div>
       </section>
     );
@@ -50,13 +62,13 @@ export function ProjectionsList({ projections, onCreate, onOpen }: ProjectionsLi
             <th scope="col">Projection</th>
             <th scope="col">Updated</th>
             <th scope="col" className="num">
-              Y1 revenue
+              Year 1 revenue
             </th>
             <th scope="col" className="num">
-              Y1 net
+              Year 1 net
             </th>
             <th scope="col" className="num">
-              Capital required
+              Startup capital required
             </th>
             <th scope="col">Recommendation</th>
           </tr>

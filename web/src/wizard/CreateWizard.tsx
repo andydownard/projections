@@ -381,7 +381,10 @@ export function CreateWizard({ onGenerate }: CreateWizardProps) {
               <div>
                 <dt>Trade area</dt>
                 <dd className="num">
-                  {d.basis} · {new Intl.NumberFormat("en-US").format(d.households)} households
+                  {/* NO client-side number formatting (PRD §13): the household
+                      count is rendered raw — there is no server {display} string
+                      pre-create to defer to. */}
+                  {d.basis} · {d.households} households
                 </dd>
               </div>
               <div>

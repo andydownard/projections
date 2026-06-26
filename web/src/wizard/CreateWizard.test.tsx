@@ -119,6 +119,16 @@ describe("CreateWizard — review & generate", () => {
     expect(payload.terms_accepted).toBe(true);
   });
 
+  it("renders the household count raw, with no client-side digit grouping (PRD §13)", async () => {
+    const user = userEvent.setup();
+    render(<CreateWizard onGenerate={() => Promise.resolve()} />);
+    await gotoReview(user);
+    // The default trade-area households (31800) renders without a thousands
+    // separator — the client never formats numbers (no client-side grouping).
+    expect(screen.getByText(/31800 households/)).toBeInTheDocument();
+    expect(screen.queryByText(/31,800 households/)).not.toBeInTheDocument();
+  });
+
   it("does not allow Generate until terms are accepted", async () => {
     const user = userEvent.setup();
     const onGenerate = vi.fn().mockResolvedValue(undefined);
