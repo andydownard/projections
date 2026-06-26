@@ -4,6 +4,10 @@
 
 [build]
 builder = "dockerfile"
+# watchPatterns belongs under [build] as a direct string array (Railway schema).
+# The old [deploy.watchPatterns] sub-table was invalid and ignored, so GitHub
+# pushes fell back to the dashboard setting and deployed as silently SKIPPED.
+watchPatterns = ["**"]
 
 [deploy]
 healthcheckPath = "/api/health"
@@ -11,9 +15,6 @@ healthcheckTimeout = 30
 numReplicas = 1
 restartPolicyType = "always"
 sleepApplication = false
-
-[deploy.watchPatterns]
-patterns = ["**"]
 
 # Volume is mounted at /data (NOT /app — the DB must live on the durable volume).
 # DB_PATH=/data/projections.db is set as a service env var, not here.
