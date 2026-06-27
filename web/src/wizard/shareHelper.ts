@@ -9,6 +9,28 @@
 export type TradeAreaBasis = "city" | "county" | "manual";
 export type LeaseType = "gross" | "nnn";
 
+/**
+ * One timed startup line item (Spec §5): a labelled cost landing on a project
+ * month. The client only collects it — `month >= 1` / `amount >= 0` and the
+ * derived totals are validated/computed server-side (no client math, PRD §13).
+ */
+export interface CostScheduleRow {
+  category: string;
+  month: number;
+  amount: number;
+}
+
+/** The legacy/migration-default timed cost schedule (mirrors engine.model.STARTUP):
+ * a single lump at month 1 — reproduces today's numbers when opening month = 1. */
+export const DEFAULT_COST_SCHEDULE: ReadonlyArray<CostScheduleRow> = [
+  { category: "Thrift Store Consultant", month: 1, amount: 100000 },
+  { category: "Equipment & Fixtures", month: 1, amount: 45000 },
+  { category: "Build-out / Renovations / Tenant Improvements", month: 1, amount: 50000 },
+  { category: "Legal, Permits, Insurance Setup, Signage", month: 1, amount: 13500 },
+];
+
+export const DEFAULT_OPENING_MONTH_NUMBER = 1;
+
 export interface WizardDraft {
   name: string;
   city: string;
@@ -29,6 +51,11 @@ export interface WizardDraft {
   grant: number;
   loan: number;
   termsAccepted: boolean;
+  // Timed cost schedule + opening anchor (Spec §5/§7). Optional so existing
+  // callers compile; buildCreatePayload supplies the month-1-lump default.
+  targetOpeningDate?: string;
+  openingMonthNumber?: number;
+  costSchedule?: CostScheduleRow[];
 }
 
 export interface CreatePayload {
@@ -48,6 +75,13 @@ export interface CreatePayload {
       share_y3: number;
     };
     source_of_funds: { cash: number; grant: number; loan: number };
+    // Opening anchor + timed cost schedule (Spec §5/§7). Optional on the payload
+    // type so legacy callers compile; buildCreatePayload always populates them
+    // (target_opening_date is null when the operator hasn't set one — the server
+    // falls back to the default).
+    target_opening_date?: string | null;
+    opening_month_number?: number;
+    cost_schedule?: CostScheduleRow[];
   };
   terms_accepted: boolean;
 }
@@ -75,6 +109,11 @@ export interface ServerCreateBody {
     occupancy_annual: string;
     lease_type: LeaseType;
     nnn_opex_annual: string;
+    // Opening anchor + timed cost schedule (Spec §5/§7). The backend InputsIn
+    // model validates these (month >= 1, amount >= 0, opening_month_number >= 1).
+    target_opening_date: string | null;
+    opening_month_number: number;
+    cost_schedule: CostScheduleRow[];
   };
   trade_area: {
     basis: TradeAreaBasis;
@@ -115,6 +154,9 @@ export function toServerCreateBody(p: CreatePayload): ServerCreateBody {
       occupancy_annual: String(p.inputs.occupancy_annual),
       lease_type: p.inputs.lease_type,
       nnn_opex_annual: "0",
+      target_opening_date: p.inputs.target_opening_date ?? null,
+      opening_month_number: p.inputs.opening_month_number ?? DEFAULT_OPENING_MONTH_NUMBER,
+      cost_schedule: p.inputs.cost_schedule ?? DEFAULT_COST_SCHEDULE.map((r) => ({ ...r })),
     },
     trade_area: { basis: p.trade_area.basis, households: String(p.trade_area.households) },
     location: { query: p.location.query },
@@ -141,6 +183,9 @@ export function buildCreatePayload(d: WizardDraft): CreatePayload {
         share_y3: d.shareY3 / 100,
       },
       source_of_funds: { cash: d.cash, grant: d.grant, loan: d.loan },
+      target_opening_date: d.targetOpeningDate ?? null,
+      opening_month_number: d.openingMonthNumber ?? DEFAULT_OPENING_MONTH_NUMBER,
+      cost_schedule: d.costSchedule ?? DEFAULT_COST_SCHEDULE.map((r) => ({ ...r })),
     },
     terms_accepted: d.termsAccepted,
   };

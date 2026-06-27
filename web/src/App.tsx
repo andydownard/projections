@@ -9,7 +9,7 @@ import { useSyncExternalStore } from "react";
 import { TopBar } from "./components/TopBar";
 import { parseRoute } from "./router/route";
 import { ListPage } from "./pages/ListPage";
-import { WizardPage } from "./pages/WizardPage";
+import { CreateProjectionPage } from "./pages/CreateProjectionPage";
 import { ProjectionDetail } from "./pages/ProjectionDetail";
 import { RoleView } from "./pages/RoleView";
 import "./tokens.css";
@@ -36,7 +36,7 @@ export function App() {
       <TopBar />
       <main id="main" className="app__main" tabIndex={-1}>
         {route.kind === "home" && <ListPage />}
-        {route.kind === "wizard" && <WizardPage aiOff={route.aiOff} />}
+        {route.kind === "wizard" && <CreateProjectionPage aiOff={route.aiOff} />}
         {route.kind === "detail" && (
           <ProjectionDetail slug={route.slug} edit={route.edit} aiOff={route.aiOff} />
         )}
