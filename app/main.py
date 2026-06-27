@@ -15,7 +15,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import config
 from app.middleware import SecurityHeadersMiddleware
-from app.routers import feedback, health, intent, penny, places, projections, roles
+from app.routers import (
+    feedback,
+    gate,
+    health,
+    intent,
+    penny,
+    places,
+    projections,
+    roles,
+)
 from app.store import build_store
 
 logger = logging.getLogger("app")
@@ -60,6 +69,7 @@ def create_app() -> FastAPI:
     app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(health.router)
+    app.include_router(gate.router)
     app.include_router(projections.router)
     app.include_router(penny.router)
     app.include_router(roles.router)

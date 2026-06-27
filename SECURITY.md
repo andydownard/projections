@@ -119,6 +119,7 @@ Because there is no login, losing the owner token loses the workspace. The **onl
 
 - Read-only holders (`view_slug` / role links) **may** view the projection and download the `.xlsx` and Board Packet — these contain nothing beyond what the read view already shows (PRD §20). This is not a leak.
 - Whether export is **gated behind the paid expert-review event** is a **business-model toggle** (PRD §3), a config decision, not an access-control bug. The access layer always permits read+export at the read scope; a separate, clearly-labeled gate (terms acceptance, paid flag) may sit in front of it.
+- The toggle is the single server config `gate_config` ({`gate_mode`, `price_usd`}, [API_SPEC.md](./API_SPEC.md) §10a). It governs the **expert-review / sign-off surface ONLY** — the basic `.xlsx` and basic packet stay **free and ungated in every mode**. It is **orthogonal** to the terms gate below: a paid gate never bypasses terms, and flipping it never alters compute/`computed_json`/`model_version`.
 - **Terms acceptance is required before export/share** (PRD §21). The gate is a server-checked flag, not client-only.
 
 ---
@@ -144,6 +145,7 @@ Because there is no login, losing the owner token loses the workspace. The **onl
 | OpenAI fallback | `OPENAI_API_KEY` | No fallback provider; Anthropic-only |
 | Feedback → GitHub | `GITHUB_TOKEN`, `GITHUB_REPO` | Feedback capture still works server-side; no GitHub issue is filed |
 | Intent → CRM | `CRM_API_KEY` | Intent capture disabled; no CRM push |
+| Price/gate flag | `GATE_MODE`, `GATE_PRICE_USD` | **Safe default `free`** — unset/unknown ⇒ free, ungated, `price_usd:null`. A business-model toggle (§3, PRD §3), **never** a required boot secret: a missing value defaults to free and must **not** refuse boot. Re-read per request for a no-deploy flip ([OPS_RUNBOOK.md](./OPS_RUNBOOK.md) §9a) |
 | Backup replication | `LITESTREAM_BUCKET`, `LITESTREAM_ENDPOINT`, `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY`, `LITESTREAM_REGION` | **See the critical note in §11** — in production these should be treated as effectively required (loud health-check) so replication is never silently off |
 | Observability | `SENTRY_DSN` | No error reporting |
 

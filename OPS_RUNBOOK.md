@@ -389,6 +389,20 @@ The math engine is the single authority (PRD §13). The release gate is what kee
 
 ---
 
+## 9a. Flip the price/gate flag (no-deploy)
+
+The free-vs-paid business-model gate (PRD §3, [`API_SPEC.md`](./API_SPEC.md) §10a) is a **single server config** flipped **without a deploy**. The flag is re-read on every request, so a value change takes effect on the **next** request — no restart, no rebuild.
+
+- **The two vars (Railway service variables):**
+  - `GATE_MODE` — `free` (default) or `paid_review`. Unset/unknown ⇒ `free` (safe default; never refuses boot).
+  - `GATE_PRICE_USD` — the dollar price surfaced in the CTA. Read **only** in `paid_review`; ignored (and `price_usd:null`) in `free`. Garbage/negative ⇒ `null`.
+- **To turn the gate ON:** set `GATE_MODE=paid_review` and `GATE_PRICE_USD=<dollars>`. Verify with `curl -s $PROD_URL/api/config` → `{"gate_mode":"paid_review","price_usd":<n>}`. The basic `.xlsx`/packet stay free in every mode; only the expert-review / sign-off surface gates (`402 payment_required`).
+- **To turn it OFF:** set `GATE_MODE=free` (or unset it). Verify `/api/config` returns `{"gate_mode":"free","price_usd":null}`.
+- **A/B (M-1):** a per-cohort override `GATE_MODE__<COHORT>` (e.g. `GATE_MODE__B=paid_review`) addresses a split without a rebuild; the experiment surface itself is wired in M-1. The gate state is emitted on the expert-review response for conversion attribution.
+- **Caution:** this is a **product/business** toggle, NOT a security control. It never gates the basic export and is orthogonal to the terms-acceptance gate (terms are always required before export/share). Do not use it to restrict data access.
+
+---
+
 ## 10. Incident response
 
 | Incident | Symptom | Response | User experience |
