@@ -19,18 +19,8 @@ import { fileURLToPath } from "node:url";
 const srcDir = dirname(fileURLToPath(import.meta.url));
 
 const KNOWN_ORPHANS = new Set<string>([
-  "conflict-modal",
-  "conflict-modal__actions",
-  "conflict-modal__body",
-  "conflict-modal__panel",
-  "conflict-modal__title",
-  "feedback-modal",
-  "feedback-modal__actions",
-  "feedback-modal__form",
-  "feedback-modal__note",
-  "feedback-modal__panel",
-  "feedback-modal__success",
-  "feedback-modal__warning",
+  // feedback-modal__* and conflict-modal__* are now styled in tokens.css
+  // (issue #144) — removed from the backlog so the gate stays honest.
   "narrative-canvas__field",
   "narrative-canvas__status",
   "role-view",
