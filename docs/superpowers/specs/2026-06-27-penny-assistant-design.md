@@ -17,6 +17,12 @@ An AI assistant named **Penny** (custom avatar `penny-avatar.png`, to be added t
 - **Change UX (per field):** the most recent change(s) are **visually prominent**; the **previous value is shown subtly** next to the field with a **small undo icon** that reverts **that field** to its previous value (per-field inline undo), independent of the global revision/restore.
 - **Safety:** grounding + extract-only + injection-resistance enforced by CI tests (extending the existing AI-safety suite); every Penny edit is an undoable revision.
 
+## Confirmed (2026-06-27)
+
+- **Apply model:** apply immediately + narrate intent and completion + per-field undo (not a propose-approve gate).
+- **Wizard scope:** **full draft assistant** — Penny can help with any wizard field (name, address resolution, households, shares) and build the cost schedule from a proposal, all narrated + undoable on the draft.
+- **Tool set:** as listed below — no additions/removals requested.
+
 ## Open (for the Spec B brainstorm)
 
 - Tool surface + server tool-use loop shape; transcript storage schema; rate/cost controls.
