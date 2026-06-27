@@ -104,6 +104,33 @@ jobs:
         # then legs (a)==(b) reconcile and (c) records an explicit skip reason.
         run: pytest -q engine/tests/
 
+  docker-boot:
+    name: Docker image boots (build + /api/health)
+    # The prod deploy crash-looped once because the Dockerfile's hardcoded pip list
+    # was missing `bleach` (`import bleach` failed at boot) and CI never built the
+    # image, so it was invisible until prod. scripts/test_dockerfile_deps.py guards
+    # dep-list DRIFT but cannot catch OTHER boot failures (bad start.sh, a config-gate
+    # refusal, a non-pip import). This job builds the REAL multi-stage prod image and
+    # BOOTS it, failing CI unless GET /api/health serves a 200 — catching the whole
+    # boot-failure class BEFORE merge/deploy. See scripts/docker_smoke.sh for the env.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx (layer cache)
+        uses: docker/setup-buildx-action@v3
+      - name: Build prod image (cached) and load into the daemon
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: projections-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Boot the image + assert /api/health (200 + shape)
+        # SKIP_BUILD=1: the image was already built (with cache) in the step above;
+        # the script only runs the container, polls /api/health, and asserts the shape.
+        run: SKIP_BUILD=1 bash scripts/docker_smoke.sh
+
   e2e:
     name: Playwright E2E (1440 / 768 / 375)
     runs-on: ubuntu-latest
