@@ -122,7 +122,13 @@ def _require_owner(store: Store, view_slug: str, authorization: Optional[str]) -
 # ----------------------------------------------------------------- request body
 class CostScheduleItemIn(BaseModel):
     """One timed startup line item (Spec §5): a labelled cost landing on a project
-    month. Server-validated — ``month >= 1`` and ``amount >= 0`` (no client math)."""
+    month. Server-validated — ``month >= 1`` and ``amount >= 0`` (no client math).
+
+    A row MAY also carry opaque ``provenance`` metadata (DATA_MODEL §7) — Penny
+    stamps ``{"source": "ai", ...}`` on rows she creates (Spec B §6.2/§9). Provenance
+    is validated/stored by ``_validate_schedule_inputs`` (not modelled here so the
+    create round-trip stays ``{category, month, amount}`` exactly); it never feeds
+    the engine (cost_schedule is filtered out of the engine args)."""
     category: str
     month: int = Field(ge=1)
     amount: float = Field(ge=0)
@@ -247,12 +253,22 @@ def _validate_schedule_inputs(inputs_d: dict) -> None:
     Enforces ``month >= 1``, ``amount >= 0``, ``opening_month_number >= 1`` on the
     PATCH path (create is validated by ``InputsIn`` at body parse). Raises HTTP 422
     with ``invalid_inputs`` on a bad row so the client never relies on client math.
+
+    An optional ``provenance`` object (Penny's AI-created rows, DATA_MODEL §7) is
+    tolerated and must be an object; it is stripped before the ``{category, month,
+    amount}`` shape is validated so any other unknown key is still rejected.
     """
     try:
         schedule = inputs_d.get("cost_schedule")
         if schedule is not None:
             for item in schedule:
-                CostScheduleItemIn(**item)
+                if not isinstance(item, dict):
+                    raise TypeError("cost row must be an object")
+                provenance = item.get("provenance")
+                if provenance is not None and not isinstance(provenance, dict):
+                    raise ValueError("provenance must be an object")
+                CostScheduleItemIn(**{k: v for k, v in item.items()
+                                      if k != "provenance"})
         anchor = inputs_d.get("opening_month_number")
         if anchor is not None and int(anchor) < 1:
             raise ValueError("opening_month_number must be >= 1")
@@ -993,26 +1009,31 @@ def export_packet(
     )
 
 
-@router.patch("/{view_slug}")
-def patch_projection(
-    view_slug: str,
+def apply_projection_patch(
+    *,
+    row: dict,
     body: PatchProjectionIn,
-    response: Response,
-    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
-    if_match: int = Depends(parse_if_match),
-):
-    """Autosave (API_SPEC §4.4): merge patch -> recompute server-side -> persist.
+    store: Store,
+    token: Optional[str],
+    if_match: int,
+    actor: str = "user",
+    change_summary: str = "autosave",
+) -> tuple[dict[str, Any], int, str]:
+    """The single server-authoritative mutation/recompute write path (API_SPEC §4.4).
 
-    Requires Authorization: Bearer (owner OR this projection's edit token) and
-    If-Match: <version>. Optimistic concurrency: a stale version writes 0 rows and
-    returns HTTP 409 with the current server state. One revision snapshot per settle.
+    Shared by the manual autosave PATCH (``actor='user'``) AND the Penny tool loop
+    (``actor='penny'``, Spec B §4/§6.2): there is NO parallel writer and NO
+    privileged Penny path. Auth, override-DAG validation, cost-schedule validation,
+    optimistic concurrency, recompute, and the one-revision-per-write audit are
+    therefore IDENTICAL for an AI edit and a human edit — Penny carries intents
+    through exactly the same wall the manual UI hits.
+
+    Auth: requires the owner OR this projection's edit token; a view-only/absent
+    token -> 403 forbidden. Raises HTTPException(403 forbidden | 422 node_not_pinnable
+    | 422 invalid_inputs | 409 version_conflict) exactly as the manual PATCH does.
+    Returns ``(view_model, new_version, name)`` and writes ONE revision tagged
+    ``actor`` (DATA_MODEL §4: the revision ``actor`` enum — user | penny | …).
     """
-    row = store.get_projection_by_slug(view_slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail={"error": "not_found"})
-
-    token = _bearer(authorization)
     is_owner = token is not None and token_matches(token, row["owner_token_hash"])
     is_editor = (
         token is not None
@@ -1021,6 +1042,7 @@ def patch_projection(
     )
     if not (is_owner or is_editor):
         # view-only (no/invalid token) cannot mutate (SECURITY.md §2; API_SPEC §4.4).
+        # A Penny mutate tool gates on capability first, but this is the real wall.
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
     # is_owner/is_editor both imply a presented token (see checks above).
     assert token is not None
@@ -1063,7 +1085,7 @@ def patch_projection(
     }
     affected = store.update_with_version_check(row["id"], if_match, patch)
     if affected == 0:
-        current = store.get_projection_by_slug(view_slug)
+        current = store.get_projection_by_slug(row["view_slug"])
         try:
             cur_vm = json.loads(current["computed_json"] or "{}") if current else {}
         except json.JSONDecodeError:
@@ -1072,7 +1094,7 @@ def patch_projection(
             "error": "version_conflict",
             "current_version": current["version"] if current else None,
             "your_version": if_match,
-            "current_state": {**cur_vm, "view_slug": view_slug,
+            "current_state": {**cur_vm, "view_slug": row["view_slug"],
                               "version": current["version"] if current else None},
             "recovery": "reload | overwrite | save_as_copy",
         })
@@ -1089,9 +1111,37 @@ def patch_projection(
         "computed_json": patch["computed_json"],
         "model_version": patch["model_version"],
         "actor_token_hash": hash_token(token),
-        "change_summary": "autosave",
+        "actor": actor,
+        "change_summary": change_summary,
         "created_at": _utcnow(),
     })
+    return vm, new_version, name
+
+
+@router.patch("/{view_slug}")
+def patch_projection(
+    view_slug: str,
+    body: PatchProjectionIn,
+    response: Response,
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Autosave (API_SPEC §4.4): merge patch -> recompute server-side -> persist.
+
+    Requires Authorization: Bearer (owner OR this projection's edit token) and
+    If-Match: <version>. Optimistic concurrency: a stale version writes 0 rows and
+    returns HTTP 409 with the current server state. One revision snapshot per settle.
+    The merge/recompute/persist/audit body lives in :func:`apply_projection_patch`
+    so the Penny tool loop converges on the exact same write path (actor:penny).
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    token = _bearer(authorization)
+    vm, new_version, name = apply_projection_patch(
+        row=row, body=body, store=store, token=token, if_match=if_match)
     response.headers["ETag"] = str(new_version)
     return {**vm, "view_slug": view_slug, "version": new_version, "name": name}
 

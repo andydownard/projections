@@ -197,7 +197,23 @@ The research and narrative subsystems are the app's trust surface. These are **h
 3. **Numeric grounding.** Every figure appearing in narrative prose **must exist** in `computed_json` / approved facts. Post-generation validation rejects any prose containing an ungrounded number (PRD §17). This protects the board packet from hallucinated figures.
 4. **Stale handling.** `narratives.computed_hash` is stored at generation; if figures change, surface "Out of date" + diff + Regenerate — **never auto-overwrite user-edited prose** (PRD §17).
 
-These tests must be **adversarial**: feed a hallucinated figure → assert rejection; feed an unfetched citation → assert rejection; feed `ignore previous instructions` web text → assert it is stripped/ignored. A happy-path-only test gives false safety.
+**Penny tool-use loop (Spec B §4/§6.2/§11).** Penny is another input device for the **same** server-authoritative mutation path, not a privileged writer. Her bounded server-side tool-use loop exposes exactly **seven** tools (`app/penny/tools.py`); the same invariants apply, as CI tests with **stubbed providers only** (no real provider call ever):
+
+| Tool | Kind | Server-side input schema (sent to the model) |
+|---|---|---|
+| `read_projection` | read | `{}` — returns grounded `computed_json` facts (metrics, KPIs, rows, overrides), the cost schedule, and the editable surface. The **only** way Penny "knows" numbers. |
+| `parse_proposal` | extract | `{proposal_ref?, proposal_text?}` — extract-only over **untrusted** proposal text; every figure must trace to the document, nothing invented (full PDF parse: PE9). |
+| `set_input` | mutate | `{field ∈ {name, city, org_name, households, target_opening_date, opening_month_number}, value}` |
+| `set_assumption` | mutate | `{name ∈ {labor_pct, marketing_pct, supplies_pct, card_pct, payroll_tax_pct, salvage_pct, escalator, basket, share_y1..3, rent_per_sqft, occupancy_annual, donation_value}, value}` |
+| `set_override` | mutate | `{node, year ∈ {1,2,3}, value, note?}` |
+| `clear_override` | mutate | `{node, year ∈ {1,2,3}}` |
+| `edit_cost_schedule` | mutate | `{ops:[{op ∈ {add,edit,remove}, category, month, amount?, new_month?}], opening_month_number?}` |
+
+5. **Untrusted-data framing of the loop.** The user message and any proposal text are wrapped as untrusted **data** (extract-only / ignore-embedded-instructions framing) and run through `strip_injection_markers` before the model sees them; grounding facts stay in the **trusted** system prompt (`app/penny/loop.py`). Sanitization events are logged as **pattern + timestamp only**, never the input.
+6. **Figure-strip in mutate-tool args.** A mutate tool argument is an **intent** (a raw user input value), never a *computed* figure. The server **strips/rejects** any value argument that is display-formatted money/percent — contains `$`, `%`, or thousands-grouping commas (`$277,990`, `8%`, `($41,200)`, `50,000`) — via `app.aisafety.is_computed_figure_token`, so **no LLM-computed figure is ever applied** (extends the N2 figure-strip rule to the tool loop). Bare numbers/fractions (`0.08`, `5000`) pass.
+7. **One mutation wall, capability-gated.** Every mutate tool routes through the existing `apply_projection_patch` (the PATCH/`If-Match` service): owner/edit Bearer required, override-DAG + domain + cost-schedule validation unchanged, non-pinnable → **422 `node_not_pinnable`** relayed in plain language, stale version → **409** surfaced for re-read/retry, and **one revision tagged `actor:penny`** per applied edit. A **view-only** caller's Penny degrades to **answer-only** (`ctx.can_mutate` gate) and the 403 wall backstops it.
+
+These tests must be **adversarial**: feed a hallucinated figure → assert rejection; feed an unfetched citation → assert rejection; feed `ignore previous instructions` web/proposal text → assert it is stripped/ignored; put a computed `$`/`%` into a mutate-tool arg → assert it is stripped/rejected; mutate from a view-only token → assert refusal. A happy-path-only test gives false safety.
 
 #### 6.3.1 Penny tool-use loop — untrusted-data framing (Spec B, issue #122 / PE3)
 

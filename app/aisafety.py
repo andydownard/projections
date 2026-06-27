@@ -41,6 +41,33 @@ _INJECTION_PATTERNS = [
 _MONEY_RE = re.compile(r"\(?\$\s?\d[\d,]*(?:\.\d+)?\)?")
 _PERCENT_RE = re.compile(r"\b\d+(?:\.\d+)?\s?%")
 
+# A *display-formatted* money/percent token — the tell-tale shape of an engine
+# OUTPUT figure ($, %, or thousands-grouping commas), as opposed to a raw user
+# input value (a bare number/fraction like ``0.08`` or ``5000``). Used by the
+# Penny tool loop to strip/reject a computed figure an LLM emits in a mutate-tool
+# argument (extends the N2 figure-strip rule to tool args, SECURITY §6.3).
+_FIGURE_TOKEN_RE = re.compile(r"[$%]|\d,\d{3}")
+
+
+def is_computed_figure_token(value: object) -> bool:
+    """True if ``value`` is a display-formatted money/percent figure, not a raw input.
+
+    Penny's tool calls must carry *intents* (raw values she relays from the user),
+    never a *computed* figure she asserts. A value that is display-formatted —
+    contains ``$``, ``%``, or thousands-grouping commas (``$277,990``, ``8%``,
+    ``($41,200)``, ``50,000``) — is the shape only the engine's formatting layer
+    produces, so the server refuses to apply it as a mutate-tool argument (no LLM
+    figure ever reaches the data). Bare numbers/fractions (``0.08``, ``5000``,
+    ``"2026-09-01"``) are legitimate user inputs and are never flagged.
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return False
+    if not isinstance(value, str):
+        return False
+    return bool(_FIGURE_TOKEN_RE.search(value))
+
 
 def strip_injection_markers(text: str | None) -> str:
     """Remove prompt-injection markers from untrusted text (SECURITY.md §6.3)."""
