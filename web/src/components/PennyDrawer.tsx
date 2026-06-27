@@ -31,7 +31,7 @@ import {
 import { FieldChange } from "./FieldChange";
 import { PennyTranscript, type PennyTurn } from "./PennyTranscript";
 import { ProposalUpload } from "./ProposalUpload";
-import { useSidePanel, Z } from "./sidePanels";
+import { useCoexistenceModal, useSidePanel, Z } from "./sidePanels";
 import {
   PennyError,
   sendPennyDraftMessage,
@@ -71,6 +71,10 @@ export interface PennyDrawerProps {
 }
 
 const BRAND = "#35644f";
+
+/** Comfortable touch target for the mobile full-screen sheet's sticky controls
+ *  (header + composer), per the PE12 mobile-375 / a11y pass (issue #131, spec §5). */
+const TOUCH_TARGET = 44;
 
 /** Safe matchMedia probe — jsdom and SSR have no matchMedia; default to `fallback`. */
 function mediaMatches(query: string, fallback: boolean): boolean {
@@ -202,6 +206,18 @@ function PennyPanel({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  // Scroll-lock the page behind the modal full-screen sheet so a touch drag scrolls
+  // the transcript, never the page underneath (PE12, issue #131). Restored on close
+  // (the panel unmounts). The desktop non-modal panel leaves the center scrollable.
+  useEffect(() => {
+    if (!modal || typeof document === "undefined") return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [modal]);
+
   // Focus trap when modal (full-screen sheet): keep Tab within the panel (spec §10).
   const onTrapKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -236,11 +252,26 @@ function PennyPanel({
     flexDirection: "column",
     width: modal ? "100%" : "380px",
     maxWidth: "100vw",
+    // Full-screen sheet uses the DYNAMIC viewport height so the composer stays above
+    // the on-screen keyboard on mobile (100dvh tracks the shrunken visual viewport).
+    height: modal ? "100dvh" : undefined,
+    maxHeight: modal ? "100dvh" : undefined,
     background: "var(--surface, #ffffff)",
     borderRight: "1px solid var(--line, #e2e2e2)",
     boxShadow: "0 0 24px rgba(0,0,0,0.18)",
     transform: entered ? "translateX(0)" : "translateX(-100%)",
     transition: reducedMotion ? "none" : "transform 240ms ease",
+  };
+
+  // On the mobile full-screen sheet the sticky header/close controls grow to a
+  // comfortable 44px touch target; the dense desktop panel keeps the compact 32px.
+  const controlSize = modal ? TOUCH_TARGET : 32;
+  const squareControlStyle: CSSProperties = {
+    ...iconBtnStyle,
+    width: controlSize,
+    height: controlSize,
+    minWidth: controlSize,
+    minHeight: controlSize,
   };
 
   return (
@@ -300,7 +331,7 @@ function PennyPanel({
             aria-haspopup="dialog"
             aria-expanded={infoOpen}
             onClick={() => setInfoOpen((v) => !v)}
-            style={iconBtnStyle}
+            style={squareControlStyle}
           >
             <span aria-hidden="true" style={{ fontWeight: 700 }}>
               i
@@ -310,8 +341,9 @@ function PennyPanel({
             type="button"
             onClick={onNewChat}
             style={{
-              ...iconBtnStyle,
+              ...squareControlStyle,
               width: "auto",
+              minWidth: 0,
               padding: "0 0.5rem",
               fontSize: "0.8125rem",
             }}
@@ -323,7 +355,7 @@ function PennyPanel({
             type="button"
             aria-label="Close Penny"
             onClick={onClose}
-            style={iconBtnStyle}
+            style={squareControlStyle}
           >
             <CloseIcon />
           </button>
@@ -374,34 +406,16 @@ const iconBtnStyle: CSSProperties = {
 // Default composer shell — multiline input + send + suggestion chips. No backend.
 function DefaultComposer() {
   const [draft, setDraft] = useState("");
+  const modal = useCoexistenceModal();
   return (
     <form
       data-testid="penny-composer"
       onSubmit={(e) => e.preventDefault()}
-      style={{
-        borderTop: "1px solid var(--line, #e2e2e2)",
-        padding: "0.625rem 1rem 0.75rem",
-        display: "flex",
-        flexDirection: "column",
-        gap: "0.5rem",
-      }}
+      style={composerFormStyle(modal)}
     >
-      <div style={{ display: "flex", gap: "0.375rem", flexWrap: "wrap" }}>
+      <div data-testid="penny-chips" style={chipRowStyle(modal)}>
         {["Explain break-even", "Lower the rent", "Build my cost schedule"].map((chip) => (
-          <button
-            key={chip}
-            type="button"
-            style={{
-              fontSize: "0.75rem",
-              padding: "0.2rem 0.55rem",
-              border: "1px solid var(--line, #e2e2e2)",
-              borderRadius: "999px",
-              background: "var(--surface, #fff)",
-              color: "var(--brand-deep, #1d4733)",
-              cursor: "pointer",
-            }}
-            onClick={() => setDraft(chip)}
-          >
+          <button key={chip} type="button" style={chipStyle(modal, false)} onClick={() => setDraft(chip)}>
             {chip}
           </button>
         ))}
@@ -413,25 +427,13 @@ function DefaultComposer() {
           rows={2}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          style={{
-            flex: "1 1 auto",
-            resize: "vertical",
-            minHeight: "2.5rem",
-            padding: "0.5rem",
-            border: "1px solid var(--line, #e2e2e2)",
-            borderRadius: "8px",
-            font: "inherit",
-          }}
+          style={composerTextareaStyle(modal)}
         />
         <button
           type="submit"
           disabled={draft.trim().length === 0}
           style={{
-            padding: "0.5rem 0.875rem",
-            border: "none",
-            borderRadius: "8px",
-            background: BRAND,
-            color: "#fff",
+            ...composerSendStyle(modal),
             cursor: draft.trim().length === 0 ? "not-allowed" : "pointer",
             opacity: draft.trim().length === 0 ? 0.6 : 1,
           }}
@@ -441,6 +443,75 @@ function DefaultComposer() {
       </div>
     </form>
   );
+}
+
+// ---- Shared composer styling (mobile full-screen sheet ⇄ desktop panel, PE12). ----
+// On the mobile sheet (`modal`): the composer sticks above the on-screen keyboard
+// with a safe-area inset, the suggestion chips scroll HORIZONTALLY instead of
+// wrapping (keeping the input reachable), and every control is a 44px touch target.
+
+function composerFormStyle(modal: boolean): CSSProperties {
+  return {
+    borderTop: "1px solid var(--line, #e2e2e2)",
+    padding: "0.625rem 1rem 0.75rem",
+    // Keep the composer clear of the iOS home indicator / rounded corners.
+    paddingBottom: modal ? "max(0.75rem, env(safe-area-inset-bottom))" : "0.75rem",
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.5rem",
+  };
+}
+
+function chipRowStyle(modal: boolean): CSSProperties {
+  return {
+    display: "flex",
+    gap: "0.375rem",
+    alignItems: "center",
+    // Mobile: a single non-wrapping row that scrolls; desktop: wrap onto lines.
+    flexWrap: modal ? "nowrap" : "wrap",
+    overflowX: modal ? "auto" : "visible",
+    WebkitOverflowScrolling: "touch",
+    scrollbarWidth: "thin",
+    paddingBottom: modal ? "0.15rem" : undefined,
+  };
+}
+
+function chipStyle(modal: boolean, pending: boolean): CSSProperties {
+  return {
+    flex: "0 0 auto",
+    whiteSpace: "nowrap",
+    fontSize: "0.75rem",
+    padding: modal ? "0 0.7rem" : "0.2rem 0.55rem",
+    minHeight: modal ? TOUCH_TARGET : undefined,
+    border: "1px solid var(--line, #e2e2e2)",
+    borderRadius: "999px",
+    background: "var(--surface, #fff)",
+    color: "var(--brand-deep, #1d4733)",
+    cursor: pending ? "not-allowed" : "pointer",
+  };
+}
+
+function composerTextareaStyle(modal: boolean): CSSProperties {
+  return {
+    flex: "1 1 auto",
+    resize: "vertical",
+    minHeight: modal ? TOUCH_TARGET : "2.5rem",
+    padding: "0.5rem",
+    border: "1px solid var(--line, #e2e2e2)",
+    borderRadius: "8px",
+    font: "inherit",
+  };
+}
+
+function composerSendStyle(modal: boolean): CSSProperties {
+  return {
+    padding: "0.5rem 0.875rem",
+    minHeight: modal ? TOUCH_TARGET : undefined,
+    border: "none",
+    borderRadius: "8px",
+    background: BRAND,
+    color: "#fff",
+  };
 }
 
 export function PennyDrawer({
@@ -519,8 +590,8 @@ export function PennyDrawer({
         }
         style={{
           position: "fixed",
-          left: "1rem",
-          bottom: "1rem",
+          left: "max(1rem, env(safe-area-inset-left))",
+          bottom: "max(1rem, env(safe-area-inset-bottom))",
           zIndex: 40,
           display: "inline-flex",
           alignItems: "center",
@@ -563,8 +634,10 @@ export function PennyDrawer({
         onClick={() => (open ? close() : setOpen(true))}
         style={{
           position: "fixed",
-          left: "1rem",
-          bottom: "1rem",
+          // Bottom-LEFT, inset past the safe area so the FAB never sits over the
+          // table's right scrollbar / primary actions on mobile (spec §5.1, #131).
+          left: "max(1rem, env(safe-area-inset-left))",
+          bottom: "max(1rem, env(safe-area-inset-bottom))",
           zIndex: 40,
           display: "inline-flex",
           alignItems: "center",
@@ -857,6 +930,7 @@ function LiveComposer({
   extraAffordance,
 }: LiveComposerProps) {
   const [draft, setDraft] = useState("");
+  const modal = useCoexistenceModal();
 
   if (muted) {
     return (
@@ -903,29 +977,15 @@ function LiveComposer({
         e.preventDefault();
         submit();
       }}
-      style={{
-        borderTop: "1px solid var(--line, #e2e2e2)",
-        padding: "0.625rem 1rem 0.75rem",
-        display: "flex",
-        flexDirection: "column",
-        gap: "0.5rem",
-      }}
+      style={composerFormStyle(modal)}
     >
-      <div style={{ display: "flex", gap: "0.375rem", flexWrap: "wrap", alignItems: "center" }}>
+      <div data-testid="penny-chips" style={chipRowStyle(modal)}>
         {chips.map((chip) => (
           <button
             key={chip}
             type="button"
             disabled={pending}
-            style={{
-              fontSize: "0.75rem",
-              padding: "0.2rem 0.55rem",
-              border: "1px solid var(--line, #e2e2e2)",
-              borderRadius: "999px",
-              background: "var(--surface, #fff)",
-              color: "var(--brand-deep, #1d4733)",
-              cursor: pending ? "not-allowed" : "pointer",
-            }}
+            style={chipStyle(modal, pending)}
             onClick={() => setDraft(chip)}
           >
             {chip}
@@ -948,15 +1008,7 @@ function LiveComposer({
               submit();
             }
           }}
-          style={{
-            flex: "1 1 auto",
-            resize: "vertical",
-            minHeight: "2.5rem",
-            padding: "0.5rem",
-            border: "1px solid var(--line, #e2e2e2)",
-            borderRadius: "8px",
-            font: "inherit",
-          }}
+          style={composerTextareaStyle(modal)}
         />
         {pending ? (
           <button
@@ -964,6 +1016,7 @@ function LiveComposer({
             onClick={onStop}
             style={{
               padding: "0.5rem 0.875rem",
+              minHeight: modal ? TOUCH_TARGET : undefined,
               border: "1px solid var(--line, #e2e2e2)",
               borderRadius: "8px",
               background: "var(--surface, #fff)",
@@ -978,11 +1031,7 @@ function LiveComposer({
             type="submit"
             disabled={draft.trim().length === 0}
             style={{
-              padding: "0.5rem 0.875rem",
-              border: "none",
-              borderRadius: "8px",
-              background: BRAND,
-              color: "#fff",
+              ...composerSendStyle(modal),
               cursor: draft.trim().length === 0 ? "not-allowed" : "pointer",
               opacity: draft.trim().length === 0 ? 0.6 : 1,
             }}

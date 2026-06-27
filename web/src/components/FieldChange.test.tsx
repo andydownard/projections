@@ -13,9 +13,28 @@
 // revision display, never computed here).
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FieldChange } from "./FieldChange";
+
+/** jsdom has no matchMedia; stub it so the touch-target probe resolves per test. */
+function stubMatchMedia(matchesByQuery: Record<string, boolean>) {
+  const impl = (query: string) => ({
+    matches: matchesByQuery[query] ?? false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  });
+  vi.stubGlobal("matchMedia", vi.fn().mockImplementation(impl));
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("FieldChange — recent change (prominent, icon + text, not color alone)", () => {
   it("renders the current value prominently by default", () => {
@@ -181,5 +200,68 @@ describe("FieldChange — a11y announcement + acknowledge persistence", () => {
     );
     expect(screen.getByTestId("field-change-badge")).toBeInTheDocument();
     expect(screen.getByTestId("field-change-was")).toHaveTextContent("was 8.0%");
+  });
+});
+
+describe("FieldChange — mobile touch targets (PE12, #131)", () => {
+  it("gives undo + dismiss a 44px touch target on small/touch screens", () => {
+    stubMatchMedia({ "(max-width: 768px)": true });
+    render(
+      <FieldChange
+        label="Donor share, Year 1"
+        current="8.0%"
+        previous="6.0%"
+        by="penny"
+        onUndo={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("field-change-undo")).toHaveStyle({
+      minWidth: "44px",
+      minHeight: "44px",
+    });
+    expect(screen.getByTestId("field-change-dismiss")).toHaveStyle({
+      minWidth: "44px",
+      minHeight: "44px",
+    });
+  });
+
+  it("stays compact but meets the 24px AA floor on the desktop (dense tables)", () => {
+    // No stub → desktop fallback. The inline affordance stays small in dense tables
+    // yet still clears the WCAG 2.5.8 (AA) 24px minimum.
+    render(
+      <FieldChange
+        label="Donor share, Year 1"
+        current="8.0%"
+        previous="6.0%"
+        by="penny"
+        onUndo={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("field-change-undo")).toHaveStyle({
+      minWidth: "24px",
+      minHeight: "24px",
+    });
+  });
+
+  it("undo stays screen-reader reviewable on mobile (labelled + change announced)", () => {
+    stubMatchMedia({ "(max-width: 768px)": true });
+    render(
+      <FieldChange
+        label="Donor share, Year 1"
+        current="8.0%"
+        previous="6.0%"
+        by="penny"
+        onUndo={vi.fn()}
+      />,
+    );
+    // Undo icon is labelled with the field + the value it restores (not color-only).
+    expect(screen.getByTestId("field-change-undo")).toHaveAccessibleName(
+      /undo.*donor share, year 1.*6\.0%/i,
+    );
+    // The change is announced in a polite live region with both values.
+    const live = screen.getByTestId("field-change-announce");
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(live).toHaveTextContent(/8\.0%/);
+    expect(live).toHaveTextContent(/6\.0%/);
   });
 });

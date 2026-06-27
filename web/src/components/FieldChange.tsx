@@ -29,6 +29,31 @@ import { useEffect, useState, type CSSProperties } from "react";
 
 export type FieldChangeActor = "penny" | "user";
 
+// Touch-target sizing (PE12, issue #131, spec §3/§5). The undo/dismiss icons render
+// INLINE in dense desktop tables, so they stay compact there — but still clear the
+// WCAG 2.5.8 (AA) 24px floor — and grow to a comfortable 44px on phones / coarse
+// pointers so the per-field undo is operable at 375px. Driven by a matchMedia probe
+// (mirrors the PE1 reduced-motion pattern); jsdom/SSR with no matchMedia → desktop.
+const TOUCH_QUERY = "(max-width: 768px)";
+const TOUCH_TARGET = 44;
+const AA_TARGET = 24;
+
+function useTouchTargets(): boolean {
+  const get = () => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+    return window.matchMedia(TOUCH_QUERY).matches;
+  };
+  const [touch, setTouch] = useState(get);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mql = window.matchMedia(TOUCH_QUERY);
+    const onChange = () => setTouch(mql.matches);
+    mql.addEventListener?.("change", onChange);
+    return () => mql.removeEventListener?.("change", onChange);
+  }, []);
+  return touch;
+}
+
 export interface FieldChangeProps {
   /** Accessible field name for the announcement + undo label (e.g. "Donor share, Year 1"). */
   label: string;
@@ -162,6 +187,15 @@ export function FieldChange({
     setDismissed(false);
   }, [current, previous, reverted]);
 
+  // 44px touch target on phones; compact-but-AA (24px) inline on the desktop.
+  const target = useTouchTargets() ? TOUCH_TARGET : AA_TARGET;
+  const controlSizing: CSSProperties = {
+    width: target,
+    height: target,
+    minWidth: target,
+    minHeight: target,
+  };
+
   const verb = reverted ? "Reverted" : "Changed";
   const badgeText = by === "penny" ? `${verb} by Penny` : verb;
   const announce =
@@ -204,7 +238,12 @@ export function FieldChange({
           onClick={onUndo}
           disabled={busy}
           aria-label={`Undo change to ${label}, restore ${previous}`}
-          style={{ ...iconBtnStyle, cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 1 }}
+          style={{
+            ...iconBtnStyle,
+            ...controlSizing,
+            cursor: busy ? "default" : "pointer",
+            opacity: busy ? 0.5 : 1,
+          }}
         >
           <ChangeIcon reverted />
           <span style={srOnly}>Undo</span>
@@ -217,7 +256,7 @@ export function FieldChange({
           data-testid="field-change-dismiss"
           onClick={handleDismiss}
           aria-label={`Dismiss change highlight for ${label}`}
-          style={{ ...iconBtnStyle, color: "#6b7280", width: "1.2rem", height: "1.2rem" }}
+          style={{ ...iconBtnStyle, ...controlSizing, color: "#6b7280" }}
         >
           <span aria-hidden="true">×</span>
         </button>
