@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """ratio.py — the HARD test:code ratio gate (DEFINITION_OF_DONE.md Tier-2, QA-0).
 
-cloc-based test-LOC / code-LOC meter over the DEFINITION_OF_DONE path map. Gates
-BOTH the per-PR diff (>1.3) AND repo-wide non-regression (>1.3). Paired with
-engine/** branch coverage >=90% (CI) so the ratio cannot be gamed by trivial
-assertions.
+test-LOC / code-LOC meter over the DEFINITION_OF_DONE path map. Two independent
+legs, both gated at >1.3, paired with engine/** branch coverage >=90% (CI) so the
+ratio cannot be gamed by trivial assertions:
+
+  * repo-wide non-regression — cloc over every file in the tree (whole-file LOC),
+    so the aggregate test:code density may never fall to/below 1.3.
+  * per-PR DIFF — measures the ACTUAL added lines of `git diff <base>...HEAD`
+    (numstat), bucketed by the SAME path map. It counts the lines the PR changed,
+    NOT the whole LOC of every touched file: a 15-line edit to the ~1200-line
+    app/routers/projections.py contributes 15 code lines, not 1200. (The old leg
+    measured whole-file LOC and so structurally false-failed small, focused edits
+    to large files — forcing #155/#158 to merge red. DECISIONS.md QA-0 always
+    intended a per-PR DIFF ratio, i.e. the diff, not whole files.)
 
 Path map (DEFINITION_OF_DONE.md Tier-2 / BACKLOG QA-0):
   code  = engine/** + app/** , minus tests
@@ -12,11 +21,11 @@ Path map (DEFINITION_OF_DONE.md Tier-2 / BACKLOG QA-0):
   excluded = migrations, generated/golden fixtures (tests/golden/**), golden .xlsx,
              vendored, __init__.py
 
-LOC counting is cloc-based: if the `cloc` binary is present it is used (per-file,
-code lines only — comments/blanks excluded). When cloc is unavailable the meter
-falls back to an equivalent non-blank, non-pure-comment line counter so the gate
-still runs in any CI image. The classification (which files are code vs test vs
-excluded) is identical regardless of the counter.
+Repo-wide LOC counting is cloc-based: if the `cloc` binary is present it is used
+(per-file, code lines only — comments/blanks excluded). When cloc is unavailable
+the meter falls back to an equivalent non-blank, non-pure-comment line counter so
+the gate still runs in any CI image. The DIFF leg uses git numstat added-line
+counts. The classification (code vs test vs excluded) is identical for both legs.
 
 Usage:
   python scripts/ratio.py                 # repo-wide gate, human output
@@ -221,15 +230,72 @@ def _measure(root: Path, paths: list[tuple[Path, str]]) -> dict:
     }
 
 
-def _diff_files(root: Path, base_ref: str) -> set[Path]:
+def _strip_rename(path: str) -> str:
+    """Normalize a git-numstat path that encodes a rename to its NEW path.
+
+    numstat renders a rename as ``old => new`` — optionally with a ``{a => b}``
+    brace group inside a shared prefix/suffix (``dir/{old => new}/f.py``). We
+    classify the destination path.
+    """
+    if " => " not in path:
+        return path
+    if "{" in path and "}" in path:
+        pre, rest = path.split("{", 1)
+        mid, post = rest.split("}", 1)
+        new = mid.split(" => ", 1)[1]
+        return f"{pre}{new}{post}"
+    return path.split(" => ", 1)[1]
+
+
+def _diff_measure(root: Path, base_ref: str) -> dict:
+    """Measure ONLY the added/changed lines of the diff vs base_ref.
+
+    Uses ``git diff --numstat <base>...HEAD`` (added lines per changed file) and
+    buckets the added lines into test / code / excluded via the SAME path map as
+    the repo-wide leg. Whole-file LOC is deliberately ignored: a 15-line edit to
+    a 1200-line file contributes 15 lines, not 1200 — the per-PR DIFF ratio that
+    DECISIONS.md (QA-0) intends. diff_ratio = added_test / max(added_code, 1).
+    """
     proc = subprocess.run(
-        ["git", "-C", str(root), "diff", "--name-only", f"{base_ref}...HEAD"],
+        ["git", "-C", str(root), "diff", "--numstat", f"{base_ref}...HEAD"],
         capture_output=True,
         text=True,
     )
-    if proc.returncode != 0:
-        return set()
-    return {Path(line) for line in proc.stdout.splitlines() if line.strip()}
+    code_loc = 0
+    test_loc = 0
+    files: list[dict] = []
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        added_s, _deleted_s, raw_path = parts[0], parts[1], "\t".join(parts[2:])
+        if added_s == "-":
+            continue  # binary file (numstat reports '-'): never test/code LOC
+        try:
+            added = int(added_s)
+        except ValueError:
+            continue
+        rel = Path(_strip_rename(raw_path))
+        kind = _classify(rel)
+        if kind == "code":
+            code_loc += added
+        elif kind == "test":
+            test_loc += added
+        else:
+            continue  # excluded / not in the path map
+        files.append({"path": str(rel), "kind": kind, "added": added})
+    ratio = test_loc / max(code_loc, 1)
+    return {
+        "code_loc": code_loc,
+        "test_loc": test_loc,
+        "ratio": ratio,
+        # A diff that adds no code (docs-only, pure deletion, excluded-only) is
+        # never a failure — the gate only bites when new code lands.
+        "pass": code_loc == 0 or ratio > THRESHOLD,
+        "files": files,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -250,11 +316,10 @@ def main(argv: list[str] | None = None) -> int:
                     "files": repo["files"]}
 
     if args.diff:
-        changed = _diff_files(root, args.diff)
-        diff_paths = [(p, k) for p, k in all_paths if p.relative_to(root) in changed]
-        diff = _measure(root, diff_paths)
+        diff = _diff_measure(root, args.diff)
         result["diff"] = {k: v for k, v in diff.items() if k != "files"}
-        # An empty diff (no code/test touched) does not fail the gate.
+        result["diff_files"] = diff["files"]
+        # An empty/excluded-only diff (no code added) does not gate.
         if diff["code_loc"] > 0:
             overall_pass = overall_pass and diff["pass"]
 
@@ -270,10 +335,9 @@ def main(argv: list[str] | None = None) -> int:
               f"threshold>{THRESHOLD}  -> {'PASS' if repo['pass'] else 'FAIL'}")
         if "diff" in result:
             d = result["diff"]
-            dr = "inf" if d["ratio"] == float("inf") else f"{d['ratio']:.3f}"
-            print(f"test:code ratio (PR diff):   {dr}  "
-                  f"[test={d['test_loc']} / code={d['code_loc']}]  "
-                  f"-> {'PASS' if d['pass'] else 'FAIL'}")
+            print(f"test:code ratio (PR diff):   {d['ratio']:.3f}  "
+                  f"[+test={d['test_loc']} / +code={d['code_loc']} lines]  "
+                  f"threshold>{THRESHOLD}  -> {'PASS' if d['pass'] else 'FAIL'}")
         print(f"cloc: {'binary' if _cloc_available() else 'fallback line-counter'}")
 
     return 0 if overall_pass else 1
