@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
-from app import narrative_provider, ratelimit
+from app import config, narrative_provider, ratelimit
 from app.deps import hash_token, parse_if_match, token_matches
 from app.geo.client import GeoUpstreamError, static_map_bytes
 from app.narrative import (
@@ -63,15 +63,74 @@ _PREVIEW_IP_LIMIT = 600
 _PREVIEW_TOKEN_LIMIT = 600
 _PREVIEW_WINDOW_SECONDS = 300
 
+# Cost-DoS caps (SECURITY.md §10; issues #164/#168). create is UNAUTHENTICATED and
+# each call mints tokens + runs the engine + a durable write -> 20/hr/IP per §10.1
+# (per-token is "—" since the flood is anonymous). The export surfaces are reachable
+# with only the public view_slug: xlsx/packet rebuild an uncached workbook/packet on
+# every call (CPU), staticmap proxies the billed Google Static Maps API (bytes are
+# cached per location, so the Google-bill blast radius is first-fetch-per-location).
+_CREATE_IP_LIMIT = 20
+_CREATE_WINDOW_SECONDS = 3600
+_EXPORT_IP_LIMIT = 30  # xlsx + packet, per IP
+_EXPORT_TOKEN_LIMIT = 60  # xlsx + packet, per token when a bearer is presented
+_EXPORT_WINDOW_SECONDS = 3600
+_STATICMAP_IP_LIMIT = 120  # cached per (lat,lng,kind); per IP only (view-capability)
+_STATICMAP_WINDOW_SECONDS = 3600
+
 router = APIRouter(prefix="/api/projections", tags=["projections"])
 
 
 def _client_ip(request: Request) -> str:
-    """Right-most untrusted hop from X-Forwarded-For, else the socket peer."""
+    """Right-most untrusted hop from X-Forwarded-For, else the socket peer.
+
+    Railway terminates TLS at a single proxy that appends the real client IP as the
+    LAST X-Forwarded-For entry, so the right-most hop is the only one a client cannot
+    spoof (anything it sends arrives to the left of the proxy's append). SECURITY §10.
+    """
     xff = request.headers.get("x-forwarded-for")
     if xff:
         return xff.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _rate_limit_bypassed() -> bool:
+    """True only under the non-prod E2E seed flag (mirrors app/main.py's seed gate).
+
+    The Playwright gate drives create->export across three viewports (plus CI retries)
+    against one server from one IP; bypassing the caps there keeps the cost-DoS brakes
+    real in production while the E2E flow never trips them. Never active in prod.
+    """
+    return os.environ.get("E2E_SEED") == "1" and not config.is_production()
+
+
+def _rate_limited(
+    endpoint: str,
+    request: Request,
+    *,
+    ip_limit: int,
+    token: Optional[str] = None,
+    token_limit: Optional[int] = None,
+    window_seconds: int = 3600,
+) -> Optional[JSONResponse]:
+    """Shared §10 gate: a 429 JSONResponse when over the per-IP/per-token cap, else
+    None. Emitted BEFORE any compute/build/upstream call (the cheapest rejection)."""
+    if _rate_limit_bypassed():
+        return None
+    allowed, retry_after = ratelimit.check(
+        endpoint,
+        ip=_client_ip(request),
+        token=token,
+        ip_limit=ip_limit,
+        token_limit=token_limit,
+        window_seconds=window_seconds,
+    )
+    if allowed:
+        return None
+    return JSONResponse(
+        status_code=429,
+        content={"error": "rate_limited", "retry_after_seconds": retry_after, "scope": "ip"},
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 def _utcnow() -> str:
@@ -543,6 +602,7 @@ def _metrics_subset(vm: dict) -> dict:
 @router.post("", status_code=201)
 def create_projection(
     body: CreateProjectionIn,
+    request: Request,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
 ):
@@ -551,6 +611,14 @@ def create_projection(
     If a valid owner bearer token is presented the projection joins that workspace;
     otherwise a new owner token is minted and returned exactly once.
     """
+    # §10.1: create is unauthenticated and mints tokens + runs the engine + a durable
+    # write on every call, so cap it per-IP BEFORE any compute/insert (#164).
+    limited = _rate_limited(
+        "create_projection", request,
+        ip_limit=_CREATE_IP_LIMIT, window_seconds=_CREATE_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
     try:
         vm = _compute_view_model(body)
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
@@ -661,13 +729,25 @@ def get_projection(view_slug: str, response: Response, store: Store = Depends(ge
 
 
 @router.get("/{view_slug}/staticmap")
-def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
+def static_map(
+    view_slug: str,
+    request: Request,
+    size: str = "thumb",
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+):
     """Server-proxied Google Static Map for the projection's resolved location.
 
     The Places key is appended server-side and never reaches the browser (hard
     rule 7). 404 when the projection has no resolved lat/lng so the client shows a
     neutral placeholder instead of a broken image (never a map over a typed count).
     """
+    # §10/#168: the slug alone reaches this billed-Google proxy; cap per IP first.
+    limited = _rate_limited(
+        "export_staticmap", request,
+        ip_limit=_STATICMAP_IP_LIMIT, window_seconds=_STATICMAP_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -696,7 +776,12 @@ def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_s
 
 
 @router.get("/{view_slug}/xlsx")
-def export_xlsx(view_slug: str, store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
+def export_xlsx(
+    view_slug: str,
+    request: Request,
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
+):
     """Formula-driven .xlsx export (API_SPEC §6.3).
 
     Owner/edit/view may download (the slug already grants read). Terms acceptance
@@ -705,6 +790,18 @@ def export_xlsx(view_slug: str, store: Store = Depends(get_store)):  # noqa: B00
     live formulas, orange overrides + audit comment, guarded IF divisions, monthly
     tab. Written to a server-controlled temp file, streamed, then deleted.
     """
+    # §10/#168: an uncached workbook rebuild on every call, reachable with just the
+    # public slug -> cap per IP (and per token when a bearer is presented) FIRST.
+    _xlsx_token = _bearer(authorization)
+    limited = _rate_limited(
+        "export_xlsx", request,
+        ip_limit=_EXPORT_IP_LIMIT,
+        token=hash_token(_xlsx_token) if _xlsx_token else None,
+        token_limit=_EXPORT_TOKEN_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -951,9 +1048,11 @@ def regenerate_narrative(
 @router.get("/{view_slug}/packet")
 def export_packet(
     view_slug: str,
+    request: Request,
     role: Optional[str] = None,
     format: str = "md",
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
 ):
     """Board / Funder / Advisor packet (API_SPEC §6.4).
 
@@ -963,6 +1062,18 @@ def export_packet(
     structured/evidence section). Terms acceptance required (§21) -> 403 otherwise.
     The role flag tailors emphasis/CTAs only — never the numbers.
     """
+    # §10/#168: an uncached packet render on every call, reachable with just the
+    # public slug -> cap per IP (and per token when a bearer is presented) FIRST.
+    _pkt_token = _bearer(authorization)
+    limited = _rate_limited(
+        "export_packet", request,
+        ip_limit=_EXPORT_IP_LIMIT,
+        token=hash_token(_pkt_token) if _pkt_token else None,
+        token_limit=_EXPORT_TOKEN_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
