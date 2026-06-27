@@ -177,29 +177,60 @@ timpager's runbook marks Litestream "conditional — runs only if `LITESTREAM_BU
 
 ### 4.4 Restore drill (a deliverable, not just docs)
 
-A `scripts/restore-db.sh` MUST exist and MUST be **exercised before launch (M0/M7)** against a throwaway volume — an untested restore is fiction. The drill:
+`scripts/restore-db.sh` MUST exist and MUST be **exercised before launch (M0/M7)** against a throwaway volume — an untested restore is fiction. The script restores the latest replica into a **throwaway** target, then **fails closed** unless every acceptance condition holds:
 
 ```bash
-# scripts/restore-db.sh — restore the latest replica into a target path
-litestream restore \
-  -o "$TARGET_DB" \
-  -config /etc/litestream.yml \
-  /data/projections.db
-
-# Verify the restored DB is sound:
-sqlite3 "$TARGET_DB" "PRAGMA integrity_check;"        # must print: ok
-sqlite3 "$TARGET_DB" "SELECT count(*) FROM projections;"
-# Round-trip a known projection's computed_json (decision metrics present):
-python -m scripts.verify_restore "$TARGET_DB" --slug "<known-view-slug>"
+# Restore the latest R2 replica into a throwaway target, then verify it.
+DB_PATH=/data/projections.db RESTORE_VERIFY_SLUG=<known-view-slug> \
+  scripts/restore-db.sh /tmp/restore-drill.db
 ```
 
-**Drill acceptance:** `integrity_check` returns `ok`; row counts are plausible; at least one projection's `computed_json` round-trips and re-renders identical decision metrics (capital required, break-even month, recommendation) to a pre-drill snapshot. Record the drill date + restored-version in the deploy log.
+Under the hood the script: **(1)** `litestream restore -config "$LITESTREAM_CONFIG" -o "$TARGET" "$DB_PATH"` (or, with `RESTORE_REPLICA_URL`, straight from a `file://` / `s3://` replica); **(2)** `PRAGMA integrity_check` — must print `ok`; **(3)** `SELECT count(*) FROM projections` — plausibility; **(4)** `python -m scripts.verify_restore "$TARGET" --slug …` — round-trips a known projection's `computed_json` and asserts the three decision metrics (capital required, break-even month, recommendation) re-render. **Any failure exits NON-ZERO** — it never falsely reports success. Env knobs: `LITESTREAM_CONFIG` (def `/etc/litestream.yml`), `RESTORE_REPLICA_URL`, `RESTORE_VERIFY_SLUG` (def `example`), `PYTHON`, and `RESTORE_SKIP_LITESTREAM=1` to **re-verify an already-restored volume** without pulling a replica (also how CI exercises the verify/fail-closed branches where the `litestream` binary is absent).
+
+**Drill acceptance:** `integrity_check` == `ok`; row counts plausible; ≥1 projection's `computed_json` re-renders **identical** capital / break-even / recommendation vs a pre-drill snapshot.
+
+**Automated coverage:** `app/tests/test_restore_drill.py` drives the script end-to-end — a CI-runnable dry-run leg (sound DB passes; corrupt DB, unknown slug, and missing decision metric each fail closed) plus a live leg (skip-guarded on the `litestream` binary) that seeds a REAL engine-computed projection, replicates it to a throwaway file replica, restores via `restore-db.sh`, and asserts the decision is byte-identical. `app/tests/test_litestream_config.py` locks the replicated path to `/data/projections.db` (regression #13 — never `/app`).
+
+#### Recorded drill — 2026-06-27 (M7.3)
+
+Executed with `litestream v0.5.10` + `sqlite3` against a **throwaway file replica** (R2 credentials are not present in the build env; the live R2 leg runs from the deployed container — §4.5 — once `LITESTREAM_*` are provisioned). A real `example` projection was seeded by the engine, replicated, then restored into a throwaway path:
+
+```text
+pre-drill decision: {"capital": "$279,446", "breakeven": "Month 5", "reco": "proceed"}
+
+litestream replicate … "snapshot complete" db=source.db txid=0000000000000001 size=13043
+
+$ scripts/restore-db.sh /…/restored.db
+Restoring -> /…/restored.db via Litestream...
+Restore wall time: 0s (RTO budget ~120-300s).
+Integrity check...
+Row count (plausibility): projections=1
+Round-trip check (decision metrics re-render)...
+{"ok": true, "integrity": "ok", "projection_count": 1, "slug": "example",
+ "decision": {"capital": "$279,446", "breakeven": "Month 5", "reco": "proceed"}}
+OK: restore verified (integrity ok + decision round-trip).
+```
+
+| Drill field | Result |
+|---|---|
+| Date | 2026-06-27 |
+| Litestream | v0.5.10 (local drill) · v0.3.13 in the runtime image |
+| Restored generation / txid | `ltx` generation, txid `0000000000000001` (snapshot 13,043 B) |
+| `integrity_check` | `ok` |
+| Row count | 1 projection (throwaway seed) |
+| Decision round-trip | **IDENTICAL** — capital `$279,446`, break-even `Month 5`, reco `proceed` |
+| **RPO** (basis) | **< 10 s** — `sync-interval: 1s`; only the in-flight sub-second WAL frame is at risk |
+| **RTO** (measured) | restore+verify in **< 1 s** on the throwaway DB; budget **≈ 2–5 min** in prod (network pull of the full replica + restart) |
+
+**Backup purge limit (surface to users — PRD §21):** R2 retention is **30 days / 720h** (`retention: 720h`, §4.1). Snapshots/WAL older than 30 days are purged and are **not** recoverable; restores can recover data up to 30 days old, no further. This bound is the user-facing backup-retention promise and MUST appear in the privacy/retention copy (PRD §21).
+
+**Live R2 leg (run from the deployed container before launch):** with `LITESTREAM_*` set, run `scripts/restore-db.sh /data/restore-drill.db` on the service to exercise the real R2 path, then record date + restored generation + measured RTO in the deploy log.
 
 ### 4.5 Real recovery procedure (production data loss / volume corruption)
 
 1. **Stop writes.** Scale the service to 0 (or take it out of the LB) so no new writes race the restore.
 2. **Provision/clear the target volume** at `/data`.
-3. **Restore:** `litestream restore -o /data/projections.db /data/projections.db` (from the R2 replica).
+3. **Restore:** `litestream restore -config /etc/litestream.yml -o /data/projections.db /data/projections.db` (from the R2 replica). Equivalently, run `scripts/restore-db.sh /data/projections.db` to restore **and** verify (integrity + decision round-trip) in one fail-closed step.
 4. **Integrity-check:** `sqlite3 /data/projections.db "PRAGMA integrity_check;"` → must be `ok`. If not `ok`, restore from a prior snapshot generation.
 5. **Restart** the service (boot runs migrations first, then schema; §1.4).
 6. **Verify** `/api/health` reports the new build, DB reachable, replication live; spot-check a known projection.
