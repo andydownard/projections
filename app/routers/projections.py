@@ -228,6 +228,17 @@ _NON_ENGINE_INPUT_KEYS = (
     "cost_schedule",
 )
 
+# Max rows in a timed ``cost_schedule`` (DoS guard, issue #166). The schedule is
+# JSON-serialized into ``inputs_json``/``cost_schedule_json`` AND snapshotted into a
+# fresh revision on every save, so an unbounded array is a per-projection blob /
+# revision-bloat amplifier (durable volume + Litestream cost, large-JSON CPU/mem).
+# 200 is generous — far above any real launch schedule (~10-30 timed startup rows)
+# yet a hard domain bound below the request-body ceiling — and mirrors the existing
+# 200-row cap used elsewhere (the Penny transcript ``MAX_TURNS`` retention bound,
+# DATA_MODEL §penny_transcripts). Enforced server-side on the manual PATCH
+# (``_validate_schedule_inputs``) and after Penny's ``edit_cost_schedule`` ops.
+MAX_COST_SCHEDULE_ROWS = 200
+
 
 class TradeAreaIn(BaseModel):
     basis: str = "city"
@@ -309,9 +320,11 @@ def _build_engine_args(body: CreateProjectionIn):
 def _validate_schedule_inputs(inputs_d: dict) -> None:
     """Server-side validation of the timed cost schedule + opening anchor (Spec §5).
 
-    Enforces ``month >= 1``, ``amount >= 0``, ``opening_month_number >= 1`` on the
+    Enforces ``month >= 1``, ``amount >= 0``, ``opening_month_number >= 1`` and a
+    ``len(cost_schedule) <= MAX_COST_SCHEDULE_ROWS`` count cap (issue #166) on the
     PATCH path (create is validated by ``InputsIn`` at body parse). Raises HTTP 422
-    with ``invalid_inputs`` on a bad row so the client never relies on client math.
+    with ``invalid_inputs`` on a bad/oversized schedule so the client never relies on
+    client math.
 
     An optional ``provenance`` object (Penny's AI-created rows, DATA_MODEL §7) is
     tolerated and must be an object; it is stripped before the ``{category, month,
@@ -320,6 +333,13 @@ def _validate_schedule_inputs(inputs_d: dict) -> None:
     try:
         schedule = inputs_d.get("cost_schedule")
         if schedule is not None:
+            # COUNT cap first (issue #166): reject an oversized array before paying to
+            # validate/serialize every row — bounds blob + per-save revision bloat.
+            if len(schedule) > MAX_COST_SCHEDULE_ROWS:
+                raise ValueError(
+                    f"cost_schedule may not exceed {MAX_COST_SCHEDULE_ROWS} rows "
+                    f"(got {len(schedule)})"
+                )
             for item in schedule:
                 if not isinstance(item, dict):
                     raise TypeError("cost row must be an object")

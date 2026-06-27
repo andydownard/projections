@@ -335,6 +335,30 @@ def test_edit_cost_schedule_amount_figure_stripped(store, projection):
     assert store.get_projection_by_slug(projection["view_slug"])["version"] == 1
 
 
+def test_edit_cost_schedule_rejects_exceeding_row_cap(store, projection):
+    # #166: Penny's append path must obey the same COUNT cap as the manual PATCH so a
+    # consultant-proposal parse can't balloon the schedule into a blob/revision DoS.
+    from app.routers.projections import MAX_COST_SCHEDULE_ROWS
+
+    ctx = _ctx(projection)
+    ops = [{"op": "add", "category": f"L{i}", "month": (i % 12) + 1, "amount": 100}
+           for i in range(MAX_COST_SCHEDULE_ROWS + 1)]
+    res = _run(store, ctx, "edit_cost_schedule", {"ops": ops})
+    assert res.get("error") == "invalid_inputs"
+    assert str(MAX_COST_SCHEDULE_ROWS) in res.get("message", "")
+    # rejected: nothing applied, no bloated revision written, version unchanged
+    assert store.get_projection_by_slug(projection["view_slug"])["version"] == 1
+
+
+def test_edit_cost_schedule_normal_add_under_cap_passes(store, projection):
+    # a sane, normal-sized add still applies cleanly (the cap only rejects abuse)
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "edit_cost_schedule",
+               {"ops": [{"op": "add", "category": "Build-out",
+                         "month": 2, "amount": 50000}]})
+    assert res["applied"] is True and res["version"] == 2
+
+
 def test_provenance_row_survives_a_later_manual_patch(client, store, projection):
     """A Penny-created provenance row must not break the manual autosave path: the
     SAME server validator (`_validate_schedule_inputs`) runs on the next manual

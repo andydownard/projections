@@ -48,7 +48,11 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.aisafety import is_computed_figure_token
-from app.routers.projections import PatchProjectionIn, apply_projection_patch
+from app.routers.projections import (
+    MAX_COST_SCHEDULE_ROWS,
+    PatchProjectionIn,
+    apply_projection_patch,
+)
 from app.store import Store
 from engine.model import DEFAULT_OPENING_MONTH_NUMBER, default_cost_schedule
 
@@ -459,6 +463,21 @@ def _edit_cost_schedule(store: Store):
                     "category": exc.category, "month": exc.month}
         except _BadOp as exc:
             return {"error": "bad_op", "status": 422, "op": exc.op}
+
+        # Same COUNT cap as the manual PATCH (issue #166): refuse before the write so
+        # Penny can't balloon the schedule (a consultant-proposal parse appends rows
+        # with no inherent bound) into a blob / revision-bloat DoS. Mirrors the
+        # `invalid_inputs` 422 `_validate_schedule_inputs` would raise on this same
+        # array, so the manual and AI paths reject identically.
+        if len(new_schedule) > MAX_COST_SCHEDULE_ROWS:
+            return {
+                "error": "invalid_inputs",
+                "status": 422,
+                "message": (
+                    f"That would leave {len(new_schedule)} cost rows, over the "
+                    f"{MAX_COST_SCHEDULE_ROWS}-row limit. Remove some rows first."
+                ),
+            }
 
         patch_inputs: dict[str, Any] = {"cost_schedule": new_schedule}
         opening = args.get("opening_month_number")

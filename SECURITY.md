@@ -212,8 +212,9 @@ The research and narrative subsystems are the app's trust surface. These are **h
 5. **Untrusted-data framing of the loop.** The user message and any proposal text are wrapped as untrusted **data** (extract-only / ignore-embedded-instructions framing) and run through `strip_injection_markers` before the model sees them; grounding facts stay in the **trusted** system prompt (`app/penny/loop.py`). Sanitization events are logged as **pattern + timestamp only**, never the input.
 6. **Figure-strip in mutate-tool args.** A mutate tool argument is an **intent** (a raw user input value), never a *computed* figure. The server **strips/rejects** any value argument that is display-formatted money/percent — contains `$`, `%`, or thousands-grouping commas (`$277,990`, `8%`, `($41,200)`, `50,000`) — via `app.aisafety.is_computed_figure_token`, so **no LLM-computed figure is ever applied** (extends the N2 figure-strip rule to the tool loop). Bare numbers/fractions (`0.08`, `5000`) pass.
 7. **One mutation wall, capability-gated.** Every mutate tool routes through the existing `apply_projection_patch` (the PATCH/`If-Match` service): owner/edit Bearer required, override-DAG + domain + cost-schedule validation unchanged, non-pinnable → **422 `node_not_pinnable`** relayed in plain language, stale version → **409** surfaced for re-read/retry, and **one revision tagged `actor:penny`** per applied edit. A **view-only** caller's Penny degrades to **answer-only** (`ctx.can_mutate` gate) and the 403 wall backstops it.
+8. **Bounded `cost_schedule` (DoS guard, issue #166).** The timed `cost_schedule` array is COUNT-capped at **`MAX_COST_SCHEDULE_ROWS = 200`** rows — a generous bound (real launch schedules carry ~10-30 timed startup rows) that prevents per-projection blob / revision-bloat (the array is JSON-serialized into `inputs_json`/`cost_schedule_json` **and** snapshotted into a fresh revision on every save, so an unbounded array amplifies durable-volume + Litestream cost). Enforced **server-side identically on both write paths**: the manual PATCH (`_validate_schedule_inputs`) and Penny's `edit_cost_schedule` (re-checked after its add/edit/remove ops), each rejecting an over-cap array with **422 `invalid_inputs`** before any write — so neither a hand-crafted PATCH body nor a runaway consultant-proposal parse can balloon the schedule.
 
-These tests must be **adversarial**: feed a hallucinated figure → assert rejection; feed an unfetched citation → assert rejection; feed `ignore previous instructions` web/proposal text → assert it is stripped/ignored; put a computed `$`/`%` into a mutate-tool arg → assert it is stripped/rejected; mutate from a view-only token → assert refusal. A happy-path-only test gives false safety.
+These tests must be **adversarial**: feed a hallucinated figure → assert rejection; feed an unfetched citation → assert rejection; feed `ignore previous instructions` web/proposal text → assert it is stripped/ignored; put a computed `$`/`%` into a mutate-tool arg → assert it is stripped/rejected; mutate from a view-only token → assert refusal; push `cost_schedule` past `MAX_COST_SCHEDULE_ROWS` (manual PATCH **and** `edit_cost_schedule`) → assert **422** with no write. A happy-path-only test gives false safety.
 
 #### 6.3.1 Penny tool-use loop — untrusted-data framing (Spec B, issue #122 / PE3)
 
@@ -258,7 +259,7 @@ Content-Security-Policy:
   style-src 'self';
   img-src 'self' data:;
   font-src 'self';
-  connect-src 'self' https://api.anthropic.com https://api.openai.com;
+  connect-src 'self';
   object-src 'none';
   base-uri 'self';
   frame-ancestors 'none';
@@ -266,7 +267,7 @@ Content-Security-Policy:
 ```
 
 - **No `'unsafe-inline'` in `script-src`.** The build must not emit inline `<script>` blocks or inline `on*=` handlers; the bundler outputs hashed `.js` files served from `'self'`. If a third-party requires inline script, use a nonce — never blanket `'unsafe-inline'`.
-- `connect-src` enumerates **only** `api.anthropic.com` and `api.openai.com` (the browser never talks directly to providers, but these are listed for resilience/observability hooks). **Places, Census, GitHub, and CRM are server-to-server only — they are intentionally absent from `connect-src`** (the browser never connects to them).
+- `connect-src` is **`'self'` only**. The browser talks exclusively to our own same-origin API — **all AI is server-proxied** (the SPA calls `/penny`, never a provider directly), and Places, Census, GitHub, and CRM are server-to-server only. The provider origins `api.anthropic.com` / `api.openai.com` were **removed** (issue #167): no client-side provider call exists, so listing them only widened the **post-XSS exfiltration / SSRF-pivot** surface (a stored-XSS `fetch()` to those origins with the owner token from `localStorage`) for no functional benefit. If a genuine client-side provider call is ever introduced, re-add the specific origin then — defense-in-depth default is `'self'`.
 - `frame-ancestors 'none'` is the modern clickjacking defense (equivalent to `X-Frame-Options: DENY`).
 - `style-src 'self'` — design tokens are shipped as a real CSS file, not inline `style=` attributes (this also aligns with the design system in [`ARCHITECTURE.md`](ARCHITECTURE.md)).
 
