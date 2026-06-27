@@ -169,9 +169,25 @@ def _recommend(result, capital, assumptions, inputs, flags, sensitivity, break_e
     horizon_reached_down = sensitivity["downside"]["breakeven"] is not None
 
     if not horizon_reached_base or not horizon_reached_down:
-        reasons["breakeven"] = (
-            "Break-even is not reached within the first year under base or downside."
-        )
+        # do_not_proceed fires when EITHER the base OR the downside scenario never
+        # reaches break-even. The reason must say WHICH so it can never contradict
+        # the break-even metric on the same screen (#142) and a non-finance reader
+        # sees WHY the verdict is "do not proceed" (#145).
+        if not horizon_reached_base:
+            reasons["breakeven"] = (
+                "Break-even is not reached within the horizon under the base case "
+                "(and the downside scenario fails as well) — the plan is not viable "
+                "as configured."
+            )
+        else:
+            # Base DOES break even (the headline Month-N metric is real); only the
+            # downside (rent +25% / donations -25%) never does. Surface that so the
+            # verdict reads as a robustness gap, not a flat "never breaks even".
+            reasons["breakeven"] = (
+                f"Base case reaches break-even at Month {break_even_month}, but the "
+                "downside scenario (rent +25% / donations -25%) never does — the plan "
+                "is not robust to a tougher market."
+            )
         return "do_not_proceed", reasons
 
     if capital > funds:
