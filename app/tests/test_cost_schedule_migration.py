@@ -250,6 +250,34 @@ def test_pre_m0005_schema_lacks_new_columns(tmp_path):
     assert not (_NEW_COLUMNS & cols)
 
 
+def test_existing_columns_survive_m0005(tmp_path):
+    # Additive discipline: m0005 must not disturb pre-existing columns/data.
+    db = tmp_path / "legacy.db"
+    con = sqlite3.connect(db)
+    _apply_pre_m0005(con)
+    _insert_legacy_row(con, "p1", "slug1")
+    con.commit()
+    con.executescript(m0005_cost_schedule.SQL)
+    con.commit()
+    row = con.execute(
+        "SELECT id, view_slug, name, model_version FROM projections WHERE id='p1'"
+    ).fetchone()
+    con.close()
+    assert row == ("p1", "slug1", "Legacy", "1.0.0")
+
+
+def test_m0005_count_of_added_columns(tmp_path):
+    # Exactly three columns are added, no more (no accidental schema sprawl).
+    db = tmp_path / "legacy.db"
+    con = sqlite3.connect(db)
+    _apply_pre_m0005(con)
+    before = {r[1] for r in con.execute("PRAGMA table_info(projections)").fetchall()}
+    con.executescript(m0005_cost_schedule.SQL)
+    after = {r[1] for r in con.execute("PRAGMA table_info(projections)").fetchall()}
+    con.close()
+    assert after - before == _NEW_COLUMNS
+
+
 def test_default_column_value_parses_as_json(tmp_path):
     db = tmp_path / "fresh.db"
     store = SqliteStore(str(db))
