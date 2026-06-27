@@ -67,14 +67,24 @@ dockerfilePath = "./Dockerfile"
 watchPatterns = ["**"]
 
 [deploy]
-startCommand = "uvicorn app.main:app --host 0.0.0.0 --port 8080"
+# NO startCommand here ON PURPOSE. The Docker image's start.sh entrypoint runs
+# uvicorn UNDER `litestream replicate -exec` and binds Railway's injected ${PORT}.
+# A startCommand would OVERRIDE start.sh and thereby DISABLE continuous Litestream
+# backups (turns OFF replication); a hardcoded `:8080` also breaks the healthcheck
+# because Railway routes to $PORT, not 8080. Do NOT add startCommand here — pasting
+# one during recovery silently kills the only backup mechanism (issue #191).
 healthcheckPath = "/api/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 120
 numReplicas = 1
-sleepApplication = false
 restartPolicyType = "always"
 restartPolicyMaxRetries = 10
+sleepApplication = false
 ```
+
+> **This block matches the shipped `railway.toml` exactly.** The deliberate
+> *absence* of `startCommand` and `healthcheckTimeout = 120` (not `30`) are
+> load-bearing — see the in-block comment. Copy it verbatim; do not "helpfully"
+> add a `startCommand`.
 
 ### 1.3 The Docker image (ops-relevant contents)
 
@@ -156,16 +166,25 @@ dbs:
     replicas:
       - type: s3
         bucket: ${LITESTREAM_BUCKET}
-        path: projections.db
+        # Path PREFIX inside the (possibly shared) R2 bucket — env-driven, not a
+        # literal, so a re-provision can't collide with another DB's prefix.
+        path: ${LITESTREAM_PATH}
         endpoint: ${LITESTREAM_ENDPOINT}            # e.g. https://<acct>.r2.cloudflarestorage.com
+        region: ${LITESTREAM_REGION}                # R2: "auto"
         access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
         secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
-        region: ${LITESTREAM_REGION}                # R2: "auto"
-        # Retention / snapshot cadence — backup purge limits (PRD §21):
+        # Backup purge limit (PRD §21) + WAL stream cadence (RPO < 10 s):
         retention: 720h           # keep 30 days of WAL/snapshots in R2
-        snapshot-interval: 24h    # full snapshot daily; WAL streamed continuously
-        validation-interval: 12h  # Litestream self-checks restore-ability
+        sync-interval: 1s         # ship WAL frames ~every second
 ```
+
+> **This block matches the shipped `litestream.yml` exactly.** It intentionally has
+> **no `snapshot-interval` and no `validation-interval`** — earlier drafts of this
+> runbook showed both, but they are NOT in the shipped file (issue #191). Restore-
+> ability is NOT self-validated by Litestream; it is proven by the **restore drill**
+> (`scripts/restore-db.sh`, §4.4) run weekly against a throwaway volume (§7.2).
+> Replication *liveness* (that WAL is still advancing) is surfaced separately via
+> `/api/health` + the scheduled freshness check (§4.3 / §7.2) — see the §4.3 note.
 
 ### 4.2 Objectives
 
@@ -278,7 +297,8 @@ This is the **single source of truth** for ops; it MUST be mirrored 1:1 by a cod
 | AI kill switch | `AI_DISABLED` | **live** (PE3) | Truthy (`1`/`true`/`yes`, case-insensitive) forces the PRD §21 opt-out mode globally: `build_provider_chain` returns an empty chain **even with `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` set** (keys stay set → boot rule §5.1 unaffected); Penny → `409 ai_disabled`, zero provider calls; compute + save + `.xlsx` still work. The prod "ship Penny dark" switch — unset/`0`/`false` enables Penny live. |
 | Sentry | `SENTRY_DSN` | **TODO** (M0/M7) | No error/observability reporting; app still runs (§6). |
 | Census app id | `CENSUS_API_BASE` | optional | Defaults to the public ACS base. |
-| Litestream snapshot tuning | `LITESTREAM_RETENTION`, `LITESTREAM_SNAPSHOT_INTERVAL` | optional | Falls back to `litestream.yml` defaults (30d / 24h). |
+| Litestream replica prefix | `LITESTREAM_PATH` | **set at M0** | Path PREFIX inside the R2 bucket (e.g. `projections.db`); `litestream.yml` substitutes it so a shared bucket can't collide. |
+| Litestream retention/cadence | (none) | n/a | `litestream.yml` hardcodes `retention: 720h` (30-day purge limit, PRD §21) and `sync-interval: 1s` (RPO < 10 s). There is **no `snapshot-interval`/`validation-interval`** and no env override for these — change them in `litestream.yml`, not via env. |
 
 ### 5.3 Boot-refuse policy (no fallback chains)
 
@@ -297,6 +317,7 @@ CENSUS_API_KEY=...
 GOOGLE_PLACES_API_KEY=...
 ANTHROPIC_API_KEY=sk-ant-...
 LITESTREAM_BUCKET=...
+LITESTREAM_PATH=projections.db          # path PREFIX in the bucket (litestream.yml substitutes ${LITESTREAM_PATH})
 LITESTREAM_ENDPOINT=https://<acct>.r2.cloudflarestorage.com
 LITESTREAM_ACCESS_KEY_ID=...
 LITESTREAM_SECRET_ACCESS_KEY=...
@@ -316,31 +337,40 @@ SENTRY_DSN=...
 
 `healthcheckPath = "/api/health"` (railway.toml). **A bare HTTP 200 is NOT proof of a successful deploy** — Railway serves 200s from the *old* instance during a build. The promotion gate (§7.1) verifies the **new build SHA**.
 
-`/api/health` returns:
+There are **two** endpoints (issue #190 — the primary used to "fail open": it hard-coded `status:"ok"` and returned 200 even with the DB down, so Railway kept routing to a broken instance):
+
+**Primary — `GET /api/health` (the Railway deploy gate; ALWAYS HTTP 200 when reachable):**
 
 ```json
-{
-  "status": "ok",
-  "deployment_sha": "<git-sha-of-running-build>",
-  "uptime_seconds": 87,
-  "model_version": "2.0.0",
-  "compute_schema_version": "1.0.0",
-  "db": { "reachable": true, "integrity": "ok", "wal_mode": true },
-  "replication": { "enabled": true, "last_push_seconds_ago": 3 },
-  "ai": { "anthropic": "configured", "openai": "configured", "disabled": false }
-}
+{ "status": "ok", "build_sha": "<git-sha>", "model_version": "2.3.0",
+  "db": "connected", "litestream": "replicating" }
 ```
 
-- `deployment_sha` is the load-bearing field for deploy verification. Fallback when absent: a fresh boot (`uptime_seconds < 120`).
-- `db.integrity` is a cheap reachability/`quick_check`, not a full `PRAGMA integrity_check` on every poll (that is reserved for the restore drill and incident response).
-- `replication.last_push_seconds_ago` makes silent backup failure visible (§4.3). The daily scheduled check (§7.2) alerts if this exceeds a threshold.
-- Health must answer only after migrations + schema succeed (§1.4).
+- **Shape is load-bearing and frozen.** Exactly `{status, build_sha, model_version, db, litestream}`. The Railway healthcheck AND the deploy smoke test (`scripts/promote.py`) require **200 + `build_sha` (== the just-pushed SHA) + `db == "connected"` + `litestream == "replicating"`** — do NOT add/rename fields and do NOT make this endpoint flap to non-200 on a transient blip (that fail-loops deploys).
+- **`status` now reflects REAL state** (it is no longer hard-coded): `ok` when healthy; `unhealthy` when the DB ping fails (`db` reads `"unavailable"`); `degraded` when the DB is up but replication is off **in production** (backups silently off, §4.3). The HTTP code stays **200** — the trouble is surfaced LOUDLY in the `status` field, not by flapping the deploy gate.
+- `build_sha` is `config.build_sha()` (driven by `RAILWAY_GIT_COMMIT_SHA`) — the load-bearing field for deploy verification. Fallback when absent: a fresh boot.
 
-### 6.2 Sentry (errors + tracing)
+**Readiness — `GET /api/health/ready` (deeper probe for monitoring; MAY return HTTP 503):**
 
-- `SENTRY_DSN` (optional; recommended in prod). Initialize at boot; tag every event with `deployment_sha`, `model_version`, environment.
-- **Never send PII or financial fields to Sentry.** Scrub request bodies for projection financials; `Authorization` headers and URL fragments are dropped before send (consistent with PRD §20/§22 — no resolvable projection link, no financial fields ever leave the server unredacted).
-- Capture: unhandled 5xx, provider failures (Anthropic/OpenAI/Places/Census/GitHub/CRM), recalc-gate failures in CI, 409 conflict rate (a spike signals an autosave/concurrency bug), and boot-config failures.
+```json
+{ "status": "ok", "build_sha": "<git-sha>", "model_version": "2.3.0",
+  "compute_schema_version": "1.2.0", "uptime_seconds": 87,
+  "checks": { "db": { "ok": true, "detail": "connected" },
+              "litestream": { "ok": true, "detail": "replicating", "required": true } } }
+```
+
+- Returns **HTTP 503** when `status == "unhealthy"` (the DB / data path is down) — the loud, unmissable signal that fixes the fail-open gap. Point an external uptime monitor / alert at THIS endpoint (the primary `/api/health` must stay 200 for the deploy gate).
+- A `degraded` instance (e.g. backups off in prod) stays **200** here — it can still serve, so we alert on the `status`/`checks` fields rather than restart-looping a serveable replica.
+- Health answers only after migrations + schema succeed (§1.4).
+- **Deeper DB diagnostics (`PRAGMA quick_check`, `wal_mode`) require a `Store`-interface extension** (`app/store/*`, out of #190's scope) and are deliberately NOT yet in `checks.db` — `checks.db.ok` is the public-interface `ping()` reachability signal. Tracked as a follow-up; full `PRAGMA integrity_check` stays reserved for the restore drill / incident response.
+
+### 6.2 Sentry + structured logging (errors + incident triage)
+
+Wired in `app/observability.py` and called first in `create_app()` boot (`configure_logging()` then `init_sentry()`), so even boot-config failures are captured.
+
+- **Structured JSON logging (always on).** `configure_logging()` installs a JSON formatter on the root logger; every line carries `deployment_sha` / `model_version` / `env` and is **secret-scrubbed** via `app.metrics.scrub` (bearer tokens, provider key shapes, high-entropy capability tokens, live secret env values, and `$`/percent financial figures are redacted — SECURITY §6.3/§10). The handler is additive + tagged so it never clobbers pytest `caplog`/uvicorn.
+- **Sentry (opt-in, safe).** `init_sentry()` is a **no-op unless `SENTRY_DSN` is set AND `sentry-sdk` is installed** — it never breaks boot. `sentry-sdk` is intentionally not a hard dependency; **to activate Sentry in production, add `sentry-sdk` to the runtime image and set `SENTRY_DSN`** (a DSN with the SDK missing logs a one-line `sentry_dsn_set_but_sdk_missing` nudge and continues). When active it tags every event with `deployment_sha` / `model_version` / environment, sets `send_default_pii=False`, and runs a `before_send` that **drops `Authorization` headers + cookies + query strings and scrubs request bodies / financial fields** (PRD §20/§22 — no resolvable projection link, no financial fields ever leave the server unredacted).
+- Capture (once active): unhandled 5xx, provider failures (Anthropic/OpenAI/Places/Census/GitHub/CRM, via the #95 breadcrumbs), 409 conflict-rate spikes (autosave/concurrency bug), and boot-config failures.
 
 ### 6.3 Per-provider observability (PRD §27)
 
