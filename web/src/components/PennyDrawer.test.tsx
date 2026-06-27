@@ -164,6 +164,87 @@ describe("PennyDrawer — motion", () => {
   });
 });
 
+describe("PennyDrawer — mobile-375 sheet & a11y (PE12, #131)", () => {
+  // jsdom has no matchMedia, so the shared coexistence probe defaults to a modal
+  // full-screen sheet (below 1180px) — i.e. the mobile sheet is the DEFAULT here.
+  // The desktop non-modal panel is exercised by stubbing the 1180px query true.
+
+  it("locks body scroll while the full-screen sheet is open and restores it on close", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    expect(document.body.style.overflow).not.toBe("hidden");
+
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    expect(document.body.style.overflow).toBe("hidden");
+
+    await user.click(screen.getByRole("button", { name: /close penny/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(document.body.style.overflow).not.toBe("hidden");
+  });
+
+  it("does NOT lock body scroll for the desktop non-modal panel", async () => {
+    stubMatchMedia({ "(min-width: 1180px)": true });
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    expect(document.body.style.overflow).not.toBe("hidden");
+  });
+
+  it("gives the sheet header controls a 44px touch target on the mobile sheet", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    expect(screen.getByRole("button", { name: /close penny/i })).toHaveStyle({
+      minWidth: "44px",
+      minHeight: "44px",
+    });
+    expect(screen.getByRole("button", { name: /about penny/i })).toHaveStyle({
+      minWidth: "44px",
+      minHeight: "44px",
+    });
+  });
+
+  it("makes the suggestion chips horizontally scrollable (not wrapped) on the mobile sheet", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    const chips = screen.getByTestId("penny-chips");
+    expect(chips).toHaveStyle({ flexWrap: "nowrap", overflowX: "auto" });
+  });
+
+  it("wraps the chips on the desktop panel (no horizontal scroll)", async () => {
+    stubMatchMedia({ "(min-width: 1180px)": true });
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    expect(screen.getByTestId("penny-chips")).toHaveStyle({ flexWrap: "wrap" });
+  });
+
+  it("gives the composer input and send a 44px touch target on the mobile sheet", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    expect(screen.getByRole("textbox", { name: /ask penny/i })).toHaveStyle({
+      minHeight: "44px",
+    });
+    expect(screen.getByRole("button", { name: /send/i })).toHaveStyle({ minHeight: "44px" });
+  });
+
+  it("keeps the collapsed FAB a ≥44px touch target inset bottom-left (clear of the right scrollbar)", () => {
+    render(<PennyDrawer />);
+    const fab = screen.getByTestId("penny-fab");
+    // 48px pill ≥ the 44px minimum, anchored bottom-LEFT so it never sits over the
+    // table's right scrollbar / primary actions (spec §5.1).
+    expect(fab).toHaveStyle({ height: "48px", position: "fixed" });
+  });
+});
+
 describe("PennyDrawer — AI-disabled fallback", () => {
   it("renders a muted FAB that deep-links to Settings and never opens a dialog", async () => {
     const user = userEvent.setup();
