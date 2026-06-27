@@ -221,3 +221,49 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     expect(kpis.getByText("$426,911")).toBeInTheDocument();
   });
 });
+
+// #203 — on Generate, swapping the form for the result must NOT strand focus
+// (the Generate button unmounts → focus reverts to <body>) and must announce
+// completion to AT (no aria-live → a screen-reader user never hears the
+// projection — the entire point of the app — was produced). WCAG 2.4.3 / 4.1.3.
+describe("CreateProjectionPage — create-result focus + announce (a11y #203)", () => {
+  async function stepToResult(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
+    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
+    await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+    await waitFor(() =>
+      expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"),
+    );
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> cost schedule
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> review
+    await user.click(screen.getByRole("checkbox", { name: /planning estimates/i }));
+    await user.click(screen.getByRole("button", { name: /generate/i }));
+    await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
+  }
+
+  it("renders a result h1 and moves focus to it (no stranded focus)", async () => {
+    wireFetch({});
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToResult(user);
+
+    const h1 = screen.getByRole("heading", { level: 1 });
+    expect(h1).toHaveTextContent(/House of Hope/i);
+    // Focus moved to the result heading (was lost to <body> before the fix).
+    await waitFor(() => expect(h1).toHaveFocus());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("announces completion via an aria-live status region", async () => {
+    wireFetch({});
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToResult(user);
+
+    const status = screen.getByTestId("generate-status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveTextContent(/projection ready/i);
+  });
+});

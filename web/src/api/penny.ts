@@ -136,6 +136,32 @@ async function readBody(resp: Response): Promise<Record<string, unknown>> {
   }
 }
 
+// The live server raises these via FastAPI `HTTPException(detail={...})`, which
+// serializes as `{ "detail": {...} }`. Reading the body FLAT silently dropped the
+// 429 countdown and the relayed 422 reason against the real backend (#188). These
+// helpers unwrap the nested envelope and tolerate a flat body (existing mocks).
+
+/** Unwrap the FastAPI `{detail:{...}}` error envelope (a flat body is tolerated). */
+function errorDetail(body: Record<string, unknown>): Record<string, unknown> {
+  const d = body.detail;
+  return d && typeof d === "object" ? (d as Record<string, unknown>) : body;
+}
+
+/** The relayed human reason for a rejection: 422 emits `reason`, some paths `message`. */
+function relayedMessage(detail: Record<string, unknown>): string | undefined {
+  if (typeof detail.reason === "string") return detail.reason;
+  if (typeof detail.message === "string") return detail.message;
+  return undefined;
+}
+
+/** The 429 retry hint: prefer the body's `retry_after_seconds`, else the `Retry-After` header. */
+function retryAfterSecondsOf(resp: Response, detail: Record<string, unknown>): number | undefined {
+  const fromBody = detail.retry_after_seconds;
+  if (typeof fromBody === "number") return fromBody;
+  const header = Number.parseInt(resp.headers.get("Retry-After") ?? "", 10);
+  return Number.isFinite(header) ? header : undefined;
+}
+
 /**
  * Send one user message to Penny on a saved projection.
  *
@@ -166,12 +192,11 @@ export async function sendPennyMessage({
   });
 
   if (!resp.ok) {
-    const data = await readBody(resp);
+    const detail = errorDetail(await readBody(resp));
     const kind = STATUS_KIND[resp.status] ?? "unknown";
-    const retryRaw = data.retry_after_seconds;
     throw new PennyError(kind, resp.status, {
-      serverMessage: typeof data.message === "string" ? data.message : undefined,
-      retryAfterSeconds: typeof retryRaw === "number" ? retryRaw : undefined,
+      serverMessage: relayedMessage(detail),
+      retryAfterSeconds: retryAfterSecondsOf(resp, detail),
     });
   }
 
@@ -209,12 +234,11 @@ export async function sendPennyDraftMessage({
   });
 
   if (!resp.ok) {
-    const data = await readBody(resp);
+    const detail = errorDetail(await readBody(resp));
     const kind = STATUS_KIND[resp.status] ?? "unknown";
-    const retryRaw = data.retry_after_seconds;
     throw new PennyError(kind, resp.status, {
-      serverMessage: typeof data.message === "string" ? data.message : undefined,
-      retryAfterSeconds: typeof retryRaw === "number" ? retryRaw : undefined,
+      serverMessage: relayedMessage(detail),
+      retryAfterSeconds: retryAfterSecondsOf(resp, detail),
     });
   }
 
@@ -268,10 +292,10 @@ export async function uploadProposal({
   });
 
   if (!resp.ok) {
-    const data = await readBody(resp);
+    const detail = errorDetail(await readBody(resp));
     const kind = STATUS_KIND[resp.status] ?? "unknown";
     throw new PennyError(kind, resp.status, {
-      serverMessage: typeof data.message === "string" ? data.message : undefined,
+      serverMessage: relayedMessage(detail),
     });
   }
 

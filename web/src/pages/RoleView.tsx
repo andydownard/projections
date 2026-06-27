@@ -43,6 +43,14 @@ export function RoleView({ slug }: RoleViewProps) {
     };
   }, [slug]);
 
+  // #203 — per-projection page title (was the static "Thrift Store Projection"
+  // for every share link), so a board member's tab/history identifies it.
+  useEffect(() => {
+    if (!vm) return;
+    const named = (vm.name || "").trim();
+    document.title = named ? `${named} — Thrift Store Projection` : "Thrift Store Projection";
+  }, [vm]);
+
   if (loadError) {
     return (
       <div className="role-view">
@@ -55,6 +63,13 @@ export function RoleView({ slug }: RoleViewProps) {
 
   return (
     <div className="role-view" data-role={vm.role}>
+      {/* #203 — the board/funder read view previously had ZERO headings of any
+          level. A visible h1 names the projection so AT users can orient + navigate
+          (WCAG 1.3.1 / 2.4.6). Inline style only (tokens.css owned elsewhere; the
+          role-view screen is still in its parity backlog). */}
+      <h1 style={{ margin: "0 0 1rem", fontSize: "1.5rem", lineHeight: 1.25 }}>
+        {(vm.name || "").trim() || "Thrift store projection"}
+      </h1>
       {/* Read-only notice (M7 I2): a shared link can read/download/export but not
           edit — announced politely (role="status"), meaning carried in text. */}
       <DegradedState kind="read-only" />

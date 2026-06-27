@@ -268,3 +268,98 @@ describe("ProjectionDetail — per-field change affordance (PE7, #126)", () => {
     vi.unstubAllGlobals();
   });
 });
+
+// #203 — the read-only detail page rendered no page heading; the first heading was
+// an <h3>, so h1/h2 were skipped (WCAG 1.3.1 / 2.4.6). A visible h1 names the
+// projection and a section h2 keeps the existing h3s from skipping levels.
+describe("ProjectionDetail — heading hierarchy (a11y #203)", () => {
+  it("renders an h1 naming the projection on the read view", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    const h1 = await screen.findByRole("heading", { level: 1 });
+    expect(h1).toHaveTextContent(/House of Hope/i);
+  });
+
+  it("inserts an h2 section heading so the existing h3s don't skip levels", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByRole("heading", { level: 1 });
+    expect(screen.getByRole("heading", { level: 2 })).toBeInTheDocument();
+  });
+});
+
+// #188 — the LIVE server raises 409 as `HTTPException(detail={...})` → `{"detail":
+// {...}}`. The client parsed it FLAT, so `current_version` was undefined and the
+// Overwrite path re-sent the STALE If-Match → a 409 loop the owner could never
+// escape. With the nested-envelope parse, Overwrite re-sends the server's current
+// version and the force-save lands.
+describe("ProjectionDetail — 409 Overwrite resolves (does not loop) #188", () => {
+  beforeEach(() => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("re-sends the server's current_version on Overwrite so the save lands", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm()); // version 3
+    const ifMatches: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (method === "PATCH") {
+          const ifMatch = new Headers(init?.headers).get("If-Match") ?? "";
+          ifMatches.push(ifMatch);
+          if (ifMatch === "3") {
+            // Stale write → the live server's nested {detail:{...}} 409 envelope.
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  detail: {
+                    error: "version_conflict",
+                    current_version: 9,
+                    your_version: 3,
+                    current_state: fullVm({ version: 9 }),
+                    recovery: "reload | overwrite | save_as_copy",
+                  },
+                }),
+                { status: 409, headers: { "Content-Type": "application/json" } },
+              ),
+            );
+          }
+          // Overwrite carries If-Match: 9 → accepted.
+          const next = Number(ifMatch) + 1;
+          return Promise.resolve(
+            new Response(JSON.stringify(fullVm({ version: next })), {
+              status: 200,
+              headers: { "Content-Type": "application/json", ETag: `"${next}"` },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+
+    const nameInput = await screen.findByLabelText("Store name");
+    await user.type(nameInput, "Z"); // debounced PATCH with the stale If-Match: 3
+
+    // The stale write surfaces the conflict modal.
+    await screen.findByTestId("save-conflict-modal");
+
+    // Owner chooses Overwrite — the force-save must succeed, not loop.
+    await user.click(screen.getByRole("button", { name: /overwrite/i }));
+
+    await waitFor(() => expect(screen.queryByTestId("save-conflict-modal")).toBeNull());
+    // The decisive proof: the Overwrite used the SERVER's current version (9), not
+    // the stale client version (3) — the flat parse never learned "9".
+    expect(ifMatches).toContain("9");
+
+    vi.unstubAllGlobals();
+  });
+});

@@ -101,4 +101,33 @@ describe("patchProjection — 409 conflict (API_SPEC §1.4)", () => {
       patchProjection({ viewSlug: "p_abc", token: "t", version: 7, body: {} }),
     ).rejects.not.toBeInstanceOf(PatchConflictError);
   });
+
+  // #188 — the LIVE server raises 409 via FastAPI `HTTPException(detail={...})`,
+  // which serializes as `{"detail": {...}}` (NOT the flat body the old mock used).
+  // The client must read the nested envelope or `current_version` is undefined and
+  // the Overwrite path re-sends the STALE If-Match → the owner can never force-save.
+  it("parses the nested {detail:{…}} conflict envelope the live server emits", async () => {
+    const envelope = {
+      detail: {
+        error: "version_conflict",
+        current_version: 9,
+        your_version: 7,
+        current_state: { settings: {}, version: 9 },
+        // server emits recovery as a STRING ("reload | overwrite | save_as_copy")
+        recovery: "reload | overwrite | save_as_copy",
+      },
+    };
+    mockFetch(() => jsonResponse(envelope, { status: 409 }));
+    try {
+      await patchProjection({ viewSlug: "p_abc", token: "t", version: 7, body: { name: "x" } });
+      throw new Error("should have thrown a PatchConflictError");
+    } catch (e) {
+      expect(e).toBeInstanceOf(PatchConflictError);
+      const err = e as PatchConflictError;
+      // The fields the Overwrite/Reload recovery relies on must survive the parse.
+      expect(err.conflict.current_version).toBe(9);
+      expect(err.conflict.your_version).toBe(7);
+      expect((err.conflict.current_state as { version?: number }).version).toBe(9);
+    }
+  });
 });

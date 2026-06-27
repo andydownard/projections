@@ -230,6 +230,16 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   }, [edit, saveLabel]);
   useEffect(() => clearDetailHeader, []);
 
+  // #203 — give every projection its own page title (was the static
+  // "Thrift Store Projection" for all of them) so AT/tab/history identify it.
+  useEffect(() => {
+    if (!vm) return;
+    const named = (name || vm.name || "").trim();
+    document.title = named
+      ? `${named} — Thrift Store Projection`
+      : "Thrift Store Projection";
+  }, [vm, name]);
+
   // PE7: derive the per-field change badges by diffing the editable-share display
   // strings whenever the view-model settles. `pendingActorRef` (set by the mutation
   // that triggered this settle) attributes the change; on the initial load there is
@@ -380,6 +390,14 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
 
   return (
     <div className="detail">
+      {/* #203 — a visible top-level page heading naming the projection (the read
+          view previously had none; the first heading was an <h3>, skipping h1/h2).
+          WCAG 1.3.1 (A) / 2.4.6 (AA). Inline styles only — tokens.css is owned
+          elsewhere and these detail screens are not yet in its parity backlog. */}
+      <h1 style={{ margin: "0 0 1rem", fontSize: "1.5rem", lineHeight: 1.25 }}>
+        {(name || vm.name || "").trim() || "Thrift store projection"}
+      </h1>
+
       {/* The autosave status is now a header chip in the shared TopBar (#150);
           ProjectionTab keeps its own recompute live-region for SR users. */}
       {edit && (
@@ -400,6 +418,12 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       {(() => {
         const projection = (
           <>
+            {/* #203 — a section-level h2 so the decision + the existing in-tab
+                h3s ("Monthly launch cash-flow", "3-year projection") nest under
+                the page h1 instead of skipping straight to h3. */}
+            <h2 style={{ margin: "0 0 0.75rem", fontSize: "1.125rem", lineHeight: 1.3 }}>
+              Decision &amp; 3-year projection
+            </h2>
             <ProjectionTab
               key={slug}
               vm={vm}

@@ -156,3 +156,61 @@ describe("sendPennyMessage — error classification (Spec B §8/§11)", () => {
     ).rejects.toBeInstanceOf(PennyError);
   });
 });
+
+// #188 — the LIVE server raises these via FastAPI `HTTPException(detail={...})`,
+// which serializes as `{"detail": {...}}`. The flat reads above never see those
+// fields against the real backend, so Penny's 429 countdown and 422 reason are
+// silently dropped. The client must read the nested envelope (and the Retry-After
+// header) so the user learns WHEN to retry and WHY the turn was rejected.
+describe("sendPennyMessage — nested {detail:{…}} error envelope (#188)", () => {
+  it("reads retry_after_seconds from the nested detail on a 429", async () => {
+    mockFetch(() =>
+      jsonResponse({ detail: { error: "rate_limited", retry_after_seconds: 30 } }, { status: 429 }),
+    );
+    try {
+      await sendPennyMessage({ viewSlug: "p", token: "t", message: "hi" });
+      throw new Error("should have thrown");
+    } catch (e) {
+      const err = e as PennyError;
+      expect(err.kind).toBe("rate_limited");
+      expect(err.retryAfterSeconds).toBe(30);
+    }
+  });
+
+  it("falls back to the Retry-After header when the body omits the count", async () => {
+    mockFetch(() =>
+      jsonResponse(
+        { detail: { error: "rate_limited" } },
+        { status: 429, headers: { "Retry-After": "45" } },
+      ),
+    );
+    try {
+      await sendPennyMessage({ viewSlug: "p", token: "t", message: "hi" });
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect((e as PennyError).retryAfterSeconds).toBe(45);
+    }
+  });
+
+  it("relays the 422 rejection reason from the nested detail", async () => {
+    mockFetch(() =>
+      jsonResponse(
+        {
+          detail: {
+            error: "input_too_large",
+            reason: "I can only apply a raw input value, not a computed figure",
+          },
+        },
+        { status: 422 },
+      ),
+    );
+    try {
+      await sendPennyMessage({ viewSlug: "p", token: "t", message: "pin a total" });
+      throw new Error("should have thrown");
+    } catch (e) {
+      const err = e as PennyError;
+      expect(err.kind).toBe("rejected");
+      expect(err.serverMessage).toMatch(/raw input value/i);
+    }
+  });
+});
