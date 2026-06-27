@@ -22,119 +22,87 @@ tested with adversarial inputs (a happy-path-only test gives false safety):
    figure-level so the client can show "Out of date" + Regenerate and NEVER
    auto-overwrite user-edited prose (PRD §17).
 
-The sanitizer is stdlib-only (`html.parser`) so the grounding/sanitization tests
-run hermetically with no third-party dependency in the path.
+The sanitizer delegates the allowlist enforcement to **`bleach`** — a vetted,
+widely-audited HTML sanitizer built on html5lib — rather than a bespoke parser,
+because allowlist sanitization is exactly the class of problem where hand-rolled
+parsers leak on obfuscated payloads (e.g. `<scr<script>ipt>`). bleach is the
+security boundary; we add only a tiny pre-pass that discards the *content* of a
+few raw-text/dangerous elements (a `<script>` body is a token-stealing payload,
+not prose). See SECURITY.md §5.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
-from html.parser import HTMLParser
 from typing import Any
 
+import bleach  # type: ignore[import-untyped]  # vetted sanitizer; ships no stubs
+
 # --------------------------------------------------------------- sanitization
-# Minimal Markdown-rendered allowlist (SECURITY.md §5).
+# Minimal Markdown-rendered allowlist (SECURITY.md §5). bleach enforces the
+# tag/attr/URL-scheme allowlist; everything else (every on* handler, `style`,
+# javascript:/data:/vbscript: URLs, <iframe>/<object>/<embed>/inline SVG) is
+# dropped.
 _ALLOWED_TAGS = {
     "p", "br", "ul", "ol", "li", "strong", "em", "b", "i", "a",
     "h1", "h2", "h3", "h4", "blockquote", "code", "pre", "hr",
 }
-# Tags whose *content* must be discarded entirely, not just the tag.
-_VOID_CONTENT_TAGS = {"script", "style", "iframe", "object", "embed", "svg", "math"}
-# Per-tag attribute allowlist; everything else (incl. every on* handler) dropped.
-_ALLOWED_ATTRS = {"a": {"href", "title"}}
-_SAFE_URL_SCHEMES = ("http:", "https:", "mailto:")
+# Per-tag attribute allowlist; bleach drops everything else (incl. on*/style).
+_ALLOWED_ATTRS = {"a": ["href", "title"]}
+# Only these URL schemes survive on a link href; a javascript:/data:/vbscript:
+# href is stripped while the <a> text is kept (defang, not delete).
+_ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
+# Elements whose entire subtree (content included) is discarded, not just the
+# tag — bleach alone keeps their inner text as inert data, but a <script>/<style>
+# body is a payload, not prose. Matched case-insensitively; the closing tag is
+# optional so an unclosed <script> is dropped through to EOF. This pre-pass is a
+# strictness nicety layered ON TOP of bleach (the real security boundary), so a
+# missed match can never let executable markup through.
+_DROP_CONTENT_RE = re.compile(
+    r"<\s*(script|style|iframe|object|embed|svg|math)\b[^>]*>.*?(?:</\s*\1\s*>|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_CLEANER = bleach.sanitizer.Cleaner(
+    tags=_ALLOWED_TAGS,
+    attributes=_ALLOWED_ATTRS,
+    protocols=_ALLOWED_PROTOCOLS,
+    strip=True,            # drop disallowed tags but keep their text (defang)
+    strip_comments=True,
+)
 
 
-class _Sanitizer(HTMLParser):
-    """Allowlist HTML sanitizer: keep allowed tags/attrs, drop the rest.
+def sanitize_richtext(value: str) -> str:
+    """Allowlist-sanitize untrusted rich text before storage AND on render.
 
-    Disallowed tags are dropped but their text is kept (defanging, not deletion)
-    EXCEPT for _VOID_CONTENT_TAGS whose entire subtree (e.g. a <script> body) is
-    discarded.
+    The single XSS-defense for every user/LLM rich-text surface that can reach
+    the DOM or the board packet — ``narratives.body_md`` (user-edited AND
+    LLM-generated), evidence labels/notes, justification notes, projection name
+    (SECURITY.md §5). Bearer tokens live in ``localStorage``, so a single stored
+    XSS = token theft = full projection takeover; this is the gate that makes
+    ``el.innerHTML = body_md`` safe on the client.
+
+    Keeps a minimal Markdown-rendered tag set and drops everything else: all
+    ``<script>``/``<style>``/``<iframe>``/``<object>``/``<embed>``/inline SVG
+    (tag *and* body), every ``on*`` handler, ``style`` attributes, and any
+    non-http(s)/mailto URL scheme. Idempotent: re-running on already-sanitized
+    markup is a no-op, so the store-time pass and the defense-in-depth render
+    pass agree.
     """
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.out: list[str] = []
-        self._suppress_depth = 0  # >0 while inside a void-content tag
-
-    def handle_starttag(self, tag: str, attrs: list) -> None:
-        tag = tag.lower()
-        if tag in _VOID_CONTENT_TAGS:
-            self._suppress_depth += 1
-            return
-        if self._suppress_depth:
-            return
-        if tag not in _ALLOWED_TAGS:
-            return  # drop the tag, keep following text
-        self.out.append(self._render_open(tag, attrs))
-
-    def handle_startendtag(self, tag: str, attrs: list) -> None:
-        tag = tag.lower()
-        if tag in _VOID_CONTENT_TAGS or self._suppress_depth:
-            return
-        if tag not in _ALLOWED_TAGS:
-            return
-        self.out.append(self._render_open(tag, attrs, self_close=True))
-
-    def handle_endtag(self, tag: str) -> None:
-        tag = tag.lower()
-        if tag in _VOID_CONTENT_TAGS:
-            if self._suppress_depth:
-                self._suppress_depth -= 1
-            return
-        if self._suppress_depth:
-            return
-        if tag not in _ALLOWED_TAGS:
-            return
-        self.out.append(f"</{tag}>")
-
-    def handle_data(self, data: str) -> None:
-        if self._suppress_depth:
-            return
-        self.out.append(_escape_text(data))
-
-    def _render_open(self, tag: str, attrs: list, self_close: bool = False) -> str:
-        allowed = _ALLOWED_ATTRS.get(tag, set())
-        kept: list[str] = []
-        for name, value in attrs:
-            name = (name or "").lower()
-            if name.startswith("on"):  # event handlers -> always drop
-                continue
-            if name not in allowed:
-                continue
-            if name == "href" and not _is_safe_url(value or ""):
-                continue
-            kept.append(f'{name}="{_escape_attr(value or "")}"')
-        attr_str = (" " + " ".join(kept)) if kept else ""
-        return f"<{tag}{attr_str}{' /' if self_close else ''}>"
-
-
-def _is_safe_url(url: str) -> bool:
-    u = url.strip().lower()
-    if u.startswith(_SAFE_URL_SCHEMES):
-        return True
-    # Relative/anchor URLs and scheme-less paths are safe (no scheme to abuse).
-    return ":" not in u.split("/", 1)[0]
-
-
-def _escape_text(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _escape_attr(s: str) -> str:
-    return _escape_text(s).replace('"', "&quot;")
+    if not value:
+        return ""
+    pre = _DROP_CONTENT_RE.sub("", value)
+    return _CLEANER.clean(pre)
 
 
 def sanitize_body_md(body_md: str) -> str:
-    """Allowlist-sanitize narrative markup before storage (SECURITY.md §5)."""
-    if not body_md:
-        return ""
-    parser = _Sanitizer()
-    parser.feed(body_md)
-    parser.close()
-    return "".join(parser.out)
+    """Allowlist-sanitize narrative markup before storage (SECURITY.md §5).
+
+    Thin alias over :func:`sanitize_richtext` kept as the name the narrative
+    store/render path calls; the allowlist behavior is identical.
+    """
+    return sanitize_richtext(body_md)
 
 
 # ----------------------------------------------------------------- grounding
