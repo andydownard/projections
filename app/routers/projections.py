@@ -1231,7 +1231,27 @@ def apply_projection_patch(
         "model_version": vm.get("model_version", ""),
         **_schedule_columns(inputs_d),
     }
-    affected = store.update_with_version_check(row["id"], if_match, patch)
+    # Version-checked UPDATE + the revision snapshot commit in ONE transaction (#186):
+    # 0 rows -> 409 and NO revision; else both land together — a crash can never leave
+    # a version bump without its snapshot (an unrecoverable restore/audit-trail hole).
+    new_version = if_match + 1
+    revision = {
+        "id": _new_id(),
+        "projection_id": row["id"],
+        "seq": new_version,
+        "inputs_json": patch["inputs_json"],
+        "assumptions_json": patch["assumptions_json"],
+        "overrides_json": patch["overrides_json"],
+        "monthly_json": "{}",
+        "computed_json": patch["computed_json"],
+        "model_version": patch["model_version"],
+        "actor_token_hash": hash_token(token),
+        "actor": actor,
+        "change_summary": change_summary,
+        "created_at": _utcnow(),
+    }
+    affected = store.update_with_version_check_and_revision(
+        row["id"], if_match, patch, revision)
     if affected == 0:
         current = store.get_projection_by_slug(row["view_slug"])
         try:
@@ -1246,23 +1266,6 @@ def apply_projection_patch(
                               "version": current["version"] if current else None},
             "recovery": "reload | overwrite | save_as_copy",
         })
-
-    new_version = if_match + 1
-    store.insert_revision({
-        "id": _new_id(),
-        "projection_id": row["id"],
-        "seq": new_version,
-        "inputs_json": patch["inputs_json"],
-        "assumptions_json": patch["assumptions_json"],
-        "overrides_json": patch["overrides_json"],
-        "monthly_json": "{}",
-        "computed_json": patch["computed_json"],
-        "model_version": patch["model_version"],
-        "actor_token_hash": hash_token(token),
-        "actor": actor,
-        "change_summary": change_summary,
-        "created_at": _utcnow(),
-    })
     return vm, new_version, name
 
 
@@ -1409,14 +1412,12 @@ def rotate_tokens(
         "view_slug": new_slug,
         "role_tokens_json": json.dumps(new_role_map),
     }
-    affected = store.rotate_tokens(row["id"], if_match, new_hashes)
-    if affected == 0:
-        raise HTTPException(status_code=409, detail={
-            "error": "version_conflict", "your_version": if_match,
-            "recovery": "reload | overwrite | save_as_copy"})
-
+    # The capability re-hash (same version-checked UPDATE as rotate_tokens) and its
+    # audit revision commit in ONE transaction (#186): 0 rows -> 409 with neither;
+    # else both land together, so a rotation can never half-apply (tokens swapped but
+    # no audit row, or vice versa).
     new_version = if_match + 1
-    store.insert_revision({
+    revision = {
         "id": _new_id(),
         "projection_id": row["id"],
         "seq": new_version,
@@ -1429,7 +1430,14 @@ def rotate_tokens(
         "actor_token_hash": hash_token(new_owner),
         "change_summary": "tokens_rotated",
         "created_at": _utcnow(),
-    })
+    }
+    affected = store.update_with_version_check_and_revision(
+        row["id"], if_match, new_hashes, revision)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+
     response.headers["ETag"] = str(new_version)
     return {
         "view_slug": new_slug,
@@ -1512,15 +1520,12 @@ def restore_revision(
         # restored inputs_json (the canonical copy).
         **_schedule_columns(inputs_d),
     }
-    affected = store.update_with_version_check(row["id"], if_match, patch)
-    if affected == 0:
-        raise HTTPException(status_code=409, detail={
-            "error": "version_conflict", "your_version": if_match,
-            "recovery": "reload | overwrite | save_as_copy"})
-
+    # The version-checked UPDATE and the new forward revision commit in ONE
+    # transaction (#186): 0 rows -> 409 with neither; else both land together, so a
+    # restore can never bump the version without writing its snapshot.
     new_version = if_match + 1
     token = _bearer(authorization)
-    store.insert_revision({
+    revision = {
         "id": _new_id(),
         "projection_id": row["id"],
         "seq": new_version,
@@ -1533,7 +1538,14 @@ def restore_revision(
         "actor_token_hash": hash_token(token) if token else None,
         "change_summary": f"restore from v{rev['seq']}",
         "created_at": _utcnow(),
-    })
+    }
+    affected = store.update_with_version_check_and_revision(
+        row["id"], if_match, patch, revision)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+
     response.headers["ETag"] = str(new_version)
     return {**vm, "view_slug": view_slug, "version": new_version, "name": row["name"]}
 
