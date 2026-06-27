@@ -65,18 +65,19 @@ The households field is **empty and disabled** until an address is selected and 
 Replaces the fixed `STARTUP` lump (`Thrift Store Consultant 100000`, `Equipment & Fixtures 45000`, `Build-out 50000`, `Legal/Permits 13500`) with a **schedule of timed line items**.
 
 - **Row shape:** `{ category: string, month: int >= 1, amount: dollars }`. `category` is a label (e.g., "Consultant", "Build-out / Renovations", "Equipment & Fixtures", "Legal / Permits"); the user can add rows and pick a month as they enter.
-- **Anchor:** the user sets a **target opening date** and an **opening month #** (which project month is grand opening, e.g., 6). Months `1 .. opening#-1` are pre-opening; `opening# .. opening#+11` are operating Year 1; rows may also fall on operating months (post-open support). Calendar labels are derived from `target_opening_date` + `opening_month#`.
-- **Default schedule:** when the user doesn't customize, all current startup categories are placed at the **opening month** (reproducing today's single-lump-at-opening behavior) so existing/example projections compute unchanged in value.
-- **Validation:** server-side — `month >= 1`, amount ≥ 0, opening_month# ≥ 1, at least the default categories present; totals derived server-side (no client math).
+- **Anchor:** the user sets a **target opening date** and an **opening month #** — the project month on which grand opening falls (a **milestone**, general: it can be month 1, or month 6, or any month). Months `1 .. opening#-1` are pre-opening; `opening# .. opening#+11` are operating Year 1; rows may fall on any month, before or after opening (e.g., post-open support).  Calendar labels are derived from `target_opening_date` + `opening_month#`.
+- **Default behavior (no special synthesis):** the natural default reduces to today's behavior simply by the user putting startup costs in **month 1** and setting **grand opening = month 1** — then there are no pre-opening months and the costs are a single lump at opening. There is no separate "grouped" default mode; grouping vs. spreading is entirely the user's choice via where they place the rows and the opening month.
+- **Validation:** server-side — `month >= 1`, amount ≥ 0, opening_month# ≥ 1; totals derived server-side (no client math).
 
 ## 6. Engine — multi-month pre-opening period
 
-Today `engine/monthly.py` builds one pre-open `M0` (entire startup lump) + `M1–M12`. New model:
+Today `engine/monthly.py` builds one pre-open `M0` (entire startup lump) + `M1–M12`. New model — a **uniform monthly timeline** where pre-opening months are first-class P&L months (NOT excluded, NOT merged into month 1):
 
-- The project timeline is **project months `1..N`**, where `opening_month#` marks grand opening. Pre-opening months (`1 .. opening#-1`) have **no operating revenue/expense** — only scheduled costs landing on those months. Operating months (`opening# .. opening#+11`) carry operating revenue/expense **plus** any scheduled costs on those months (e.g., Months 1–3 / 4–6 consultant support).
+- The timeline is **project months `1..N`**; `opening_month#` (= `G`) is a **milestone marker**. Every month has a P&L line. Months `1..G-1` (pre-opening) have **no operating revenue** and no operating expenses (the store isn't open) — their P&L is the **scheduled costs landing that month** (a real monthly loss). Months `G..N` carry operating revenue/expense **plus** any scheduled costs on those months. `N` covers pre-opening + the 12 operating months (`N = G + 11`).
+- **Pre-opening months feed the P&L and cash flow as real months** — they appear in the monthly income statement / cash-flow with their costs and a negative net, and contribute to cumulative cash. The user may *choose* to place all costs in month 1 (= grouping), but the engine never forces grouping or exclusion.
 - **Scheduled costs** from §5 are placed on their month #s (replacing the single startup lump). Total startup = sum of the schedule.
-- **Decision metrics recomputed** from the new cumulative-cash curve: `startup_capital_required` = peak cumulative cash deficit across the whole timeline (now beginning in pre-opening); `break_even_month` = first sustained operating month with net ≥ 0 (numbered in project months, with opening marked); `first_year_cash_gap` per the operating Year-1 window.
-- **View-model + chart** extend to include pre-opening months (x-axis starts at month 1, opening marked). The annual 3-year projection's operating years are unchanged in definition (Year 1 = the 12 operating months); pre-opening costs surface in startup/cash-flow, not operating P&L.
+- **Decision metrics recomputed** from the new cumulative-cash curve: `startup_capital_required` = peak cumulative cash deficit across the whole timeline (begins accumulating in pre-opening); `break_even_month` = first sustained operating month (≥ `G`) with net ≥ 0, numbered in project months with the opening milestone marked; `first_year_cash_gap` per the operating Year-1 window (`G..G+11`).
+- **View-model + chart** include all months `1..N` (x-axis starts at month 1; the grand-opening milestone is marked). The 3-year **annual** operating P&L is measured from the opening milestone (Year 1 = `G..G+11`); pre-opening months are shown in the monthly view and as a pre-opening period that rolls into the income statement/startup — exact annual-table presentation finalized in plan review, but pre-opening is never dropped or forced into month 1.
 - **`.xlsx` export** and the **three-way golden gate** (server == computed_json == LibreOffice recalc) extend to the pre-opening months; golden fixtures regenerated. `model_version` bumps (math/shape change); reads of older snapshots still return the stored snapshot + "new model available" (existing behavior).
 
 ## 7. Data model
@@ -86,7 +87,7 @@ Today `engine/monthly.py` builds one pre-open `M0` (entire startup lump) + `M1�
 - `opening_month_number` (int ≥ 1)
 - `cost_schedule`: `[{ category, month, amount }]`
 
-The fixed startup constant is superseded by `cost_schedule`; a **default cost_schedule** is synthesized from the legacy `STARTUP` constants (all at `opening_month#`) for any projection without one, so existing rows and the seeded example keep computing. Schedule is server-validated; the engine consumes it. Provenance for AI-populated schedules is added later (Spec B).
+The fixed startup constant is superseded by `cost_schedule`. **Migration default for projections without a schedule** (legacy rows + the seeded example): place the legacy `STARTUP` category amounts at **month 1** with `opening_month_number = 1` — i.e., a single lump at opening, reproducing today's numbers exactly (this is the same result a user gets by entering costs in month 1 + opening month 1, not a special engine mode). Schedule is server-validated; the engine consumes it. Provenance for AI-populated schedules is added later (Spec B).
 
 ## Components & files (anticipated)
 
@@ -104,5 +105,5 @@ The fixed startup constant is superseded by `cost_schedule`; a **default cost_sc
 ## Risks / open considerations
 
 - **Golden-gate churn:** the pre-opening change touches the correctness spine; fixtures must be regenerated carefully and the LibreOffice `.xlsx` leg kept in lockstep.
-- **Backward compatibility:** the default-schedule parity test is the guard that existing projections' numbers don't move unexpectedly.
-- **Annual roll-up semantics:** pre-opening months feed startup/cash-flow but not operating P&L — confirm this is the desired treatment during plan review.
+- **Backward compatibility:** the migration default (costs at month 1, opening month 1) + a parity test guard that existing projections' numbers don't move.
+- **Annual roll-up semantics:** pre-opening months ARE first-class P&L months (monthly view + income statement); the only open detail is how the *annual* 3-year table presents the pre-opening period (its own column/period vs. rolled into the operating Year-1 window) — decided in plan review. They are never excluded or forced into month 1.
