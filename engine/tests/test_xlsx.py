@@ -214,3 +214,193 @@ def test_preopening_workbook_has_no_unguarded_divisions(tmp_path):
                         and cell_denom.search(c.value)):
                     assert "IF(" in c.value, \
                         f"unguarded cell division at {ws.title}!{c.coordinate}"
+
+
+def _headers(ws):
+    return [ws.cell(row=2, column=col).value for col in range(1, 7)]
+
+
+def test_monthly_headers_are_in_exact_order(tmp_path):
+    _res, path = _build_preopening(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    assert _headers(ws) == [
+        "Month", "Revenue", "Operating expenses", "Scheduled costs",
+        "Net", "Cumulative cash",
+    ]
+
+
+def test_monthly_revenue_and_expenses_are_literals_not_formulas(tmp_path):
+    res, path = _build_preopening(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    headers = _headers(ws)
+    rev_col = headers.index("Revenue") + 1
+    exp_col = headers.index("Operating expenses") + 1
+    rowmap = _month_row_map(ws)
+    for r in rowmap.values():
+        rev = ws.cell(row=r, column=rev_col).value
+        exp = ws.cell(row=r, column=exp_col).value
+        assert not (isinstance(rev, str) and rev.startswith("="))
+        assert not (isinstance(exp, str) and exp.startswith("="))
+
+
+def test_operating_months_carry_revenue_and_expenses(tmp_path):
+    res, path = _build_preopening(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    headers = _headers(ws)
+    rev_col = headers.index("Revenue") + 1
+    exp_col = headers.index("Operating expenses") + 1
+    rowmap = _month_row_map(ws)
+    by_month = {m.index: m for m in res.monthly}
+    operating = [m.index for m in res.monthly
+                 if m.kind == "operating" and m.index <= res.inputs.opening_month_number + 11]
+    assert operating  # there are operating months
+    for month in operating:
+        r = rowmap[month]
+        assert float(ws.cell(row=r, column=rev_col).value) == float(by_month[month].revenue)
+        assert float(ws.cell(row=r, column=exp_col).value) == float(by_month[month].expenses)
+    # at least one operating month has positive revenue (the ramp is non-trivial)
+    assert any(float(by_month[m].revenue) > 0 for m in operating)
+
+
+def test_monthly_net_is_formula_for_every_month(tmp_path):
+    from openpyxl.utils import get_column_letter
+    res, path = _build_preopening(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    headers = _headers(ws)
+    rev = get_column_letter(headers.index("Revenue") + 1)
+    exp = get_column_letter(headers.index("Operating expenses") + 1)
+    sched = get_column_letter(headers.index("Scheduled costs") + 1)
+    net_col = headers.index("Net") + 1
+    rowmap = _month_row_map(ws)
+    for r in rowmap.values():
+        assert ws.cell(row=r, column=net_col).value == f"={rev}{r}-{exp}{r}-{sched}{r}"
+
+
+def test_cumulative_cash_is_running_sum_of_net(tmp_path):
+    from openpyxl.utils import get_column_letter
+    res, path = _build_preopening(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    headers = _headers(ws)
+    net = get_column_letter(headers.index("Net") + 1)
+    cum_col = headers.index("Cumulative cash") + 1
+    cum = get_column_letter(cum_col)
+    rowmap = _month_row_map(ws)
+    ordered = [rowmap[m] for m in sorted(rowmap)]
+    first = ordered[0]
+    assert ws.cell(row=first, column=cum_col).value == f"={net}{first}"
+    for prev, r in zip(ordered, ordered[1:]):
+        assert ws.cell(row=r, column=cum_col).value == f"={cum}{prev}+{net}{r}"
+
+
+def test_scheduled_costs_sum_equals_startup_total(tmp_path):
+    res, path = _build_preopening(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    headers = _headers(ws)
+    sched_col = headers.index("Scheduled costs") + 1
+    rowmap = _month_row_map(ws)
+    total = sum(float(ws.cell(row=r, column=sched_col).value) for r in rowmap.values())
+    assert abs(total - float(res.startup_total)) < 0.5
+
+
+def test_opening_month_scheduled_cost_includes_lease_deposit(tmp_path):
+    res, path = _build_preopening(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    headers = _headers(ws)
+    sched_col = headers.index("Scheduled costs") + 1
+    rowmap = _month_row_map(ws)
+    g = res.inputs.opening_month_number
+    # lease deposit = occupancy_y1 / 12 * 3 = 120000/12*3 = 30000, plus the
+    # explicit month-G equipment cost of 30000 => 60000 on the opening month.
+    assert float(ws.cell(row=rowmap[g], column=sched_col).value) == 60000.0
+
+
+def test_opening_month_label_is_bold_milestone(tmp_path):
+    res, path = _build_preopening(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    rowmap = _month_row_map(ws)
+    g = res.inputs.opening_month_number
+    cell = ws.cell(row=rowmap[g], column=1)
+    assert "Grand opening" in cell.value
+    assert cell.font.bold
+
+
+def test_monthly_cells_use_usd_number_format(tmp_path):
+    res, path = _build_preopening(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    rowmap = _month_row_map(ws)
+    for r in rowmap.values():
+        for col in range(2, 7):
+            assert "$" in ws.cell(row=r, column=col).number_format
+
+
+def test_scheduled_costs_are_never_negative(tmp_path):
+    res, path = _build_preopening(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    headers = _headers(ws)
+    sched_col = headers.index("Scheduled costs") + 1
+    rowmap = _month_row_map(ws)
+    for r in rowmap.values():
+        assert float(ws.cell(row=r, column=sched_col).value) >= 0.0
+
+
+def test_default_no_schedule_has_no_pre_opening_rows(tmp_path):
+    # The default inputs open on month 1, so there are no pre-opening months.
+    res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    rowmap = _month_row_map(ws)
+    assert sorted(rowmap) == list(range(1, 13))
+    assert all(m.kind == "operating" for m in res.monthly)
+
+
+def test_default_no_schedule_places_whole_lump_on_opening_month(tmp_path):
+    res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    headers = _headers(ws)
+    sched_col = headers.index("Scheduled costs") + 1
+    rowmap = _month_row_map(ws)
+    # opening is month 1; the entire startup total lands there.
+    assert abs(float(ws.cell(row=rowmap[1], column=sched_col).value)
+               - float(res.startup_total)) < 0.5
+    # every other month carries no scheduled cost.
+    for month in range(2, 13):
+        assert float(ws.cell(row=rowmap[month], column=sched_col).value) == 0.0
+
+
+def test_post_open_scheduled_cost_extends_the_timeline(tmp_path):
+    # A support cost beyond the 12-month operating window must still get a row on
+    # its own month number; N extends to cover it.
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+        opening_month_number=2,
+        cost_schedule=(
+            {"category": "Consultant", "month": 1, "amount": "15000"},
+            {"category": "Post-open support", "month": 16, "amount": "9000"},
+        ),
+    )
+    res = compute(inputs, Assumptions(), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"))
+    path = tmp_path / "postopen.xlsx"
+    build_xlsx(res, str(path))
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Monthly Cash Flow"]
+    headers = _headers(ws)
+    sched_col = headers.index("Scheduled costs") + 1
+    rowmap = _month_row_map(ws)
+    assert max(rowmap) == 16
+    assert sorted(rowmap) == list(range(1, 17))
+    assert float(ws.cell(row=rowmap[16], column=sched_col).value) == 9000.0
