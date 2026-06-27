@@ -47,6 +47,10 @@ ANTHROPIC_VERSION = "2023-06-01"
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
 _HTTP_TIMEOUT_SECONDS = 60.0
+# Truthy values for the deployment-wide AI kill switch (``AI_DISABLED``), matching
+# the same set honored by app/aisafety.ai_disabled and the routers' opt-out gate
+# (DRY: one established flag name + truthy set across the AI-opt-out surface).
+_AI_DISABLED_TRUTHY = ("1", "true", "yes")
 # A provider HTTP status in this set is an availability failure -> trigger fallback.
 _UNAVAILABLE_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 # Returned to the user when a provider's body is unparseable (degrade, not 500).
@@ -126,6 +130,20 @@ Transport = Callable[..., "tuple[int, dict]"]
 # ----------------------------------------------------------- model resolution
 def _env(env: Mapping[str, str] | None) -> Mapping[str, str]:
     return os.environ if env is None else env
+
+
+def ai_globally_disabled(env: Mapping[str, str] | None = None) -> bool:
+    """True when the deployment-wide AI kill switch ``AI_DISABLED`` is truthy.
+
+    This is the production "ship Penny dark" switch: set ``AI_DISABLED=1`` (or
+    ``true`` / ``yes``, case-insensitive) and :func:`build_provider_chain` returns
+    an EMPTY chain even when ``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY`` are present.
+    The keys stay set, so config boot (which still requires at least one key) is
+    unaffected — yet Penny makes ZERO provider calls and the loop/endpoint surface
+    ``ai_disabled`` (-> 409). Flip it OFF (unset, or any non-truthy value) to enable
+    Penny live. Read from the server env at call time only (CLAUDE.md rule 7).
+    """
+    return (_env(env).get("AI_DISABLED") or "").strip().lower() in _AI_DISABLED_TRUTHY
 
 
 def resolve_anthropic_model(env: Mapping[str, str] | None = None) -> str:
@@ -395,10 +413,16 @@ def build_provider_chain(
 ) -> ProviderChain:
     """Build the chain from env keys, read at call time (Anthropic, then OpenAI).
 
-    An empty chain (no keys) signals AI-disabled to the loop (spec §8: no key ->
-    zero provider calls, Penny hidden). ``transport`` is injectable for tests.
+    An empty chain signals AI-disabled to the loop (spec §8: zero provider calls,
+    Penny hidden). The chain is empty when EITHER no provider key is set OR the
+    deployment-wide ``AI_DISABLED`` kill switch is truthy — the latter lets prod
+    "ship Penny dark" with the keys still set, so config boot is unaffected
+    (:func:`ai_globally_disabled`). ``transport`` is injectable for tests.
     """
     e = _env(env)
+    # Deployment-wide kill switch wins over key presence: build EMPTY even with keys.
+    if ai_globally_disabled(e):
+        return ProviderChain([])
     providers: list[_BaseProvider] = []
     if e.get("ANTHROPIC_API_KEY"):
         providers.append(

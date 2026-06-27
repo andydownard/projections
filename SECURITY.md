@@ -231,6 +231,14 @@ Penny runs a **bounded server-side tool-use loop** (`app/penny/loop.py`) against
 
 The app must **compute, save, and export `.xlsx`** with **zero AI calls** (manual rent, no narrative) — PRD §21. This is verified by a test that runs the full create → compute → save → export flow with **all AI keys unset**. Compute is server-authoritative and AI-independent (the math engine has no network/LLM dependency).
 
+**Three ways AI turns off (any one engages the zero-AI path), checked by `app/aisafety.ai_disabled`:**
+
+1. **Per-projection** — the `ai_opt_out` flag on the projection row (DATA_MODEL §`ai_opt_out`).
+2. **Deployment-wide kill switch — `AI_DISABLED`** (the prod **"ship Penny dark"** switch). Set `AI_DISABLED` to a truthy value (`1`, `true`, or `yes`, case-insensitive) and `app/penny/providers.build_provider_chain` returns an **EMPTY provider chain regardless of whether `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` are set**. The keys **stay set**, so the production boot rule (§4: at least one AI key required) is **unaffected** — the server boots normally — yet Penny makes **zero provider calls**: the loop raises `AIDisabledError` → the `/penny*` endpoints return **`409 ai_disabled`**, and the FAB is muted. This is the explicit switch for shipping Penny disabled in production while keeping keys configured. **Flip it OFF (unset, or any non-truthy value) to enable Penny live** — no change to the secrets, just the flag. The same `AI_DISABLED` value is honored by the narrative `:regenerate` opt-out gate (`409 ai_disabled`) so the whole AI surface engages or disengages together.
+3. **No key configured** — with neither AI key set the chain is empty too (the dev/CI default; this is how the opt-out guarantee stays tested).
+
+Pinned by stubbed-provider tests (no real `api.anthropic.com`/`api.openai.com` call): `AI_DISABLED` truthy **with keys present** → `build_provider_chain` empty → loop signals `ai_disabled` with **zero** transport calls (`app/tests/test_penny_providers.py`, `app/tests/ai_safety/test_penny_ai_off_rate_fallback.py`).
+
 ---
 
 ## 7. SSRF hardening of the research fetcher

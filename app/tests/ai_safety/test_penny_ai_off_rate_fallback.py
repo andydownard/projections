@@ -59,6 +59,25 @@ def test_no_api_key_means_empty_chain_and_zero_calls(store, projection):
         )
 
 
+def test_ai_disabled_env_flag_empty_chain_zero_calls_even_with_keys(store, projection):
+    """"Ship dark": AI_DISABLED=true + keys present → empty chain → loop signals
+    ai_disabled with ZERO provider calls (the prod kill switch, keys stay set)."""
+    transport = stub_transport(lambda u, b: (200, anthropic_text_payload("never")))
+    chain = build_provider_chain(
+        env={"ANTHROPIC_API_KEY": "sk-a", "OPENAI_API_KEY": "sk-o", "AI_DISABLED": "true"},
+        transport=transport,
+    )
+    assert chain.providers == []  # built empty despite both keys being present
+    with pytest.raises(AIDisabledError):
+        run_turn(
+            user_message="hi",
+            chain=chain,
+            registry=_registry(store),
+            context=make_ctx(projection),
+        )
+    assert transport.calls == []  # not one provider call — no network touched
+
+
 def test_ai_opt_out_flag_forces_disabled_even_with_a_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     assert ai_keys_present() is True

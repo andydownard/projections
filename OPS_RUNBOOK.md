@@ -229,6 +229,8 @@ This is the **single source of truth** for ops; it MUST be mirrored 1:1 by a cod
 
 **At-least-one AI rule:** production must have **`ANTHROPIC_API_KEY` (primary)** set. `OPENAI_API_KEY` (fallback, PRD §17) is optional but recommended in production. If *neither* is set, the AI features hard-fail at boot **only if AI is not globally disabled**; if the operator intends an AI-disabled deployment, set `AI_DISABLED=1` (below) and the opt-out path (PRD §21) keeps compute + `.xlsx` working. This makes the §21 "compute/save/export with zero AI calls" guarantee an explicitly testable boot mode.
 
+**Ship Penny "dark" in prod (keys stay set).** To disable AI at runtime **without unsetting the provider keys** — so the boot rule above stays satisfied and the server boots normally — set `AI_DISABLED=1` (truthy: `1`/`true`/`yes`, case-insensitive) and **keep `ANTHROPIC_API_KEY` set**. `app/penny/providers.build_provider_chain` then builds an **empty** chain regardless of the keys, so Penny makes zero provider calls and the `/penny*` endpoints return `409 ai_disabled` (the FAB is muted), while compute/save/`.xlsx`/narrative-disabled all keep working. **To enable Penny live, flip it OFF — unset `AI_DISABLED` (or set it to `0`/`false`) — no secrets change required.** This is the production go-live toggle for Penny.
+
 ### 5.2 Optional — graceful degrade (no boot warning, feature disables cleanly)
 
 | Secret / config | Env var | Status | Degrades to |
@@ -238,7 +240,7 @@ This is the **single source of truth** for ops; it MUST be mirrored 1:1 by a cod
 | GitHub org | `GITHUB_ORG` | **TODO** (M6) | `=rallytasks`. Without it, issue routing disabled. |
 | GitHub repo | `GITHUB_REPO` | **TODO** (M6) | `=projections`. Without it, issue routing disabled. |
 | CRM | `CRM_API_KEY` | **TODO** (M6) | Intent capture stored locally; no CRM push (PRD §6.1/§22). |
-| AI kill switch | `AI_DISABLED` | **TODO** (optional) | `=1` forces the PRD §21 opt-out mode globally: no provider calls; compute + save + `.xlsx` still work. |
+| AI kill switch | `AI_DISABLED` | **live** (PE3) | Truthy (`1`/`true`/`yes`, case-insensitive) forces the PRD §21 opt-out mode globally: `build_provider_chain` returns an empty chain **even with `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` set** (keys stay set → boot rule §5.1 unaffected); Penny → `409 ai_disabled`, zero provider calls; compute + save + `.xlsx` still work. The prod "ship Penny dark" switch — unset/`0`/`false` enables Penny live. |
 | Sentry | `SENTRY_DSN` | **TODO** (M0/M7) | No error/observability reporting; app still runs (§6). |
 | Census app id | `CENSUS_API_BASE` | optional | Defaults to the public ACS base. |
 | Litestream snapshot tuning | `LITESTREAM_RETENTION`, `LITESTREAM_SNAPSHOT_INTERVAL` | optional | Falls back to `litestream.yml` defaults (30d / 24h). |
