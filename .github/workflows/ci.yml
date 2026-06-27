@@ -132,10 +132,18 @@ jobs:
         run: npm install --no-audit --no-fund
       - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
-      - name: E2E flows (happy / override+409 / read-only / feedback / AI-disabled)
-        # Specs are viewport-matrixed; until the M2 UI ships they record explicit
-        # skip reasons (never silently pass). Screenshots archived on failure.
+      - name: E2E flows (happy / override+409 / read-only / feedback / AI-disabled / degraded-a11y)
+        # The webServer (playwright.config.ts) boots uvicorn with E2E_SEED=1 (seeds
+        # the `example` projection + `board-slug` role link AND bypasses the rate
+        # limiter) + Vite, across the 1440/768/375 viewport matrix. The happy path
+        # drives the real wizard -> server compute -> decision banner + milestones ->
+        # a 200 .xlsx download (#141). Screenshots archived on failure.
         run: npx playwright test
+      - name: Assert the E2E gate actually ran (fail-on-empty, #198)
+        # Playwright has no built-in fail-on-empty: a suite that skips 100% of its
+        # tests still exits 0. This guard fails the build unless real tests executed,
+        # so the "Playwright E2E" check can never again be green on a hollow run.
+        run: node assert_e2e_ran.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
