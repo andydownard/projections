@@ -23,12 +23,15 @@ from __future__ import annotations
 import ipaddress
 import socket
 from typing import Callable
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
+
+import httpx
 
 ALLOWED_SCHEMES = ("http", "https")
 MAX_REDIRECTS = 5
 MAX_BYTES = 512_000  # cap response size to bound memory/cost
 TIMEOUT_SECONDS = 8.0
+_REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 
 # Hostname suffixes blocked by name (DNS may not resolve them publicly).
 BLOCKED_HOST_SUFFIXES = (".railway.internal",)
@@ -38,10 +41,21 @@ class BlockedURLError(Exception):
     """Raised when a URL is disallowed (bad scheme/host or blocked IP range)."""
 
 
+class ResponseTooLargeError(BlockedURLError):
+    """Raised when a response declares or streams more than MAX_BYTES.
+
+    Subclasses BlockedURLError so the degrade path (all candidates failed ->
+    502 research_unavailable) catches it like any other refusal, while callers
+    that care can still distinguish an over-cap body from an SSRF block.
+    """
+
+
 # A resolver maps a hostname -> list of IP strings. Injectable for tests.
 Resolver = Callable[[str], list]
-# A transport performs one HTTP request and returns (status, location, body).
-Transport = Callable[[str], tuple]
+# A transport performs ONE request and returns (status, location, body). It is
+# handed BOTH the request URL (for scheme/host/path) AND the already-validated IP
+# it must connect to; it MUST NOT re-resolve the hostname (DNS-rebinding TOCTOU).
+Transport = Callable[[str, str], tuple]
 
 
 def is_blocked_ip(ip: str) -> bool:
@@ -105,15 +119,79 @@ def validate_url_scheme_host(url: str, *, resolver: Resolver | None = None) -> s
     return ips[0]
 
 
-def _httpx_transport(url: str) -> tuple:
-    """Default transport: one non-following GET, capped read. (status, loc, body)."""
-    import httpx
+def _pin_url_to_ip(url: str, ip: str) -> str:
+    """Return `url` with its host replaced by the literal `ip` (IPv6 bracketed),
+    preserving scheme/port/path/query.
 
-    with httpx.Client(follow_redirects=False, timeout=TIMEOUT_SECONDS) as client:
-        resp = client.get(url)
-        location = resp.headers.get("location", "")
-        body = resp.text[:MAX_BYTES] if resp.status_code < 300 else ""
-        return resp.status_code, location, body
+    Connecting to the literal IP is what closes the DNS-rebinding TOCTOU: the
+    socket targets the address we already validated instead of whatever the
+    resolver might now return. The caller restores the real hostname in the
+    `Host` header + TLS SNI so vhost routing and certificate verification still
+    target the actual site. Any userinfo in the URL is dropped on purpose.
+    """
+    parsed = urlparse(url)
+    try:
+        host_literal = f"[{ip}]" if ipaddress.ip_address(ip).version == 6 else ip
+    except ValueError:
+        host_literal = ip
+    netloc = f"{host_literal}:{parsed.port}" if parsed.port is not None else host_literal
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+def _httpx_transport(
+    url: str,
+    ip: str,
+    *,
+    _client_factory: Callable[[], httpx.Client] | None = None,
+) -> tuple[int, str, str]:
+    """Default transport: one non-following GET, pinned to the validated IP, with
+    a hard streamed byte cap. Returns (status, location, body).
+
+    - Dials the literal `ip` (no hostname re-resolution -> no rebinding TOCTOU),
+      restoring the real host for the `Host` header and TLS SNI.
+    - Refuses an over-cap `Content-Length` before reading the body, and streams
+      with `iter_bytes`, aborting the moment the running total exceeds MAX_BYTES
+      so a multi-GB / decompression-bomb body can never be buffered whole.
+    """
+    host = urlparse(url).hostname or ""
+    pinned = _pin_url_to_ip(url, ip)
+
+    def _default_factory() -> httpx.Client:
+        return httpx.Client(follow_redirects=False, timeout=TIMEOUT_SECONDS)
+
+    factory = _client_factory or _default_factory
+    with factory() as client:
+        with client.stream(
+            "GET",
+            pinned,
+            headers={"Host": host},
+            extensions={"sni_hostname": host},
+        ) as resp:
+            location = resp.headers.get("location", "")
+            if resp.status_code in _REDIRECT_STATUSES:
+                # Redirect target is re-validated by fetch_url; body is irrelevant.
+                return resp.status_code, location, ""
+            declared = resp.headers.get("content-length")
+            if declared is not None:
+                try:
+                    if int(declared) > MAX_BYTES:
+                        raise ResponseTooLargeError(
+                            f"content-length {declared} exceeds cap {MAX_BYTES}"
+                        )
+                except ValueError:
+                    pass  # malformed header -> fall through to the streamed cap
+            chunks = []
+            total = 0
+            for chunk in resp.iter_bytes():
+                total += len(chunk)
+                if total > MAX_BYTES:
+                    raise ResponseTooLargeError(
+                        f"response body exceeded cap {MAX_BYTES}"
+                    )
+                chunks.append(chunk)
+            encoding = resp.charset_encoding or "utf-8"
+            body = b"".join(chunks).decode(encoding, errors="replace")
+            return resp.status_code, location, body
 
 
 def fetch_url(
@@ -122,20 +200,23 @@ def fetch_url(
     resolver: Resolver | None = None,
     transport: Transport | None = None,
 ) -> str:
-    """Fetch `url` safely, re-validating every redirect hop. Returns body text.
+    """Fetch `url` safely, re-validating + re-pinning every redirect hop.
 
-    Each hop's resolved IP is checked against the block-list BEFORE the request
-    is made; a redirect into a blocked range raises BlockedURLError (not a
-    silent follow). Caps redirect depth.
+    Each hop's host is resolved and its IP checked against the block-list BEFORE
+    the request is made; the validated IP is handed to the transport as the pin
+    target (the transport never re-resolves the hostname, closing the rebinding
+    TOCTOU). A redirect into a blocked range raises BlockedURLError rather than
+    being silently followed. Relative/scheme-relative redirects are resolved
+    against the current URL before re-validation. Redirect depth is capped.
     """
     transport = transport or _httpx_transport
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        validate_url_scheme_host(current, resolver=resolver)
-        status, location, body = transport(current)
-        if status in (301, 302, 303, 307, 308) and location:
-            # Re-validate the redirect target on the NEXT loop iteration.
-            current = location
+        ip = validate_url_scheme_host(current, resolver=resolver)
+        status, location, body = transport(current, ip)
+        if status in _REDIRECT_STATUSES and location:
+            # Resolve relative/scheme-relative targets, then re-validate next loop.
+            current = urljoin(current, location)
             continue
         return body or ""
     raise BlockedURLError("too many redirects")
