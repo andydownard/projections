@@ -78,6 +78,7 @@ Today `engine/monthly.py` builds one pre-open `M0` (entire startup lump) + `M1�
 - **Scheduled costs** from §5 are placed on their month #s (replacing the single startup lump). Total startup = sum of the schedule.
 - **Decision metrics recomputed** from the new cumulative-cash curve: `startup_capital_required` = peak cumulative cash deficit across the whole timeline (begins accumulating in pre-opening); `break_even_month` = first sustained operating month (≥ `G`) with net ≥ 0, numbered in project months with the opening milestone marked; `first_year_cash_gap` per the operating Year-1 window (`G..G+11`).
 - **View-model + chart** include all months `1..N` (x-axis starts at month 1; the grand-opening milestone is marked). The 3-year **annual** operating P&L is measured from the opening milestone (Year 1 = `G..G+11`); pre-opening months are shown in the monthly view and as a pre-opening period that rolls into the income statement/startup — exact annual-table presentation finalized in plan review, but pre-opening is never dropped or forced into month 1.
+- **Three milestones computed precisely** on the new timeline (see §8): `grand_opening_month` (= `G`, the input), `break_even_month` (first sustained operating month with ongoing revenue ≥ ongoing expenses — already computed), and a true `payback_month` (first month where cumulative operating profit since opening ≥ total startup costs — i.e., the investment is recovered). The crude `simple_payback_years` (startup ÷ Year-1 net) is replaced by this exact payback period.
 - **`.xlsx` export** and the **three-way golden gate** (server == computed_json == LibreOffice recalc) extend to the pre-opening months; golden fixtures regenerated. `model_version` bumps (math/shape change); reads of older snapshots still return the stored snapshot + "new model available" (existing behavior).
 
 ## 7. Data model
@@ -89,6 +90,16 @@ Today `engine/monthly.py` builds one pre-open `M0` (entire startup lump) + `M1�
 
 The fixed startup constant is superseded by `cost_schedule`. **Migration default for projections without a schedule** (legacy rows + the seeded example): place the legacy `STARTUP` category amounts at **month 1** with `opening_month_number = 1` — i.e., a single lump at opening, reproducing today's numbers exactly (this is the same result a user gets by entering costs in month 1 + opening month 1, not a special engine mode). Schedule is server-validated; the engine consumes it. Provenance for AI-populated schedules is added later (Spec B).
 
+## 8. Projection detail-page milestones
+
+The detail page calls out **three milestones** explicitly, both as labeled markers on the monthly cash-flow chart and as named callouts (with their plain-language definitions surfaced as help text/tooltips, server-formatted display strings — no client math):
+
+1. **Grand Opening** — month `G`, the milestone when the store opens (the wizard input). Marked on the timeline.
+2. **Breakeven Point** — the milestone where ongoing revenue matches ongoing expenses; crossing it means day-to-day operations are officially profitable. (= `break_even_month`.)
+3. **Payback Period** — the length of time for accumulated profits to equal the initial startup costs; reaching the end means the investment has officially been recovered. (= `payback_month` / the period from opening to it.)
+
+All three come from the engine view-model as `{raw, display}` (e.g., "Month 6", "Month 14", "Month 31" / "25 months"). The cash-flow chart marks Grand Opening, Breakeven, and Payback distinctly; the decision banner / KPI strip surfaces Breakeven and Payback with their definitions on hover/tap. When a milestone is not reached within the horizon, show an explicit N/A with the reason (existing flag pattern), never a misleading 0.
+
 ## Components & files (anticipated)
 
 - Frontend: `TopBar.tsx` (brand text + lightbulb + all-routes), new `web/src/pages/CreateProjectionPage.tsx` (full-page wizard shell) with step components (`StepStore`, `StepTradeArea`, `StepDonorMarket`, `StepCostSchedule`, `StepReview`) + a wizard-state hook + step indicator; `PlacesAutocomplete.tsx` (verify rendering); a `CostScheduleEditor` component; `shareHelper.ts`/`buildCreatePayload` extended for the new inputs.
@@ -97,7 +108,7 @@ The fixed startup constant is superseded by `cost_schedule`. **Migration default
 
 ## Testing
 
-- **Engine:** golden three-way reconcile **including** pre-opening months (with and without a custom schedule); decision-metric tests for the deeper trough / opening-anchored break-even; default-schedule == legacy-lump value parity test.
+- **Engine:** golden three-way reconcile **including** pre-opening months (with and without a custom schedule); decision-metric tests for the deeper trough / opening-anchored break-even; **milestone tests** — grand-opening = `G`, breakeven = first sustained operating net ≥ 0, payback = first month cumulative profit ≥ startup total (and N/A-with-reason when unreached); migration default == legacy-lump value parity test.
 - **Backend:** schedule validation, create/patch round-trip of the new inputs, additive migration test, Places-API-New client against the mocked network seam.
 - **Frontend:** wizard step flow (gating, Back/Next, Generate), households-empty-until-resolved, cost-schedule editor (add/remove rows, opening anchor), `TopBar` lightbulb opens feedback on every route, Places predictions render.
 - **E2E:** create-projection happy path through all steps with a manual multi-month cost schedule; existing flows still green.
