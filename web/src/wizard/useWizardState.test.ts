@@ -90,6 +90,22 @@ describe("useWizardState — households empty-until-resolved (§4)", () => {
     expect(result.current.canGenerate).toBe(false); // still no value
     act(() => result.current.setHouseholds(25000));
     expect(result.current.householdsSource).toBe("manual");
+    act(() => result.current.set("termsAccepted", true));
+    expect(result.current.canGenerate).toBe(true);
+  });
+});
+
+describe("useWizardState — terms acceptance is explicit (#141 / PRD §21)", () => {
+  it("defaults termsAccepted to false (the box is NOT pre-checked)", () => {
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.draft.termsAccepted).toBe(false);
+  });
+
+  it("blocks Generate until the operator actively accepts terms", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.onResolved(RESOLVED)); // households now has a value
+    expect(result.current.canGenerate).toBe(false); // terms unchecked → blocked
+    act(() => result.current.set("termsAccepted", true));
     expect(result.current.canGenerate).toBe(true);
   });
 });

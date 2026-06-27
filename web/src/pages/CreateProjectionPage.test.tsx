@@ -175,18 +175,25 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     expect(screen.getByRole("heading", { name: /cost schedule/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 5. Review -> Generate
+    // 5. Review -> accept terms (explicit, #141/PRD §21) -> Generate
     expect(screen.getByRole("heading", { name: /review/i })).toBeInTheDocument();
+    // Generate is gated until the operator actively accepts terms (not pre-checked).
+    expect(screen.getByRole("button", { name: /generate/i })).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: /planning estimates/i }));
     await user.click(screen.getByRole("button", { name: /generate/i }));
 
     await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
     const body = bodies["/api/projections"] as {
       inputs: { opening_month_number: number; cost_schedule: unknown[]; target_opening_date: string | null };
       trade_area: { households_source: string };
+      terms_accepted: boolean;
     };
     expect(body.inputs.opening_month_number).toBe(1);
     expect(Array.isArray(body.inputs.cost_schedule)).toBe(true);
     expect(body.trade_area.households_source).toBe("census_acs");
+    // #141: the operator's acceptance travels in the create body so the server can
+    // persist terms_accepted_at and the .xlsx / packet exports are reachable.
+    expect(body.terms_accepted).toBe(true);
     // result screen renders the server display string verbatim (no client math)
     const kpis = within(screen.getByTestId("kpi-strip"));
     expect(kpis.getByText("$426,911")).toBeInTheDocument();

@@ -215,6 +215,11 @@ class CreateProjectionIn(BaseModel):
     demand: Optional[dict] = None
     overrides: dict = Field(default_factory=dict)
     location: LocationIn = Field(default_factory=LocationIn)
+    # Terms acceptance (PRD §21 / API_SPEC §4.2): the operator's explicit "these are
+    # planning estimates, not advice" check. Persisted as terms_accepted_at on create
+    # so exports (.xlsx / packet) are reachable; defaults False so an unchecked box
+    # never silently accepts and the export gate stays honest.
+    terms_accepted: bool = False
 
 
 class PatchProjectionIn(BaseModel):
@@ -567,6 +572,9 @@ def create_projection(
         "assumptions_json": json.dumps(body.assumptions.model_dump() if body.assumptions else {}),
         "overrides_json": json.dumps(body.overrides or {}),
         "computed_json": json.dumps(vm),
+        # Server-checked terms gate (PRD §21): stamp acceptance now when the operator
+        # actively accepted; NULL otherwise so exports correctly 403 terms_required.
+        "terms_accepted_at": now if body.terms_accepted else None,
         "created_at": now,
         "updated_at": now,
         **_schedule_columns(inputs_dump),

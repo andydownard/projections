@@ -53,7 +53,9 @@ export const DEFAULT_DRAFT: WizardDraft = {
   cash: 300000,
   grant: 0,
   loan: 0,
-  termsAccepted: true,
+  // #141 / PRD §21: terms acceptance must be an EXPLICIT, active choice — the box is
+  // unchecked by default (canGenerate gates on it) and the value is persisted server-side.
+  termsAccepted: false,
   targetOpeningDate: "",
   openingMonthNumber: DEFAULT_OPENING_MONTH_NUMBER,
   costSchedule: DEFAULT_COST_SCHEDULE.map((r) => ({ ...r })),
