@@ -12,7 +12,7 @@ describe("App shell", () => {
   it("renders the persistent top bar with the product name", () => {
     render(<App />);
     expect(screen.getByRole("banner")).toBeInTheDocument();
-    expect(screen.getByText(/Thrift Store Projection/i)).toBeInTheDocument();
+    expect(screen.getByText(/Store Projections/i)).toBeInTheDocument();
   });
 
   it("renders no model version chip until the server provides one", () => {
