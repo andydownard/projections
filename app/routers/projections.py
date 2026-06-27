@@ -26,7 +26,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
 from app import narrative_provider, ratelimit
@@ -45,6 +45,7 @@ from app.packet import build_packet, render_packet_docx, render_packet_md
 from app.store import Store, get_store
 from engine import dag
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute, compute_annual
+from engine.model import DEFAULT_OPENING_MONTH_NUMBER, default_cost_schedule
 from engine.money import D, number_view
 from engine.viewmodel import to_view_model
 from engine.xlsx import build_xlsx
@@ -119,6 +120,17 @@ def _require_owner(store: Store, view_slug: str, authorization: Optional[str]) -
 
 
 # ----------------------------------------------------------------- request body
+class CostScheduleItemIn(BaseModel):
+    """One timed startup line item (Spec §5): a labelled cost landing on a project
+    month. Server-validated — ``month >= 1`` and ``amount >= 0`` (no client math)."""
+    category: str
+    month: int = Field(ge=1)
+    amount: float = Field(ge=0)
+
+    class Config:
+        extra = "forbid"
+
+
 class InputsIn(BaseModel):
     org_name: str = ""
     city: str
@@ -134,6 +146,22 @@ class InputsIn(BaseModel):
     rent_per_sqft: Optional[str] = None
     lease_type: str = "gross"
     nnn_opex_annual: str = "0"
+    # Timed cost schedule + opening anchor (Spec §5/§7). The fixed STARTUP lump is
+    # superseded by cost_schedule; when omitted the engine/migration default (the
+    # month-1 lump from engine.model.STARTUP) applies, reproducing today's numbers.
+    target_opening_date: Optional[str] = None
+    opening_month_number: int = Field(default=DEFAULT_OPENING_MONTH_NUMBER, ge=1)
+    cost_schedule: Optional[list[CostScheduleItemIn]] = None
+
+
+# Inputs keys that are part of the saved projection but are NOT positional args of
+# the engine's frozen ``Inputs`` dataclass (the engine consumes the schedule/anchor
+# separately, in a later wave). They are filtered out before constructing Inputs.
+_NON_ENGINE_INPUT_KEYS = (
+    "target_opening_date",
+    "opening_month_number",
+    "cost_schedule",
+)
 
 
 class TradeAreaIn(BaseModel):
@@ -208,10 +236,52 @@ def _build_engine_args(body: CreateProjectionIn):
     )
 
 
+def _validate_schedule_inputs(inputs_d: dict) -> None:
+    """Server-side validation of the timed cost schedule + opening anchor (Spec §5).
+
+    Enforces ``month >= 1``, ``amount >= 0``, ``opening_month_number >= 1`` on the
+    PATCH path (create is validated by ``InputsIn`` at body parse). Raises HTTP 422
+    with ``invalid_inputs`` on a bad row so the client never relies on client math.
+    """
+    try:
+        schedule = inputs_d.get("cost_schedule")
+        if schedule is not None:
+            for item in schedule:
+                CostScheduleItemIn(**item)
+        anchor = inputs_d.get("opening_month_number")
+        if anchor is not None and int(anchor) < 1:
+            raise ValueError("opening_month_number must be >= 1")
+    except (ValidationError, ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422, detail={"error": "invalid_inputs", "message": str(exc)}
+        ) from exc
+
+
+def _schedule_columns(inputs_d: dict) -> dict:
+    """Denormalized schedule/anchor columns mirrored from ``inputs`` (DATA_MODEL §7).
+
+    The canonical copy lives in ``inputs_json`` (what the engine consumes); these
+    first-class columns mirror it for queryability and match the m0005 backfill
+    contract. A row without a schedule resolves to the month-1 lump default so every
+    row always carries a resolvable schedule (legacy parity, Spec §7).
+    """
+    schedule = inputs_d.get("cost_schedule") or default_cost_schedule()
+    opening = inputs_d.get("opening_month_number")
+    return {
+        "cost_schedule_json": json.dumps(schedule),
+        "target_opening_date": inputs_d.get("target_opening_date"),
+        "opening_month_number": int(opening) if opening is not None
+        else DEFAULT_OPENING_MONTH_NUMBER,
+    }
+
+
 def _build_engine_args_from_dicts(
     inputs_d: dict, assumptions_d: Optional[dict], demand_d: dict, trade_d: dict
 ):
-    inputs = Inputs(**inputs_d)
+    engine_inputs_d = {
+        k: v for k, v in inputs_d.items() if k not in _NON_ENGINE_INPUT_KEYS
+    }
+    inputs = Inputs(**engine_inputs_d)
     akw = {k: v for k, v in (assumptions_d or {}).items() if v is not None}
     assumptions = Assumptions(**akw)
     demand = DemandDrivers(**(demand_d or {}))
@@ -481,6 +551,7 @@ def create_projection(
     now = _utcnow()
     name = body.name or body.inputs.org_name or "Untitled projection"
 
+    inputs_dump = body.inputs.model_dump()
     row = {
         "id": pid,
         "view_slug": view_slug,
@@ -491,13 +562,14 @@ def create_projection(
         "compute_schema_version": vm.get("compute_schema_version", ""),
         "location_json": json.dumps(body.location.model_dump(exclude_none=True)),
         "trade_area_json": json.dumps(body.trade_area.model_dump()),
-        "inputs_json": json.dumps(body.inputs.model_dump()),
+        "inputs_json": json.dumps(inputs_dump),
         "demand_drivers_json": json.dumps(body.demand or {}),
         "assumptions_json": json.dumps(body.assumptions.model_dump() if body.assumptions else {}),
         "overrides_json": json.dumps(body.overrides or {}),
         "computed_json": json.dumps(vm),
         "created_at": now,
         "updated_at": now,
+        **_schedule_columns(inputs_dump),
     }
     store.create_projection(row)
 
@@ -954,6 +1026,10 @@ def patch_projection(
         raise HTTPException(status_code=422, detail={
             "error": "node_not_pinnable", "node": node, "message": str(exc)}) from exc
 
+    # Server-validates the merged schedule/anchor (PATCH inputs is a raw dict, so it
+    # bypasses the InputsIn body validation that guards create).
+    _validate_schedule_inputs(inputs_d)
+
     try:
         vm = _compute_view_model_from_dicts(inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
@@ -975,6 +1051,7 @@ def patch_projection(
         "overrides_json": json.dumps(overrides_d),
         "computed_json": json.dumps(vm),
         "model_version": vm.get("model_version", ""),
+        **_schedule_columns(inputs_d),
     }
     affected = store.update_with_version_check(row["id"], if_match, patch)
     if affected == 0:
@@ -1225,6 +1302,9 @@ def restore_revision(
         "overrides_json": json.dumps(overrides_d),
         "computed_json": json.dumps(vm),
         "model_version": vm.get("model_version", ""),
+        # keep the denormalized schedule/anchor columns consistent with the
+        # restored inputs_json (the canonical copy).
+        **_schedule_columns(inputs_d),
     }
     affected = store.update_with_version_check(row["id"], if_match, patch)
     if affected == 0:
