@@ -70,6 +70,64 @@ def test_n_equals_g_plus_eleven():
         assert [m.index for m in ops] == list(range(g, g + 12))
 
 
+def test_operating_rollup_holds_when_opening_is_late():
+    # Year-1 annual P&L == sum of the 12 operating months even when opening is late
+    # (the pre-opening months never absorb or distort the operating roll-up).
+    res = _opening_at(6)
+    ops = [m for m in res.monthly if m.kind == "operating"]
+    rev = sum((D(str(m.revenue)) for m in ops), Decimal("0"))
+    exp = sum((D(str(m.expenses)) for m in ops), Decimal("0"))
+    net = sum((D(str(m.net)) for m in ops), Decimal("0"))
+    assert rev == D(str(res.annual[1].total_rev))
+    assert exp == D(str(res.annual[1].total_exp))
+    assert net == D(str(res.annual[1].net))
+
+
+def test_cumulative_is_running_sum_across_pre_open_and_operating():
+    schedule = (
+        {"category": "A", "month": 1, "amount": 12000},
+        {"category": "B", "month": 2, "amount": 8000},
+    )
+    res = _opening_at(3, schedule)
+    running = Decimal("0")
+    for m in res.monthly:
+        running += D(str(m.cash_net))
+        assert D(str(m.cumulative_cash)) == running
+
+
+def test_post_opening_support_cost_lands_on_its_month():
+    # A row after the opening milestone (post-open support) lands on that month and
+    # is an additional outflow on top of that operating month's net.
+    schedule = (
+        {"category": "Launch", "month": 1, "amount": 50000},
+        {"category": "Post-open support", "month": 14, "amount": 9000},
+    )
+    res = _opening_at(1, schedule)
+    row14 = next(m for m in res.monthly if m.index == 14)
+    assert D(str(row14.startup_outflow)) == Decimal("9000")
+    assert row14.kind == "operating"
+    assert D(str(row14.cash_net)) == D(str(row14.net)) - Decimal("9000")
+
+
+def test_timeline_extends_past_operating_year_for_late_cost():
+    # A scheduled cost beyond G+11 extends the timeline (N = max(G+11, last month))
+    # so the cost is never dropped; the extra months carry no operating ramp.
+    schedule = ({"category": "Year-3 refit", "month": 20, "amount": 30000},)
+    res = _opening_at(1, schedule)
+    assert max(m.index for m in res.monthly) == 20
+    ramp = [m for m in res.monthly if m.kind == "operating" and m.index <= 12]
+    assert sum((D(str(m.revenue)) for m in ramp), Decimal("0")) == \
+        D(str(res.annual[1].total_rev))
+    beyond = next(m for m in res.monthly if m.index == 20)
+    assert beyond.revenue == 0 and beyond.expenses == 0
+    assert D(str(beyond.startup_outflow)) == Decimal("30000")
+
+
+def test_no_scheduled_cost_keeps_timeline_at_g_plus_eleven():
+    res = _opening_at(4)
+    assert max(m.index for m in res.monthly) == 15
+
+
 def test_revenue_rolls_up_to_annual_to_the_penny(canonical_result):
     ops = [m for m in canonical_result.monthly if m.kind == "operating"]
     rev = sum((D(str(m.revenue)) for m in ops), Decimal("0"))

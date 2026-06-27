@@ -78,9 +78,15 @@ def build_monthly(annual_y1, assumptions, opening_month_number, startup_by_month
 
     `breakeven_month` is the first operating month (>= G) whose net >= 0 and stays
     non-negative thereafter, numbered in **project months** (None if never).
+
+    The timeline runs to ``N = max(G + 11, last scheduled month)`` so a post-open
+    support cost beyond the 12-month operating window is still placed on its month
+    (the trough and startup total reconcile); those extra months carry the scheduled
+    cost only — the operating ramp covers exactly the 12 months ``G..G+11``.
     """
     g = int(opening_month_number)
-    n = g + 11
+    last_scheduled = max(startup_by_month.keys(), default=0)
+    n = max(g + 11, int(last_scheduled))
 
     total_rev = D(str(annual_y1.total_rev))
     total_exp = D(str(annual_y1.total_exp))
@@ -108,12 +114,19 @@ def build_monthly(annual_y1, assumptions, opening_month_number, startup_by_month
             exp = Decimal("0")
             net = Decimal("0")
             kind = "pre_open"
-        else:
+        elif month <= g + 11:
             oi = month - g
             rev = rev_parts[oi]
             exp = payroll_parts[oi] + other_parts[oi]
             net = rev - exp
             op_nets.append(net)
+            kind = "operating"
+        else:
+            # Beyond the 12-month operating ramp: the store is open but this month
+            # carries only its scheduled cost (no modeled operating activity).
+            rev = Decimal("0")
+            exp = Decimal("0")
+            net = Decimal("0")
             kind = "operating"
         cash_net = net - outflow
         cumulative += cash_net
