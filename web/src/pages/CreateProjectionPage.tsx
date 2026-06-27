@@ -17,6 +17,7 @@ import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
 import { CashflowChart } from "../components/CashflowChart";
 import { DecisionBanner } from "../components/DecisionBanner";
 import { PennyDraftAssistant } from "../components/PennyDrawer";
+import { SidePanelProvider } from "../components/sidePanels";
 import {
   buildCreatePayload,
   DEFAULT_OPENING_MONTH_NUMBER,
@@ -396,14 +397,20 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
           NOTHING until Generate (which sends the draft, incl. any Penny-built schedule
           WITH provenance). With ?ai=off she degrades to the muted Settings FAB and the
           whole manual wizard stays intact (CLAUDE.md "AI opt-out works end-to-end"). */}
-      <PennyDraftAssistant
-        token={draftToken.current}
-        aiEnabled={!aiOff}
-        buildDraftState={() => wizardToDraftState(wiz)}
-        onApplyDraft={onApplyDraft}
-        onRevertField={applyDraftField}
-        labelField={labelDraftField}
-      />
+      {/* The wizard is full-page with NO Override Inspector, so Penny is the only
+          side panel here (Spec B §10, issue #129). Wrapped in the shared coordinator
+          for identical breakpoint behaviour (non-modal ≥1180px, modal sheet below)
+          and the shared polite live region. */}
+      <SidePanelProvider>
+        <PennyDraftAssistant
+          token={draftToken.current}
+          aiEnabled={!aiOff}
+          buildDraftState={() => wizardToDraftState(wiz)}
+          onApplyDraft={onApplyDraft}
+          onRevertField={applyDraftField}
+          labelField={labelDraftField}
+        />
+      </SidePanelProvider>
     </div>
   );
 }

@@ -31,6 +31,7 @@ import {
 import { FieldChange } from "./FieldChange";
 import { PennyTranscript, type PennyTurn } from "./PennyTranscript";
 import { ProposalUpload } from "./ProposalUpload";
+import { useSidePanel, Z } from "./sidePanels";
 import {
   PennyError,
   sendPennyDraftMessage,
@@ -92,19 +93,9 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-/** Below 1180px Penny is a modal full-screen sheet; at/above it is a non-modal panel (spec §10). */
-function useIsModal(): boolean {
-  const get = () => !mediaMatches("(min-width: 1180px)", false);
-  const [modal, setModal] = useState(get);
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
-    const mql = window.matchMedia("(min-width: 1180px)");
-    const onChange = () => setModal(!mql.matches);
-    mql.addEventListener?.("change", onChange);
-    return () => mql.removeEventListener?.("change", onChange);
-  }, []);
-  return modal;
-}
+// The 1180px modal/non-modal breakpoint now lives in the shared coexistence wiring
+// (sidePanels.useSidePanel → useCoexistenceModal) so Penny and the Override
+// Inspector share ONE source of truth (spec §10, issue #129).
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
@@ -143,6 +134,10 @@ function CloseIcon() {
 interface PennyPanelProps {
   labelId: string;
   modal: boolean;
+  /** Whether this panel should pull focus into itself on open. False when the
+   *  coordinator suppresses it (e.g. the Inspector is already open on the desktop)
+   *  so opening Penny never steals an open sibling's focus (spec §10). */
+  autoFocus: boolean;
   reducedMotion: boolean;
   provider?: PennyProvider;
   avatarSrc: string;
@@ -162,6 +157,7 @@ const PROVIDER_LABEL: Record<PennyProvider, string> = {
 function PennyPanel({
   labelId,
   modal,
+  autoFocus,
   reducedMotion,
   provider,
   avatarSrc,
@@ -174,6 +170,8 @@ function PennyPanel({
   const closeRef = useRef<HTMLButtonElement>(null);
   const [entered, setEntered] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  // Captured once at mount: closing a coexisting sibling later must not yank focus.
+  const autoFocusOnMount = useRef(autoFocus);
 
   // Slide in: start off-screen, settle to 0. Reduced-motion → settle immediately.
   useEffect(() => {
@@ -185,9 +183,11 @@ function PennyPanel({
     return () => cancelAnimationFrame(raf);
   }, [reducedMotion]);
 
-  // Focus the close button on open (focus moves into the drawer).
+  // Focus the close button on open (focus moves into the drawer) — UNLESS the
+  // coordinator suppressed it because a sibling panel is already open beside it on
+  // the desktop (no focus steal, exactly one focus ring; spec §10).
   useEffect(() => {
-    closeRef.current?.focus();
+    if (autoFocusOnMount.current) closeRef.current?.focus();
   }, []);
 
   // Esc closes from anywhere within the drawer; parent restores focus to the FAB.
@@ -231,7 +231,7 @@ function PennyPanel({
     top: 0,
     left: 0,
     bottom: 0,
-    zIndex: 52,
+    zIndex: Z.pennyPanel,
     display: "flex",
     flexDirection: "column",
     width: modal ? "100%" : "380px",
@@ -254,7 +254,7 @@ function PennyPanel({
           style={{
             position: "fixed",
             inset: 0,
-            zIndex: 51,
+            zIndex: Z.pennyScrim,
             background: "rgba(0,0,0,0.32)",
           }}
         />
@@ -455,20 +455,28 @@ export function PennyDrawer({
   open: openProp,
   onOpenChange,
 }: PennyDrawerProps) {
+  // The shared coexistence coordinator (spec §10). Inside a SidePanelProvider it
+  // enforces mutual exclusion vs. the Override Inspector below 1180px and focus
+  // politeness above it; standalone (the wizard, where there is no Inspector) it
+  // self-manages open state with the same breakpoint.
+  const panel = useSidePanel("penny");
   const reducedMotion = usePrefersReducedMotion();
-  const modal = useIsModal();
+  const modal = panel.modal;
   const labelId = useId();
 
-  const [internalOpen, setInternalOpen] = useState(false);
-  const open = openProp ?? internalOpen;
+  const { requestOpen, requestClose } = panel;
+  const open = openProp ?? panel.open;
   const fabRef = useRef<HTMLButtonElement>(null);
 
   const setOpen = useCallback(
     (next: boolean) => {
-      if (openProp === undefined) setInternalOpen(next);
+      if (openProp === undefined) {
+        if (next) requestOpen();
+        else requestClose();
+      }
       onOpenChange?.(next);
     },
-    [openProp, onOpenChange],
+    [openProp, onOpenChange, requestOpen, requestClose],
   );
 
   const close = useCallback(() => {
@@ -584,6 +592,7 @@ export function PennyDrawer({
         <PennyPanel
           labelId={labelId}
           modal={modal}
+          autoFocus={panel.autoFocus()}
           reducedMotion={reducedMotion}
           provider={provider}
           avatarSrc={avatarSrc}

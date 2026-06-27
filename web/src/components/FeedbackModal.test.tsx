@@ -3,8 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { FeedbackModal } from "./FeedbackModal";
+import { Z } from "./sidePanels";
 
 describe("FeedbackModal", () => {
+  it("layers above both side panels (Penny + Inspector) at the documented z-order", () => {
+    // Spec B §10 / issue #129: the feedback modal (70/71) sits above the Penny
+    // (52) and Override Inspector (51) panels — never under a coexisting side panel.
+    render(<FeedbackModal onSubmit={async () => "SUP-X"} onClose={() => {}} />);
+    const scrim = screen.getByTestId("feedback-modal");
+    expect(scrim.style.zIndex).toBe(String(Z.feedbackScrim));
+    expect(Z.feedbackScrim).toBeGreaterThan(Z.pennyPanel);
+  });
+
   it("warns against pasting sensitive financial details", () => {
     render(<FeedbackModal onSubmit={async () => "SUP-AAAAAA"} onClose={() => {}} />);
     expect(
