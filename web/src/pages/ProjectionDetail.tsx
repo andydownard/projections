@@ -23,7 +23,8 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
 import { patchProjection, PatchConflictError } from "../api/patch";
 import { submitFeedback } from "../api/feedback";
-import { ProjectionTab } from "../components/ProjectionTab";
+import { ProjectionTab, fieldChangeKey, type FieldChangeInfo } from "../components/ProjectionTab";
+import type { FieldChangeActor } from "../components/FieldChange";
 import { TradeAreaMap } from "../components/TradeAreaMap";
 import { EvidencePanel } from "../components/EvidencePanel";
 import { FeedbackModal } from "../components/FeedbackModal";
@@ -77,6 +78,41 @@ function sv(v: ServerValue | number | string | undefined): ServerValue {
   return { raw: typeof v === "number" ? v : 0, display: String(v ?? "") };
 }
 
+// PE7 (#126): the per-field "recent change / was X / undo" affordance is DERIVED,
+// not computed. We snapshot the editable donor-share cells' SERVER display strings
+// and diff them across a mutation (Penny apply or manual) — a string compare, never
+// any math (PRD §13). The "previous value" is the prior revision's display string;
+// the undo is a normal FORWARD PATCH restoring the prior input value → recompute →
+// version++ → a NEW revision (it never erases the revision that introduced the
+// change). We scope undo to the donor-share inputs because those map cleanly +
+// reversibly to the `inputs.demand.share_y{n}` PATCH key; broader editable rows can
+// be added as their reversible PATCH mapping is confirmed.
+interface TrackedCell {
+  key: string; // fieldChangeKey(node, year)
+  display: string; // server display string (verbatim)
+  raw: number; // the share input value (0..1) used to revert
+  patchKey: string; // share_y1 | share_y2 | share_y3
+}
+
+/** The editable donor-share cells of a view-model, snapshotted for diffing. */
+function shareCells(vm: ViewModel): TrackedCell[] {
+  const out: TrackedCell[] = [];
+  const row = vm.rows.find((r) => r.editable && r.group === "drivers" && /share/i.test(r.label));
+  if (!row) return out;
+  const node = row.node ?? row.label;
+  for (const year of [1, 2, 3] as const) {
+    const cell = row[`y${year}` as "y1" | "y2" | "y3"];
+    if (!cell) continue;
+    out.push({
+      key: fieldChangeKey(node, year),
+      display: cell.display,
+      raw: cell.raw,
+      patchKey: `share_y${year}`,
+    });
+  }
+  return out;
+}
+
 /** Build the SettingsTab view-model from the server settings map. */
 function settingsVm(s: ViewModel["settings"]) {
   return {
@@ -103,6 +139,16 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const [showFeedback, setShowFeedback] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTabId>("projection");
   const [loadError, setLoadError] = useState(false);
+
+  // PE7: the recent per-field changes (keyed by fieldChangeKey) + the refs that
+  // derive them. `prevCellsRef` is the editable-share snapshot from the last vm;
+  // `revertRef` remembers the prior value to PATCH back for an inline undo;
+  // `pendingActorRef` carries the attribution (penny / user / undo) for the NEXT
+  // vm diff. The badge persists in `fieldChanges` until acknowledged/superseded.
+  const [fieldChanges, setFieldChanges] = useState<Record<string, FieldChangeInfo>>({});
+  const prevCellsRef = useRef<Map<string, TrackedCell>>(new Map());
+  const revertRef = useRef<Map<string, { patchKey: string; raw: number }>>(new Map());
+  const pendingActorRef = useRef<{ by: FieldChangeActor; reverted: boolean } | null>(null);
 
   // Roving tab navigation (WAI-ARIA tabs): Left/Right move + focus the next tab.
   function onTabKey(e: KeyboardEvent<HTMLButtonElement>) {
@@ -162,6 +208,47 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   }, [edit, saveLabel]);
   useEffect(() => clearDetailHeader, []);
 
+  // PE7: derive the per-field change badges by diffing the editable-share display
+  // strings whenever the view-model settles. `pendingActorRef` (set by the mutation
+  // that triggered this settle) attributes the change; on the initial load there is
+  // no actor, so we only seed the snapshot. No client math — display strings only.
+  useEffect(() => {
+    if (!vm) return;
+    const cells = shareCells(vm);
+    const prev = prevCellsRef.current;
+    const meta = pendingActorRef.current;
+    if (meta && prev.size > 0) {
+      const next: Record<string, FieldChangeInfo> = {};
+      for (const c of cells) {
+        const p = prev.get(c.key);
+        if (p && p.display !== c.display) {
+          next[c.key] = { previous: p.display, by: meta.by, reverted: meta.reverted };
+          revertRef.current.set(c.key, { patchKey: c.patchKey, raw: p.raw });
+        }
+      }
+      if (Object.keys(next).length > 0) setFieldChanges((cur) => ({ ...cur, ...next }));
+    }
+    prevCellsRef.current = new Map(cells.map((c) => [c.key, c]));
+    pendingActorRef.current = null;
+  }, [vm]);
+
+  // PE7: per-field inline undo — a FORWARD PATCH restoring the share input to its
+  // prior value (carries Bearer + If-Match), producing a NEW revision. Never erases
+  // the revision that introduced the change; re-undoable (the revert is itself a
+  // recent change the next diff surfaces as "reverted — was …").
+  function onUndoField(node: string, year: number) {
+    const revert = revertRef.current.get(fieldChangeKey(node, year));
+    if (!revert) return;
+    pendingActorRef.current = { by: "user", reverted: true };
+    setSaveLabel("Saving…");
+    doPatch({ inputs: { demand: { [revert.patchKey]: revert.raw } } }, version)
+      .then(() => setSaveLabel("All changes saved"))
+      .catch((err) => {
+        if (err instanceof PatchConflictError) setConflict(err.conflict);
+        else setSaveLabel("Save failed — retry");
+      });
+  }
+
   async function doPatch(body: Record<string, unknown>, ver: number) {
     const res = await patchProjection({
       viewSlug: slug,
@@ -180,6 +267,8 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   // (Spec B §2/§5.1). It also re-syncs `version` so a later manual autosave carries
   // the correct If-Match.
   function refreshViewModel() {
+    // The next vm settle is a Penny-applied edit (PE7 attribution).
+    pendingActorRef.current = { by: "penny", reverted: false };
     void fetchProjection(slug)
       .then((data) => {
         setVm(data);
@@ -209,6 +298,8 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   }
 
   async function onSettingsPatch(args: PatchHandlerArgs) {
+    // A manual settings edit (PE7 attribution: actor user).
+    pendingActorRef.current = { by: "user", reverted: false };
     setSaveLabel("Saving…");
     try {
       const v = await doPatch(args.body as Record<string, unknown>, args.version);
@@ -287,7 +378,13 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       {(() => {
         const projection = (
           <>
-            <ProjectionTab key={slug} vm={vm} recomputeStatus={edit ? saveLabel : ""} />
+            <ProjectionTab
+              key={slug}
+              vm={vm}
+              recomputeStatus={edit ? saveLabel : ""}
+              fieldChanges={fieldChanges}
+              onUndoField={edit ? onUndoField : undefined}
+            />
             <TradeAreaMap
               slug={slug}
               location={vm.location}
@@ -405,8 +502,9 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       {/* Penny — the LEFT slide-out assistant (apply-immediately + narrate, Spec B
           §2/§5.1). Mounted only in edit mode (her mutate path needs the owner/edit
           token); with ?ai=off she degrades to the muted Settings FAB (never a
-          dead-end). The per-field "recent change / was X / undo" affordance is PE7
-          — left as a seam here, not built. */}
+          dead-end). Her applied edits flow back through onApplied → refreshViewModel,
+          which the PE7 diff (above) surfaces as the per-field "recent change / was X
+          / undo" affordance on the share cells. */}
       {edit && (
         <PennyAssistant
           viewSlug={slug}

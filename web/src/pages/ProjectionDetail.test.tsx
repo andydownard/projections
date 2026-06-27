@@ -166,3 +166,105 @@ describe("ProjectionDetail — Penny mount (PE6, #125)", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("ProjectionDetail — per-field change affordance (PE7, #126)", () => {
+  beforeEach(() => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  /** A view-model carrying an editable Year-1 donor-share cell + row. */
+  function shareVm(shareY1: { raw: number; display: string }, version: number): ViewModel {
+    return fullVm({
+      version,
+      rows: [
+        {
+          label: "Donor market share",
+          group: "drivers",
+          y1: shareY1,
+          y2: { raw: 0.08, display: "8.0%" },
+          y3: { raw: 0.1, display: "10.0%" },
+          class: "input",
+          editable: true,
+        },
+        {
+          label: "Total Revenue",
+          group: "revenue",
+          y1: { raw: 426911, display: "$426,911" },
+          y2: { raw: 560000, display: "$560,000" },
+          y3: { raw: 700000, display: "$700,000" },
+          class: "computed",
+          editable: false,
+        },
+      ],
+      settings: {
+        shareY1,
+        shareY2: { raw: 0.08, display: "8.0%" },
+        shareY3: { raw: 0.1, display: "10.0%" },
+      },
+    });
+  }
+
+  it("surfaces 'changed by Penny' + subtle 'was 6.0%' on the share cell after Penny applies, and the per-field undo forward-PATCHes the prior value (If-Match)", async () => {
+    vi.mocked(fetchProjection)
+      .mockResolvedValueOnce(shareVm({ raw: 0.06, display: "6.0%" }, 3)) // initial load
+      .mockResolvedValueOnce(shareVm({ raw: 0.08, display: "8.0%" }, 4)); // after Penny applies
+
+    const fetchMock = vi.fn((url: string, _opts?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("/penny")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              turns_appended: [{ id: "a1", role: "assistant", content: "Done. Year-1 share is now 8.0%." }],
+              provider: "anthropic",
+              applied_revisions: ["rev_2"],
+              narration: "Done. Year-1 share is now 8.0%.",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      // The undo forward-PATCH → reverted view-model with a fresh version (ETag).
+      return Promise.resolve(
+        new Response(JSON.stringify(shareVm({ raw: 0.06, display: "6.0%" }, 5)), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ETag: "5" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+
+    // Drive a Penny turn that applies a share edit.
+    await user.click(await screen.findByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    await user.type(screen.getByRole("textbox", { name: /ask penny/i }), "set year-1 share to 8%");
+    await user.click(screen.getByRole("button", { name: /^send$/i }));
+
+    // The share cell shows the recent-change affordance (icon + text, not color
+    // alone) + the subtle prior value, derived from the server display string.
+    const fc = await screen.findByTestId("field-change");
+    expect(within(fc).getByTestId("field-change-badge")).toHaveTextContent(/changed by penny/i);
+    expect(within(fc).getByTestId("field-change-was")).toHaveTextContent("was 6.0%");
+
+    // Per-field undo → a FORWARD PATCH restoring the prior value (0.06), carrying
+    // If-Match: the post-apply version (4). Never history erasure.
+    await user.click(screen.getByTestId("field-change-undo"));
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([u, o]) => String(u).includes("/projections/p_8x") && (o as RequestInit)?.method === "PATCH",
+      );
+      expect(patchCall).toBeTruthy();
+      const opts = patchCall![1] as RequestInit;
+      expect(JSON.parse(opts.body as string)).toEqual({ inputs: { demand: { share_y1: 0.06 } } });
+      expect((opts.headers as Record<string, string>)["If-Match"]).toBe("4");
+    });
+
+    vi.unstubAllGlobals();
+  });
+});

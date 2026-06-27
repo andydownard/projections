@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ProjectionTab } from "./ProjectionTab";
 import type { ViewModel } from "../api/viewModel";
@@ -167,5 +167,52 @@ describe("ProjectionTab a11y", () => {
     const table = screen.getByRole("table", { name: /3-year projection/i });
     expect(table).toBeInTheDocument();
     expect(within(table).getByRole("rowheader", { name: /Donor market share/i })).toBeInTheDocument();
+  });
+});
+
+describe("ProjectionTab — per-field change affordance (PE7, #126)", () => {
+  it("renders the FieldChange affordance on an editable cell that recently changed", () => {
+    render(
+      <ProjectionTab
+        vm={vm()}
+        fieldChanges={{ "Donor market share#1": { previous: "4.0%", by: "penny" } }}
+      />,
+    );
+    const cell = screen.getByTestId("cell-Donor market share-y1").closest("td");
+    const fc = within(cell as HTMLElement).getByTestId("field-change");
+    // recent-change badge (icon + text, not color alone) + subtle "was X".
+    expect(within(fc).getByTestId("field-change-badge")).toHaveTextContent(/changed by penny/i);
+    expect(within(fc).getByTestId("field-change-was")).toHaveTextContent("was 4.0%");
+  });
+
+  it("does not render the affordance on cells with no recent change", () => {
+    render(<ProjectionTab vm={vm()} fieldChanges={{ "Donor market share#1": { previous: "4.0%" } }} />);
+    // The Rent editable cell has no change entry → no affordance there.
+    const rent = screen.getByTestId("cell-Rent-y1").closest("td");
+    expect(within(rent as HTMLElement).queryByTestId("field-change")).not.toBeInTheDocument();
+  });
+
+  it("per-field undo reverts THAT field — calls onUndoField with the node + year", async () => {
+    const onUndoField = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProjectionTab
+        vm={vm()}
+        fieldChanges={{ "Donor market share#1": { previous: "4.0%", by: "penny" } }}
+        onUndoField={onUndoField}
+      />,
+    );
+    await user.click(screen.getByTestId("field-change-undo"));
+    expect(onUndoField).toHaveBeenCalledWith("Donor market share", 1);
+  });
+
+  it("renders no undo control when onUndoField is absent (display-only)", () => {
+    render(
+      <ProjectionTab
+        vm={vm()}
+        fieldChanges={{ "Donor market share#1": { previous: "4.0%", by: "penny" } }}
+      />,
+    );
+    expect(screen.queryByTestId("field-change-undo")).not.toBeInTheDocument();
   });
 });
