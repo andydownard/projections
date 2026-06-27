@@ -41,6 +41,17 @@ def test_security_headers_present_on_every_response(client):
     assert "max-age=" in resp.headers.get("strict-transport-security", "")
 
 
+def test_csp_connect_src_is_self_only(client):
+    # #167 — all AI is server-proxied (hard rule 7); the browser only ever calls the
+    # app's own /penny endpoint, never a provider. So connect-src must NOT list the
+    # provider origins — they were needless post-XSS exfil / SSRF-pivot surface.
+    resp = client.get("/api/health")
+    csp = resp.headers.get("content-security-policy", "")
+    assert "connect-src 'self'" in csp
+    assert "api.anthropic.com" not in csp
+    assert "api.openai.com" not in csp
+
+
 def test_robots_disallow_all(client):
     resp = client.get("/robots.txt")
     assert resp.status_code == 200

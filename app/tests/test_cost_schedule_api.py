@@ -380,6 +380,42 @@ def test_patch_rejection_leaves_schedule_unchanged(client, store):
     assert _stored_inputs(store, slug)["cost_schedule"] == SAMPLE_SCHEDULE
 
 
+# ------------------------------------------ PATCH row-count cap (#166, DoS guard)
+def _cap_rows(n):
+    return [{"category": f"L{i}", "month": (i % 12) + 1, "amount": 100}
+            for i in range(n)]
+
+
+def test_patch_accepts_schedule_at_row_cap(client, store):
+    from app.routers.projections import MAX_COST_SCHEDULE_ROWS
+
+    created = _create(client)
+    slug = created["view_slug"]
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"inputs": {"cost_schedule": _cap_rows(MAX_COST_SCHEDULE_ROWS)}},
+        headers=_owner_headers(created, 1),
+    )
+    assert r.status_code == 200, r.text
+    assert len(_stored_inputs(store, slug)["cost_schedule"]) == MAX_COST_SCHEDULE_ROWS
+
+
+def test_patch_rejects_schedule_over_row_cap(client, store):
+    from app.routers.projections import MAX_COST_SCHEDULE_ROWS
+
+    created = _create(client)
+    slug = created["view_slug"]
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"inputs": {"cost_schedule": _cap_rows(MAX_COST_SCHEDULE_ROWS + 1)}},
+        headers=_owner_headers(created, 1),
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["error"] == "invalid_inputs"
+    # rejected over-cap mutation must not persist / bump the version
+    assert _row(store, slug)["version"] == 1
+
+
 # --------------------------------------------------------------------- preview
 def test_preview_with_schedule_is_read_only(client, store):
     created = _create(client)

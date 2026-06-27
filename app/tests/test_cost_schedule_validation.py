@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from app.routers.projections import (
     _NON_ENGINE_INPUT_KEYS,
+    MAX_COST_SCHEDULE_ROWS,
     CostScheduleItemIn,
     InputsIn,
     _build_engine_args_from_dicts,
@@ -170,6 +171,34 @@ def test_validate_rejects_extra_field_row():
             "cost_schedule": [{"category": "X", "month": 1, "amount": 1, "x": 1}]
         })
     assert ei.value.status_code == 422
+
+
+# ----------------------------------- cost_schedule row-count cap (#166, DoS guard)
+def _n_rows(n):
+    """n valid rows — enough to exercise the COUNT cap, not the per-row shape."""
+    return [{"category": f"L{i}", "month": (i % 12) + 1, "amount": 100}
+            for i in range(n)]
+
+
+def test_row_cap_is_a_sane_generous_bound():
+    # A generous-but-safe domain cap: far above any real launch schedule (~10-30
+    # rows), well below the request-body ceiling that drove the bloat DoS (#166).
+    assert 50 <= MAX_COST_SCHEDULE_ROWS <= 1000
+
+
+def test_validate_passes_at_row_cap_boundary():
+    # exactly MAX rows is allowed (inclusive cap)
+    assert _validate_schedule_inputs(
+        {"cost_schedule": _n_rows(MAX_COST_SCHEDULE_ROWS)}) is None
+
+
+def test_validate_rejects_schedule_over_row_cap():
+    with pytest.raises(HTTPException) as ei:
+        _validate_schedule_inputs({"cost_schedule": _n_rows(MAX_COST_SCHEDULE_ROWS + 1)})
+    assert ei.value.status_code == 422
+    assert ei.value.detail["error"] == "invalid_inputs"
+    # the rejection message names the cap so the client can surface it
+    assert str(MAX_COST_SCHEDULE_ROWS) in ei.value.detail["message"]
 
 
 # ----------------------------------------------------------- _schedule_columns
