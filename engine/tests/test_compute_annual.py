@@ -28,7 +28,10 @@ def test_year2_share_is_independent_input():
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
     )
-    res = compute(inputs, Assumptions(), DemandDrivers(), TradeArea(basis="city", households="31798"), overrides={})
+    res = compute(
+        inputs, Assumptions(), DemandDrivers(),
+        TradeArea(basis="city", households="31798"), overrides={},
+    )
     # 0.099 is NOT the midpoint of 0.06 and 0.10 (which would be 0.08).
     assert D(str(res.annual[2].share)) == Decimal("0.099")
 

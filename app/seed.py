@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import secrets
 from datetime import datetime, timezone
+from typing import Any
 
 from app.deps import hash_token
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
@@ -64,12 +65,13 @@ def example_view_model() -> dict:
     from app.routers.projections import _enrich_view_model
 
     inputs = Inputs(**_INPUTS)
-    akw = {k: v for k, v in _ASSUMPTIONS.items() if v is not None}
+    akw: dict[str, Any] = {k: v for k, v in _ASSUMPTIONS.items() if v is not None}
+    acs_vintage = _TRADE.get("acs_vintage")
     result = compute(
         inputs, Assumptions(**akw), DemandDrivers(),
         # The engine takes only basis/households/acs_vintage; provenance is metadata.
-        TradeArea(basis=_TRADE["basis"], households=_TRADE["households"],
-                  acs_vintage=_TRADE.get("acs_vintage")),
+        TradeArea(basis=str(_TRADE["basis"]), households=str(_TRADE["households"]),
+                  acs_vintage=str(acs_vintage) if acs_vintage is not None else None),
         overrides={},
     )
     vm = result.view_model or to_view_model(result)

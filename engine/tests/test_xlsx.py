@@ -5,12 +5,10 @@ The recalc/reconciliation against LibreOffice lives in the golden-gate test
 live formulas, totals as formulas, division guards, the monthly tab, and the
 orange overridden-component cell + exact comment string.
 """
-import pathlib
 
 import openpyxl
 
-from engine.compute import (Assumptions, DemandDrivers, Inputs, TradeArea,
-                            compute)
+from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.xlsx import build_xlsx
 
 
@@ -58,7 +56,8 @@ def test_no_unguarded_division_by_a_cell(tmp_path):
     for ws in wb.worksheets:
         for row in ws.iter_rows():
             for c in row:
-                if isinstance(c.value, str) and c.value.startswith("=") and cell_denom.search(c.value):
+                if (isinstance(c.value, str) and c.value.startswith("=")
+                        and cell_denom.search(c.value)):
                     assert "IF(" in c.value, \
                         f"unguarded cell division at {ws.title}!{c.coordinate}: {c.value}"
 

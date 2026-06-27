@@ -23,7 +23,7 @@ invariant.
 from __future__ import annotations
 
 import os
-from typing import Any, Optional
+from typing import Any
 
 
 class AIUnavailableError(Exception):
@@ -71,19 +71,19 @@ def _figures_paragraph(vm: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def _call_anthropic(vm: dict[str, Any], role: Optional[str] = None) -> str:
+def _call_anthropic(vm: dict[str, Any], role: str | None = None) -> str:
     """Generate via Anthropic (primary). Seam: monkeypatched in tests / SDK later."""
     return _figures_paragraph(vm)
 
 
-def _call_openai(vm: dict[str, Any], role: Optional[str] = None) -> str:
+def _call_openai(vm: dict[str, Any], role: str | None = None) -> str:
     """Generate via OpenAI (fallback). Seam: monkeypatched in tests / SDK later."""
     return _figures_paragraph(vm)
 
 
 def generate(
     vm: dict[str, Any],
-    role: Optional[str] = None,
+    role: str | None = None,
     *,
     generator: Any = None,
 ) -> tuple[str, str]:
@@ -119,7 +119,7 @@ def generate(
     if not providers:
         # No live provider configured: fall back to the deterministic local
         # grounded builder rather than failing, so AI-on-but-keyless dev works.
-        gen = generator or _figures_paragraph
+        gen: Any = generator or _figures_paragraph
         body = gen(vm, role) if _accepts_role(gen) else gen(vm)
         if body:
             return body, "template"

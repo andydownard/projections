@@ -9,6 +9,8 @@ call. The derived count is returned editable; the engine never runs here.
 """
 from __future__ import annotations
 
+# ruff: noqa: UP045 -- keep typing.Optional: Pydantic/FastAPI evaluate these
+# annotations at runtime, and PEP 604 `X | None` is unsupported on Python 3.9.
 from typing import Optional
 
 from fastapi import APIRouter, Request
@@ -107,5 +109,8 @@ def places_resolve(body: ResolveIn, request: Request):
         # fallback (503), never a 500 with a key-bearing traceback in the logs.
         return JSONResponse(
             status_code=503,
-            content={"error": "census_unavailable", "message": "Lookup failed — enter households manually."},
+            content={
+                "error": "census_unavailable",
+                "message": "Lookup failed — enter households manually.",
+            },
         )

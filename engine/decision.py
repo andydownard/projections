@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Optional
 
 from engine import model
 from engine.money import D
@@ -19,11 +18,11 @@ class Decision:
     first_year_cash_gap: Decimal
     peak_cash_shortfall: Decimal
     startup_capital_required: Decimal
-    cash_runway_months: Optional[int]
-    break_even_month: Optional[int]
-    break_even_revenue_annual: Optional[Decimal]
-    simple_payback_years: Optional[Decimal]
-    revenue_cagr: Optional[Decimal]
+    cash_runway_months: int | None
+    break_even_month: int | None
+    break_even_revenue_annual: Decimal | None
+    simple_payback_years: Decimal | None
+    revenue_cagr: Decimal | None
     reco_tag: str
     reco_reasons: dict = field(default_factory=dict)
     sensitivity: dict = field(default_factory=dict)
@@ -31,7 +30,7 @@ class Decision:
 
 def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, donation_mult):
     """Full re-run of the core with perturbed rent & donations -> (net, breakeven, capital)."""
-    from engine.compute import Assumptions, Inputs, compute_annual
+    from engine.compute import Inputs, compute_annual
     from engine.monthly import build_monthly
 
     # perturb shares (proxy for donations) and occupancy.
@@ -131,7 +130,9 @@ def _recommend(result, capital, assumptions, inputs, flags, sensitivity, break_e
     horizon_reached_down = sensitivity["downside"]["breakeven"] is not None
 
     if not horizon_reached_base or not horizon_reached_down:
-        reasons["breakeven"] = "Break-even is not reached within the first year under base or downside."
+        reasons["breakeven"] = (
+            "Break-even is not reached within the first year under base or downside."
+        )
         return "do_not_proceed", reasons
 
     if capital > funds:
@@ -149,7 +150,9 @@ def _recommend(result, capital, assumptions, inputs, flags, sensitivity, break_e
         reasons["revise"] = "Outcome hinges on out-of-band inputs or a non-positive Year-1 result."
         return "revise", reasons
 
-    reasons["proceed"] = "Positive Year-1 cash trajectory; capital need within funds; ratios in band."
+    reasons["proceed"] = (
+        "Positive Year-1 cash trajectory; capital need within funds; ratios in band."
+    )
     return "proceed", reasons
 
 

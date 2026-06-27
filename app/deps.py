@@ -11,6 +11,8 @@ testable from commit one.
 """
 from __future__ import annotations
 
+# ruff: noqa: UP045 -- keep typing.Optional: FastAPI evaluates this dependency's
+# annotation at runtime, and PEP 604 `X | None` is unsupported on Python 3.9.
 import hashlib
 import hmac
 from typing import Optional

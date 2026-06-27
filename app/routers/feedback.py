@@ -15,6 +15,8 @@ support_id returned (github_issue_url=null) — never a 500.
 """
 from __future__ import annotations
 
+# ruff: noqa: UP045 -- keep typing.Optional: Pydantic/FastAPI evaluate these
+# annotations at runtime, and PEP 604 `X | None` is unsupported on Python 3.9.
 import json
 import os
 import re
@@ -59,7 +61,7 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def redact_route(route: str, own_slug: str | None = None) -> str:
+def redact_route(route: str, own_slug: Optional[str] = None) -> str:
     """Strip any slug segment and URL fragment so no resolvable link survives.
 
     /p/<slug>/edit#edit-secret -> /p/:slug/edit ; /r/<slug> -> /r/:slug.
@@ -96,7 +98,7 @@ def submit_feedback(
     body: FeedbackIn,
     request: Request,
     response: Response,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
 ):
     if not body.title.strip():
         raise HTTPException(status_code=422, detail={"error": "title_required"})

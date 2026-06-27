@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from typing import Callable, Optional
+from typing import Callable
 from urllib.parse import urlparse
 
 ALLOWED_SCHEMES = ("http", "https")
@@ -74,7 +74,7 @@ def _default_resolver(host: str) -> list:
     return [info[4][0] for info in infos]
 
 
-def validate_url_scheme_host(url: str, *, resolver: Optional[Resolver] = None) -> str:
+def validate_url_scheme_host(url: str, *, resolver: Resolver | None = None) -> str:
     """Validate scheme + host, resolve, and return the validated IP.
 
     Raises BlockedURLError on a non-http(s) scheme, a railway.internal host, a
@@ -119,8 +119,8 @@ def _httpx_transport(url: str) -> tuple:
 def fetch_url(
     url: str,
     *,
-    resolver: Optional[Resolver] = None,
-    transport: Optional[Transport] = None,
+    resolver: Resolver | None = None,
+    transport: Transport | None = None,
 ) -> str:
     """Fetch `url` safely, re-validating every redirect hop. Returns body text.
 

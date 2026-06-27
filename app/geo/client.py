@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from collections import OrderedDict
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlencode
 
 import httpx
@@ -41,7 +41,7 @@ _STATIC_SIZES = {
     "thumb": {"size": "120x80", "zoom": "11"},
     "detail": {"size": "640x280", "zoom": "12"},
 }
-_static_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+_static_cache: OrderedDict[tuple, bytes] = OrderedDict()
 _STATIC_CACHE_MAX = 256
 
 
@@ -106,7 +106,7 @@ def _places_key() -> str:
     return os.environ.get("GOOGLE_PLACES_API_KEY", "")
 
 
-def autocomplete(query: str, *, session_token: Optional[str] = None) -> list[dict]:
+def autocomplete(query: str, *, session_token: str | None = None) -> list[dict]:
     """Address predictions for `query`. Returns [{description, place_id}] only —
     the upstream payload (and the key) never leave the server."""
     params = {"input": query, "key": _places_key(), "types": "geocode"}
@@ -121,7 +121,7 @@ def autocomplete(query: str, *, session_token: Optional[str] = None) -> list[dic
     ]
 
 
-def place_details(place_id: str, *, session_token: Optional[str] = None) -> dict:
+def place_details(place_id: str, *, session_token: str | None = None) -> dict:
     """Resolve a place_id to {lat, lng, formatted_address}."""
     params = {
         "place_id": place_id,
@@ -145,7 +145,7 @@ def place_details(place_id: str, *, session_token: Optional[str] = None) -> dict
     }
 
 
-def _first_layer(geos: dict, needle: str) -> Optional[dict]:
+def _first_layer(geos: dict, needle: str) -> dict | None:
     """First non-empty geography layer whose name contains `needle`."""
     for name, rows in geos.items():
         if needle.lower() in name.lower() and rows:
@@ -188,8 +188,8 @@ def census_geographies(lat: float, lng: float) -> dict:
 def acs_households(
     state_fips: str,
     *,
-    place_fips: Optional[str] = None,
-    county_fips: Optional[str] = None,
+    place_fips: str | None = None,
+    county_fips: str | None = None,
 ) -> dict:
     """ACS 5-year total households (B11001_001E) for a place or county FIPS."""
     params = {"get": f"NAME,{ACS_HOUSEHOLDS_VAR},{ACS_HOUSEHOLDS_MOE}"}

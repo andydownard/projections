@@ -14,12 +14,24 @@ from engine import dag
 from engine.money import D, money_view, na_view, number_view, pct_view
 
 _RECO_HEADLINES = {
-    "proceed": ("Proceed.", "Positive Year-1 cash trajectory; capital need within funds; ratios in band."),
-    "revise": ("Revise.", "The outcome hinges on out-of-band inputs or a non-positive Year-1 result."),
-    "find_cheaper_rent": ("Find cheaper rent.", "Occupancy is the binding constraint on viability."),
+    "proceed": (
+        "Proceed.",
+        "Positive Year-1 cash trajectory; capital need within funds; ratios in band.",
+    ),
+    "revise": (
+        "Revise.",
+        "The outcome hinges on out-of-band inputs or a non-positive Year-1 result.",
+    ),
+    "find_cheaper_rent": (
+        "Find cheaper rent.",
+        "Occupancy is the binding constraint on viability.",
+    ),
     "raise_cash": ("Raise cash.", "Capital required exceeds your committed funds."),
     "delay": ("Delay.", "The chosen opening month is cash-infeasible given the ramp."),
-    "do_not_proceed": ("Do not proceed.", "Break-even is not reached within the horizon under base or downside."),
+    "do_not_proceed": (
+        "Do not proceed.",
+        "Break-even is not reached within the horizon under base or downside.",
+    ),
 }
 
 # Rows that are component (pinnable / editable) vs derived (computed, never editable).
@@ -83,7 +95,8 @@ def to_view_model(result):
     occ_ratio = (D(str(y1.expenses.get("Rent", 0))) / rev1) if rev1 != 0 else None
     labor_ratio = (D(str(y1.expenses.get("Payroll", 0))) / rev1) if rev1 != 0 else None
     kpis = [
-        {"label": "Total revenue", "value": money_view(y1.total_rev), "sub": "Year 1", "color": "text"},
+        {"label": "Total revenue", "value": money_view(y1.total_rev), "sub": "Year 1",
+         "color": "text"},
         {"label": "Net profit", "value": money_view(y1.net), "sub": "Year 1", "color": "text"},
         {"label": "Net margin", "value": _pct_or_na(y1.margin), "sub": "Year 1", "color": "text"},
         {"label": "Sales / sq ft", "value": _money_or_na(sales_per_sqft),
@@ -107,9 +120,13 @@ def to_view_model(result):
     # ---- 3-year rows
     rows = []
     rows.append(_driver_row("Donor market share", annual, "share", pct=True, group="drivers"))
-    rows.append(_driver_row("Donating households", annual, "donating_hh", num=True, group="drivers"))
+    rows.append(
+        _driver_row("Donating households", annual, "donating_hh", num=True, group="drivers")
+    )
     rows.append(_driver_row("Annual donations", annual, "donations", num=True, group="drivers"))
-    rows.append(_driver_row("Customers", annual, "customers", num=True, group="drivers", computed=True))
+    rows.append(
+        _driver_row("Customers", annual, "customers", num=True, group="drivers", computed=True)
+    )
     rows.append(_driver_row("Retail Sales", annual, "retail", group="revenue"))
     rows.append(_driver_row("Salvage Sales", annual, "salvage", group="revenue", computed=True))
     rows.append(_driver_row("Total Revenue", annual, "total_rev", group="revenue", computed=True))

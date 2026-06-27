@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Optional
 
 from engine import model
 from engine.money import D
@@ -56,8 +55,8 @@ class Inputs:
     building_sqft: str
     salesfloor_pct: str
     source_of_funds: str
-    occupancy_annual: Optional[str] = None     # explicit annual occupancy $ (preferred)
-    rent_per_sqft: Optional[str] = None        # OR sqft x rate
+    occupancy_annual: str | None = None     # explicit annual occupancy $ (preferred)
+    rent_per_sqft: str | None = None        # OR sqft x rate
     lease_type: str = "gross"                  # "gross" | "nnn"
     nnn_opex_annual: str = "0"                 # added to occupancy if nnn
 
@@ -81,14 +80,14 @@ class Assumptions:
 @dataclass(frozen=True)
 class DemandDrivers:
     confidence: str = "medium"
-    seasonality: Optional[tuple] = None        # 12 monthly weights or None
+    seasonality: tuple | None = None        # 12 monthly weights or None
 
 
 @dataclass(frozen=True)
 class TradeArea:
     basis: str = "city"                        # city | county | manual
     households: str = "0"
-    acs_vintage: Optional[str] = None
+    acs_vintage: str | None = None
 
 
 # ------------------------------------------------------------------ result rows
@@ -105,7 +104,7 @@ class AnnualYear:
     expenses: dict           # label -> Decimal
     total_exp: Decimal
     net: Decimal
-    margin: Optional[Decimal]  # None when total_rev == 0 (§8)
+    margin: Decimal | None  # None when total_rev == 0 (§8)
 
 
 @dataclass
@@ -118,7 +117,7 @@ class ComputeResult:
     assumptions: Assumptions
     trade_area: TradeArea
     monthly: list = field(default_factory=list)   # filled by monthly model
-    monthly_breakeven: Optional[int] = None       # first sustained net>=0 month
+    monthly_breakeven: int | None = None       # first sustained net>=0 month
     decision: object = None                       # filled by decision model
     overrides_applied: dict = field(default_factory=dict)
     stale_nodes: list = field(default_factory=list)

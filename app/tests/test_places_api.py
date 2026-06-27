@@ -13,7 +13,6 @@ from app import ratelimit
 from app.geo import client as geo_client
 from app.routers import places
 
-
 # --- canned upstream payloads (Longview, TX -> Gregg County) ------------------
 _AUTOCOMPLETE = {
     "predictions": [

@@ -10,19 +10,18 @@ CRM delivery is best-effort and graceful-degrades when CRM_API_KEY is unset
 """
 from __future__ import annotations
 
+import re as _re
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
-import re as _re
-
 from pydantic import BaseModel, validator
-
-_EMAIL_RE = _re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 from app import ratelimit
 from app.store import Store, get_store
+
+_EMAIL_RE = _re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 router = APIRouter(prefix="/api/intent", tags=["intent"])
 
@@ -63,7 +62,7 @@ def submit_intent(
     body: IntentIn,
     request: Request,
     response: Response,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
 ):
     allowed, retry_after = ratelimit.check(
         "intent", ip=_client_ip(request), ip_limit=_IP_LIMIT_PER_HOUR

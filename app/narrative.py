@@ -353,5 +353,5 @@ def stale_diff(old_vm: dict[str, Any], new_vm: dict[str, Any]) -> list[dict[str,
     for field in sorted(set(old) | set(new)):
         was, now = old.get(field), new.get(field)
         if was != now:
-            rows.append({"field": field, "was": was, "now": now})
+            rows.append({"field": field, "was": was or "", "now": now or ""})
     return format_was_now(rows)

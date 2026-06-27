@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/r", tags=["roles"])
 
 
 @router.get("/{role_slug}")
-def get_role_view(role_slug: str, response: Response, store: Store = Depends(get_store)):
+def get_role_view(role_slug: str, response: Response, store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
     row = store.get_projection_by_role_slug(role_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})

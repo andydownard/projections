@@ -48,7 +48,8 @@ def test_payback_present_when_y1_net_positive(design_parity_result):
     dec = design_parity_result.decision
     if design_parity_result.annual[1].net > 0:
         assert dec.simple_payback_years is not None
-        expected = D(str(design_parity_result.startup_total)) / D(str(design_parity_result.annual[1].net))
+        expected = (D(str(design_parity_result.startup_total))
+                    / D(str(design_parity_result.annual[1].net)))
         assert abs(D(str(dec.simple_payback_years)) - expected) < Decimal("0.001")
 
 

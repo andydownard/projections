@@ -57,8 +57,8 @@ def parse_key(key: str):
         raise PinRejected(f"override key missing node: {key!r}")
     try:
         year = int(year_s)
-    except ValueError:
-        raise PinRejected(f"override key year not an int: {key!r}")
+    except ValueError as err:
+        raise PinRejected(f"override key year not an int: {key!r}") from err
     if year not in (1, 2, 3):
         raise PinRejected(f"override year out of range (1..3): {key!r}")
     return node, year

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Callable, Optional
+from typing import Callable
 
 from app.research.snippets import Snippet
 
@@ -89,7 +89,7 @@ def _grounding_prompt(snippets: list) -> str:
 
 
 def extract_rent(
-    snippets: list, *, provider: Optional[Provider] = None
+    snippets: list, *, provider: Provider | None = None
 ) -> dict:
     """Return a grounded rent estimate dict, citing only fetched snippets.
 

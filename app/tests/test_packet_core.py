@@ -9,7 +9,6 @@ emphasis/CTAs only — never the numbers.
 
 RED-first: written before app/packet.py exists.
 """
-import pytest
 
 from app.packet import PACKET_ROLES, build_packet, render_packet_md
 
@@ -22,7 +21,8 @@ VM = {
         "breakeven": {"raw": 5, "display": "Month 5"},
     },
     "kpis": [
-        {"label": "Total revenue", "value": {"raw": 426911.0, "display": "$426,911"}, "sub": "Year 1"},
+        {"label": "Total revenue", "value": {"raw": 426911.0, "display": "$426,911"},
+         "sub": "Year 1"},
         {"label": "Net margin", "value": {"raw": 0.11, "display": "11.0%"}, "sub": "Year 1"},
     ],
     "rows": [

@@ -14,6 +14,8 @@ snapshot is written per settle. The .xlsx export lands in a later slice.
 """
 from __future__ import annotations
 
+# ruff: noqa: UP045 -- keep typing.Optional: Pydantic/FastAPI evaluate these
+# annotations at runtime, and PEP 604 `X | None` is unsupported on Python 3.9.
 import json
 import os
 import re
@@ -27,10 +29,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
-from app import ratelimit
+from app import narrative_provider, ratelimit
 from app.deps import hash_token, parse_if_match, token_matches
 from app.geo.client import GeoUpstreamError, static_map_bytes
-from app import narrative_provider
 from app.narrative import (
     GroundingError,
     canonical_grounded_figures,
@@ -43,8 +44,7 @@ from app.narrative import (
 from app.packet import build_packet, render_packet_docx, render_packet_md
 from app.store import Store, get_store
 from engine import dag
-from engine.compute import (
-    Assumptions, DemandDrivers, Inputs, TradeArea, compute, compute_annual)
+from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute, compute_annual
 from engine.money import D, number_view
 from engine.viewmodel import to_view_model
 from engine.xlsx import build_xlsx
@@ -389,7 +389,7 @@ def _apply_override_ops(stored: dict, ops, calc):
     return result
 
 
-def _merge_patch(row: dict, body: "PatchProjectionIn"):
+def _merge_patch(row: dict, body: PatchProjectionIn):
     """Merge an editable-surface partial onto the stored source-of-truth.
 
     Returns (inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name). This
@@ -423,7 +423,7 @@ def _diff_changed(before: dict, after: dict) -> list[dict]:
     Both before/after are subsets of the view-model metrics; we compare display
     strings and derive a direction sign from the raw values.
     """
-    out = []
+    out: list[dict[str, str]] = []
     for key, label in (("capital", "Capital required"),
                        ("cashGap", "First-year cash gap"),
                        ("breakeven", "Break-even month")):
@@ -435,8 +435,8 @@ def _diff_changed(before: dict, after: dict) -> list[dict]:
         sign = "flat"
         if isinstance(b_raw, (int, float)) and isinstance(a_raw, (int, float)):
             sign = "up" if a_raw > b_raw else "down" if a_raw < b_raw else "flat"
-        out.append({"label": label, "was": b.get("display"),
-                    "now": a.get("display"), "sign": sign})
+        out.append({"label": label, "was": str(b.get("display") or ""),
+                    "now": str(a.get("display") or ""), "sign": sign})
     # N11: route through the ONE shared was->now formatter so /preview changed[]
     # and the narrative stale_diff never drift in shape.
     return format_was_now(out)
@@ -452,7 +452,7 @@ def _metrics_subset(vm: dict) -> dict:
 @router.post("", status_code=201)
 def create_projection(
     body: CreateProjectionIn,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
 ):
     """Create: compute server-side, persist, return the view-model + one-time tokens.
@@ -463,7 +463,9 @@ def create_projection(
     try:
         vm = _compute_view_model(body)
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
-        raise HTTPException(status_code=422, detail={"error": "invalid_inputs", "message": str(exc)})
+        raise HTTPException(
+            status_code=422, detail={"error": "invalid_inputs", "message": str(exc)}
+        ) from exc
     _enrich_view_model(vm, body.location.model_dump(), body.trade_area.model_dump())
 
     presented_owner = _bearer(authorization)
@@ -513,7 +515,7 @@ def create_projection(
 
 @router.get("")
 def list_projections(
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
 ):
     """Owner-scoped list (never global). No/invalid token -> empty list."""
@@ -549,7 +551,7 @@ def list_projections(
 
 
 @router.get("/{view_slug}")
-def get_projection(view_slug: str, response: Response, store: Store = Depends(get_store)):
+def get_projection(view_slug: str, response: Response, store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
     """Read by capability slug: return the STORED snapshot verbatim (no recompute)."""
     row = store.get_projection_by_slug(view_slug)
     if row is None:
@@ -563,7 +565,7 @@ def get_projection(view_slug: str, response: Response, store: Store = Depends(ge
 
 
 @router.get("/{view_slug}/staticmap")
-def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_store)):
+def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
     """Server-proxied Google Static Map for the projection's resolved location.
 
     The Places key is appended server-side and never reaches the browser (hard
@@ -584,12 +586,12 @@ def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_s
         lat_f, lng_f = float(lat), float(lng)
     except (TypeError, ValueError):
         # Unparseable stored coords -> treat as no resolved location (never a 500).
-        raise HTTPException(status_code=404, detail={"error": "no_location"})
+        raise HTTPException(status_code=404, detail={"error": "no_location"}) from None
     kind = "detail" if size == "detail" else "thumb"
     try:
         img = static_map_bytes(lat_f, lng_f, kind)
     except GeoUpstreamError:
-        raise HTTPException(status_code=502, detail={"error": "map_unavailable"})
+        raise HTTPException(status_code=502, detail={"error": "map_unavailable"}) from None
     return Response(
         content=img,
         media_type="image/png",
@@ -598,7 +600,7 @@ def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_s
 
 
 @router.get("/{view_slug}/xlsx")
-def export_xlsx(view_slug: str, store: Store = Depends(get_store)):
+def export_xlsx(view_slug: str, store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
     """Formula-driven .xlsx export (API_SPEC §6.3).
 
     Owner/edit/view may download (the slug already grants read). Terms acceptance
@@ -632,7 +634,7 @@ def export_xlsx(view_slug: str, store: Store = Depends(get_store)):
         path,
         media_type=XLSX_CONTENT_TYPE,
         filename=filename,
-        background=BackgroundTask(lambda: os.path.exists(path) and os.remove(path)),
+        background=BackgroundTask(lambda: os.remove(path) if os.path.exists(path) else None),
     )
 
 
@@ -718,7 +720,7 @@ def _narrative_response(row: dict, store: Store) -> dict:
 
 
 @router.get("/{view_slug}/narrative")
-def get_narrative(view_slug: str, store: Store = Depends(get_store)):
+def get_narrative(view_slug: str, store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
     """Fetch the stored narrative + staleness (owner/edit/view — the slug grants read)."""
     row = store.get_projection_by_slug(view_slug)
     if row is None:
@@ -734,7 +736,7 @@ class NarrativeIn(BaseModel):
 def put_narrative(
     view_slug: str,
     body: NarrativeIn,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
@@ -764,7 +766,7 @@ def put_narrative(
         raise HTTPException(status_code=409, detail={
             "error": "grounding_failed",
             "ungrounded_figures": exc.ungrounded,
-        })
+        }) from exc
     store.upsert_narrative(row["id"], {
         "body_md": clean,
         "edited": 1,
@@ -782,7 +784,7 @@ def put_narrative(
 def regenerate_narrative(
     view_slug: str,
     confirm: bool = False,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
@@ -817,7 +819,7 @@ def regenerate_narrative(
         draft, provider = narrative_provider.generate(
             live_vm, generator=_generate_narrative_md)
     except narrative_provider.AIUnavailableError:
-        raise HTTPException(status_code=503, detail={"error": "ai_unavailable"})
+        raise HTTPException(status_code=503, detail={"error": "ai_unavailable"}) from None
 
     # Grounding is checked BEFORE the confirm gate: a failed generation has
     # nothing to discard, so a hallucinated figure is rejected regardless.
@@ -828,7 +830,7 @@ def regenerate_narrative(
         raise HTTPException(status_code=409, detail={
             "error": "grounding_failed",
             "ungrounded_figures": exc.ungrounded,
-        })
+        }) from exc
 
     # Confirm-before-discard: never silently overwrite hand-edited prose.
     prior = store.get_narrative(row["id"]) or {}
@@ -855,7 +857,7 @@ def export_packet(
     view_slug: str,
     role: Optional[str] = None,
     format: str = "md",
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
 ):
     """Board / Funder / Advisor packet (API_SPEC §6.4).
 
@@ -916,7 +918,7 @@ def patch_projection(
     view_slug: str,
     body: PatchProjectionIn,
     response: Response,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
@@ -940,6 +942,8 @@ def patch_projection(
     if not (is_owner or is_editor):
         # view-only (no/invalid token) cannot mutate (SECURITY.md §2; API_SPEC §4.4).
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
+    # is_owner/is_editor both imply a presented token (see checks above).
+    assert token is not None
 
     # Merge the partial onto the stored source-of-truth, then recompute.
     try:
@@ -948,12 +952,14 @@ def patch_projection(
     except dag.PinRejected as exc:
         node = exc.node if hasattr(exc, "node") else None
         raise HTTPException(status_code=422, detail={
-            "error": "node_not_pinnable", "node": node, "message": str(exc)})
+            "error": "node_not_pinnable", "node": node, "message": str(exc)}) from exc
 
     try:
         vm = _compute_view_model_from_dicts(inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
-        raise HTTPException(status_code=422, detail={"error": "invalid_inputs", "message": str(exc)})
+        raise HTTPException(
+            status_code=422, detail={"error": "invalid_inputs", "message": str(exc)}
+        ) from exc
     try:
         location_d = json.loads(row.get("location_json") or "{}")
     except json.JSONDecodeError:
@@ -1010,7 +1016,7 @@ def preview_projection(
     view_slug: str,
     body: PatchProjectionIn,
     request: Request,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
 ):
     """Dry-run /preview (epic-N N1): merge -> recompute -> diff, READ-ONLY.
@@ -1060,14 +1066,14 @@ def preview_projection(
     except dag.PinRejected as exc:
         node = exc.node if hasattr(exc, "node") else None
         raise HTTPException(status_code=422, detail={
-            "error": "node_not_pinnable", "node": node, "message": str(exc)})
+            "error": "node_not_pinnable", "node": node, "message": str(exc)}) from exc
 
     try:
         after_vm = _compute_view_model_from_dicts(
             inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
         raise HTTPException(status_code=422, detail={
-            "error": "invalid_inputs", "message": str(exc)})
+            "error": "invalid_inputs", "message": str(exc)}) from exc
 
     before = _metrics_subset(before_vm)
     after = _metrics_subset(after_vm)
@@ -1085,7 +1091,7 @@ def preview_projection(
 def rotate_tokens(
     view_slug: str,
     response: Response,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
@@ -1109,7 +1115,7 @@ def rotate_tokens(
         old_roles = {}
     new_role_secrets: dict[str, str] = {}
     new_role_map: dict[str, str] = {}
-    for old_slug, role_name in old_roles.items():
+    for _old_slug, role_name in old_roles.items():
         rs = secrets.token_urlsafe(16)
         new_role_map[rs] = role_name
         new_role_secrets[role_name] = rs
@@ -1158,7 +1164,7 @@ def rotate_tokens(
 @router.get("/{view_slug}/revisions")
 def list_revisions(
     view_slug: str,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
 ):
     """Owner-scoped revision history (API_SPEC §5.1).
@@ -1186,7 +1192,7 @@ def restore_revision(
     view_slug: str,
     revision_id: str,
     response: Response,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
@@ -1211,7 +1217,7 @@ def restore_revision(
             inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
         raise HTTPException(status_code=422, detail={
-            "error": "invalid_inputs", "message": str(exc)})
+            "error": "invalid_inputs", "message": str(exc)}) from exc
 
     patch = {
         "inputs_json": json.dumps(inputs_d),
@@ -1259,7 +1265,7 @@ def _set_status_or_conflict(store, row, if_match, status):
 def trash_projection(
     view_slug: str,
     response: Response,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
@@ -1281,7 +1287,7 @@ def trash_projection(
 def restore_projection(
     view_slug: str,
     response: Response,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
@@ -1302,7 +1308,7 @@ def restore_projection(
 @router.delete("/{view_slug}", status_code=204)
 def delete_projection(
     view_slug: str,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):

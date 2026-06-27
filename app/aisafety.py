@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 # Prompt-injection markers neutralized before untrusted text reaches a model or a
 # render path (untrusted-data framing, SECURITY.md §6.3). Case-insensitive.

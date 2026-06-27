@@ -20,7 +20,11 @@ keeps every structured/evidence section (AI opt-out, §21).
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+import io
+import re
+import zipfile
+from typing import Any
+from xml.sax.saxutils import escape as _xml_escape
 
 PACKET_ROLES = ("board", "funder", "advisor")
 
@@ -41,7 +45,7 @@ _VERIFIED_BADGES = {"verified", "verified_user", "user_attached"}
 _VERIFIED_METHODS = {"user_attached", "user_provided"}
 
 
-def _norm_role(role: Optional[str]) -> str:
+def _norm_role(role: str | None) -> str:
     return role if role in PACKET_ROLES else "board"
 
 
@@ -123,7 +127,8 @@ def _sensitivity(vm: dict[str, Any]) -> dict[str, Any]:
         {"driver": "Capital required", "base": _disp(metrics.get("capital")),
          # Source the rationale from the view-model so packet and UI never drift.
          "note": metrics.get("reasonCapital")
-                 or "Worst-case cumulative cash trough (already includes one-time startup) plus reserve."},
+                 or ("Worst-case cumulative cash trough (already includes "
+                     "one-time startup) plus reserve.")},
         {"driver": "First-year cash gap", "base": _disp(metrics.get("cashGap")),
          "note": "Most-negative cumulative cash across the first year."},
         {"driver": "Break-even", "base": _disp(metrics.get("breakeven")),
@@ -144,7 +149,7 @@ def _kpis(vm: dict[str, Any]) -> list[dict[str, str]]:
 def build_packet(
     vm: dict[str, Any],
     role: str = "board",
-    narrative_md: Optional[str] = None,
+    narrative_md: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the role-tailored packet from a computed_json view-model.
 
@@ -244,10 +249,6 @@ def render_packet_md(pkt: dict[str, Any]) -> str:
 # Content is the SAME grounded packet text as the markdown render (one source of
 # figures); paragraphs map 1:1 from the rendered lines so the export can never
 # carry a figure the markdown packet doesn't.
-import io
-import re
-import zipfile
-from xml.sax.saxutils import escape as _xml_escape
 
 _DOCX_CONTENT_TYPES = (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'

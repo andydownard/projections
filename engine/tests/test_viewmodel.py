@@ -45,8 +45,7 @@ def test_rows_have_class_and_editable(canonical_result):
 
 
 def test_overridden_row_class_when_pinned():
-    from engine.compute import (Assumptions, DemandDrivers, Inputs, TradeArea,
-                                 compute)
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="x", city="x", opening_status="pre_launch",
         share_y1="0.06", share_y2="0.08", share_y3="0.10",
@@ -67,8 +66,7 @@ def test_override_inspector_fields_calc_value_affected():
     """Override Inspector (M4): each overrides[] entry carries the calc-vs-override
     pair (`calculated` from the unpinned recompute, `value` the pin), the note, the
     pinned date, and the list of derived rows the pin rewrites (`affected`)."""
-    from engine.compute import (Assumptions, DemandDrivers, Inputs, TradeArea,
-                                 compute)
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="x", city="x", opening_status="pre_launch",
         share_y1="0.06", share_y2="0.08", share_y3="0.10",

@@ -13,8 +13,6 @@ $0.50 / 0.1pp with zero formula errors.
 """
 from __future__ import annotations
 
-from decimal import Decimal
-
 from openpyxl import Workbook
 from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
