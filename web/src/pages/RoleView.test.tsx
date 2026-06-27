@@ -8,7 +8,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RoleView } from "./RoleView";
-import type { ViewModel } from "../api/viewModel";
+import { fetchRoleView, type ViewModel } from "../api/viewModel";
 
 const VM: Partial<ViewModel> = {
   reco: { tag: "raise_cash", headline: "Raise cash.", sub: "Capital exceeds funds." },
@@ -62,5 +62,14 @@ describe("RoleView — read-only share", () => {
     await screen.findByTestId("degraded-read-only");
     const icon = container.querySelector("[data-testid='degraded-read-only'] .degraded__icon");
     expect(icon).toHaveAttribute("aria-hidden", "true");
+  });
+
+  // #146 — a bad/expired/removed slug 404s; the page must degrade to a labelled
+  // error state instead of spinning "Loading…" forever.
+  it("renders a load-failed error state (not an infinite spinner) when the fetch 404s", async () => {
+    vi.mocked(fetchRoleView).mockRejectedValueOnce(new Error("GET /r/missing failed: 404"));
+    render(<RoleView slug="missing" />);
+    expect(await screen.findByTestId("degraded-load-failed")).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });
 });

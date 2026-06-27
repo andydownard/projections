@@ -6,9 +6,16 @@
 //
 // EDIT (/p/<slug>/edit#<edit-secret>): the fragment secret is read once then
 // scrubbed from the address bar (SECURITY.md §2.5). Owner/edit token drives the
-// autosave PATCH (If-Match: version). A stale save → the 409 SaveConflictModal
+// autosave PATCH (If-Match: version) — for the OWNER the fallback owner token in
+// localStorage authorizes it, so the editable surface is reachable from the list
+// with no secret in the URL (issue #143). A stale save → the 409 SaveConflictModal
 // (reload / overwrite / save-as-copy). Net profit is a derived total — its cell
 // is non-pinnable (aria-disabled), enforced server-side too (PRD §14).
+//
+// A 404 (bad/expired/removed slug) rejects the load; we render a load-failed
+// DegradedState rather than spinning "Loading…" forever (issue #146). The model
+// version + autosave state are published to the shared TopBar header chips —
+// detail-page-only (issue #150).
 //
 // NO client math: every figure is the server's { display } string.
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
@@ -23,7 +30,9 @@ import { FeedbackModal } from "../components/FeedbackModal";
 import { SaveConflictModal } from "../components/SaveConflictModal";
 import { SettingsTab } from "../components/SettingsTab";
 import { DegradedState } from "../components/DegradedState";
+import type { SaveState } from "../components/TopBar";
 import type { ConflictBody } from "../state/autosaveReducer";
+import { clearDetailHeader, setDetailHeader } from "../state/detailHeader";
 import type { ServerValue } from "../api/client";
 import type { PatchHandlerArgs } from "../components/SettingsTab";
 import { readFragmentSecret } from "../router/route";
@@ -35,6 +44,26 @@ export interface ProjectionDetailProps {
 }
 
 type SaveLabel = "All changes saved" | "Saving…" | "Save failed — retry" | "";
+
+/** Map the in-page autosave label to the TopBar save-state enum (header chip). */
+function labelToSaveState(label: SaveLabel): SaveState {
+  switch (label) {
+    case "Saving…":
+      return "saving";
+    case "All changes saved":
+      return "saved";
+    case "Save failed — retry":
+      return "error";
+    default:
+      return "idle";
+  }
+}
+
+/** SPA-navigate home (the shell re-renders on popstate). */
+function goHome() {
+  window.history.pushState(null, "", "/");
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
 
 const DETAIL_TABS = [
   { id: "projection", label: "Projection" },
@@ -72,6 +101,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const [conflict, setConflict] = useState<ConflictBody | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTabId>("projection");
+  const [loadError, setLoadError] = useState(false);
 
   // Roving tab navigation (WAI-ARIA tabs): Left/Right move + focus the next tab.
   function onTabKey(e: KeyboardEvent<HTMLButtonElement>) {
@@ -103,16 +133,33 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   // Load the stored snapshot.
   useEffect(() => {
     let cancelled = false;
-    void fetchProjection(slug).then((data) => {
-      if (cancelled) return;
-      setVm(data);
-      setVersion(data.version);
-      setName(data.name);
-    });
+    setLoadError(false);
+    void fetchProjection(slug)
+      .then((data) => {
+        if (cancelled) return;
+        setVm(data);
+        setVersion(data.version);
+        setName(data.name);
+      })
+      .catch(() => {
+        // 404 / network failure: degrade to a labelled error state, never spin.
+        if (!cancelled) setLoadError(true);
+      });
     return () => {
       cancelled = true;
     };
   }, [slug]);
+
+  // Publish the detail-only header chips (model version + autosave state) to the
+  // shared TopBar (#150). The shell also gates these on the detail route, but we
+  // reset on unmount so nothing lingers after navigating away.
+  useEffect(() => {
+    setDetailHeader({ modelVersion: vm?.model_version });
+  }, [vm?.model_version]);
+  useEffect(() => {
+    setDetailHeader({ saveState: edit ? labelToSaveState(saveLabel) : "idle" });
+  }, [edit, saveLabel]);
+  useEffect(() => clearDetailHeader, []);
 
   async function doPatch(body: Record<string, unknown>, ver: number) {
     const res = await patchProjection({
@@ -184,18 +231,26 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     setSaveLabel("All changes saved");
   }
 
+  if (loadError) {
+    return (
+      <div className="detail">
+        <DegradedState
+          kind="load-failed"
+          onAction={goHome}
+          actionLabel="Back to your projections"
+        />
+      </div>
+    );
+  }
+
   if (!vm) {
     return <div className="detail detail--loading">Loading…</div>;
   }
 
   return (
     <div className="detail">
-      {edit && (
-        <span data-testid="save-label" role="status" aria-live="polite">
-          {saveLabel}
-        </span>
-      )}
-
+      {/* The autosave status is now a header chip in the shared TopBar (#150);
+          ProjectionTab keeps its own recompute live-region for SR users. */}
       {edit && (
         <label className="detail__name">
           Store name

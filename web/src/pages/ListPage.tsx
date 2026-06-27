@@ -49,6 +49,10 @@ export function ListPage() {
       projections={projections}
       onCreate={() => navigate("/wizard")}
       onOpen={(slug) => navigate(`/p/${slug}`)}
+      // Edit routes to the EDITABLE detail (#143). No secret in the URL: the owner
+      // token in localStorage authorizes the PATCH (ProjectionDetail's token
+      // fallback). The list is owner-scoped, so every listed row is owner-editable.
+      onEdit={(slug) => navigate(`/p/${slug}/edit`)}
     />
   );
 }
