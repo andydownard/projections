@@ -325,9 +325,18 @@ feature branch → PR → CI green (incl. golden + recalc gate) → merge to mai
    → merge staging → production → VERIFY production /api/health shows the NEW build SHA
 ```
 
-Preferred: a `scripts/promote-to-prod.sh` that merges `main → staging`, polls `/api/health` every 10 s (up to 10 min) until `deployment_sha` equals the just-pushed commit (fallback: fresh boot `uptime_seconds < 120`), then merges `staging → production` and verifies the same way. It **aborts cleanly (back on main)** if the new build never reports healthy. If the public domain is WAF-gated, point the poll at the direct `*.up.railway.app` URL via a `STAGING_URL`/`PROD_URL` override.
+The promote gate is `scripts/promote.py` (#90). It polls `GET <base>/api/health` and declares success **only** when the response proves the NEW build is live — all of: HTTP 200 + a JSON body, `build_sha` == the just-pushed commit (a bare 200 from the OLD instance is **refused**), `db == "connected"`, and `litestream == "replicating"`. It is **fail-closed**: a wrong/missing SHA, db-not-ok, replication-off, non-JSON, non-200, or fetch error refuses the promote (exit 1). If the public domain is WAF-gated, point it at the direct `*.up.railway.app` URL via `STAGING_URL`/`PROD_URL`:
 
-**Never promote without a healthcheck that confirms the new build SHA** (timpager regressions #15/#87). A 200 from the old instance is not a pass.
+```bash
+# After merge to staging, gate before promoting staging → production:
+python -m scripts.promote --base-url "$STAGING_URL" --sha "$GIT_SHA" --attempts 60 --delay 10
+# Exit 0 = new build verified live; exit 1 = REFUSED (do not promote).
+python -m scripts.promote --base-url "$PROD_URL"    --sha "$GIT_SHA" --attempts 60 --delay 10
+```
+
+The acceptance/refusal matrix (new SHA → accept; old/missing SHA, db down, replication off, bare 200 → refuse) is pinned by `scripts/test_promote.py`.
+
+**Never promote without a healthcheck that confirms the new build SHA** (timpager regressions #15/#52/#87). A 200 from the old instance is not a pass.
 
 ### 7.2 Scheduled operational jobs
 
@@ -350,17 +359,19 @@ Preferred: a `scripts/promote-to-prod.sh` that merges `main → staging`, polls 
 ### 8.1 Discipline
 
 - **Versioned migrations run on every boot, before schema/statement setup** (§1.4). A numbered, append-only migrations directory (`app/store/migrations/NNNN_*.sql` or equivalent), each idempotent.
-- **Additive-only. NEVER DROP TABLE; NEVER DROP COLUMN** (timpager's hard rule). Schema changes are `ALTER TABLE ADD COLUMN` / new tables / new indexes. The single durable volume + no staging copy means a destructive migration corrupts live data with no clean undo.
+- **Additive-only. NEVER DROP TABLE; NEVER DROP COLUMN** (timpager's hard rule). Schema changes are `ALTER TABLE ADD COLUMN` / new tables / new indexes. The single durable volume + no staging copy means a destructive migration corrupts live data with no clean undo. **This is enforced as code, twice (#90):** a CI gate `python -m scripts.migration_lint` (wired in `.github/workflows/ci.yml`) fails the build the moment a `DROP TABLE`/`DROP COLUMN`/`DROP INDEX`/`RENAME`/destructive `ALTER`/`TRUNCATE`/bulk `DELETE`/table-recreate is introduced; and the boot path calls `assert_migrations_additive(MIGRATIONS)` first in `SqliteStore.migrate()`, so a destructive migration **refuses to boot** before any DDL touches the volume. Both reuse the same `app/store/migration_safety.py` scanner (comment/string-literal-stripped keyword scan), so they cannot drift.
 - App-generated **string PKs (UUID/ULID)** and **no SQLite-specific SQL above the data-access interface** (no `INSERT OR REPLACE`, no `last_insert_rowid()`) so the documented Postgres path stays a drop-in (PRD §22/§26; [`ARCHITECTURE.md`](./ARCHITECTURE.md)).
-- Ship the **`actuals` table schema from day one** (PRD §24/§6.3) so post-launch actuals are not a later migration — but build **no actuals UI in v1**.
+- Ship the **`actuals` table schema from day one** (PRD §24/§6.3) so post-launch actuals are not a later migration — but build **no actuals UI in v1**. (Pinned by a regression test that asserts `actuals` exists from `0001_init`.)
 
 ### 8.2 Migration safety procedure (production)
 
-1. Migration is additive and reviewed (PR; [`DEFINITION_OF_DONE.md`](./DEFINITION_OF_DONE.md)).
-2. **Force a Litestream checkpoint/snapshot before the migration runs** so there is a clean pre-migration restore point (the boot sequence triggers a snapshot prior to applying pending migrations).
-3. Deploy to **staging first**; verify migration applied and `/api/health` healthy.
-4. Promote to production; verify; spot-check a known projection.
-5. If a migration fails: the boot fails loudly (restart loop), data is untouched (additive), fix forward with a new migration or restore from the pre-migration snapshot.
+1. Migration is additive and reviewed (PR; [`DEFINITION_OF_DONE.md`](./DEFINITION_OF_DONE.md)). The CI additive-only gate (`scripts/migration_lint.py`) must be green before merge.
+2. **Force a Litestream checkpoint/snapshot before the migration runs** so there is a clean pre-migration restore point. The migration runner does this automatically: when `SqliteStore.migrate()` detects pending migrations it calls `force_pre_migration_checkpoint()` (`app/store/litestream.py`) **once, before any pending DDL** — a truncating WAL checkpoint (`PRAGMA wal_checkpoint(TRUNCATE)`) that flushes the WAL into the main DB file so the next continuous Litestream sync (`sync-interval: 1s`) ships the clean pre-migration image. When `LITESTREAM_BUCKET` is set the checkpoint logs a `replicating` restore-point line; when it is not (dev/test) it is a harmless no-op. The checkpoint is skipped entirely when there is no pending migration (no snapshot for a no-op boot).
+3. Deploy to **staging first**; verify migration applied and `/api/health` healthy (and that the boot log shows the pre-migration checkpoint line).
+4. Promote to production with the promote gate (§7.1, `scripts/promote.py`); verify; spot-check a known projection.
+5. If a migration fails: the boot fails loudly (restart loop), data is untouched (additive), fix forward with a new migration or restore from the pre-migration snapshot (§4.5).
+
+**Exercised once (#90):** `python -m scripts.migration_lint` → `migration-lint OK: 6 migration(s) additive-only`; the pre-migration checkpoint ordering, the promote-gate outcomes, and the day-one `actuals` regression are covered by `app/tests/test_migration_checkpoint.py`, `scripts/test_promote.py`, and `scripts/test_migration_lint.py`.
 
 ---
 

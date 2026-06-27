@@ -34,6 +34,11 @@ jobs:
         run: ruff check app engine scripts
       - name: Types (mypy)
         run: mypy app engine
+      - name: Migration safety gate (additive-only scanner)
+        # Fail-closed: rejects DROP TABLE/COLUMN/INDEX, RENAME, destructive ALTER,
+        # TRUNCATE, bulk DELETE, or table-recreate in any shipped migration BEFORE
+        # it can run against the single durable volume (OPS_RUNBOOK §8 / #90).
+        run: python -m scripts.migration_lint
       - name: pytest + engine branch coverage gate (fail_under=90)
         run: pytest -q --cov --cov-report=term-missing
 
