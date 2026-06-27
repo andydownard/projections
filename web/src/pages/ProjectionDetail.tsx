@@ -30,6 +30,7 @@ import { FeedbackModal } from "../components/FeedbackModal";
 import { SaveConflictModal } from "../components/SaveConflictModal";
 import { SettingsTab } from "../components/SettingsTab";
 import { DegradedState } from "../components/DegradedState";
+import { PennyAssistant } from "../components/PennyDrawer";
 import type { SaveState } from "../components/TopBar";
 import type { ConflictBody } from "../state/autosaveReducer";
 import { clearDetailHeader, setDetailHeader } from "../state/detailHeader";
@@ -171,6 +172,23 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     setVm(res.viewModel as ViewModel);
     setVersion(res.version);
     return res.version;
+  }
+
+  // Re-read the stored snapshot after Penny applies an edit (server-side, inside
+  // the tool-use loop's normal PATCH/If-Match path). This is the ONLY way a
+  // decision-metric delta reaches the screen — the client never streams a number
+  // (Spec B §2/§5.1). It also re-syncs `version` so a later manual autosave carries
+  // the correct If-Match.
+  function refreshViewModel() {
+    void fetchProjection(slug)
+      .then((data) => {
+        setVm(data);
+        setVersion(data.version);
+        setName(data.name);
+      })
+      .catch(() => {
+        /* a transient read failure leaves the prior snapshot in place */
+      });
   }
 
   function onNameChange(value: string) {
@@ -381,6 +399,21 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
             });
             return res.support_id;
           }}
+        />
+      )}
+
+      {/* Penny — the LEFT slide-out assistant (apply-immediately + narrate, Spec B
+          §2/§5.1). Mounted only in edit mode (her mutate path needs the owner/edit
+          token); with ?ai=off she degrades to the muted Settings FAB (never a
+          dead-end). The per-field "recent change / was X / undo" affordance is PE7
+          — left as a seam here, not built. */}
+      {edit && (
+        <PennyAssistant
+          viewSlug={slug}
+          token={token.current ?? ""}
+          aiEnabled={!aiOff}
+          settingsHref={`/p/${encodeURIComponent(slug)}/edit`}
+          onApplied={() => refreshViewModel()}
         />
       )}
     </div>

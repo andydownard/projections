@@ -28,7 +28,8 @@ import {
   type ReactNode,
 } from "react";
 
-import { PennyTranscript } from "./PennyTranscript";
+import { PennyTranscript, type PennyTurn } from "./PennyTranscript";
+import { PennyError, sendPennyMessage, type PennyTurnDTO } from "../api/penny";
 
 export type PennyProvider = "anthropic" | "openai";
 
@@ -583,5 +584,367 @@ export function PennyDrawer({
         />
       )}
     </>
+  );
+}
+
+// ============================================================================
+// PennyAssistant — the LIVE detail-page drawer (PE6). Wires the shell above to
+// POST …/penny: apply-immediately + narrate, streaming with Stop, provider
+// disclosure, and graceful AI-off / unavailable / rate-limit handling. The
+// component still computes NOTHING: it relays the user's message and renders the
+// server's turns + narration VERBATIM. A decision-metric delta reaches the screen
+// only once the engine recomputes and the host page refetches the view-model
+// (via `onApplied`) — Penny never streams a number (spec §2/§5.1/§8, issue #125).
+// ============================================================================
+
+export interface PennyAssistantProps {
+  /** The saved projection's view_slug (the POST …/penny path key). */
+  viewSlug: string;
+  /** The caller's owner/edit Bearer token (header only — never the URL/log). */
+  token: string;
+  /** AI opt-out / no key → muted FAB + Settings deep-link (never a dead-end). */
+  aiEnabled?: boolean;
+  /** Provider known up front (e.g. from a prior transcript turn); updated per turn. */
+  provider?: PennyProvider;
+  /** Settings deep-link for the AI-disabled / muted states. */
+  settingsHref?: string;
+  onOpenSettings?: () => void;
+  /** Seed turns (e.g. a persisted transcript from GET …/penny/transcript). */
+  initialTurns?: PennyTurn[];
+  /**
+   * Called after an applied edit with the new revision ids so the host page can
+   * refetch the view-model — the ONLY way a decision-metric delta reaches the
+   * screen (the client never streams a number).
+   */
+  onApplied?: (revisionIds: string[]) => void;
+  avatarSrc?: string;
+}
+
+interface PennyErrorView {
+  message: string;
+}
+
+/** Map a classified PennyError → plain, code-owned copy. Chat is never the only
+ *  path: each message reassures that numbers + manual editing still work. */
+function errorView(err: PennyError): PennyErrorView {
+  switch (err.kind) {
+    case "ai_unavailable":
+      return { message: "AI unavailable — numbers and manual editing still work." };
+    case "rate_limited":
+      return { message: "Penny is busy right now — please try again in a moment." };
+    default:
+      return {
+        message:
+          "Something went wrong reaching Penny — your numbers and manual editing are unaffected.",
+      };
+  }
+}
+
+function dtoToTurn(dto: PennyTurnDTO, fallbackId: string): PennyTurn {
+  return { id: dto.id ?? fallbackId, role: dto.role, content: dto.content };
+}
+
+function isAbortError(e: unknown): boolean {
+  return !!e && typeof e === "object" && (e as { name?: string }).name === "AbortError";
+}
+
+export function PennyAssistant({
+  viewSlug,
+  token,
+  aiEnabled = true,
+  provider: initialProvider,
+  settingsHref,
+  onOpenSettings,
+  initialTurns = [],
+  onApplied,
+  avatarSrc,
+}: PennyAssistantProps) {
+  const [turns, setTurns] = useState<PennyTurn[]>(initialTurns);
+  const [provider, setProvider] = useState<PennyProvider | undefined>(initialProvider);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<PennyErrorView | null>(null);
+  // `muted` is the in-drawer ai_disabled state (composer → Settings note), distinct
+  // from the up-front muted FAB (`aiEnabled=false`): Penny got turned off mid-chat.
+  const [muted, setMuted] = useState(false);
+
+  const abortRef = useRef<AbortController | null>(null);
+  const idRef = useRef(0);
+  const localId = useCallback(() => `penny-local-${(idRef.current += 1)}`, []);
+
+  const send = useCallback(
+    async (text: string) => {
+      const message = text.trim();
+      if (!message || pending || muted) return;
+
+      setTurns((prev) => [...prev, { id: localId(), role: "user", content: message }]);
+      setError(null);
+      setPending(true);
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const res = await sendPennyMessage({
+          viewSlug,
+          token,
+          message,
+          signal: controller.signal,
+        });
+        setProvider(res.provider);
+        // Append the server's turns, skipping the user echo we already rendered.
+        const appended = (res.turns_appended ?? [])
+          .filter((t) => t.role !== "user")
+          .map((t) => dtoToTurn(t, localId()));
+        const next: PennyTurn[] =
+          appended.length > 0
+            ? appended
+            : res.narration
+              ? [{ id: localId(), role: "assistant", content: res.narration }]
+              : [];
+        if (next.length > 0) setTurns((prev) => [...prev, ...next]);
+        // A decision-metric delta reaches the screen ONLY here, after recompute.
+        if (res.applied_revisions.length > 0) onApplied?.(res.applied_revisions);
+      } catch (e) {
+        if (isAbortError(e)) {
+          // User pressed Stop — silently return to idle (no error surfaced).
+        } else if (e instanceof PennyError && e.kind === "ai_disabled") {
+          setMuted(true);
+        } else if (e instanceof PennyError && e.kind === "rejected") {
+          // Penny relays the server's plain-language rejection as her own turn.
+          setTurns((prev) => [
+            ...prev,
+            {
+              id: localId(),
+              role: "assistant",
+              content: e.serverMessage ?? "Penny couldn't make that change.",
+            },
+          ]);
+        } else if (e instanceof PennyError) {
+          setError(errorView(e));
+        } else {
+          setError({
+            message:
+              "Something went wrong reaching Penny — your numbers and manual editing are unaffected.",
+          });
+        }
+      } finally {
+        setPending(false);
+        abortRef.current = null;
+      }
+    },
+    [viewSlug, token, pending, muted, onApplied, localId],
+  );
+
+  const stop = useCallback(() => abortRef.current?.abort(), []);
+  const newChat = useCallback(() => {
+    setTurns([]);
+    setError(null);
+  }, []);
+
+  const body = (
+    <>
+      <PennyTranscript turns={turns} pending={pending} />
+      {error && (
+        <div
+          data-testid="penny-error"
+          role="alert"
+          style={{
+            margin: "0 1rem 0.5rem",
+            padding: "0.5rem 0.625rem",
+            borderRadius: "8px",
+            border: "1px solid var(--line, #e2e2e2)",
+            background: "var(--surface-alt, #f7f7f5)",
+            color: "var(--text, #1a1a1a)",
+            fontSize: "0.8125rem",
+          }}
+        >
+          {/* Icon is decorative; the text carries the meaning (not color alone). */}
+          <span aria-hidden="true">⚠ </span>
+          {error.message}
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <PennyDrawer
+      aiEnabled={aiEnabled}
+      provider={provider}
+      settingsHref={settingsHref}
+      onOpenSettings={onOpenSettings}
+      avatarSrc={avatarSrc}
+      onNewChat={newChat}
+      composer={
+        <LiveComposer
+          pending={pending}
+          muted={muted}
+          settingsHref={settingsHref}
+          onOpenSettings={onOpenSettings}
+          onSend={send}
+          onStop={stop}
+        />
+      }
+    >
+      {body}
+    </PennyDrawer>
+  );
+}
+
+interface LiveComposerProps {
+  pending: boolean;
+  muted: boolean;
+  settingsHref?: string;
+  onOpenSettings?: () => void;
+  onSend: (text: string) => void;
+  onStop: () => void;
+}
+
+const SUGGESTION_CHIPS = ["Explain break-even", "Lower the rent", "Build my cost schedule"];
+
+// The LIVE composer: multiline input + Send, a Stop control while a turn is in
+// flight, and suggestion chips. When Penny is muted mid-chat (409 ai_disabled) it
+// degrades to a Settings deep-link note — never a dead-end (spec §1/§8).
+function LiveComposer({
+  pending,
+  muted,
+  settingsHref = "/?settings=ai",
+  onOpenSettings,
+  onSend,
+  onStop,
+}: LiveComposerProps) {
+  const [draft, setDraft] = useState("");
+
+  if (muted) {
+    return (
+      <div
+        data-testid="penny-muted-note"
+        role="note"
+        style={{
+          borderTop: "1px solid var(--line, #e2e2e2)",
+          padding: "0.75rem 1rem",
+          fontSize: "0.8125rem",
+          color: "var(--text-muted, #666)",
+        }}
+      >
+        Penny is off.{" "}
+        <a
+          href={settingsHref}
+          onClick={
+            onOpenSettings
+              ? (e) => {
+                  e.preventDefault();
+                  onOpenSettings();
+                }
+              : undefined
+          }
+        >
+          Open Settings
+        </a>{" "}
+        to turn the AI assistant back on. Your numbers and manual editing are unaffected.
+      </div>
+    );
+  }
+
+  const submit = () => {
+    const value = draft.trim();
+    if (!value || pending) return;
+    setDraft("");
+    onSend(value);
+  };
+
+  return (
+    <form
+      data-testid="penny-composer"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+      style={{
+        borderTop: "1px solid var(--line, #e2e2e2)",
+        padding: "0.625rem 1rem 0.75rem",
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.5rem",
+      }}
+    >
+      <div style={{ display: "flex", gap: "0.375rem", flexWrap: "wrap" }}>
+        {SUGGESTION_CHIPS.map((chip) => (
+          <button
+            key={chip}
+            type="button"
+            disabled={pending}
+            style={{
+              fontSize: "0.75rem",
+              padding: "0.2rem 0.55rem",
+              border: "1px solid var(--line, #e2e2e2)",
+              borderRadius: "999px",
+              background: "var(--surface, #fff)",
+              color: "var(--brand-deep, #1d4733)",
+              cursor: pending ? "not-allowed" : "pointer",
+            }}
+            onClick={() => setDraft(chip)}
+          >
+            {chip}
+          </button>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end" }}>
+        <textarea
+          aria-label="Ask Penny"
+          placeholder="Ask Penny…"
+          rows={2}
+          value={draft}
+          disabled={pending}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter sends; Shift+Enter is a newline (chat convention, keyboard-first).
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          style={{
+            flex: "1 1 auto",
+            resize: "vertical",
+            minHeight: "2.5rem",
+            padding: "0.5rem",
+            border: "1px solid var(--line, #e2e2e2)",
+            borderRadius: "8px",
+            font: "inherit",
+          }}
+        />
+        {pending ? (
+          <button
+            type="button"
+            onClick={onStop}
+            style={{
+              padding: "0.5rem 0.875rem",
+              border: "1px solid var(--line, #e2e2e2)",
+              borderRadius: "8px",
+              background: "var(--surface, #fff)",
+              color: "var(--text, #1a1a1a)",
+              cursor: "pointer",
+            }}
+          >
+            Stop
+          </button>
+        ) : (
+          <button
+            type="submit"
+            disabled={draft.trim().length === 0}
+            style={{
+              padding: "0.5rem 0.875rem",
+              border: "none",
+              borderRadius: "8px",
+              background: BRAND,
+              color: "#fff",
+              cursor: draft.trim().length === 0 ? "not-allowed" : "pointer",
+              opacity: draft.trim().length === 0 ? 0.6 : 1,
+            }}
+          >
+            Send
+          </button>
+        )}
+      </div>
+    </form>
   );
 }

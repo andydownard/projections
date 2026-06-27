@@ -1,0 +1,139 @@
+// web/src/api/penny.ts — PE6: the POST …/penny client (API_SPEC §12, Spec B §6/§12).
+//
+// Penny is another INPUT DEVICE for the same server-authoritative mutation path —
+// not a parallel writer and not a second math authority. The client sends only the
+// user's message + the caller's Bearer; the bounded tool-use loop runs SERVER-SIDE
+// and any edit is applied through the normal PATCH/If-Match path (version++ + an
+// actor:penny revision) as a side effect. The client computes NOTHING and formats
+// NOTHING: it relays the message and renders the server's
+// { turns_appended, provider, applied_revisions, narration } verbatim.
+//
+// There is no top-level If-Match here (§12): the loop's internal PATCHes carry it.
+// Errors are CLASSIFIED into a `kind` the UI maps to friendly copy so chat is never
+// the only path (issue #125): 409 ai_disabled, 503 ai_unavailable, 429 rate_limited
+// (+retry_after_seconds), 422 a relayed rejection, anything else → unknown.
+
+const BASE = "/api";
+
+export type PennyProvider = "anthropic" | "openai";
+export type PennyTurnRole = "user" | "assistant" | "tool";
+
+/** One persisted transcript turn (Spec B §7). `content` is server-formatted text
+ *  rendered VERBATIM — the client never derives a figure. */
+export interface PennyTurnDTO {
+  id?: string;
+  role: PennyTurnRole;
+  content: string;
+  tool_name?: string;
+  /** Links a mutating turn to the revision it produced (provenance ↔ §4 audit). */
+  revision_id?: string;
+  provider?: PennyProvider;
+  ts?: string;
+}
+
+/** The POST …/penny response (API_SPEC §12). */
+export interface PennyResponse {
+  turns_appended: PennyTurnDTO[];
+  /** The ACTUAL provider used this turn; flips to openai on fallback (§8). */
+  provider: PennyProvider;
+  /** Revision ids produced by edits applied inside the loop (empty if answer-only). */
+  applied_revisions: string[];
+  /** The final assistant message (also the last assistant turn). */
+  narration: string;
+}
+
+export interface SendPennyArgs {
+  viewSlug: string;
+  /** The caller's owner/edit Bearer token (header only — never the URL/log). */
+  token: string;
+  message: string;
+  /** Optional uploaded-proposal handle for parse_proposal (§9). */
+  proposalRef?: string;
+  /** Aborts the in-flight turn (the composer Stop control). */
+  signal?: AbortSignal;
+}
+
+export type PennyErrorKind =
+  | "ai_disabled" // 409 — AI opt-out / no provider key; mute Penny
+  | "ai_unavailable" // 503 — both providers failed
+  | "rate_limited" // 429 — LLM bucket; retry_after_seconds
+  | "rejected" // 422 — server rejected the edit (relayed to the user)
+  | "unknown"; // any other non-2xx — degrade gracefully, never a bare 500
+
+/** A classified Penny failure. Carries the status + (for 422) the relayed server
+ *  message and (for 429) the retry hint, so the UI shows plain copy, never a crash. */
+export class PennyError extends Error {
+  kind: PennyErrorKind;
+  status: number;
+  retryAfterSeconds?: number;
+  serverMessage?: string;
+  constructor(
+    kind: PennyErrorKind,
+    status: number,
+    opts: { message?: string; serverMessage?: string; retryAfterSeconds?: number } = {},
+  ) {
+    super(opts.message ?? `penny_${kind}`);
+    this.name = "PennyError";
+    this.kind = kind;
+    this.status = status;
+    this.serverMessage = opts.serverMessage;
+    this.retryAfterSeconds = opts.retryAfterSeconds;
+  }
+}
+
+const STATUS_KIND: Record<number, PennyErrorKind> = {
+  409: "ai_disabled",
+  503: "ai_unavailable",
+  429: "rate_limited",
+  422: "rejected",
+};
+
+async function readBody(resp: Response): Promise<Record<string, unknown>> {
+  try {
+    return (await resp.json()) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Send one user message to Penny on a saved projection.
+ *
+ * Resolves with the server's appended turns + provider + applied revisions +
+ * narration. Rejects with a typed {@link PennyError} on a classified failure so
+ * the caller can surface plain copy (and, on `applied_revisions.length > 0`,
+ * refetch the view-model so decision metrics reflect the recomputed snapshot —
+ * the client never streams a number ahead of the engine).
+ */
+export async function sendPennyMessage({
+  viewSlug,
+  token,
+  message,
+  proposalRef,
+  signal,
+}: SendPennyArgs): Promise<PennyResponse> {
+  const body: Record<string, unknown> = { message };
+  if (proposalRef) body.proposal_ref = proposalRef;
+
+  const resp = await fetch(`${BASE}/projections/${encodeURIComponent(viewSlug)}/penny`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const data = await readBody(resp);
+    const kind = STATUS_KIND[resp.status] ?? "unknown";
+    const retryRaw = data.retry_after_seconds;
+    throw new PennyError(kind, resp.status, {
+      serverMessage: typeof data.message === "string" ? data.message : undefined,
+      retryAfterSeconds: typeof retryRaw === "number" ? retryRaw : undefined,
+    });
+  }
+
+  return (await resp.json()) as PennyResponse;
+}

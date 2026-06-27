@@ -3,8 +3,9 @@
 // #146: a 404/failed load renders a load-failed DegradedState, never an infinite
 // "Loading…" spinner. #150: a successful load publishes the server model_version
 // into the shared TopBar header chip (detail-page-only; rendered by App).
-import { render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectionDetail } from "./ProjectionDetail";
 import { App } from "../App";
@@ -82,5 +83,86 @@ describe("ProjectionDetail — header model-version chip (#150)", () => {
     render(<App />);
     const chip = await screen.findByTestId("version-chip");
     expect(chip).toHaveTextContent("model 2.1.0");
+  });
+});
+
+describe("ProjectionDetail — Penny mount (PE6, #125)", () => {
+  beforeEach(() => {
+    // Edit mode reads the owner token from localStorage when no edit fragment is
+    // present (issue #143). Penny's mutate path needs it.
+    localStorage.setItem("projections.owner_token", "owner-tok");
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("mounts the Penny FAB on the editable detail page when AI is on", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    const fab = await screen.findByTestId("penny-fab");
+    expect(fab).toHaveAttribute("data-state", "ai-enabled");
+    expect(fab).toHaveAccessibleName(/ask penny/i);
+  });
+
+  it("degrades to the muted Settings FAB when AI is opt-out (?ai=off) — never a dead-end", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit aiOff />);
+    const fab = await screen.findByTestId("penny-fab");
+    expect(fab).toHaveAttribute("data-state", "ai-disabled");
+    expect(fab.tagName).toBe("A");
+    expect(fab).toHaveAccessibleName(/settings/i);
+  });
+
+  it("does not mount Penny in read-only mode (no edit token to mutate with)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("penny-fab")).not.toBeInTheDocument();
+  });
+
+  it("refetches the view-model after Penny applies an edit (tiles reflect the new computed_json)", async () => {
+    vi.mocked(fetchProjection)
+      .mockResolvedValueOnce(fullVm()) // initial load — capital $277,990
+      .mockResolvedValueOnce(
+        fullVm({
+          metrics: { ...fullVm().metrics, capital: { raw: 311111, display: "$311,111" } },
+        }),
+      );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              turns_appended: [{ id: "a1", role: "assistant", content: "Done. Capital updated." }],
+              provider: "anthropic",
+              applied_revisions: ["rev_2"],
+              narration: "Done. Capital updated.",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+
+    // Initial computed_json on screen (the capital tile).
+    await screen.findByTestId("metric-capital");
+    expect(screen.getByTestId("metric-capital")).toHaveTextContent("$277,990");
+
+    // Drive a Penny turn that applies an edit.
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    await user.type(screen.getByRole("textbox", { name: /ask penny/i }), "raise the reserve");
+    await user.click(screen.getByRole("button", { name: /^send$/i }));
+
+    // The applied edit triggers a refetch → the tile reflects the NEW figure.
+    await waitFor(() => expect(screen.getByTestId("metric-capital")).toHaveTextContent("$311,111"));
+    await waitFor(() => expect(vi.mocked(fetchProjection)).toHaveBeenCalledTimes(2));
+
+    vi.unstubAllGlobals();
   });
 });
