@@ -375,3 +375,41 @@ def test_do_not_proceed_message_differs_between_base_fail_and_downside_fail():
     assert downside_driven != base_failed
     assert "reaches break-even" in downside_driven
     assert "reaches break-even" not in base_failed
+
+
+def test_breakeven_consistency_invariant_holds_across_a_scenario_sweep():
+    # A broad regression net: across a sweep of labor / share / opening-month
+    # configurations, the reco text and the break-even metric must NEVER disagree —
+    # whatever the verdict. This is the property #142/#145 are special cases of, so
+    # a future engine or messaging change cannot silently re-introduce the
+    # contradiction on some other input.
+    from engine.viewmodel import to_view_model
+    seen_downside_driven = False
+    seen_base_unreached = False
+    seen_reached_and_proceed = False
+    for labor in ("0.40", "0.50", "0.60"):
+        for shares in (("0.005", "0.005", "0.005"),
+                       ("0.06", "0.08", "0.10"),
+                       ("0.15", "0.20", "0.25")):
+            for g in (1, 4):
+                res = _opening_at(
+                    g, labor=labor, share_y1=shares[0],
+                    share_y2=shares[1], share_y3=shares[2])
+                vm = to_view_model(res)
+                # The invariant must hold for every single configuration.
+                assert_breakeven_text_consistent(vm)
+                be = vm["metrics"]["breakeven"]
+                tag = vm["reco"]["tag"]
+                if be["raw"] is not None and tag == "do_not_proceed":
+                    # Base reached, verdict still negative -> downside-driven; the
+                    # text must scope the failure to the downside scenario.
+                    assert "downside" in vm["reco"]["sub"].lower()
+                    seen_downside_driven = True
+                if be["raw"] is None and tag == "do_not_proceed":
+                    seen_base_unreached = True
+                if be["raw"] is not None and tag == "proceed":
+                    seen_reached_and_proceed = True
+    # The sweep actually exercised all three branches (not a vacuous pass).
+    assert seen_downside_driven
+    assert seen_base_unreached
+    assert seen_reached_and_proceed
