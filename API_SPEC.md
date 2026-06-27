@@ -255,7 +255,7 @@ Notes:
 ```
 
 - **Validation:** `share_y1/y2/y3` are **three explicit values** — no auto-midpoint (PRD §7.1; supersedes `methodology.md` line 17). `salesfloor_pct ∈ (0,1]`; `building_sqft > 0` (0 sq ft blocked, §12.4); `terms_accepted` must be `true` before any export/share is later allowed (§21) — create may proceed without it, but exports are gated (see §6/§7).
-- **Behavior:** computes server-side (the only math authority), persists `inputs/assumptions/trade_area/computed_json/monthly_json/flags`, stamps `model_version`, sets `version=1`, mints owner + edit + view tokens.
+- **Behavior:** computes server-side (the only math authority), persists `inputs/assumptions/trade_area/computed_json/monthly_json/flags`, stamps `model_version`, sets `version=1`, mints owner + edit + view tokens. When `terms_accepted: true` is sent, the server **stamps `terms_accepted_at` = now** so the later `.xlsx`/packet exports (§6/§7) are reachable; when it is absent/`false`, `terms_accepted_at` stays unset and exports `403 terms_required`. `terms_accepted` defaults to `false` — an unchecked box must never silently accept.
 - **Response `201`:** the full view-model (§3) **plus** the one-time secrets, returned **only here** (never stored in retrievable plaintext on the server beyond `view_slug`):
 
 ```json

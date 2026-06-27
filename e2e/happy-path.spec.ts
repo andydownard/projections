@@ -26,6 +26,9 @@ test.describe("happy path: create -> decision -> save -> reopen -> export", () =
     await page.getByLabel(/year 1 share/i).fill("6");
     await page.getByLabel(/year 2 share/i).fill("8");
     await page.getByLabel(/year 3 share/i).fill("10");
+    // #141 / PRD §21: terms acceptance is explicit (the box is NOT pre-checked) and
+    // gates Generate; the operator must actively accept before the projection runs.
+    await page.getByRole("checkbox", { name: /planning estimates/i }).check();
     await page.getByRole("button", { name: /generate/i }).click();
 
     // Decision artifact ships together (banner + capital + break-even + cash gap).
@@ -34,6 +37,28 @@ test.describe("happy path: create -> decision -> save -> reopen -> export", () =
     await expect(page.getByTestId("metric-breakeven")).toBeVisible();
     await expect(page.getByTestId("metric-cashgap")).toBeVisible();
     await expect(page.getByTestId("cashflow-chart")).toBeVisible();
+  });
+
+  test("a freshly-created projection (not the seeded example) downloads the .xlsx", async ({ page }) => {
+    // #141 regression: exports 403'd for EVERY real projection because the wizard's
+    // terms_accepted:true was dropped server-side. This drives a FRESH projection
+    // (not the seeded `example`, which sets terms_accepted_at in app/seed.py) all the
+    // way to a real .xlsx download — a 403 would surface as a JSON blob, never a
+    // download event, so waitForEvent("download") firing is the proof.
+    await page.goto("/wizard");
+    await page.getByLabel(/households/i).fill("31798");
+    await page.getByLabel(/year 1 share/i).fill("6");
+    await page.getByLabel(/year 2 share/i).fill("8");
+    await page.getByLabel(/year 3 share/i).fill("10");
+    await page.getByRole("checkbox", { name: /planning estimates/i }).check();
+    await page.getByRole("button", { name: /generate/i }).click();
+    await expect(page.getByTestId("decision-banner")).toBeVisible();
+
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("button", { name: /download \.xlsx/i }).click(),
+    ]);
+    expect(download.suggestedFilename()).toMatch(/\.xlsx$/);
   });
 
   test("reopen by view_slug shows identical server numbers", async ({ page }) => {
