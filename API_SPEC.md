@@ -478,7 +478,45 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
   An absent transcript returns `200` with `"transcript_id": null` and `"turns": []`. Turn shape + the retention cap are normative in [`DATA_MODEL.md`](./DATA_MODEL.md) §3.9/§4.9.
 - **Errors:** `403 forbidden`; `404 not_found`.
 
-> The mutating `POST …/penny` tool-use loop (which appends turns and applies edits through the normal `PATCH`/`If-Match` path → `version++` → an `actor:penny` revision), plus `POST /api/penny/draft` and `POST /api/penny/proposal`, are a later slice (PE5). This slice ships the data model + owner-scoped read only.
+### 6.6 `POST /api/projections/{view_slug}/penny` — run the tool-use loop (PE5)
+
+- **Auth:** owner/edit Bearer. **Capability:** owner OR this projection's edit token may **mutate**; a view-only caller (no/invalid token) is **answer-only** (the loop still runs, but every `mutate` tool refuses and nothing is persisted to the owner's transcript). Unknown slug → `404`.
+- **Body:** `{ "message": "…", "proposal_ref": "prop_…"? }`. There is **NO top-level `If-Match`** — the loop's internal `PATCH`es each carry the caller's known version (Spec B §12).
+- **Behavior:** runs the bounded server-side tool-use loop (Spec B §6.1): system prompt + grounding context (current `computed_json` + editable surface) + user message → the provider replies with prose or tool calls → each tool runs server-side → repeat until a final message or a hard cap. The user message and any proposal text are wrapped as **untrusted DATA** (injection-marker stripped, extract-only framing — SECURITY §6.3). Every `mutate` tool converges on the **same** `apply_projection_patch` write path the manual UI hits, so each applied edit produces `version++` + **one** `actor:penny` revision as a side effect (no parallel writer, no privileged path). Detail-page turns persist to `penny_transcripts` (PE2); a view-only caller's answer-only turns persist **nothing**.
+- **Response `200`:**
+
+```json
+{ "provider":"anthropic",
+  "narration":"Done — I lowered the labor assumption; capital updated.",
+  "applied_revisions":[
+    {"tool":"set_assumption","version":2,"actor":"penny",
+     "changed":[{"label":"Capital required","was":"$277,990","now":"$281,400"}]}
+  ],
+  "turns_appended":[
+    {"role":"user","content":"cut labor to 0.55","ts":"…"},
+    {"role":"tool","content":"Applied set_assumption → version 2.","tool_name":"set_assumption","revision_id":2,"ts":"…"},
+    {"role":"assistant","content":"Done — …","provider":"anthropic","ts":"…"}
+  ] }
+```
+
+  `applied_revisions[].changed` is the engine's recomputed view-model diff (`was→now`), so Penny narrates the effect without inventing a figure. `provider` reflects the **actual** provider used.
+- **Errors:** `409 ai_disabled` (per-projection opt-out, deployment kill switch, or no provider key — **zero** provider calls); `503 ai_unavailable` (both providers down); `429 rate_limited` with `{ "retry_after_seconds": N }` + a `Retry-After` header (surfaced **before** any provider call); `422` relays a rejected edit to the model (e.g. `node_not_pinnable`, `invalid_inputs`) and `input_too_large` when the assembled prompt exceeds the input-token cap; `404 not_found`.
+
+### 6.7 `POST /api/penny/draft` — wizard-draft loop (PE5)
+
+- **Auth:** edit Bearer (any bearer token present; there is no projection yet). Missing token → `403 forbidden`.
+- **Body:** `{ "message":"…", "draft_state":{…}, "proposal_ref":"prop_…"? }`.
+- **Behavior:** the **same** loop, but every `mutate` tool edits the supplied `draft_state` (the wizard's in-progress inputs/assumptions/overrides/cost-schedule) instead of routing through `apply_projection_patch`. **Persists nothing** — no transcript row, no revision, no projection (the ephemeral wizard transcript stays in client state, Spec B §7). The figure-strip guard still applies (no LLM-computed figure reaches the draft).
+- **Response `200`:** `{ "draft":{…mutated…}, "narration":"…", "provider":"anthropic", "applied":[…] }`.
+- **Errors:** `403 forbidden`; `409 ai_disabled`; `503 ai_unavailable`; `429 rate_limited`.
+
+### 6.8 `POST /api/penny/proposal` — proposal upload intake (PE5)
+
+- **Auth:** owner/edit Bearer (any bearer token present). Missing token → `403 forbidden`.
+- **Body:** either a **raw PDF body** (`Content-Type: application/pdf`, optional `?filename=`) **or** JSON `{ "source_url":"…" }`.
+- **Behavior:** accepts the consultant proposal **server-side as untrusted bytes** and returns an opaque `proposal_ref` for the `parse_proposal` tool. The bytes are **never executed, parsed, or rendered** here (full PDF extraction is PE9). Guards: **type** — a magic-byte sniff (`%PDF-`) is the authority (a forgeable `Content-Type`/filename is advisory only); **size** — capped (`413` over the limit); **SSRF** — a `source_url` is validated with the research fetcher's scheme allowlist + private/loopback/link-local/metadata IP rejection (a blocked host → `422 ssrf_blocked`, fail-closed; remote fetching itself is PE9, so a clean URL returns `422 remote_intake_unavailable`).
+- **Response `201`:** `{ "proposal_ref":"prop_…", "filename":"plan.pdf", "size":1234, "content_type":"application/pdf" }`.
+- **Errors:** `403 forbidden`; `413 file_too_large`; `415 unsupported_type`; `422 ssrf_blocked` / `remote_intake_unavailable` / `empty_upload`; `429 rate_limited`.
 
 ---
 
@@ -625,6 +663,9 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `POST …/{slug}/evidence` | owner/edit | **yes** | yes | upload |
 | `GET …/{slug}/xlsx` · `…/packet` | owner/edit/view | — | no | export |
 | `GET …/{slug}/penny/transcript` | owner/edit | — | no | read |
+| `POST …/{slug}/penny` | owner/edit (view = answer-only) | — (loop's internal `PATCH`es carry it) | yes (`actor:penny` via the loop) | penny |
+| `POST /api/penny/draft` | edit Bearer | — | no (persists nothing) | penny |
+| `POST /api/penny/proposal` | owner/edit Bearer | — | holds bytes (no parse) | upload |
 | `GET/POST …/{slug}/actuals` | owner/edit(/view GET) | POST: **yes** | POST yes | read |
 | `POST /api/research` | (none) | no | no | research |
 | `GET /api/places/autocomplete` | (none) | — | no | read |
@@ -647,3 +688,4 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 9. **Excel ↔ computed_json reconcile** (<$0.50 / 0.1 pp, zero formula errors) with and without overrides, CI-blocking (§18) — the only thing keeping "single math authority" true.
 10. **`/preview` is provably read-only** (epic-N N12): a dry-run never persists, never bumps `version`, never writes a revision — CI-asserted over repeated calls.
 11. **No ungrounded LLM figure reaches a render path** (§6.1, SECURITY §6.3): every currency/percent token in narrative/packet prose must be a display string the engine produced; an ungrounded `$`/`%` token is rejected. Injection markers are stripped from untrusted text. AI opt-out runs the full compute/save/`.xlsx` flow with **all AI keys unset**.
+12. **Penny mutates only through the one write path** (§6.6, Spec B §4/§6.2): the `POST …/penny` tool-use loop applies every edit via `apply_projection_patch` — the same merge → recompute → `If-Match` → one revision the manual `PATCH` uses — producing `version++` + an `actor:penny` revision; there is no parallel writer and no privileged Penny path. Capability-gated (a view-only caller is answer-only, mutate tools refuse). `409 ai_disabled` makes **zero** provider calls; both providers down → `503 ai_unavailable`; an LLM-bucket breach → `429 retry_after_seconds`. `POST /api/penny/draft` mutates only the supplied draft and **persists nothing**. `POST /api/penny/proposal` holds the upload as untrusted bytes (type/size/SSRF guarded) and never executes/renders it — all CI-asserted with **stubbed providers**.
