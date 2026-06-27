@@ -452,9 +452,24 @@ The acceptance/refusal matrix (new SHA → accept; old/missing SHA, db down, rep
 3. Deploy to **staging first**; verify migration applied and `/api/health` healthy (and that the boot log shows the pre-migration checkpoint line).
 4. Promote to production with the promote gate (§7.1, `scripts/promote.py`); verify; spot-check a known projection.
 5. If a migration fails *to apply*: the apply transaction rolls back (no partial schema), the boot fails loudly, and the next boot **re-attempts and recovers** (apply is atomic + idempotent, #185) — it no longer crash-loops on an already-added column. Data is untouched (additive); fix forward with a new migration or restore from the pre-migration snapshot (§4.5).
-6. **`UNIQUE(projection_id, seq)` backstop (migration `0007`, #186).** A `CREATE UNIQUE INDEX` over existing rows would fail if the live DB already held a duplicate `(projection_id, seq)`. A healthy DB never does (the app has always written `seq = if_match + 1` under the version check), so the index builds cleanly. If a legacy/corrupted DB ever blocks the index, de-duplicate first: `SELECT projection_id, seq, COUNT(*) FROM revisions GROUP BY 1,2 HAVING COUNT(*) > 1;` then resolve before deploying.
+6. **`UNIQUE(projection_id, seq)` backstop (migration `0007`, #186) — degrades safely, never crash-loops the boot.** A bare `CREATE UNIQUE INDEX` over existing rows would fail if the live DB already held a duplicate `(projection_id, seq)`, raising `IntegrityError` and **boot-crash-looping the single durable volume** on an unattended deploy. A healthy DB never holds a duplicate (the app has always written `seq = if_match + 1` under the version check, and #186 makes the version bump + snapshot one transaction), so the index builds cleanly **as UNIQUE**. But the migration no longer trusts that blindly: `m0007_revision_seq_unique.apply` (dispatched by `SqliteStore._apply_migration`) **detects an existing duplicate BEFORE creating the index** and, if one exists (unexpected), it:
+   - does **not** crash and does **not** delete any revision row (additive-only — never de-dup by deleting data);
+   - creates a **NON-UNIQUE** index on `(projection_id, seq)` instead, so revision lookups/restore stay fast;
+   - logs a **loud structured warning** on the `app.migrations` logger (`event=revision_seq_duplicate_degraded_index`) naming the affected `projection_id`s;
+   - still records `0007` in `schema_migrations` so the boot **proceeds**.
 
-**Exercised:** `python -m scripts.migration_lint` → `migration-lint OK: 7 migration(s) additive-only`; the pre-migration checkpoint ordering and the day-one `actuals` regression are covered by `app/tests/test_migration_checkpoint.py`; the atomic+idempotent apply and the crash-window-then-reboot recovery by `app/tests/test_store_robustness.py`; the promote-gate by `scripts/test_promote.py` and `scripts/test_migration_lint.py`.
+   The apply is idempotent (a no-op when an index — unique or plain — already exists). **Operator remediation** when the degrade warning fires: identify the duplicates with
+   ```sql
+   SELECT projection_id, seq, COUNT(*) FROM revisions GROUP BY 1, 2 HAVING COUNT(*) > 1;
+   ```
+   investigate the affected projections, and (after a pre-change Litestream snapshot, §8.2 step 2) resolve the duplicate seqs **without losing audit history** — e.g. re-sequence the colliding rows by assigning each a fresh unique `seq` rather than deleting them. Once no duplicate remains, **restore the UNIQUE backstop** by rebuilding the index (an index-only, data-safe step):
+   ```sql
+   DROP INDEX idx_revisions_projection_seq;
+   CREATE UNIQUE INDEX idx_revisions_projection_seq ON revisions(projection_id, seq);
+   ```
+   (A fresh apply on a copy where the duplicates were already removed — `0007` not yet in the ledger — rebuilds the UNIQUE index automatically.)
+
+**Exercised:** `python -m scripts.migration_lint` → `migration-lint OK: 9 migration(s) additive-only`; the pre-migration checkpoint ordering and the day-one `actuals` regression are covered by `app/tests/test_migration_checkpoint.py`; the atomic+idempotent apply and the crash-window-then-reboot recovery by `app/tests/test_store_robustness.py`; the 0007 clean-path UNIQUE backstop **and the degrade-on-dup boot-never-fails path** (no row deleted, plain index, recorded, re-run no-op) by `app/tests/test_m0007_dup_safe.py`; the promote-gate by `scripts/test_promote.py` and `scripts/test_migration_lint.py`.
 
 ---
 
