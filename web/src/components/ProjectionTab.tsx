@@ -186,7 +186,7 @@ export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: Projecti
 
       <section className="projection-tab__cashflow" aria-label="Monthly launch cash-flow">
         <h3 className="projection-tab__heading">Monthly launch cash-flow — Year 1</h3>
-        <CashflowChart monthly={monthly} breakevenMonth={breakevenMonth} />
+        <CashflowChart monthly={monthly} breakevenMonth={breakevenMonth} milestones={vm.milestones} />
       </section>
 
       <section className="projection-tab__rows" aria-label="3-year projection">

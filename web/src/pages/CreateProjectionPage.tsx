@@ -93,7 +93,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
     return (
       <div className="wizard">
         <div className="wizard__result">
-          <DecisionBanner reco={vm.reco} metrics={vm.metrics} />
+          <DecisionBanner reco={vm.reco} metrics={vm.metrics} milestones={vm.milestones} />
 
           <div className="kpis" data-testid="kpi-strip">
             {vm.kpis.map((k) => (
@@ -108,7 +108,11 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
             ))}
           </div>
 
-          <CashflowChart monthly={vm.monthly} breakevenMonth={vm.breakevenMonth} />
+          <CashflowChart
+            monthly={vm.monthly}
+            breakevenMonth={vm.breakevenMonth}
+            milestones={vm.milestones}
+          />
 
           <a
             className="btn"
