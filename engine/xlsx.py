@@ -262,24 +262,43 @@ def _precalc_expense(label, year, result):
 
 
 def _build_monthly_tab(ws, result):
-    ws["A1"] = "Monthly Cash Flow (Year 1)"
+    """Monthly cash flow over the uniform project-month timeline 1..N (Spec §6).
+
+    Every project month gets a P&L row. Pre-opening months (1..G-1) carry no
+    operating revenue/expense — their scheduled one-time costs land on their own
+    month #, and Net = revenue - opex - scheduled costs is a live formula, so a
+    pre-opening month reads as a real monthly loss (negative net). Operating
+    months (G..N) carry the ramp plus any scheduled costs on the same month. Net
+    and Cumulative cash are formulas; no division, so nothing to guard here.
+    """
+    g = result.inputs.opening_month_number
+    ws["A1"] = "Monthly Cash Flow (project months 1..N)"
     ws["A1"].font = BOLD
-    headers = ["Month", "Revenue", "Operating expenses", "Net", "Cumulative cash"]
+    # Columns: A Month | B Revenue | C Operating expenses | D Scheduled costs
+    #          | E Net | F Cumulative cash
+    headers = ["Month", "Revenue", "Operating expenses", "Scheduled costs",
+               "Net", "Cumulative cash"]
     for i, hdr in enumerate(headers):
         c = ws.cell(row=2, column=1 + i, value=hdr)
         c.font = BOLD
     r = 3
     first_data = r
     for m in result.monthly:
-        ws.cell(row=r, column=1, value=f"Month {m.index}")
+        label = f"Month {m.index}"
+        if m.index == g:
+            label = f"Month {m.index} — Grand opening"
+        lc = ws.cell(row=r, column=1, value=label)
+        if m.index == g:
+            lc.font = BOLD
         ws.cell(row=r, column=2, value=_f(m.revenue)).number_format = USD
         ws.cell(row=r, column=3, value=_f(m.expenses)).number_format = USD
-        ws.cell(row=r, column=4, value=f"=B{r}-C{r}").number_format = USD
-        # cumulative cash references prior row (running sum incl. startup outflow)
-        outflow = _f(m.startup_outflow)
+        ws.cell(row=r, column=4, value=_f(m.startup_outflow)).number_format = USD
+        # Net = revenue - operating expenses - scheduled costs (live formula).
+        ws.cell(row=r, column=5, value=f"=B{r}-C{r}-D{r}").number_format = USD
+        # cumulative cash = running sum of Net (Net already nets out scheduled costs)
         if r == first_data:
-            ws.cell(row=r, column=5, value=f"=D{r}-{outflow}").number_format = USD
+            ws.cell(row=r, column=6, value=f"=E{r}").number_format = USD
         else:
-            ws.cell(row=r, column=5, value=f"=E{r-1}+D{r}-{outflow}").number_format = USD
+            ws.cell(row=r, column=6, value=f"=F{r-1}+E{r}").number_format = USD
         r += 1
-    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["A"].width = 24
