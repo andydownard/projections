@@ -342,6 +342,20 @@ SENTRY_DSN=...
 
 Emit structured metrics — **latency, error rate, and call volume per external provider** — for: Anthropic, OpenAI, Google Places, US Census, GitHub, CRM. These feed cost control (cap regenerations, cache research; PRD §16.6/§27) and incident triage (§10). Surface them via logs + Sentry breadcrumbs; a lightweight `GET /api/metrics` (owner/admin-gated) can expose rolling counters.
 
+**Emitter — `app/metrics.py` (M7.7 / #95).** A process-local, thread-safe registry (mirrors `app/ratelimit.py`; swap for a shared store if the service scales horizontally). Provider call sites wrap their network seam in `metrics.track(<provider>)`, which times the call, increments **call volume**, records **latency**, and increments the **error** counter on an exception (the exception still propagates — behavior is unchanged). `record_provider_call(...)` is the lower seam when a latency is already measured. Each metric is tagged with a **canonical provider label** (`anthropic`, `openai`, `google_places`, `us_census`, `github`, `crm`) — never a URL, payload, or key. Every emission also writes a **scrubbed structured breadcrumb** to the `app.metrics` logger and a best-effort **Sentry breadcrumb** (no-op when `sentry_sdk` is absent).
+
+**LLM token + cost counters.** `record_llm_usage(<provider>, input_tokens=, output_tokens=)` accumulates per-AI-provider token counts and the **server-computed USD cost**. Cost is derived from a server-owned per-MTok price table (Anthropic default = Claude Opus 4.8 list price, $5 in / $25 out per 1M tokens; OpenAI carries an illustrative default). Ops override per provider without a deploy via env: `LLM_PRICE_ANTHROPIC_INPUT`, `LLM_PRICE_ANTHROPIC_OUTPUT`, `LLM_PRICE_OPENAI_INPUT`, `LLM_PRICE_OPENAI_OUTPUT` (USD per 1M tokens). **No client math** — cost is never supplied or recomputed by the browser.
+
+**Cost-control verification counters (PRD §16.6/§27).** Generic named counters surface the spend brakes built by M3.4 / M5.5: `research_cache_hit` / `research_cache_miss`, `narrative_cache_hit` / `narrative_cache_miss`, and `narrative_regen_blocked` (the per-IP+token regeneration cap). A rising hit rate and a non-zero `narrative_regen_blocked` confirm the caches and the regen cap are holding.
+
+**Owner/admin-gated surface — `GET /api/metrics`.** Returns the secret-free `snapshot()`: per-provider `{calls, errors, error_rate, avg_latency_ms, input_tokens, output_tokens, cost_usd}` for all six providers, the cost-control `counters`, and LLM `totals`. The gate is a dedicated server-env **`METRICS_TOKEN`** (secrets are server-env only; no fallback chain — SECURITY.md §4):
+
+- `METRICS_TOKEN` **unset** → `404` (the endpoint does not exist; an unauthenticated probe learns nothing, and it is never an open surface — so it does **not** block boot if unset);
+- missing `Authorization` → `401`; wrong bearer → `403` (constant-time `hmac.compare_digest` on the SHA-256 hash; the token never appears in a path/query/log);
+- correct bearer → `200`. Read-only (only `GET` is registered).
+
+**No secrets in metrics (hard invariant, SECURITY.md §6.3/§10).** The registry holds only provider labels and numbers, so `snapshot()` is secret-free by construction. As defense-in-depth, every structured log/breadcrumb value passes through `metrics.scrub()`, which redacts bearer tokens, provider key shapes (`sk-…`, `AIza…`, `ghp_…`/`github_pat_…`), high-entropy capability tokens, the live secret env **values**, and `$`/percent financial figures. With AI keys unset (opt-out, PRD §21), the AI providers are never called, so **no AI-provider metric is emitted** while the keyless compute path still records its non-AI providers.
+
 ### 6.4 Audit / access log (PRD §20/§25)
 
 A durable audit trail (in `revisions.actor_token_hash` + a dedicated access log) records: mutations, **token rotations**, exports (`.xlsx`/packet), and **share-link access events** — for forensics after a leaked edit fragment. Logs store **hashed** tokens only, never plaintext tokens or fragments.
