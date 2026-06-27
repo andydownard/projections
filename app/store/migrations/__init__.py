@@ -1,8 +1,12 @@
 """Versioned, additive-only migrations (DATA_MODEL.md §8).
 
-NEVER DROP TABLE / DROP COLUMN. CREATE TABLE IF NOT EXISTS always; ALTER TABLE ADD
-COLUMN wrapped to tolerate "duplicate column" (idempotent). Migrations run BEFORE
-the app serves (SECURITY.md §11.3) and are recorded in schema_migrations.
+NEVER DROP TABLE / DROP COLUMN. ``CREATE TABLE/INDEX IF NOT EXISTS`` always. Each
+migration is applied atomically (DDL + ledger INSERT in ONE transaction) and
+idempotently (a re-run after a crash swallows "duplicate column name" on a bare
+``ALTER ADD COLUMN``) by the runner in ``SqliteStore._apply_migration`` (#185) — so
+an interrupted apply recovers on the next boot instead of boot-crash-looping the
+single durable volume. Migrations run BEFORE the app serves (SECURITY.md §11.3) and
+are recorded in ``schema_migrations``.
 """
 from app.store.migrations import (
     m0001_init,
@@ -11,6 +15,7 @@ from app.store.migrations import (
     m0004_narrative_edit_origin,
     m0005_cost_schedule,
     m0006_penny_transcripts,
+    m0007_revision_seq_unique,
 )
 
 # Ordered list of (name, ddl) migrations. Append-only.
@@ -21,4 +26,5 @@ MIGRATIONS = [
     ("0004_narrative_edit_origin", m0004_narrative_edit_origin.SQL),
     ("0005_cost_schedule", m0005_cost_schedule.SQL),
     ("0006_penny_transcripts", m0006_penny_transcripts.SQL),
+    ("0007_revision_seq_unique", m0007_revision_seq_unique.SQL),
 ]

@@ -29,6 +29,9 @@ class Store(Protocol):
     def update_with_version_check(
         self, id: str, expected_version: int, patch: dict[str, Any]
     ) -> int: ...  # rows-affected; 0 -> HTTP 409
+    def update_with_version_check_and_revision(
+        self, id: str, expected_version: int, patch: dict[str, Any], revision: dict
+    ) -> int: ...  # version bump + revision snapshot in ONE txn; 0 -> 409 (no revision)
     def rotate_tokens(
         self, id: str, expected_version: int, new_hashes: dict[str, Any]
     ) -> int: ...  # atomic owner/edit/view_slug/role rotation; 0 -> HTTP 409

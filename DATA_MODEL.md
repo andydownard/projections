@@ -84,11 +84,16 @@ CREATE TABLE IF NOT EXISTS projections (
   overrides_json       TEXT NOT NULL DEFAULT '{}',  -- see 4.6, keyed "{node}#{year}"
   monthly_json         TEXT NOT NULL DEFAULT '{}',  -- see 4.7 (M0..M12 cash-flow)
   computed_json        TEXT NOT NULL DEFAULT '{}',  -- see 4.8 (resolved P&L + KPIs + decision + flags)
+  cohort_json          TEXT NOT NULL DEFAULT '{}',  -- 0001: frozen cohort fingerprint (BACKLOG data-network)
   terms_accepted_at    TEXT,                        -- terms gate before export/share (§21)
   ai_opt_out           INTEGER NOT NULL DEFAULT 0,  -- 1 = no AI calls (§21)
   created_at           TEXT NOT NULL,
   updated_at           TEXT NOT NULL,
-  deleted_at           TEXT                         -- hard-delete marker (post-DELETE); distinct from status='trashed'
+  deleted_at           TEXT,                        -- hard-delete marker (post-DELETE); distinct from status='trashed'
+  -- 0005: timed cost schedule + opening anchor (Spec §5/§7); canonical copy lives in inputs_json (§4.3).
+  target_opening_date  TEXT,                        -- ISO month/date of grand opening
+  opening_month_number INTEGER NOT NULL DEFAULT 1,  -- project month (>=1) opening lands on (frozen literal DEFAULT)
+  cost_schedule_json   TEXT NOT NULL DEFAULT '[...]' -- [{category,month,amount}]; frozen month-1 lump (see 0005, #187)
 );
 ```
 
@@ -144,9 +149,14 @@ CREATE TABLE IF NOT EXISTS revisions (
   created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_revisions_projection ON revisions(projection_id, seq DESC);
+-- 0007: UNIQUE(projection_id, seq) backstop so a miscomputed/duplicate seq fails
+-- loudly (IntegrityError) instead of silently corrupting the restore/audit trail.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_revisions_projection_seq ON revisions(projection_id, seq);
 ```
 
 A full snapshot is written **per autosave settle** and per explicit save / model upgrade / restore (PRD §19.3, §24). `actor_token_hash` records which capability token authored the change (audit/forensics, PRD §20). The **`actor` enum** (`user | penny | penny_undo | user_undo`, added in migration `0006`, default `'user'`) attributes each revision to its author class so the audit trail distinguishes a Penny edit, a per-field undo, and a manual edit (Spec B §3/§4); it is app-enforced (SQLite has no native enum) and carries to Postgres as the same column. Restore (`POST …/revisions/{id}/restore`) writes a **new** revision rather than rewinding in place. `model_version` is captured so a restored snapshot is never silently recomputed.
+
+**Atomic version bump + snapshot (issue #186).** The version-checked UPDATE and its revision snapshot are written in **one transaction** via `update_with_version_check_and_revision` (§9): 0 rows → HTTP 409 and **no** revision is written; otherwise the `projections.version++` and the matching `revisions` row commit together. This closes the crash window where a separate `version++` commit landed but the snapshot commit did not — a version with no recoverable snapshot, a silent hole in the restore/audit trail. The additive **`UNIQUE(projection_id, seq)`** index (migration `0007`) is the DB-level backstop: `seq` integrity no longer rests solely on the app computing `seq = if_match + 1` — a duplicate fails loudly rather than corrupting the list.
 
 > **Retention (ops concern, see [`OPS_RUNBOOK.md`](./OPS_RUNBOOK.md)):** autosave can produce heavy append volume on a single projection. v1 keeps all revisions but a compaction/retention policy (e.g. keep all from the last 30 days + daily milestones beyond that) is a documented backlog item; growth must be bounded before high write rates (backend-lens risk).
 
@@ -276,7 +286,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 ```
 
-Mirrors timpager's applied-migration ledger (timpager `SCHEMA.md`). Migrations run **before** any other statement on boot (§10).
+Mirrors timpager's applied-migration ledger (timpager `SCHEMA.md`). Migrations run **before** any other statement on boot (§10). Each pending migration's DDL and its `schema_migrations` INSERT commit in **one transaction** (atomic), and every `ALTER ADD COLUMN` re-run is a no-op (idempotent), so an interrupted apply recovers on the next boot rather than crash-looping (§8, issue #185).
 
 ### 3.9 `penny_transcripts` (per-project Penny conversation — Spec B §7)
 
@@ -539,8 +549,8 @@ UPDATE projections
 ```
 A 0-row result → **HTTP 409** with the current server state in the body so the UI can offer reload / overwrite / save-as-copy (PRD §19.4). The new `version` is returned in the body and as an `ETag`-style header. See [`API_SPEC.md`](./API_SPEC.md).
 
-### 5.2 Single-writer + WAL
-SQLite is a single writer under WAL with `busy_timeout` (§10). Autosave is debounced client-side; writes serialize server-side; each settle writes one `revisions` row (§3.2). Concurrent edit-link sessions on one projection serialize through the version check (a stale writer gets a 409, not a lost update).
+### 5.2 Single-writer + WAL (connection-per-request reads)
+SQLite is a single writer under WAL with `busy_timeout` (§10). **Writes** all go through one primary connection under a process-wide write lock, preserving the single-writer invariant; each autosave settle writes one `revisions` row (§3.2). **Reads** use a **per-thread reader connection** (`SqliteStore._read_conn`, issue #177): a single shared connection for every read serialized all access through SQLite's per-connection mutex, nullified WAL's concurrent-reader benefit, and let one slow query head-of-line-block every other request — including the `/api/health` probe, which could then exceed the healthcheck window and trip a restart loop. With a reader per thread, WAL delivers concurrent reads alongside the single writer, and the health probe runs on its own connection. (An in-memory DB is per-connection, so dev/test reads fall back to the primary connection.) Concurrent edit-link sessions on one projection still serialize through the version check (a stale writer gets a 409, not a lost update).
 
 ### 5.3 Model-version lifecycle
 `computed_json`/`monthly_json` are stored with `model_version`. On read, if `model_version != current_engine_version`, the API returns the stored snapshot verbatim plus an `upgrade_available: true` flag — **never recompute silently** (PRD §13). `POST …/upgrade-model` recomputes under the new engine and writes a **new revision**, preserving the prior. `compute_schema_version` is tracked separately so a view-model shape change is distinguishable from a math change.
@@ -583,9 +593,11 @@ PRAGMA journal_mode = WAL;      -- durable, concurrent reads + single writer; NE
 PRAGMA busy_timeout = 5000;     -- ms; serialize writers without immediate SQLITE_BUSY
 PRAGMA synchronous  = NORMAL;   -- safe + fast under WAL with Litestream replication
 PRAGMA foreign_keys = ON;       -- enforce FKs (projection_id -> projections)
+PRAGMA query_only   = ON;       -- READER connections only (#177); writes stay on the primary
 ```
 
 - **WAL only — never change the journal mode** (timpager hard rule). Litestream relies on WAL for continuous replication.
+- **One writer connection, a reader connection per thread (#177).** The PRAGMAs above are applied on *every* connection at open. Writes use the single primary connection under a write lock; reads use a lazily-opened per-thread reader (opened `query_only = ON` so a read path can never write). This is what actually delivers WAL's "concurrent reads + single writer" — a lone shared connection would serialize everything through SQLite's per-connection mutex and could stall the healthcheck into a restart loop.
 - The DB lives at `DB_PATH=/data/projections.db` on the **durable Railway volume** — never `/app`, never ephemeral container FS. (Explicitly avoid the timpager `litestream.yml` bug which points at `/app/timpager.db`; our `litestream.yml` replicates `/data/projections.db`.) See [`OPS_RUNBOOK.md`](./OPS_RUNBOOK.md).
 - **Litestream** continuous replication to object storage (R2/S3) from the `/data` volume, with a documented, **tested** restore drill (`PRAGMA integrity_check` + `computed_json` round-trip), RPO (near-zero), RTO (~2 min), and backup purge limits (PRD §21, §26).
 
@@ -596,8 +608,9 @@ PRAGMA foreign_keys = ON;       -- enforce FKs (projection_id -> projections)
 (Mirrors timpager `SCHEMA.md` Schema Rules + ARCHITECTURE Database Rules.)
 
 - **NEVER `DROP TABLE`; NEVER `DROP COLUMN`.** Use `ALTER TABLE ADD COLUMN`. New nullable/defaulted columns only.
-- **`CREATE TABLE IF NOT EXISTS` always.** Wrap `ALTER TABLE ADD COLUMN` to tolerate "duplicate column" (idempotent migrations).
-- **Prepared statements only. No string concatenation into SQL.**
+- **`CREATE TABLE/INDEX IF NOT EXISTS` always.** Each `ALTER TABLE ADD COLUMN` is applied **idempotently**: the runner swallows "duplicate column name" so a re-run (e.g. after a crash) is a no-op (issue #185). This is now enforced in code (`SqliteStore._execute_idempotent`), not just asserted in a docstring.
+- **Atomic apply (issue #185).** Each migration's DDL **and** its `schema_migrations` ledger INSERT run in **one explicit transaction** (`SqliteStore._apply_migration`). `executescript` is NOT used — it issues an implicit COMMIT that auto-committed the DDL independently of the ledger, so a crash/OOM in that window left the column physically added but the migration name absent from the ledger; the next boot re-ran the bare `ALTER`, hit "duplicate column name", and **boot-crash-looped the single durable volume**. With apply+ledger atomic and every `ALTER` idempotent, a partial apply commits nothing and an interrupted run **recovers on the next boot** instead of looping. Re-running the full set on an already-migrated DB is a no-op.
+- **Prepared statements only. No string concatenation into SQL. Frozen migration literals.** A migration is an immutable historical artifact: its embedded DEFAULTs are hand-written, apostrophe-escaped literals, **never** `json.dumps(<live engine constant>)` evaluated at import time (issue #187) — which would drift with the engine across deploys and risk an apostrophe terminating the SQL string. A forward-guard test fails RED if the engine default diverges from the frozen literal, forcing a NEW migration.
 - **Migrations run before any other statement on boot**, recorded in `schema_migrations`. A single durable volume with no staging copy means a bad migration corrupts live data — take a **pre-migration Litestream checkpoint/snapshot** before applying (see [`OPS_RUNBOOK.md`](./OPS_RUNBOOK.md)).
 - **Additive-only** keeps the Postgres path (§9) trivial: every column added to SQLite is added to the Postgres DDL the same way.
 - Boot **refuses** if required secrets/env are unset (no fallback chains) — see [`SECURITY.md`](./SECURITY.md). `DB_BACKEND ∈ {sqlite, postgres}` is explicit so the data-access path is never ambiguous.
@@ -617,6 +630,8 @@ class Store(Protocol):
     def create_projection(self, p: Projection) -> Projection: ...        # app-generated ULID + view_slug
     def update_with_version_check(self, id: str, expected_version: int,
                                   patch: ProjectionPatch) -> int: ...     # rows-affected; 0 -> 409
+    def update_with_version_check_and_revision(self, id: str, expected_version: int,
+                                  patch: ProjectionPatch, revision: Revision) -> int: ...  # version++ AND snapshot in ONE txn; 0 -> 409 (no revision)
     def set_status(self, id: str, status: str, expected_version: int) -> int: ...  # trash/restore
     def soft_delete(self, id: str, expected_version: int) -> int: ...     # sets deleted_at
     def rotate_tokens(self, id: str, expected_version: int,
@@ -701,6 +716,7 @@ Single-writer SQLite serializes all writes; high autosave write-amplification ac
 | `projections` | `(owner_token_hash, status, updated_at DESC)` | Owner-scoped list (no global index). |
 | `projections` | `(edit_token_hash)` | Edit-token resolution. |
 | `revisions` | `(projection_id, seq DESC)` | Revisions list + restore. |
+| `revisions` | `UNIQUE(projection_id, seq)` | Seq-integrity backstop (0007): a duplicate seq fails loudly, never silently corrupts the trail (#186). |
 | `evidence` | `(projection_id, field)` | Evidence panel per field. |
 | `research_cache` | PK `(cache_key)`, `(expires_at)` | Cache hit + TTL sweep. |
 | `actuals` | `UNIQUE(projection_id, month)`, `(projection_id, month)` | Forecast-vs-actual. |
@@ -742,11 +758,16 @@ CREATE TABLE IF NOT EXISTS projections (
   overrides_json TEXT NOT NULL DEFAULT '{}',
   monthly_json TEXT NOT NULL DEFAULT '{}',
   computed_json TEXT NOT NULL DEFAULT '{}',
+  cohort_json TEXT NOT NULL DEFAULT '{}',         -- frozen cohort fingerprint (0001)
   terms_accepted_at TEXT,
   ai_opt_out INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  deleted_at TEXT
+  deleted_at TEXT,
+  -- 0005: timed cost schedule + opening anchor (Spec §5/§7). Frozen literal DEFAULTs.
+  target_opening_date TEXT,
+  opening_month_number INTEGER NOT NULL DEFAULT 1,
+  cost_schedule_json TEXT NOT NULL DEFAULT '[{"category": "Thrift Store Consultant", "month": 1, "amount": 100000}, {"category": "Equipment & Fixtures", "month": 1, "amount": 45000}, {"category": "Build-out / Renovations / Tenant Improvements", "month": 1, "amount": 50000}, {"category": "Legal, Permits, Insurance Setup, Signage", "month": 1, "amount": 13500}]'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projections_view_slug ON projections(view_slug);
 CREATE INDEX IF NOT EXISTS idx_projections_owner ON projections(owner_token_hash, status, updated_at DESC);
@@ -768,14 +789,17 @@ CREATE TABLE IF NOT EXISTS revisions (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_revisions_projection ON revisions(projection_id, seq DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_revisions_projection_seq ON revisions(projection_id, seq);  -- 0007: seq backstop (#186)
 
 CREATE TABLE IF NOT EXISTS narratives (
   projection_id TEXT PRIMARY KEY REFERENCES projections(id),
   body_md TEXT NOT NULL DEFAULT '',
   edited INTEGER NOT NULL DEFAULT 0,
   computed_hash TEXT,
+  snapshot_json TEXT NOT NULL DEFAULT '{}',       -- 0002: computed_json at generation time
   provider TEXT,
   model_version TEXT,
+  edit_origin TEXT,                               -- 0004: 'ai' | 'human' | NULL
   updated_at TEXT NOT NULL
 );
 
