@@ -11,9 +11,11 @@ import json
 import secrets
 import sqlite3
 import threading
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from app.store.litestream import force_pre_migration_checkpoint
 from app.store.migration_safety import assert_migrations_additive
 from app.store.migrations import MIGRATIONS
 from app.store.penny_retention import apply_retention
@@ -29,8 +31,14 @@ def _new_transcript_id() -> str:
 
 
 class SqliteStore:
-    def __init__(self, db_path: str) -> None:
+    def __init__(
+        self, db_path: str, *, checkpoint: Callable[[], None] | None = None
+    ) -> None:
         self.db_path = db_path
+        # Pre-migration Litestream checkpoint hook (OPS_RUNBOOK §8.2). Injectable so
+        # tests can spy the call ordering; defaults to the real WAL/Litestream
+        # checkpoint against this store's connection.
+        self._checkpoint = checkpoint
         # Single-writer serialization (DATA_MODEL.md §5.2).
         self._write_lock = threading.Lock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -58,15 +66,26 @@ class SqliteStore:
             applied = {
                 r["name"] for r in cur.execute("SELECT name FROM schema_migrations")
             }
-            for name, sql in MIGRATIONS:
-                if name in applied:
-                    continue
+            pending = [(name, sql) for name, sql in MIGRATIONS if name not in applied]
+            if pending:
+                # OPS_RUNBOOK §8.2 / SECURITY §12: force a pre-migration Litestream
+                # checkpoint so there is a clean restore point BEFORE any pending DDL
+                # touches the durable volume. Forced ONCE per boot (one restore
+                # point for the batch), only when there is actually work to apply.
+                self._run_pre_migration_checkpoint()
+            for name, sql in pending:
                 cur.executescript(sql)
                 cur.execute(
                     "INSERT INTO schema_migrations(name, applied_at) VALUES (?, ?)",
                     (name, _utcnow()),
                 )
                 self._conn.commit()
+
+    def _run_pre_migration_checkpoint(self) -> None:
+        if self._checkpoint is not None:
+            self._checkpoint()
+            return
+        force_pre_migration_checkpoint(self._conn, db_path=self.db_path)
 
     def ping(self) -> bool:
         try:
