@@ -47,11 +47,41 @@ describe("ProjectionsList — populated", () => {
     render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
     const row = screen.getByTestId("projection-row-p_8x");
     expect(within(row).getByText("House of Hope — Longview, TX")).toBeInTheDocument();
-    // location + basis sub-line (a single node combining both)
-    expect(within(row).getByText(/Longview, TX · city/)).toBeInTheDocument();
+    // location + basis sub-line (a single node combining both); basis is a
+    // humanized label, never the raw enum code (#151).
+    expect(within(row).getByText(/Longview, TX · City/)).toBeInTheDocument();
     expect(within(row).getByText("$426,911")).toBeInTheDocument();
     expect(within(row).getByText("$47,100")).toBeInTheDocument();
     expect(within(row).getByText("$277,990")).toBeInTheDocument();
+  });
+
+  it("colors a negative Y1 net as a loss — error color paired with the server parentheses [#148]", () => {
+    const loss: ProjectionListItem = {
+      ...item,
+      view_slug: "p_loss",
+      y1_net: { raw: -44433, display: "($44,433)" },
+    };
+    render(<ProjectionsList projections={[loss]} onCreate={() => {}} onOpen={() => {}} />);
+    const row = screen.getByTestId("projection-row-p_loss");
+    const net = within(row).getByText("($44,433)");
+    expect(net).toHaveAttribute("data-negative", "true");
+    expect(net).toHaveTextContent("($44,433)"); // parentheses (non-color cue) kept
+    // Positive figures are never flagged negative.
+    expect(within(row).getByText("$426,911")).not.toHaveAttribute("data-negative");
+  });
+
+  it("renders a friendly, locale-stable updated date — not a raw ISO slice [#151]", () => {
+    render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
+    const row = screen.getByTestId("projection-row-p_8x");
+    expect(within(row).getByText("Jun 24, 2026")).toBeInTheDocument();
+    expect(within(row).queryByText("2026-06-24")).toBeNull();
+  });
+
+  it("renders a human trade-area basis label, never the raw enum code [#151]", () => {
+    render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
+    const row = screen.getByTestId("projection-row-p_8x");
+    expect(within(row).getByText(/· City$/)).toBeInTheDocument();
+    expect(within(row).queryByText(/· city$/)).toBeNull();
   });
 
   it("renders a per-row trade-area mini-map when coordinates are present", () => {

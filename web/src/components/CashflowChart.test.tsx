@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { CashflowChart } from "./CashflowChart";
@@ -93,5 +93,31 @@ describe("CashflowChart", () => {
     const legend = screen.getByTestId("chart-milestones");
     expect(legend).toHaveTextContent("N/A");
     expect(legend).toHaveTextContent("startup costs are not recovered");
+  });
+
+  it("colors negative cells in the monthly data table — loss color paired with the server parentheses [#148]", () => {
+    const loss: MonthlyPoint = {
+      month: 0,
+      revenue: { raw: 0, display: "$0" },
+      expenses: { raw: -31870, display: "($31,870)" },
+      net: { raw: -14793, display: "($14,793)" },
+      cumulativeCash: { raw: -199793, display: "($199,793)" },
+    };
+    const gain: MonthlyPoint = {
+      month: 1,
+      revenue: { raw: 20000, display: "$20,000" },
+      expenses: { raw: -10000, display: "($10,000)" },
+      net: { raw: 10000, display: "$10,000" },
+      cumulativeCash: { raw: 5000, display: "$5,000" },
+    };
+    render(<CashflowChart monthly={[loss, gain]} breakevenMonth={1} />);
+    const table = screen.getByTestId("cashflow-table");
+    // Negative net / cumulative cells carry the negative hook (CSS error color),
+    // PAIRED with the server's parentheses — never color alone.
+    expect(within(table).getByText("($14,793)")).toHaveAttribute("data-negative", "true");
+    expect(within(table).getByText("($199,793)")).toHaveAttribute("data-negative", "true");
+    // Positive figures are unflagged.
+    expect(within(table).getByText("$20,000")).not.toHaveAttribute("data-negative");
+    expect(within(table).getByText("$10,000")).not.toHaveAttribute("data-negative");
   });
 });

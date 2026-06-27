@@ -20,6 +20,8 @@ import { useState, type KeyboardEvent } from "react";
 import { RecoChip } from "./RecoChip";
 import { CashflowChart } from "./CashflowChart";
 import { FieldChange, type FieldChangeActor } from "./FieldChange";
+import { isNegative } from "./displayLabels";
+import type { ServerValue } from "../api/client";
 import type { Metrics, Row, ViewModel } from "../api/viewModel";
 
 /** A recent change on one editable cell (PE7, #126). `previous` is the SERVER's
@@ -56,7 +58,7 @@ interface TileDef {
   /** Back-compat alias kept for the existing e2e/detail contract. */
   metricTestid: string;
   label: string;
-  value: (m: Metrics) => { display: string };
+  value: (m: Metrics) => ServerValue;
   reason: (m: Metrics) => string | undefined;
 }
 
@@ -168,7 +170,14 @@ export function ProjectionTab({
                 {t.value(metrics).display}
               </span>
               <dt className="decision-tile__label">{t.label}</dt>
-              <dd className="decision-tile__value num">{t.value(metrics).display}</dd>
+              {/* #148: a loss (server raw < 0) gets the error color, PAIRED with
+                  the server's parentheses (the non-color cue) — never color alone. */}
+              <dd
+                className="decision-tile__value num"
+                data-negative={isNegative(t.value(metrics)) ? "true" : undefined}
+              >
+                {t.value(metrics).display}
+              </dd>
               {t.reason(metrics) && (
                 <div className="decision-tile__reason-wrap">
                   <button
@@ -206,7 +215,9 @@ export function ProjectionTab({
             data-testid={/^total revenue$/i.test(k.label) ? "kpi-revenue" : `kpi-${k.label}`}
           >
             <span className="kpi__label">{k.label}</span>
-            <span className="kpi__value">{k.value.display}</span>
+            <span className="kpi__value" data-negative={isNegative(k.value) ? "true" : undefined}>
+              {k.value.display}
+            </span>
             {k.sub && <span className="kpi__sub">{k.sub}</span>}
           </div>
         ))}
@@ -311,6 +322,9 @@ function Cell({
   const value = row[`y${year}` as "y1" | "y2" | "y3"];
   const display = value ? value.display : "—";
   const cls = `cell cell--${row.class} num`;
+  // #148: flag losses (server raw < 0) for the error-color cue, kept PAIRED with
+  // the server's parentheses so meaning is never carried by color alone.
+  const negative = isNegative(value) ? "true" : undefined;
   const testid = `cell-${row.label}-y${year}`;
   // Back-compat alias the detail page / e2e read (e.g. row-net_profit-y1).
   const rowTestid = `row-${rowSlug(row.label)}-y${year}`;
@@ -338,6 +352,7 @@ function Cell({
           type="button"
           data-testid={testid}
           className={cls}
+          data-negative={negative}
           // Recent-change prominence (not color alone — the FieldChange badge
           // carries icon + text). Inline so it never collides with tokens.css.
           style={change ? { fontWeight: 700, outline: "2px solid #35644f", outlineOffset: 1 } : undefined}
@@ -363,7 +378,13 @@ function Cell({
   }
 
   return (
-    <td data-testid={testid} data-row-testid={rowTestid} className={cls} aria-disabled="true">
+    <td
+      data-testid={testid}
+      data-row-testid={rowTestid}
+      className={cls}
+      data-negative={negative}
+      aria-disabled="true"
+    >
       {/* The slug alias is a hidden sibling so getByTestId(row-...) resolves to a
           node carrying the same aria-disabled state, without two attrs on one el. */}
       <span data-testid={rowTestid} aria-disabled="true" className="sr-only">
