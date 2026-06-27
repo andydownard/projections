@@ -312,9 +312,15 @@ Tokens are free to mint, so abuse and cost-amplification are open without limits
 | `POST /api/feedback` | GitHub-issue spam | 5 / hour | 10 / hour |
 | `POST /api/intent` | CRM spam | 5 / hour | — |
 | `POST /api/projections` (create) | token-mint flood | 20 / hour | — |
+| `GET …/xlsx` | uncached workbook rebuild (CPU/openpyxl) | 30 / hour | 60 / hour |
+| `GET …/packet` | uncached packet render (CPU) | 30 / hour | 60 / hour |
+| `GET …/staticmap` | billed Google Static Maps proxy | 120 / hour | — |
 
 - Research and narrative results are **cached** (PRD §16.6) — caching is also a cost brake, not only a latency win.
-- Exceeded limit → `429` with a `Retry-After` header; never a 500.
+- Exceeded limit → `429` with a top-level `{"error":"rate_limited","retry_after_seconds":…}` body **and** a `Retry-After` header; never a 500.
+- **The export surfaces (`/xlsx`, `/packet`, `/staticmap`) are reachable with only the public `view_slug` (no Bearer)**, so they are capped even when no token is presented. `xlsx`/`packet` rebuild on every call (no artifact cache yet) and add a per-token cap when a bearer *is* presented (a single workspace re-exporting in a loop); `staticmap` bytes are already cached per `(lat,lng,kind)`, so the Google-bill blast radius is bounded to first-fetch-per-location and a per-IP cap suffices.
+- **Client-IP extraction (the per-IP key):** take the **right-most** hop of `X-Forwarded-For`, falling back to the socket peer. Railway terminates TLS at a single proxy that **appends** the real client IP as the last `X-Forwarded-For` entry, so the right-most hop is the only one a client cannot spoof — anything the client sends arrives to the *left* of the proxy's append. (Never trust the left-most entry; it is fully attacker-controlled.)
+- **One shared limiter, one test bypass.** All caps run through `app/ratelimit.py` (a process-local fixed-window counter) via the routers' shared `_rate_limited(...)` gate; the check fires **before** any compute/build/upstream call. The limiter is bypassed **only** under the non-prod E2E seed flag (`E2E_SEED=1` **and** not production — the same gate that guards the demo seed in `app/main.py`) so the Playwright create→export gate (three viewports + CI retries from one IP) never trips a production-realistic cap. It is **never** bypassed in production.
 - Compute itself (PATCH recompute) is cheap (<50 ms target) and AI-free; it is concurrency-bounded by the single-writer DB, not rate-limited per keystroke (the client debounces).
 
 ### 10.2 Audit / access log
