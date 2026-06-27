@@ -19,7 +19,6 @@ from __future__ import annotations
 # annotations at runtime, and PEP 604 `X | None` is unsupported on Python 3.9.
 import json
 import os
-import re
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
@@ -32,9 +31,12 @@ from app import config, ratelimit
 from app.feedback.redact import (
     DESCRIPTION_CAP,
     TITLE_CAP,
+    build_safe_context,
+    normalize_type,
     redact_text,
 )
 from app.store import Store, get_store
+from engine.model import MODEL_VERSION
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
@@ -61,22 +63,10 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def redact_route(route: str, own_slug: Optional[str] = None) -> str:
-    """Strip any slug segment and URL fragment so no resolvable link survives.
-
-    /p/<slug>/edit#edit-secret -> /p/:slug/edit ; /r/<slug> -> /r/:slug.
-    The fragment (edit/role secret) is dropped entirely (PRD §20/§22).
-    """
-    route = (route or "/").split("#", 1)[0].split("?", 1)[0]
-    # Collapse the capability slug that follows /p/ or /r/ to a placeholder.
-    route = re.sub(r"^(/[pr])/[^/]+", r"\1/:slug", route)
-    if own_slug:
-        route = route.replace(own_slug, ":slug")
-    return route or "/"
-
-
 class FeedbackContext(BaseModel):
-    model_version: str = ""
+    # NO client `model_version`: it is stamped SERVER-side from the engine
+    # (#201). A client-sent model_version is silently dropped (extra="ignore"),
+    # so it can never bypass the redactor into a sink.
     view_slug: str = ""  # server-only; NEVER reaches GitHub (IDEA_FAB §3.5).
 
     class Config:
@@ -84,6 +74,8 @@ class FeedbackContext(BaseModel):
 
 
 class FeedbackIn(BaseModel):
+    # `type` is untrusted free-text on the wire; it is enum-normalized server
+    # side before it touches either sink (#201). Never persisted/filed raw.
     type: str = "bug"
     title: str
     description: str = ""
@@ -133,31 +125,40 @@ def submit_feedback(
     title = redact_text(body.title, own_slug=own_slug, cap=TITLE_CAP)
     redacted_body = redact_text(body.description, own_slug=own_slug, cap=DESCRIPTION_CAP)
 
-    # context carries ONLY non-sensitive fields (NO slug, token, link, financials).
-    context = {
-        "route": redact_route(body.route, own_slug),
-        "app_version": config.build_sha(),
-        "model_version": body.context.model_version,
-        "type": body.type,
-        "ts": _utcnow(),
-    }
+    # `type` is untrusted client free-text — normalize to the closed enum ONCE
+    # and use that everywhere (top-level + context). The raw value never lands in
+    # a sink (#201).
+    safe_type = normalize_type(body.type)
 
-    # 4) Build the GitHub payload from redacted parts only and file it (stubbed
+    # 4) Build the context from the SERVER allowlist — the single chokepoint for
+    #    both sinks. Client `model_version`/`type` are IGNORED: model_version is
+    #    stamped from the engine, type is enum-normalized, route is slug-stripped.
+    #    NOTHING else from the request survives (NO slug, token, link, financials).
+    context = build_safe_context(
+        route=body.route,
+        own_slug=own_slug,
+        app_version=config.build_sha(),
+        model_version=MODEL_VERSION,
+        feedback_type=safe_type,
+        ts=_utcnow(),
+    )
+
+    # 5) Build the GitHub payload from redacted parts only and file it (stubbed
     #    in tests). support_id is non-sensitive and IS included.
     gh_payload = {
         "support_id": support_id,
-        "type": body.type,
+        "type": safe_type,
         "title": title,
         "body": redacted_body,
         "context": context,
     }
     github_issue_url = _maybe_file_github_issue(gh_payload)
 
-    # 5) Persist the SAME redacted artifact (no email in GitHub, but email is
+    # 6) Persist the SAME redacted artifact (no email in GitHub, but email is
     #    stored server-only for an optional reply).
     store.create_feedback({
         "support_id": support_id,
-        "type": body.type,
+        "type": safe_type,
         "title": title,
         "body": redacted_body,
         "email": (body.email or None),
