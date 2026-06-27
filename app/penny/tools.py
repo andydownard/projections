@@ -41,7 +41,6 @@ was->now) so Penny narrates the engine's effect without inventing a number.
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -56,6 +55,7 @@ from app.routers.projections import (
 from app.store import Store
 from engine.model import DEFAULT_OPENING_MONTH_NUMBER, default_cost_schedule
 
+from . import proposal as proposal_intake
 from .loop import Tool, ToolContext, ToolRegistry
 
 # set_input routes these straight onto the engine ``inputs`` bucket; ``name`` and
@@ -76,9 +76,6 @@ _ASSUMPTION_BUCKET = {
     "rent_per_sqft": "inputs", "occupancy_annual": "inputs",
     "donation_value": "inputs",
 }
-
-# Extract-only: a $-figure the document literally contains (never invented).
-_PROPOSAL_MONEY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?")
 
 
 def _utcnow() -> str:
@@ -346,19 +343,30 @@ def _read_projection(store: Store):
 
 def _parse_proposal(store: Store):
     def handler(args: dict, ctx: ToolContext) -> dict:
+        """Extract-only parse over the uploaded proposal (PE9, spec §9).
+
+        Resolves a held upload by ``proposal_ref`` (from the tool args, or threaded
+        onto ``ctx.extra`` by the router) → reads its PDF text → parses candidate
+        line-items / tiers / phase→month mapping. ``proposal_text`` (a pre-extracted
+        body, e.g. from a test) takes precedence. Every figure traces to the document;
+        nothing is invented (the untrusted bytes are never executed/rendered).
+        """
         text = str(args.get("proposal_text") or "")
-        candidates = [
-            {"amount_text": m.group(0),
-             "snippet": text[max(0, m.start() - 24): m.end() + 24].strip()}
-            for m in _PROPOSAL_MONEY_RE.finditer(text)
-        ]
-        return {
-            "extract_only": True,
-            "untrusted": True,
-            "candidates": candidates,
-            "note": ("Stub seam — full PDF extraction lands in PE9. Figures here come "
-                     "only from the document; nothing is invented."),
-        }
+        if not text:
+            ref = args.get("proposal_ref")
+            if not ref and isinstance(ctx.extra, dict):
+                ref = ctx.extra.get("proposal_ref")
+            if ref:
+                held = proposal_intake.get_proposal(str(ref))
+                if held is None:
+                    return {
+                        "error": "proposal_not_found",
+                        "status": 404,
+                        "message": ("I couldn't find that uploaded proposal — try "
+                                    "re-attaching the PDF and asking again."),
+                    }
+                text = proposal_intake.extract_pdf_text(held.get("data") or b"")
+        return proposal_intake.parse_proposal_text(text)
     return handler
 
 

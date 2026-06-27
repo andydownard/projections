@@ -30,6 +30,7 @@ import {
 
 import { FieldChange } from "./FieldChange";
 import { PennyTranscript, type PennyTurn } from "./PennyTranscript";
+import { ProposalUpload } from "./ProposalUpload";
 import {
   PennyError,
   sendPennyDraftMessage,
@@ -675,6 +676,9 @@ export function PennyAssistant({
   // `muted` is the in-drawer ai_disabled state (composer → Settings note), distinct
   // from the up-front muted FAB (`aiEnabled=false`): Penny got turned off mid-chat.
   const [muted, setMuted] = useState(false);
+  // An uploaded consultant proposal, attached to the NEXT turn (Spec §9). One-shot:
+  // cleared once a turn carries it so a later message doesn't silently re-attach it.
+  const [proposal, setProposal] = useState<{ ref: string; name?: string } | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const idRef = useRef(0);
@@ -696,8 +700,10 @@ export function PennyAssistant({
           viewSlug,
           token,
           message,
+          proposalRef: proposal?.ref,
           signal: controller.signal,
         });
+        setProposal(null); // consumed by this turn (one-shot attachment)
         setProvider(res.provider);
         // Append the server's turns, skipping the user echo we already rendered.
         const appended = (res.turns_appended ?? [])
@@ -740,13 +746,14 @@ export function PennyAssistant({
         abortRef.current = null;
       }
     },
-    [viewSlug, token, pending, muted, onApplied, localId],
+    [viewSlug, token, pending, muted, proposal, onApplied, localId],
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
   const newChat = useCallback(() => {
     setTurns([]);
     setError(null);
+    setProposal(null);
   }, []);
 
   const body = (
@@ -790,6 +797,19 @@ export function PennyAssistant({
           onOpenSettings={onOpenSettings}
           onSend={send}
           onStop={stop}
+          extraAffordance={
+            <ProposalUpload
+              token={token}
+              disabled={pending}
+              attachedName={proposal?.name ?? null}
+              onUploaded={(ref, name) => {
+                setProposal({ ref, name });
+                setError(null);
+              }}
+              onClear={() => setProposal(null)}
+              onError={(message) => setError({ message })}
+            />
+          }
         />
       }
     >

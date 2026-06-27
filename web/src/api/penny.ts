@@ -220,3 +220,65 @@ export async function sendPennyDraftMessage({
 
   return (await resp.json()) as PennyDraftResponse;
 }
+
+export interface UploadProposalArgs {
+  /** The caller's owner/edit Bearer token (header only — never the URL/log). */
+  token: string;
+  /** The chosen PDF (the bytes are sent verbatim; the server is the type authority). */
+  file: File | Blob;
+  /** Optional display name (defaults to the File's name). */
+  filename?: string;
+  /** Aborts the in-flight upload. */
+  signal?: AbortSignal;
+}
+
+/** The POST /api/penny/proposal response — an opaque handle for parse_proposal (§9). */
+export interface ProposalUploadResult {
+  proposalRef: string;
+  filename?: string;
+  size?: number;
+}
+
+/**
+ * Upload a consultant proposal PDF for Penny to parse (Spec §9/§12).
+ *
+ * The PDF is sent to the server as untrusted bytes; the server validates type/size,
+ * holds it behind an opaque `proposal_ref`, and NEVER executes or renders it. The
+ * returned ref is threaded into the next Penny turn (`proposal_ref`) so the
+ * server-side `parse_proposal` tool can extract candidate cost rows — the client
+ * never parses the document itself. Rejections are classified into the same typed
+ * {@link PennyError} taxonomy so the composer shows plain copy, never a crash.
+ */
+export async function uploadProposal({
+  token,
+  file,
+  filename,
+  signal,
+}: UploadProposalArgs): Promise<ProposalUploadResult> {
+  const name = filename ?? (file as File).name ?? undefined;
+  const qs = name ? `?filename=${encodeURIComponent(name)}` : "";
+  const resp = await fetch(`${BASE}/penny/proposal${qs}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/pdf",
+      Authorization: `Bearer ${token}`,
+    },
+    body: file,
+    signal,
+  });
+
+  if (!resp.ok) {
+    const data = await readBody(resp);
+    const kind = STATUS_KIND[resp.status] ?? "unknown";
+    throw new PennyError(kind, resp.status, {
+      serverMessage: typeof data.message === "string" ? data.message : undefined,
+    });
+  }
+
+  const data = await readBody(resp);
+  return {
+    proposalRef: String(data.proposal_ref ?? ""),
+    filename: typeof data.filename === "string" ? data.filename : name,
+    size: typeof data.size === "number" ? data.size : undefined,
+  };
+}

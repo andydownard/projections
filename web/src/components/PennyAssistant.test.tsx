@@ -93,6 +93,43 @@ async function send(user: ReturnType<typeof userEvent.setup>, text: string) {
   await user.click(screen.getByRole("button", { name: /^send$/i }));
 }
 
+function pdfFile(name = "consultant-plan.pdf") {
+  return new File([new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d])], name, {
+    type: "application/pdf",
+  });
+}
+
+describe("PennyAssistant — proposal upload (PE9 §9)", () => {
+  it("uploads a PDF then threads its proposal_ref into the next turn", async () => {
+    const fetchMock = vi.fn((url: string, _init?: RequestInit) =>
+      Promise.resolve(
+        String(url).includes("/penny/proposal")
+          ? jsonResponse({ proposal_ref: "prop_xyz", filename: "consultant-plan.pdf" }, 201)
+          : jsonResponse(okPayload()),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    mountAndOpen();
+
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    await user.upload(screen.getByTestId("proposal-file-input"), pdfFile());
+    await screen.findByTestId("proposal-attached"); // chip shows the attached PDF
+
+    const box = screen.getByRole("textbox", { name: /ask penny/i });
+    await user.type(box, "build my cost schedule from this");
+    await user.click(screen.getByRole("button", { name: /^send$/i }));
+
+    await waitFor(() => {
+      const turnCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/penny"));
+      expect(turnCall).toBeTruthy();
+      const body = JSON.parse(String((turnCall![1] as RequestInit).body));
+      expect(body.proposal_ref).toBe("prop_xyz");
+    });
+  });
+});
+
 describe("PennyAssistant — apply-immediately + narrate", () => {
   it("sends the message to POST …/penny with Bearer and echoes the user turn", async () => {
     const fetchMock = vi.fn((_url: string, _init: RequestInit) =>
