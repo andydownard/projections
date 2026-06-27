@@ -9,21 +9,86 @@
 // returns the Appendix-D view-model, which renders the decision banner + KPI
 // strip + monthly cash-flow. NO client math — every figure is the server's
 // { display } string (PRD §13 / CLAUDE.md hard rule).
-import { useState } from "react";
+import { useRef, useState } from "react";
 
+import type { PennyDraftApplied, PennyDraftState } from "../api/penny";
+import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
 import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
 import { CashflowChart } from "../components/CashflowChart";
 import { DecisionBanner } from "../components/DecisionBanner";
-import { buildCreatePayload, toServerCreateBody, type WizardDraft } from "../wizard/shareHelper";
+import { PennyDraftAssistant } from "../components/PennyDrawer";
+import {
+  buildCreatePayload,
+  DEFAULT_OPENING_MONTH_NUMBER,
+  toServerCreateBody,
+  type CostScheduleRow,
+  type WizardDraft,
+} from "../wizard/shareHelper";
 import { StepIndicator } from "../wizard/StepIndicator";
 import { StepStore } from "../wizard/StepStore";
 import { StepTradeArea } from "../wizard/StepTradeArea";
 import { StepDonorMarket } from "../wizard/StepDonorMarket";
 import { StepCostSchedule } from "../wizard/StepCostSchedule";
 import { StepReview } from "../wizard/StepReview";
-import { useWizardState } from "../wizard/useWizardState";
+import { useWizardState, type WizardState } from "../wizard/useWizardState";
 
 const EXAMPLE_SLUG = "example";
+
+// Human labels for the server `draft_state` field keys Penny mutates (Spec §6.2),
+// shown on each per-field FieldChange affordance in the wizard drawer.
+const DRAFT_FIELD_LABELS: Record<string, string> = {
+  name: "Store name",
+  org_name: "Store name",
+  city: "Store address",
+  address: "Store address",
+  households: "Trade-area households",
+  share_y1: "Year-1 donor share",
+  share_y2: "Year-2 donor share",
+  share_y3: "Year-3 donor share",
+  basket: "Average basket",
+  donation_value: "Donation value",
+  occupancy_annual: "Annual occupancy",
+  opening_month_number: "Opening month",
+  target_opening_date: "Target opening date",
+  cost_schedule: "Cost schedule",
+};
+
+function labelDraftField(field: string): string {
+  return DRAFT_FIELD_LABELS[field] ?? field;
+}
+
+/** Mint an EPHEMERAL session Bearer for the wizard's /penny/draft calls. There is no
+ *  projection (and no owner/edit token) yet, so this is only a rate-limit id; it is
+ *  never persisted, never put in a URL/log, and dropped when the wizard unmounts. */
+function makeWizardDraftToken(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c && typeof c.randomUUID === "function") return `wizdraft-${c.randomUUID()}`;
+  return `wizdraft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** Shape the live wizard state as the server `draft_state` Penny reads + mutates
+ *  (Spec §5.2/§12). Pure field shaping — NO client math (mirrors shareHelper). */
+function wizardToDraftState(wiz: WizardState): PennyDraftState {
+  return {
+    name: wiz.draft.name,
+    inputs: {
+      city: wiz.draft.city,
+      org_name: wiz.draft.name,
+      opening_month_number: wiz.draft.openingMonthNumber ?? DEFAULT_OPENING_MONTH_NUMBER,
+      target_opening_date: wiz.draft.targetOpeningDate ?? null,
+    },
+    assumptions: {
+      share_y1: String(wiz.draft.shareY1),
+      share_y2: String(wiz.draft.shareY2),
+      share_y3: String(wiz.draft.shareY3),
+      basket: String(wiz.draft.basket),
+      donation_value: String(wiz.draft.donationValue),
+      occupancy_annual: String(wiz.draft.occupancyAnnual),
+    },
+    trade_area: { households: String(wiz.householdsValue ?? wiz.draft.households ?? "") },
+    cost_schedule: (wiz.draft.costSchedule ?? []).map((r) => ({ ...r })),
+  };
+}
 
 export interface CreateProjectionPageProps {
   aiOff?: boolean;
@@ -33,6 +98,94 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
   const wiz = useWizardState();
   const [vm, setVm] = useState<ViewModel | null>(null);
   const [busy, setBusy] = useState(false);
+  // One ephemeral Bearer for the whole wizard session's /penny/draft calls.
+  const draftToken = useRef<string>(makeWizardDraftToken());
+
+  // --- Penny (DRAFT mode) ↔ wizard bridge (Spec §5.2) ------------------------
+  // She fills/refines any wizard field and builds the cost schedule by mutating the
+  // in-memory draft via /penny/draft; her returned edits are mapped straight onto
+  // the live wizard inputs (no client math) and persist nowhere until Generate.
+
+  // When Penny sets the address, kick off the SAME Places→Census resolve the manual
+  // combobox uses (households stay server-derived; the key never reaches the client).
+  async function resolveDraftAddress(address: string) {
+    if (!address.trim()) return;
+    try {
+      const session = newSessionToken();
+      const preds = await placesAutocomplete(address, session);
+      if (preds.length === 0) {
+        wiz.onResolveError("location_not_found");
+        return;
+      }
+      const resolved = await placesResolve(preds[0].place_id, wiz.basis, session);
+      wiz.onResolved(resolved);
+    } catch {
+      wiz.onResolveError("network");
+    }
+  }
+
+  // Map ONE server `draft_state` field key → the matching wizard setter. Used both to
+  // apply Penny's edits and to undo a single field (a forward draft edit). Coercion
+  // only — the projection numbers still come from the server on Generate (PRD §13).
+  function applyDraftField(field: string, value: unknown) {
+    switch (field) {
+      case "name":
+      case "org_name":
+        wiz.set("name", String(value ?? ""));
+        break;
+      case "city":
+      case "address":
+        wiz.set("city", String(value ?? ""));
+        void resolveDraftAddress(String(value ?? ""));
+        break;
+      case "households":
+        wiz.setHouseholds(Number(value));
+        break;
+      case "share_y1":
+        wiz.set("shareY1", Number(value));
+        break;
+      case "share_y2":
+        wiz.set("shareY2", Number(value));
+        break;
+      case "share_y3":
+        wiz.set("shareY3", Number(value));
+        break;
+      case "basket":
+        wiz.set("basket", Number(value));
+        break;
+      case "donation_value":
+        wiz.set("donationValue", Number(value));
+        break;
+      case "occupancy_annual":
+        wiz.set("occupancyAnnual", Number(value));
+        break;
+      case "opening_month_number":
+        wiz.set("openingMonthNumber", Number(value));
+        break;
+      case "target_opening_date":
+        wiz.set("targetOpeningDate", String(value ?? ""));
+        break;
+      case "cost_schedule":
+        wiz.set("costSchedule", (value as CostScheduleRow[]) ?? []);
+        break;
+      default:
+        break; // an unmapped field is ignored (the manual path is unaffected)
+    }
+  }
+
+  // Apply EXACTLY what Penny changed this turn (named in `applied`), reading values
+  // from the returned draft. Avoids clobbering fields the user is editing manually.
+  function onApplyDraft(next: PennyDraftState, applied: PennyDraftApplied[]) {
+    let scheduleTouched = false;
+    for (const entry of applied) {
+      if (entry.tool === "edit_cost_schedule") scheduleTouched = true;
+      for (const c of entry.changed ?? []) applyDraftField(c.field, c.now);
+    }
+    if (scheduleTouched) {
+      const sched = (next as { cost_schedule?: unknown }).cost_schedule;
+      if (Array.isArray(sched)) applyDraftField("cost_schedule", sched as CostScheduleRow[]);
+    }
+  }
 
   async function onGenerate(d: WizardDraft) {
     setBusy(true);
@@ -236,6 +389,21 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
           )}
         </p>
       </form>
+
+      {/* Penny — the LEFT slide-out assistant in DRAFT mode (Spec §5.2). She fills/
+          refines any wizard field + builds the cost schedule by mutating the in-memory
+          draft via /penny/draft; her edits flow into the live inputs above and persist
+          NOTHING until Generate (which sends the draft, incl. any Penny-built schedule
+          WITH provenance). With ?ai=off she degrades to the muted Settings FAB and the
+          whole manual wizard stays intact (CLAUDE.md "AI opt-out works end-to-end"). */}
+      <PennyDraftAssistant
+        token={draftToken.current}
+        aiEnabled={!aiOff}
+        buildDraftState={() => wizardToDraftState(wiz)}
+        onApplyDraft={onApplyDraft}
+        onRevertField={applyDraftField}
+        labelField={labelDraftField}
+      />
     </div>
   );
 }

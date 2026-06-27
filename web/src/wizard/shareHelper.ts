@@ -18,6 +18,13 @@ export interface CostScheduleRow {
   category: string;
   month: number;
   amount: number;
+  /**
+   * Optional opaque provenance for a row Penny built from a proposal (Spec B §9,
+   * DATA_MODEL §7), e.g. `{ source: "ai", turn_id }`. The client never reads it —
+   * it is round-tripped from /penny/draft straight into the create body so the
+   * server can persist it (it is filtered out of the engine inputs). NOT math.
+   */
+  provenance?: Record<string, unknown>;
 }
 
 /** The legacy/migration-default timed cost schedule (mirrors engine.model.STARTUP):
