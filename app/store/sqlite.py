@@ -16,10 +16,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+from app.store import revision_retention
+from app.store.card_summary import build_card_summary
 from app.store.litestream import force_pre_migration_checkpoint
 from app.store.migration_safety import assert_migrations_additive
 from app.store.migrations import MIGRATIONS
 from app.store.penny_retention import apply_retention
+from app.store.role_links import parse_role_tokens, slug_token_hash
 
 
 def _utcnow() -> str:
@@ -172,6 +175,15 @@ class SqliteStore:
                 self._run_pre_migration_checkpoint()
             for name, sql in pending:
                 self._apply_migration(name, sql)
+        # One-time data backfills, keyed to the migration that introduced the column/
+        # table, so an existing DB is correct WITHOUT a re-save. Run outside the
+        # migration lock (each acquires the write lock itself); only on the boot that
+        # freshly applied the migration (idempotent: a no-op once recorded).
+        freshly_applied = {name for name, _ in pending}
+        if "0008_card_summary" in freshly_applied:
+            self._backfill_card_summaries()
+        if "0009_role_links" in freshly_applied:
+            self._backfill_role_links()
 
     def _apply_migration(self, name: str, sql: str) -> None:
         """Apply ONE migration atomically and idempotently (#185).
@@ -216,6 +228,91 @@ class SqliteStore:
             return
         force_pre_migration_checkpoint(self._conn, db_path=self.db_path)
 
+    def _backfill_card_summaries(self) -> None:
+        """Populate ``summary_json`` from ``computed_json`` for pre-0008 rows (#178).
+
+        Runs ONCE, on the boot that applies migration 0008, so existing projections
+        get a correct owner-list card without a re-save. Maintenance UPDATE (no
+        version bump) under the write lock.
+        """
+        with self._write_lock:
+            rows = self._conn.execute(
+                "SELECT id, computed_json FROM projections "
+                "WHERE summary_json = '{}' OR summary_json IS NULL"
+            ).fetchall()
+            for r in rows:
+                try:
+                    vm = json.loads(r["computed_json"] or "{}")
+                except json.JSONDecodeError:
+                    vm = {}
+                self._conn.execute(
+                    "UPDATE projections SET summary_json = ? WHERE id = ?",
+                    (json.dumps(build_card_summary(vm)), r["id"]),
+                )
+            self._conn.commit()
+
+    def _backfill_role_links(self) -> None:
+        """Populate ``role_links`` from ``role_tokens_json`` for pre-0009 rows (#180).
+
+        Runs ONCE, on the boot that applies migration 0009, so existing role-share
+        links resolve through the indexed table immediately. Tolerant of both the
+        legacy ``{slug: role_name}`` and documented ``{role_name: {slug,...}}`` shapes.
+        """
+        with self._write_lock:
+            rows = self._conn.execute(
+                "SELECT id, role_tokens_json, created_at FROM projections "
+                "WHERE deleted_at IS NULL"
+            ).fetchall()
+            for r in rows:
+                self._sync_role_links(self._conn, r["id"], r["role_tokens_json"],
+                                      created_at=r["created_at"])
+            self._conn.commit()
+
+    @staticmethod
+    def _sync_role_links(
+        conn: sqlite3.Connection,
+        projection_id: str,
+        role_tokens_json: str | None,
+        *,
+        created_at: str | None = None,
+    ) -> None:
+        """Rebuild ``role_links`` rows for one projection from its ``role_tokens_json``.
+
+        Replace-all (scoped DELETE + INSERT) so a rotation/edit that drops a role link
+        kills its row. The slug is the plaintext lookup PK (like ``view_slug``);
+        ``token_hash = SHA-256(slug)`` is the documented §6 hashed-at-rest companion.
+        Caller controls the surrounding transaction/lock.
+        """
+        conn.execute("DELETE FROM role_links WHERE projection_id = ?", (projection_id,))
+        now = created_at or _utcnow()
+        for link in parse_role_tokens(role_tokens_json):
+            conn.execute(
+                "INSERT INTO role_links (slug, projection_id, role_name, token_hash, "
+                "created_at) VALUES (?, ?, ?, ?, ?)",
+                (link["slug"], projection_id, link["role_name"],
+                 slug_token_hash(link["slug"]), now),
+            )
+
+    def _prune_revisions(self, conn: sqlite3.Connection, projection_id: str) -> None:
+        """Cap retained revisions per projection (#179), keeping recent + protected.
+
+        Keeps the most-recent ``MAX_REVISIONS_PER_PROJECTION`` by ``seq`` plus any
+        protected revision (model upgrade / token rotation) that falls outside that
+        window. Portable (no LIKE/JSON1): candidate selection + filtering in Python,
+        scoped DELETE by id. Runs inside the caller's write transaction.
+        """
+        keep = revision_retention.MAX_REVISIONS_PER_PROJECTION
+        rows = conn.execute(
+            "SELECT id, change_summary FROM revisions WHERE projection_id = ? "
+            "ORDER BY seq DESC",
+            (projection_id,),
+        ).fetchall()
+        if len(rows) <= keep:
+            return
+        for r in rows[keep:]:
+            if not revision_retention.is_protected(r["change_summary"]):
+                conn.execute("DELETE FROM revisions WHERE id = ?", (r["id"],))
+
     def ping(self) -> bool:
         # The healthcheck probe reads via the per-thread reader (#177), so it is never
         # head-of-line-blocked behind a slow write holding the single writer.
@@ -246,20 +343,75 @@ class SqliteStore:
         sql += " ORDER BY updated_at DESC"
         return [dict(r) for r in self._read_conn().execute(sql, (owner_token_hash,))]
 
+    def list_card_summaries(
+        self, owner_token_hash: str, *, include_trashed: bool = False
+    ) -> list[dict]:
+        """Owner-scoped list selecting ONLY the small card columns (#178).
+
+        Never SELECTs the heavy JSON blobs (computed_json/inputs_json/...); returns the
+        denormalized ``summary_json`` instead, so the hottest authenticated query stops
+        being O(N rows x ~10KB) read + per-row full-blob parse. Owner-scoped, NEVER
+        global (DATA_MODEL.md §3.1 / SECURITY.md §1 risk #3); the owner index backs the
+        WHERE + ORDER BY.
+        """
+        sql = (
+            "SELECT view_slug, name, status, version, updated_at, summary_json "
+            "FROM projections WHERE owner_token_hash = ? AND deleted_at IS NULL"
+        )
+        if not include_trashed:
+            sql += " AND status = 'active'"
+        sql += " ORDER BY updated_at DESC"
+        return [dict(r) for r in self._read_conn().execute(sql, (owner_token_hash,))]
+
     def create_projection(self, p: dict) -> dict:
-        cols = list(p.keys())
+        # Denormalize the owner-list card summary at write time (#178) so the list
+        # never parses the full computed_json per row.
+        row = dict(p)
+        if "computed_json" in row and "summary_json" not in row:
+            row["summary_json"] = self._summary_json(row["computed_json"])
+        cols = list(row.keys())
         placeholders = ", ".join("?" for _ in cols)
         with self._write_lock:
-            self._conn.execute(
-                f"INSERT INTO projections ({', '.join(cols)}) VALUES ({placeholders})",
-                [p[c] for c in cols],
-            )
-            self._conn.commit()
+            conn = self._conn
+            prev = conn.isolation_level
+            conn.isolation_level = None
+            try:
+                conn.execute("BEGIN")
+                conn.execute(
+                    f"INSERT INTO projections ({', '.join(cols)}) "
+                    f"VALUES ({placeholders})",
+                    [row[c] for c in cols],
+                )
+                # Keep the indexed role_links table in sync (#180): role-share links
+                # resolve via an exact-match slug PK, never a leading-wildcard scan.
+                if "role_tokens_json" in row:
+                    self._sync_role_links(
+                        conn, row["id"], row["role_tokens_json"],
+                        created_at=row.get("created_at"))
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            finally:
+                conn.isolation_level = prev
         return p
+
+    @staticmethod
+    def _summary_json(computed_json: str | None) -> str:
+        """Compact owner-list card summary derived from a computed_json blob (#178)."""
+        try:
+            vm = json.loads(computed_json or "{}")
+        except json.JSONDecodeError:
+            vm = {}
+        return json.dumps(build_card_summary(vm))
 
     def update_with_version_check(
         self, id: str, expected_version: int, patch: dict[str, Any]
     ) -> int:
+        # Refresh the denormalized owner-list card summary in the SAME UPDATE whenever
+        # computed_json changes (#178), so the list never re-parses the full blob.
+        if "computed_json" in patch and "summary_json" not in patch:
+            patch = {**patch, "summary_json": self._summary_json(patch["computed_json"])}
         # Identical SQL on both backends: 0 rows -> HTTP 409 (DATA_MODEL.md §5.1).
         set_cols = ", ".join(f"{k} = ?" for k in patch)
         sql = (
@@ -296,6 +448,13 @@ class SqliteStore:
         (migration 0007) makes a miscomputed/duplicate seq fail loudly here rather
         than silently corrupt the trail.
         """
+        # Refresh the denormalized card summary alongside computed_json (#178).
+        if "computed_json" in patch and "summary_json" not in patch:
+            patch = {**patch, "summary_json": self._summary_json(patch["computed_json"])}
+        # Revisions never persist the recomputable, never-read compute snapshot (#179):
+        # restore recomputes from inputs/assumptions/overrides; computed_json/monthly_json
+        # are blanked so the durable volume (and Litestream) is not bloated.
+        revision = revision_retention.strip_recomputable(revision)
         set_cols = ", ".join(f"{k} = ?" for k in patch)
         update_sql = (
             "UPDATE projections SET version = version + 1, updated_at = ?"
@@ -319,6 +478,7 @@ class SqliteStore:
                     conn.execute("ROLLBACK")  # 409: no orphan revision
                     return 0
                 conn.execute(insert_sql, [revision[c] for c in cols])
+                self._prune_revisions(conn, revision["projection_id"])  # bounded (#179)
                 conn.execute("COMMIT")
                 return cur.rowcount
             except BaseException:
@@ -333,29 +493,120 @@ class SqliteStore:
         """Atomic owner/edit/view_slug/role rotation (DATA_MODEL §6.1).
 
         One version-checked UPDATE re-hashes every shared capability so all prior
-        links die at once. Same 0-rows -> 409 contract as every mutation.
+        links die at once, and the indexed ``role_links`` table is rebuilt from the
+        new ``role_tokens_json`` IN THE SAME TRANSACTION (#180) so every old role slug
+        stops resolving. Same 0-rows -> 409 contract as every mutation.
         """
-        return self.update_with_version_check(id, expected_version, dict(new_hashes))
+        patch = dict(new_hashes)
+        set_cols = ", ".join(f"{k} = ?" for k in patch)
+        update_sql = (
+            "UPDATE projections SET version = version + 1, updated_at = ?"
+            + (", " + set_cols if patch else "")
+            + " WHERE id = ? AND version = ? AND deleted_at IS NULL"
+        )
+        params = [_utcnow(), *patch.values(), id, expected_version]
+        with self._write_lock:
+            conn = self._conn
+            prev = conn.isolation_level
+            conn.isolation_level = None
+            try:
+                conn.execute("BEGIN")
+                cur = conn.execute(update_sql, params)
+                if cur.rowcount == 0:
+                    conn.execute("ROLLBACK")  # 409: nothing rotated
+                    return 0
+                if "role_tokens_json" in patch:
+                    self._sync_role_links(conn, id, patch["role_tokens_json"])
+                conn.execute("COMMIT")
+                return cur.rowcount
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            finally:
+                conn.isolation_level = prev
 
     def set_status(self, id: str, status: str, expected_version: int) -> int:
         """Trash/restore: flip status under the optimistic-concurrency version check."""
         return self.update_with_version_check(id, expected_version, {"status": status})
 
     def soft_delete(self, id: str, expected_version: int) -> int:
-        """Hard-delete marker: set deleted_at so the row is excluded everywhere."""
+        """Soft-delete marker: set deleted_at so the row is excluded everywhere.
+
+        Recoverable (the row + children persist); the real privacy purge is
+        ``purge_projection`` (#202).
+        """
         return self.update_with_version_check(
             id, expected_version, {"deleted_at": _utcnow()})
 
+    # Child tables erased by a hard purge (#202), ordered children-before-parent so
+    # the FK references (no ON DELETE CASCADE; PRAGMA foreign_keys=ON) resolve.
+    _PURGE_CHILD_TABLES = (
+        "revisions", "narratives", "evidence", "penny_transcripts",
+        "actuals", "role_links",
+    )
+
+    def purge_projection(self, id: str, expected_version: int) -> int:
+        """Hard purge (#202): version-checked DELETE of the projection AND a cascade
+        of every child row it owns (revisions, narratives, evidence, penny_transcripts,
+        actuals, role_links). Truly irreversible — the confidential financials + Penny
+        conversation are ERASED, not merely hidden behind ``deleted_at``.
+
+        0 rows (version mismatch / unknown id) -> NO cascade runs and 0 is returned
+        (the 409 path), so a stale purge never half-erases a live projection. Children
+        are deleted before the parent because the FKs have no ON DELETE CASCADE.
+        """
+        with self._write_lock:
+            conn = self._conn
+            prev = conn.isolation_level
+            conn.isolation_level = None
+            try:
+                conn.execute("BEGIN")
+                row = conn.execute(
+                    "SELECT version FROM projections WHERE id = ?", (id,)
+                ).fetchone()
+                if row is None or row["version"] != expected_version:
+                    conn.execute("ROLLBACK")  # 409: nothing erased
+                    return 0
+                for tbl in self._PURGE_CHILD_TABLES:
+                    conn.execute(
+                        f"DELETE FROM {tbl} WHERE projection_id = ?", (id,))
+                conn.execute("DELETE FROM projections WHERE id = ?", (id,))
+                conn.execute("COMMIT")
+                return 1
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            finally:
+                conn.isolation_level = prev
+
     # --- revisions ---
     def insert_revision(self, rev: dict) -> None:
+        # Never persist the recomputable, never-read compute snapshot (#179): restore
+        # recomputes from inputs/assumptions/overrides; computed_json/monthly_json are
+        # blanked so each revision is not ~10KB of Litestream-replicated dead weight.
+        rev = revision_retention.strip_recomputable(rev)
         cols = list(rev.keys())
         placeholders = ", ".join("?" for _ in cols)
         with self._write_lock:
-            self._conn.execute(
-                f"INSERT INTO revisions ({', '.join(cols)}) VALUES ({placeholders})",
-                [rev[c] for c in cols],
-            )
-            self._conn.commit()
+            conn = self._conn
+            prev = conn.isolation_level
+            conn.isolation_level = None
+            try:
+                conn.execute("BEGIN")
+                conn.execute(
+                    f"INSERT INTO revisions ({', '.join(cols)}) "
+                    f"VALUES ({placeholders})",
+                    [rev[c] for c in cols],
+                )
+                # Bound per-projection revision growth (#179): prune oldest beyond the
+                # cap, keeping the recent window + protected (upgrade/rotate) rows.
+                self._prune_revisions(conn, rev["projection_id"])
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            finally:
+                conn.isolation_level = prev
 
     def list_revisions(self, projection_id: str, limit: int = 50) -> list[dict]:
         return [
@@ -374,28 +625,21 @@ class SqliteStore:
         return dict(row) if row else None
 
     def get_projection_by_role_slug(self, role_slug: str) -> dict | None:
-        """Resolve a role-link slug -> (projection_row, role_name).
+        """Resolve a role-link slug -> (projection_row, role_name) by EXACT MATCH (#180).
 
-        role_tokens_json maps {role_slug: role_name}. Scanned with a portable
-        LIKE prefilter then matched in Python (no SQLite-only JSON1 above Store).
+        O(1) lookup on the ``role_links`` slug PK joined to the live projection — no
+        leading-wildcard ``LIKE`` full-table scan, identical on Postgres. The role slug
+        is the plaintext read-only lookup key (like ``view_slug``); ``role_links`` is
+        kept in sync from ``role_tokens_json`` on every write. Excludes purged/deleted
+        projections (``deleted_at IS NULL``).
         """
-        import json as _json
-
-        rows = self._read_conn().execute(
-            "SELECT * FROM projections "
-            "WHERE deleted_at IS NULL AND role_tokens_json LIKE ?",
-            (f'%"{role_slug}"%',),
-        ).fetchall()
-        for row in rows:
-            try:
-                mapping = _json.loads(row["role_tokens_json"] or "{}")
-            except _json.JSONDecodeError:
-                continue
-            if role_slug in mapping:
-                d = dict(row)
-                d["_role_name"] = mapping[role_slug]
-                return d
-        return None
+        row = self._read_conn().execute(
+            "SELECT p.*, rl.role_name AS _role_name "
+            "FROM role_links rl JOIN projections p ON p.id = rl.projection_id "
+            "WHERE rl.slug = ? AND p.deleted_at IS NULL",
+            (role_slug,),
+        ).fetchone()
+        return dict(row) if row else None
 
     # --- narratives (M5 / §6.1) ---
     def get_narrative(self, projection_id: str) -> dict | None:

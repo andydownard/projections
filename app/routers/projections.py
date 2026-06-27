@@ -464,14 +464,6 @@ def _enrich_view_model(vm: dict, location_d: dict, trade_d: dict) -> None:
     vm["evidence"] = evidence
 
 
-def _kpi_value(vm: dict, label: str) -> dict:
-    """The {raw, display} of a named KPI in the view-model (for the list row)."""
-    for k in vm.get("kpis") or []:
-        if isinstance(k, dict) and k.get("label") == label:
-            return k.get("value") or {"raw": 0, "display": "—"}
-    return {"raw": 0, "display": "—"}
-
-
 def _compute_result_from_dicts(
     inputs_d: dict, assumptions_d: Optional[dict], demand_d: dict,
     trade_d: dict, overrides_d: dict,
@@ -706,30 +698,31 @@ def list_projections(
     owner = _bearer(authorization)
     if owner is None:
         return {"projections": []}
-    rows = store.list_by_owner(hash_token(owner))
+    # #178: read the small denormalized card columns (summary_json) only — the store
+    # never SELECTs or parses the full ~10KB computed_json per row for the owner list.
+    rows = store.list_card_summaries(hash_token(owner))
     items = []
     for r in rows:
         try:
-            vm = json.loads(r.get("computed_json") or "{}")
+            summary = json.loads(r.get("summary_json") or "{}")
         except json.JSONDecodeError:
-            vm = {}
-        ta = vm.get("trade_area") or {}
-        loc = vm.get("location") or {}
+            summary = {}
         items.append({
             "view_slug": r["view_slug"],
             "name": r["name"],
-            "location": ta.get("geography_name") or loc.get("formatted_address") or "",
-            "basis": ta.get("basis") or "",
-            "y1_revenue": _kpi_value(vm, "Total revenue"),
-            "y1_net": _kpi_value(vm, "Net profit"),
-            "capital_required": (vm.get("metrics") or {}).get("capital")
-                                or {"raw": 0, "display": "—"},
-            "reco_tag": (vm.get("reco") or {}).get("tag") or "revise",
             "status": r.get("status") or "active",
             "version": r["version"],
             "updated_at": r["updated_at"],
+            # card fields denormalized at write time (build_card_summary)
+            "location": summary.get("location", ""),
+            "basis": summary.get("basis", ""),
+            "y1_revenue": summary.get("y1_revenue") or {"raw": 0, "display": "—"},
+            "y1_net": summary.get("y1_net") or {"raw": 0, "display": "—"},
+            "capital_required": summary.get("capital_required")
+                                or {"raw": 0, "display": "—"},
+            "reco_tag": summary.get("reco_tag") or "revise",
             # lat/lng for the list-row mini-map; null when location was never resolved.
-            "coords": vm.get("location"),
+            "coords": summary.get("coords"),
         })
     return {"projections": items}
 
@@ -1585,12 +1578,15 @@ def delete_projection(
     if_match: int = Depends(parse_if_match),
 ):
     """Hard delete / purge (API_SPEC §4.8). Owner-only; permitted ONLY when the
-    projection is already trashed (else 409 not_trashed). Irreversible: sets
-    deleted_at so the row is excluded from every read."""
+    projection is already trashed (else 409 not_trashed). Irreversible: hard-DELETEs
+    the projection AND cascades to every child it owns (revisions, narratives,
+    evidence, penny_transcripts, actuals, role links) so the confidential financials
+    and Penny conversation are actually ERASED, not merely hidden (#202, DATA_MODEL
+    §5.4)."""
     row = _require_owner(store, view_slug, authorization)
     if row.get("status") != "trashed":
         raise HTTPException(status_code=409, detail={"error": "not_trashed"})
-    affected = store.soft_delete(row["id"], if_match)
+    affected = store.purge_projection(row["id"], if_match)
     if affected == 0:
         raise HTTPException(status_code=409, detail={
             "error": "version_conflict", "your_version": if_match,
