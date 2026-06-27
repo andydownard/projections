@@ -1,17 +1,27 @@
 """app/geo/client.py — outbound Google Places + US Census ACS clients.
 
 Server-side ONLY: GOOGLE_PLACES_API_KEY / CENSUS_API_KEY are read from the env and
-NEVER returned to the client (CLAUDE.md hard rule 7). All network I/O funnels
-through `_get_json`, the single seam the tests stub, so the derivation logic is
-exercised without real HTTP and the key value never appears in a response.
+NEVER returned to the client (CLAUDE.md hard rule 7). Network I/O funnels through a
+small set of seams the tests stub, so the derivation logic is exercised without real
+HTTP and the key value never appears in a response, URL, or log line.
 
 Providers:
-  * Google Places (legacy) Autocomplete + Details   -> predictions, lat/lng.
+  * Google Places API (New) v1 Autocomplete + Details -> predictions, lat/lng.
+      The key travels in the ``X-Goog-Api-Key`` HEADER (never the URL/query), so a
+      logged request line can never carry it. The legacy
+      ``maps.googleapis.com/maps/api/place/*`` endpoints are denied for newer keys
+      (``REQUEST_DENIED``); the New API is the supported surface.
   * US Census Geocoder (coordinates -> geographies)  -> state/county/place FIPS.
   * US Census ACS 5-year, table B11001 (households)  -> the trade-area count.
+
+Dev-visible error path: when NOT in production, a Places upstream failure logs the
+upstream status (``REQUEST_DENIED`` / HTTP status — never the key) and carries it on
+the raised error, so a denied key cannot regress unnoticed behind an empty list.
+In production it fails CLOSED: a generic message, no status detail, no key.
 """
 from __future__ import annotations
 
+import logging
 import os
 from collections import OrderedDict
 from typing import Any
@@ -19,13 +29,23 @@ from urllib.parse import urlencode
 
 import httpx
 
+from app import config
+
+logger = logging.getLogger("app.geo.client")
+
 # ACS 5-year vintage (2018–2022). Pinned so the evidence row stamps an exact
 # source year a board can verify; bump deliberately, not silently.
 ACS_VINTAGE = "2022"
 ACS_HOUSEHOLDS_VAR = "B11001_001E"   # Total households
 ACS_HOUSEHOLDS_MOE = "B11001_001M"   # 90% margin of error
 
-_PLACES_BASE = "https://maps.googleapis.com/maps/api/place"
+# Places API (New) v1. Autocomplete is POST (JSON body); Details is GET with a
+# required field mask. Both authenticate via the X-Goog-Api-Key header.
+_PLACES_V1 = "https://places.googleapis.com/v1"
+# Place Details field mask: only what derive.py needs (location + address). A
+# tight mask keeps the response small and the billing SKU minimal.
+_PLACE_DETAILS_FIELDS = "location,formattedAddress"
+
 _CENSUS_GEOCODER = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates"
 _CENSUS_ACS = f"https://api.census.gov/data/{ACS_VINTAGE}/acs/acs5"
 
@@ -106,42 +126,110 @@ def _places_key() -> str:
     return os.environ.get("GOOGLE_PLACES_API_KEY", "")
 
 
+def _places_fail(detail: str) -> GeoUpstreamError:
+    """Build (and log) the Places error per the dev-visible / fail-closed contract.
+
+    ``detail`` is an upstream STATUS token only (e.g. ``REQUEST_DENIED`` or
+    ``HTTP 403`` or an httpx exception class name) — NEVER the key. Because the New
+    API carries the key in a header (not the URL), even a leaked request line is
+    key-safe; we still surface only the status, never raw httpx strings.
+
+    Non-prod: log + carry the status so a denied key is visible instead of an empty
+    list. Prod: fail closed — a generic message, no status, nothing key-adjacent.
+    """
+    if config.is_production():
+        logger.warning("places upstream request failed")
+        return GeoUpstreamError("places upstream request failed")
+    logger.error("places upstream request failed: %s", detail)
+    return GeoUpstreamError(f"places upstream request failed: {detail}")
+
+
+def _places_request(
+    method: str,
+    url: str,
+    *,
+    params: dict | None = None,
+    json_body: dict | None = None,
+    field_mask: str | None = None,
+) -> Any:
+    """Network seam for Places API (New) v1 (stubbed in tests).
+
+    SECURITY (CLAUDE.md hard rule 7): the API key is sent ONLY in the
+    ``X-Goog-Api-Key`` header — never the path/query — so it cannot land in a logged
+    request line. On failure we extract the upstream status (HTTP code or the
+    ``error.status`` token) and route it through ``_places_fail`` so the key-bearing
+    httpx chain never propagates and prod stays fail-closed.
+    """
+    headers = {"X-Goog-Api-Key": _places_key()}
+    if field_mask:
+        headers["X-Goog-FieldMask"] = field_mask
+    try:
+        resp = httpx.request(
+            method, url, params=params, json=json_body, headers=headers, timeout=_TIMEOUT
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as e:
+        status_token = None
+        try:
+            status_token = ((e.response.json() or {}).get("error") or {}).get("status")
+        except (ValueError, AttributeError):
+            status_token = None
+        detail = status_token or f"HTTP {e.response.status_code}"
+        raise _places_fail(detail) from None
+    except (httpx.HTTPError, ValueError) as e:
+        raise _places_fail(type(e).__name__) from None
+
+
 def autocomplete(query: str, *, session_token: str | None = None) -> list[dict]:
     """Address predictions for `query`. Returns [{description, place_id}] only —
-    the upstream payload (and the key) never leave the server."""
-    params = {"input": query, "key": _places_key(), "types": "geocode"}
+    the upstream payload (and the key) never leave the server.
+
+    Places API (New) v1: ``POST /v1/places:autocomplete`` with a JSON body. Each
+    suggestion's ``placePrediction`` carries the place id + display text.
+    """
+    body: dict = {"input": query}
     if session_token:
-        params["sessiontoken"] = session_token
-    data = _get_json(f"{_PLACES_BASE}/autocomplete/json", params)
-    preds = data.get("predictions", []) if isinstance(data, dict) else []
-    return [
-        {"description": p.get("description", ""), "place_id": p.get("place_id", "")}
-        for p in preds
-        if p.get("place_id")
-    ]
+        body["sessionToken"] = session_token
+    data = _places_request(
+        "POST", f"{_PLACES_V1}/places:autocomplete", json_body=body
+    )
+    suggestions = data.get("suggestions", []) if isinstance(data, dict) else []
+    out: list[dict] = []
+    for s in suggestions:
+        pred = (s or {}).get("placePrediction") or {}
+        place_id = pred.get("placeId", "")
+        if not place_id:
+            continue
+        text = (pred.get("text") or {}).get("text", "")
+        out.append({"description": text, "place_id": place_id})
+    return out
 
 
 def place_details(place_id: str, *, session_token: str | None = None) -> dict:
-    """Resolve a place_id to {lat, lng, formatted_address}."""
-    params = {
-        "place_id": place_id,
-        "key": _places_key(),
-        "fields": "geometry,formatted_address",
-    }
-    if session_token:
-        params["sessiontoken"] = session_token
-    data = _get_json(f"{_PLACES_BASE}/details/json", params)
-    result = (data or {}).get("result") if isinstance(data, dict) else None
-    if not result:
+    """Resolve a place_id to {lat, lng, formatted_address}.
+
+    Places API (New) v1: ``GET /v1/places/{id}`` with a required field mask. The
+    response is the Place resource directly (location.latitude/longitude,
+    formattedAddress) — no legacy ``result`` envelope.
+    """
+    params = {"sessionToken": session_token} if session_token else None
+    data = _places_request(
+        "GET",
+        f"{_PLACES_V1}/places/{place_id}",
+        params=params,
+        field_mask=_PLACE_DETAILS_FIELDS,
+    )
+    if not isinstance(data, dict) or not data:
         raise GeoUpstreamError("place_details: no result")
-    loc = (result.get("geometry") or {}).get("location") or {}
-    lat, lng = loc.get("lat"), loc.get("lng")
+    loc = data.get("location") or {}
+    lat, lng = loc.get("latitude"), loc.get("longitude")
     if lat is None or lng is None:
         raise GeoUpstreamError("place_details: no geometry")
     return {
         "lat": float(lat),
         "lng": float(lng),
-        "formatted_address": result.get("formatted_address", ""),
+        "formatted_address": data.get("formattedAddress", ""),
     }
 
 
