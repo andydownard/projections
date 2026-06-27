@@ -291,3 +291,229 @@ def test_chain_pinned_provider_failure_is_ai_unavailable_not_silent_switch():
     with pytest.raises(P.AIUnavailableError):
         chain.complete(_request())
     assert len(o.calls) == 0
+
+
+def test_empty_chain_complete_raises_ai_unavailable():
+    chain = P.ProviderChain([])
+    with pytest.raises(P.AIUnavailableError):
+        chain.complete(_request())
+
+
+# --------------------------------------------------- data-shape unit behaviour
+def test_usage_total_and_add():
+    u = P.Usage(input_tokens=3, output_tokens=4)
+    assert u.total == 7
+    u.add(P.Usage(input_tokens=1, output_tokens=2))
+    assert (u.input_tokens, u.output_tokens, u.total) == (4, 6, 10)
+
+
+def test_provider_response_defaults():
+    r = P.ProviderResponse(provider="anthropic")
+    assert r.text == ""
+    assert r.tool_calls == []
+    assert r.stop_reason == "end_turn"
+    assert r.usage.total == 0
+    assert r.wants_tools is False
+
+
+def test_resolve_anthropic_model_blank_override_falls_back():
+    assert (
+        P.resolve_anthropic_model({"PENNY_ANTHROPIC_MODEL": ""})
+        == P.MOST_CAPABLE_ANTHROPIC_MODEL
+    )
+
+
+def test_resolve_openai_model_blank_override_falls_back():
+    assert P.resolve_openai_model({"PENNY_OPENAI_MODEL": ""}) == P.OPENAI_FALLBACK_MODEL
+
+
+# --------------------------------------------- anthropic parsing, more shapes
+def test_anthropic_parses_text_and_multiple_tool_uses():
+    payload = {
+        "content": [
+            {"type": "text", "text": "I'll do two things."},
+            {"type": "tool_use", "id": "t1", "name": "set_input", "input": {"a": 1}},
+            {"type": "tool_use", "id": "t2", "name": "set_assumption", "input": {"b": 2}},
+        ],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 3, "output_tokens": 4},
+    }
+    prov = P.AnthropicProvider(api_key="sk", model="m", transport=StubTransport((200, payload)))
+    resp = prov.complete(_request())
+    assert resp.text == "I'll do two things."
+    assert [tc.name for tc in resp.tool_calls] == ["set_input", "set_assumption"]
+    assert resp.tool_calls[1].arguments == {"b": 2}
+
+
+def test_anthropic_missing_usage_defaults_to_zero():
+    payload = {"content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn"}
+    prov = P.AnthropicProvider(api_key="sk", model="m", transport=StubTransport((200, payload)))
+    resp = prov.complete(_request())
+    assert resp.usage.input_tokens == 0
+    assert resp.usage.output_tokens == 0
+
+
+def test_anthropic_passes_through_custom_stop_reason():
+    payload = {"content": [{"type": "text", "text": "hi"}], "stop_reason": "max_tokens"}
+    prov = P.AnthropicProvider(api_key="sk", model="m", transport=StubTransport((200, payload)))
+    assert prov.complete(_request()).stop_reason == "max_tokens"
+
+
+def test_anthropic_4xx_degrades_not_unavailable():
+    transport = StubTransport((400, {"e": "bad"}))
+    resp = P.AnthropicProvider(api_key="sk", model="m", transport=transport).complete(_request())
+    assert resp.stop_reason == "parse_degraded"
+    assert resp.text
+
+
+def test_anthropic_529_overloaded_is_unavailable():
+    prov = P.AnthropicProvider(api_key="sk", model="m", transport=StubTransport((529, {})))
+    with pytest.raises(P.ProviderUnavailable):
+        prov.complete(_request())
+
+
+def test_anthropic_408_timeout_is_unavailable():
+    prov = P.AnthropicProvider(api_key="sk", model="m", transport=StubTransport((408, {})))
+    with pytest.raises(P.ProviderUnavailable):
+        prov.complete(_request())
+
+
+def test_anthropic_sets_json_content_type_and_version_header():
+    t = StubTransport((200, _anthropic_body(text="ok")))
+    P.AnthropicProvider(api_key="sk", model="m", transport=t).complete(_request())
+    _u, headers, _b = t.calls[0]
+    assert headers["content-type"] == "application/json"
+    assert headers["anthropic-version"] == P.ANTHROPIC_VERSION
+
+
+# ----------------------------------------------- openai parsing, more shapes
+def test_openai_missing_usage_defaults_to_zero():
+    payload = {"choices": [{"message": {"role": "assistant", "content": "hi"}}]}
+    prov = P.OpenAIProvider(api_key="sk", model="m", transport=StubTransport((200, payload)))
+    resp = prov.complete(_request())
+    assert resp.usage.total == 0
+    assert resp.text == "hi"
+
+
+def test_openai_parses_multiple_tool_calls():
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "a", "arguments": "{}"},
+                        },
+                        {
+                            "id": "c2",
+                            "type": "function",
+                            "function": {"name": "b", "arguments": '{"x": 1}'},
+                        },
+                    ],
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+    }
+    prov = P.OpenAIProvider(api_key="sk", model="m", transport=StubTransport((200, payload)))
+    resp = prov.complete(_request())
+    assert [tc.name for tc in resp.tool_calls] == ["a", "b"]
+    assert resp.tool_calls[1].arguments == {"x": 1}
+
+
+def test_openai_prepends_system_message():
+    t = StubTransport((200, _openai_body(text="ok")))
+    req = P.CompletionRequest(system="sysprompt", messages=[], tools=[], max_output_tokens=5)
+    P.OpenAIProvider(api_key="sk", model="m", transport=t).complete(req)
+    _u, _h, body = t.calls[0]
+    assert body["messages"][0] == {"role": "system", "content": "sysprompt"}
+
+
+def test_openai_passes_through_string_content_messages():
+    t = StubTransport((200, _openai_body(text="ok")))
+    req = P.CompletionRequest(
+        system="s", messages=[{"role": "user", "content": "plain"}], tools=[], max_output_tokens=5
+    )
+    P.OpenAIProvider(api_key="sk", model="m", transport=t).complete(req)
+    _u, _h, body = t.calls[0]
+    assert {"role": "user", "content": "plain"} in body["messages"]
+
+
+def test_openai_translates_assistant_tooluse_and_tool_result_roundtrip():
+    t = StubTransport((200, _openai_body(text="ok")))
+    req = P.CompletionRequest(
+        system="sys",
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "calling"},
+                    {"type": "tool_use", "id": "c1", "name": "set_input", "input": {"a": 1}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "c1", "content": {"ok": True}}],
+            },
+        ],
+        tools=[],
+        max_output_tokens=10,
+    )
+    P.OpenAIProvider(api_key="sk", model="m", transport=t).complete(req)
+    _u, _h, body = t.calls[0]
+    msgs = body["messages"]
+    asst = next(m for m in msgs if m["role"] == "assistant")
+    assert asst["tool_calls"][0]["function"]["name"] == "set_input"
+    assert json.loads(asst["tool_calls"][0]["function"]["arguments"]) == {"a": 1}
+    tool_msg = next(m for m in msgs if m["role"] == "tool")
+    assert tool_msg["tool_call_id"] == "c1"
+    assert json.loads(tool_msg["content"]) == {"ok": True}
+
+
+# ------------------------------------------------------- degrade / salvage
+def test_salvage_text_prefers_anthropic_then_openai_then_empty():
+    assert P._salvage_text({"content": [{"type": "text", "text": "A"}]}) == "A"
+    assert P._salvage_text({"choices": [{"message": {"content": "B"}}]}) == "B"
+    assert P._salvage_text({"nothing": 1}) == ""
+
+
+def test_degraded_uses_fallback_when_nothing_salvageable():
+    prov = P.AnthropicProvider(api_key="sk", model="m", transport=StubTransport((200, {"x": 1})))
+    resp = prov.complete(_request())
+    assert resp.text == P._DEGRADED_FALLBACK_TEXT
+    assert resp.provider == "anthropic"
+
+
+def test_degraded_salvages_partial_text_when_present():
+    # 200 with a parseable text block but a broken tool block -> keep the text.
+    payload = {"content": [{"type": "text", "text": "kept"}, {"type": "tool_use"}]}
+    prov = P.AnthropicProvider(api_key="sk", model="m", transport=StubTransport((200, payload)))
+    resp = prov.complete(_request())
+    assert resp.stop_reason == "parse_degraded"
+    assert resp.text == "kept"
+
+
+# ----------------------------------------------------- chain / build wiring
+def test_build_chain_threads_resolved_model_and_transport():
+    t = StubTransport((200, _anthropic_body(text="ok")))
+    chain = P.build_provider_chain(
+        env={"ANTHROPIC_API_KEY": "sk", "PENNY_ANTHROPIC_MODEL": "claude-x"}, transport=t
+    )
+    chain.complete(_request())
+    _u, _h, body = t.calls[0]
+    assert body["model"] == "claude-x"
+
+
+def test_build_chain_openai_uses_resolved_openai_model():
+    t = StubTransport((200, _openai_body(text="ok")))
+    chain = P.build_provider_chain(
+        env={"OPENAI_API_KEY": "sk", "PENNY_OPENAI_MODEL": "gpt-z"}, transport=t
+    )
+    chain.complete(_request())
+    _u, _h, body = t.calls[0]
+    assert body["model"] == "gpt-z"
