@@ -5,9 +5,10 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    # 2.3.0: downside sensitivity rent stress applied to the RESOLVED occupancy
-    # (rent_per_sqft + nnn opex stressed too, not just occupancy_annual) — #181.
-    assert model.MODEL_VERSION == "2.3.0"
+    # 2.4.0: first_year_cash_gap scoped strictly to the Year-1 window G..G+11 (a cost
+    # beyond G+11 no longer leaks into the headline, #182) + cash_runway_months ignores
+    # leading zero-cost pre-opening months (#184).
+    assert model.MODEL_VERSION == "2.4.0"
     # 1.2.0: view-model gained the milestones block + payback-period KPI (shape only).
     assert model.COMPUTE_SCHEMA_VERSION == "1.2.0"
 

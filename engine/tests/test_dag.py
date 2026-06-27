@@ -34,6 +34,52 @@ def test_pinnable_nodes_accepted():
         dag.validate_pin(f"{node}#1")  # no raise
 
 
+def _math_sig(res):
+    """The resolved annual MATH (rev/exp/net per year) — not the view-model.
+
+    A no-op pin still mutates the view-model (overrides[] gains an entry, the row
+    class flips to 'overridden'), which is exactly the #183 silent-lie symptom; the
+    real test of "a pin does something" is whether the resolved numbers move.
+    """
+    return tuple(
+        (D(str(res.annual[y].total_rev)), D(str(res.annual[y].total_exp)),
+         D(str(res.annual[y].net)))
+        for y in (1, 2, 3)
+    )
+
+
+def test_every_pinnable_node_measurably_changes_compute_output():
+    # #183 RED: every node advertised in PINNABLE_NODES MUST actually change the
+    # resolved math when pinned. Pre-fix the rate/driver inputs (labor_pct, basket,
+    # occupancy, ...) were advertised pinnable but compute() never consulted them, so
+    # pinning them was accepted-and-persisted yet byte-identical output (a silent lie).
+    trade = TradeArea(basis="city", households="31798")
+    base_sig = _math_sig(compute(_inputs(), Assumptions(), DemandDrivers(),
+                                 trade, overrides={}))
+    for node in sorted(dag.PINNABLE_NODES):
+        val = "0.5" if node == "share" else "4242424"
+        res = compute(_inputs(), Assumptions(), DemandDrivers(), trade,
+                      overrides={f"{node}#1": {"value": val, "note": "n", "ts": "t"}})
+        assert _math_sig(res) != base_sig, f"pinning {node!r} did not change output"
+
+
+def test_non_honored_driver_pins_are_rejected_not_silently_ignored():
+    # #183 RED: the rate/driver inputs compute() does NOT resolve via a pin are no
+    # longer advertised as pinnable, so a pin on them is REJECTED (-> 422), never
+    # accepted-and-ignored. They are edited as global assumptions, not per-year pins.
+    for node in ("labor_pct", "marketing_pct", "supplies_pct", "card_pct",
+                 "payroll_tax_pct", "salvage_pct", "escalator", "basket",
+                 "donation_value", "donations_per_hh", "sqft", "rent_per_sqft",
+                 "occupancy"):
+        with pytest.raises(dag.PinRejected):
+            dag.validate_pin(f"{node}#1")
+    # ...and compute() rejects them at the boundary too (the API echoes this as 422).
+    with pytest.raises(dag.PinRejected):
+        compute(_inputs(), Assumptions(), DemandDrivers(),
+                TradeArea(basis="city", households="31798"),
+                overrides={"labor_pct#1": {"value": "0.99", "note": "n", "ts": "t"}})
+
+
 def test_bad_key_format_rejected():
     with pytest.raises(dag.PinRejected):
         dag.validate_pin("Payroll")          # missing #year

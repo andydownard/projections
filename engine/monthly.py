@@ -85,6 +85,12 @@ def build_monthly(annual_y1, assumptions, opening_month_number, startup_by_month
     cost only — the operating ramp covers exactly the 12 months ``G..G+11``.
     """
     g = int(opening_month_number)
+    # Grand opening is a project-month milestone >= 1 (Spec §5). A g <= 0 timeline has
+    # no well-defined operating window and previously crashed the break-even loop with
+    # an IndexError (-> HTTP 500); reject it cleanly as a ValueError (-> 422) so no
+    # internal caller (seed, Penny tools, scenario re-runs) can take compute down (#184).
+    if g < 1:
+        raise ValueError("opening_month_number must be >= 1")
     last_scheduled = max(startup_by_month.keys(), default=0)
     n = max(g + 11, int(last_scheduled))
 
@@ -136,9 +142,11 @@ def build_monthly(annual_y1, assumptions, opening_month_number, startup_by_month
         ))
 
     # break-even month: first operating month with net>=0 that stays non-negative,
-    # numbered in project months (g + offset).
+    # numbered in project months (g + offset). Iterate over the actual operating-net
+    # count (always 12 for g>=1) rather than a hardcoded range(12) — defense in depth
+    # so the loop can never index past op_nets (#184).
     breakeven = None
-    for i in range(12):
+    for i in range(len(op_nets)):
         if op_nets[i] >= 0 and all(net_ >= 0 for net_ in op_nets[i:]):
             breakeven = g + i
             break

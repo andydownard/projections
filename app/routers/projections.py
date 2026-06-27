@@ -45,7 +45,11 @@ from app.packet import build_packet, render_packet_docx, render_packet_md
 from app.store import Store, get_store
 from engine import dag
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute, compute_annual
-from engine.model import DEFAULT_OPENING_MONTH_NUMBER, default_cost_schedule
+from engine.model import (
+    DEFAULT_OPENING_MONTH_NUMBER,
+    MODEL_VERSION,
+    default_cost_schedule,
+)
 from engine.money import D, number_view
 from engine.viewmodel import to_view_model
 from engine.xlsx import build_xlsx
@@ -736,7 +740,16 @@ def list_projections(
 
 @router.get("/{view_slug}")
 def get_projection(view_slug: str, response: Response, store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
-    """Read by capability slug: return the STORED snapshot verbatim (no recompute)."""
+    """Read by capability slug: return the STORED snapshot verbatim (no recompute).
+
+    Regression Registry #12 (Hard Rule): a projection stored under an OLDER
+    ``model_version`` is returned byte-for-byte as stored — never silently recomputed
+    on the current engine. Staleness is surfaced as a READ-TIME signal only
+    (``upgrade_available``, API_SPEC §4.3/§13) by comparing the stored stamp to the
+    live engine ``MODEL_VERSION``; the stored bytes and the stored ``model_version``
+    are left untouched. Applying the new model is an explicit upgrade-model revision
+    (#34), not this read.
+    """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -744,8 +757,16 @@ def get_projection(view_slug: str, response: Response, store: Store = Depends(ge
         vm = json.loads(row.get("computed_json") or "{}")
     except json.JSONDecodeError:
         vm = {}
+    stored_mv = row.get("model_version") or vm.get("model_version") or ""
+    upgrade_available = bool(stored_mv) and stored_mv != MODEL_VERSION
     response.headers["ETag"] = str(row["version"])
-    return {**vm, "view_slug": view_slug, "version": row["version"], "name": row["name"]}
+    return {
+        **vm,
+        "view_slug": view_slug,
+        "version": row["version"],
+        "name": row["name"],
+        "upgrade_available": upgrade_available,
+    }
 
 
 @router.get("/{view_slug}/staticmap")

@@ -4,12 +4,15 @@ The server computes via the pure engine and persists the native view-model; read
 return that snapshot verbatim; lists are owner-scoped by the bearer owner token.
 RED-first: these were written before app/routers/projections.py.
 """
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.store import get_store
 from app.store.sqlite import SqliteStore
+from engine.model import MODEL_VERSION
 
 
 @pytest.fixture()
@@ -19,6 +22,47 @@ def client():
     app = create_app()
     app.dependency_overrides[get_store] = lambda: store
     return TestClient(app)
+
+
+@pytest.fixture()
+def client_store():
+    """A client paired with its store, so a test can plant a raw stored row."""
+    store = SqliteStore(":memory:")
+    store.migrate()
+    app = create_app()
+    app.dependency_overrides[get_store] = lambda: store
+    return TestClient(app), store
+
+
+def _plant_snapshot(store, *, model_version, sentinel):
+    """Insert a projection whose computed_json was produced under ``model_version``.
+
+    Returns ``(stored_vm, view_slug)``. The stored view-model carries a unique
+    ``_sentinel`` so a read can prove the bytes survived unchanged (no recompute).
+    """
+    stored_vm = {
+        "model_version": model_version,
+        "compute_schema_version": "1.0.0-old",
+        "reco": {"tag": "proceed", "headline": "Proceed.", "sub": "stored verbatim"},
+        "metrics": {"capital": {"raw": 12345, "display": "$12,345"},
+                    "cashGap": {"raw": -999, "display": "($999)"}},
+        "kpis": [], "rows": [], "monthly": [],
+        "flags": {"model_upgrade_available": False},
+        "_sentinel": sentinel,
+    }
+    row = {
+        "id": f"id-{sentinel}",
+        "view_slug": f"slug-{sentinel}",
+        "owner_token_hash": "ownerhash",
+        "name": "Planted Snapshot",
+        "model_version": model_version,
+        "compute_schema_version": "1.0.0-old",
+        "computed_json": json.dumps(stored_vm),
+        "created_at": "2020-01-01T00:00:00Z",
+        "updated_at": "2020-01-01T00:00:00Z",
+    }
+    store.create_projection(row)
+    return stored_vm, row["view_slug"]
 
 
 VALID_BODY = {
@@ -70,6 +114,35 @@ def test_get_by_slug_returns_stored_snapshot_with_etag(client):
 
 def test_get_unknown_slug_404(client):
     assert client.get("/api/projections/does-not-exist").status_code == 404
+
+
+def test_read_returns_older_snapshot_verbatim_and_surfaces_new_model(client_store):
+    # #200 / Regression Registry #12 (Hard Rule): a projection stored under an OLDER
+    # model_version is returned byte-for-byte on read — NEVER silently recomputed on
+    # the current engine — and the staleness is surfaced as a read-time signal.
+    client, store = client_store
+    stored_vm, slug = _plant_snapshot(store, model_version="0.0.1-old", sentinel="old")
+    r = client.get(f"/api/projections/{slug}")
+    assert r.status_code == 200, r.text
+    got = r.json()
+    # (1) every stored key/value survives verbatim — no recompute mutated the snapshot.
+    for k, v in stored_vm.items():
+        assert got[k] == v, f"read recomputed/mutated stored {k!r}"
+    # (2) the OLDER model_version is preserved, not overwritten with the live engine.
+    assert got["model_version"] == "0.0.1-old"
+    assert got["model_version"] != MODEL_VERSION
+    # (3) staleness is surfaced (the engine has moved on since this snapshot).
+    assert got["upgrade_available"] is True
+
+
+def test_read_does_not_flag_upgrade_when_snapshot_is_current(client_store):
+    # The flag must be a TRUE comparison against the live engine, not always-on: a
+    # snapshot already at the current model_version is not stale.
+    client, store = client_store
+    _stored_vm, slug = _plant_snapshot(store, model_version=MODEL_VERSION, sentinel="cur")
+    got = client.get(f"/api/projections/{slug}").json()
+    assert got["model_version"] == MODEL_VERSION
+    assert got["upgrade_available"] is False
 
 
 def test_list_is_owner_scoped(client):

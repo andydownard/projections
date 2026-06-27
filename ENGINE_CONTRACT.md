@@ -1,7 +1,7 @@
 # ENGINE_CONTRACT.md — The Math Authority
 
 > **Status:** Build spec (ready-to-build, not yet built) · **Repo:** `rallytasks/projections` · **Owner:** Andy Downard
-> **Model version this contract defines:** `model_version = "2.3.0"` · `compute_schema_version = "1.2.0"` (2.3.0: downside sensitivity rent stress applied to the **resolved** occupancy — `rent_per_sqft` and `nnn` opex are stressed too, not just `occupancy_annual` (#181); 2.2.0: multi-month pre-opening timeline + scheduled costs + 3 milestones; schema 1.2.0: view-model `milestones` block + Payback-period KPI, monthly `scheduledCosts`)
+> **Model version this contract defines:** `model_version = "2.4.0"` · `compute_schema_version = "1.2.0"` (2.4.0: `first_year_cash_gap` is scoped **strictly** to the operating Year-1 window `G..G+11`, so a scheduled cost beyond `G+11` no longer leaks its deeper trough into the first-year headline (#182); `cash_runway_months` ignores leading zero-cost pre-opening months instead of trivially reporting `1` (#184); 2.3.0: downside sensitivity rent stress applied to the **resolved** occupancy — `rent_per_sqft` and `nnn` opex are stressed too, not just `occupancy_annual` (#181); 2.2.0: multi-month pre-opening timeline + scheduled costs + 3 milestones; schema 1.2.0: view-model `milestones` block + Payback-period KPI, monthly `scheduledCosts`)
 > **Source of truth for requirements:** [`PRD.md`](reference/PRD.md) (cited inline as §) and [`methodology.md`](reference/thrift-store-projections-skill/reference/methodology.md).
 > **Sibling docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [BUILD_PLAN.md](BUILD_PLAN.md) · [DATA_MODEL.md](DATA_MODEL.md) · [API_SPEC.md](API_SPEC.md) · [SECURITY.md](SECURITY.md) · [OPS_RUNBOOK.md](OPS_RUNBOOK.md) · [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CLAUDE.md](CLAUDE.md) · [AGENTS.md](AGENTS.md) · [IDEA_FAB.md](IDEA_FAB.md)
 
@@ -236,14 +236,18 @@ All computed in the core; all asserted by golden tests (not merely rendered).
 ### 6.1 Capital & cash (§12.1)
 
 ```
-first_year_cash_gap   = min(cumulativeCash[M0..M12])           # most-negative position; ≤ 0
+first_year_cash_gap   = min(cumulativeCash[m] for G ≤ m ≤ G+11)  # most-negative position in the operating Year-1 window; ≤ 0 (#182)
 peak_cash_shortfall   = |min(0, first_year_cash_gap)|
 startup_capital_required = peak_cash_shortfall + CASH_RESERVE_BUFFER   # trough already embeds startup (spent at M0) — NEVER add startup_total again
-cash_runway_months    = first m where cumulativeCash[m] ≥ 0     # months to cash-positive; null if never
+cash_runway_months    = # non-negative cumulative-cash months from the first month with cash activity until cash first goes negative; leading zero-cost pre-opening months don't count; null when cash never goes negative within the horizon (#184)
 break_even_revenue    = solve(net == 0 over fixed+variable structure)   # monthly and annual
 break_even_month      = first project month ≥ G where net[m] ≥ 0 AND sustained thereafter   # null if never
 payback_month         = first operating month where Σ(operating net since opening) ≥ startup_total   # the precise payback; null if never within horizon
 ```
+
+> **`first_year_cash_gap` is the Year-1 OPERATING window, not "every operating-kind month" (#182).** The timeline can extend past `G+11` to place a scheduled cost on a post-open month (`N = max(G+11, last scheduled month)`); those extension months are tagged `operating` but are **outside** the 12-month Year-1 window. The gap is bounded by month **index** `G..G+11`, so a Year-3 cost (e.g. a cost at month 30) can never pull its deeper trough into the first-year funding headline.
+
+> **`cash_runway_months` ignores leading zero-cost pre-opening months (#184).** Pre-opening months that carry no scheduled cost have `cumulativeCash == 0`; counting them as "cash-positive" made runway trivially `1` on every pre-opening timeline even when cash later plunged deeply negative. Runway now counts the non-negative months from the **first month with cash activity** up to the first month cash goes negative; it is `0` when cash goes negative the moment money is first spent, and `null` (N/A) when cash never goes negative within the horizon.
 
 Months are numbered on the uniform **project-month timeline** `1..N` (`N = G+11`, `G = opening_month_number`); pre-opening months `1..G-1` accumulate their scheduled-cost losses into `cumulativeCash` from month 1 (§5).
 
@@ -361,7 +365,7 @@ Rules:
 - **No upstream back-solve.** Pinning a downstream node does **not** mutate any upstream input. An upstream row that no longer drives any pinned downstream value gets a **`stale` flag** (rendered as the "no longer drives a pinned value" hint; §14).
 - **Derived rows + totals + margins + KPIs are NEVER pinnable** so the statement always foots. Pin writes to a non-pinnable node are **rejected at the API boundary** (HTTP 4xx), not merely hidden in the UI. The non-pinnable node list:
   `total_revenue, total_expenses, net_profit, net_margin, customers (derived), salvage_sales, donating_households, donations`, plus **every KPI and every decision metric** (`break_even_month, startup_capital_required, first_year_cash_gap, cash_runway_months, simple_payback_years, revenue_cagr`).
-  **Pinnable** nodes: the input drivers (`share[y]`, `donation_value`, `donations_per_hh`, `basket`, `sqft`, `rent/occupancy`, the `%` assumptions) and the **component expense lines** (`Payroll, Marketing & outreach, Supplies & processing, Credit card fees, Payroll taxes, Rent, Insurance, Internet, Pest control, Repairs, Security, Utilities`).
+  **Pinnable** nodes — and this set is **honest**: every member, when pinned, measurably changes computed output, so the API never accepts-and-persists a no-op pin (#183) — are the per-year revenue driver `share[y]` and the **component expense lines** (`Payroll, Marketing & outreach, Supplies & processing, Credit card fees, Payroll taxes, Rent, Insurance, Internet, Pest control, Repairs, Security, Utilities`). The rate/driver inputs (`labor_pct, marketing_pct, supplies_pct, card_pct, payroll_tax_pct, salvage_pct, escalator, basket, donation_value, donations_per_hh, sqft, rent_per_sqft, occupancy`) are **NOT** per-year pins — they are edited as **global assumptions** (`compute()` reads them directly, never via a pin), so a pin on them is **rejected** (HTTP 4xx), not silently ignored. To change one, edit the assumption; to fix a year's resulting expense, pin the component line (e.g. pin `Payroll`, not `labor_pct`).
 - **Reset:** per-pin reset deletes that key; global reset clears all keys.
 - **Totals always derive from resolved component values** so the in-sheet `=SUM(...)` and the server's resolved total are computed from **the same** numbers (this is the case most likely to break the <$0.50 gate — see §11.4).
 
@@ -369,6 +373,7 @@ Rules:
 - Pin a component → the total re-foots via formula over the now-hardcoded cell.
 - Pin then reset → returns to the computed value.
 - Attempt to pin a derived/total/KPI/decision node → **rejected** server-side.
+- **Every** node in `PINNABLE_NODES`, when pinned, **measurably changes** computed output (no advertised-but-ignored pin); a pin on a non-honored rate/driver input is **rejected**, not silently accepted (#183).
 - Pin an upstream input that no longer drives any pinned downstream node → **`stale` flag set**.
 - Property: the statement **always foots** (`total_exp == Σ resolved expense lines`; `net == total_rev − total_exp`) under any subset of legal pins.
 

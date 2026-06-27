@@ -14,13 +14,22 @@ owns the *rules* that guard that resolution at the API boundary:
 """
 from __future__ import annotations
 
-# Component lines that MAY be pinned (the input drivers + component expense lines).
+# Nodes that MAY be pinned — and that compute_annual ACTUALLY resolves via a pin
+# (engine.compute._resolve_get). This set is HONEST: every member, when pinned,
+# measurably changes computed output, so the API never accepts-and-persists a no-op
+# pin (#183). The per-year revenue driver ``share`` plus the component expense lines
+# are the pinnable cells. The rate/driver inputs (labor_pct, marketing_pct,
+# supplies_pct, card_pct, payroll_tax_pct, salvage_pct, escalator, basket,
+# donation_value, donations_per_hh, sqft, rent_per_sqft, occupancy) are NOT pinned
+# per-year — they are edited as GLOBAL assumptions (app SettingsTab) and compute()
+# reads them directly, never via a pin; advertising them pinnable was a silent lie
+# (a pin on them was accepted yet did nothing). To change one of those, edit the
+# assumption; to fix a year's resulting expense, pin the component line (e.g. pin
+# ``Payroll`` rather than ``labor_pct``).
 PINNABLE_NODES = frozenset({
-    # input drivers
-    "share", "donation_value", "donations_per_hh", "basket", "sqft",
-    "rent_per_sqft", "occupancy", "labor_pct", "marketing_pct", "supplies_pct",
-    "card_pct", "payroll_tax_pct", "salvage_pct", "escalator",
-    # component expense lines
+    # the one per-year revenue driver
+    "share",
+    # component expense lines (resolved by compute_annual)
     "Payroll", "Marketing & outreach", "Supplies & processing", "Credit card fees",
     "Payroll taxes", "Rent", "Insurance liability", "Internet, Phones",
     "Pest control", "Repairs/maintenance", "Security system",
