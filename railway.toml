@@ -1,19 +1,28 @@
 # railway.toml — Railway service config (M0.7 / OPS_RUNBOOK).
 # Single replica, durable volume at /data, healthcheck on /api/health.
-# watchPatterns=["**"] so no change deploys as silently SKIPPED.
 
 [build]
 builder = "dockerfile"
+dockerfilePath = "./Dockerfile"
+# watchPatterns must be a direct string array under [build] (Railway schema). A
+# [deploy.watchPatterns] sub-table is invalid and silently ignored, which made
+# GitHub pushes fall back to the dashboard setting and deploy as SKIPPED. "**"
+# = deploy on ANY repo change; never narrow it to a pattern that can drop app
+# code. NOTE: also set the dashboard watch pattern to ["**"] — the trigger-time
+# skip decision reads the dashboard, so a config-as-code fix can't bootstrap itself.
+watchPatterns = ["**"]
 
 [deploy]
+# NO startCommand here on purpose: the Docker image's start.sh entrypoint runs
+# uvicorn UNDER `litestream replicate` and binds ${PORT:-8000}. A startCommand
+# would override start.sh and disable continuous backups. The service has a
+# PORT var so the container binds the port Railway routes the healthcheck to.
 healthcheckPath = "/api/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 120
 numReplicas = 1
 restartPolicyType = "always"
+restartPolicyMaxRetries = 10
 sleepApplication = false
-
-[deploy.watchPatterns]
-patterns = ["**"]
 
 # Volume is mounted at /data (NOT /app — the DB must live on the durable volume).
 # DB_PATH=/data/projections.db is set as a service env var, not here.
