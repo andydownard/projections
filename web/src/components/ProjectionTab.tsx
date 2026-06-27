@@ -19,7 +19,24 @@ import { useState, type KeyboardEvent } from "react";
 
 import { RecoChip } from "./RecoChip";
 import { CashflowChart } from "./CashflowChart";
+import { FieldChange, type FieldChangeActor } from "./FieldChange";
 import type { Metrics, Row, ViewModel } from "../api/viewModel";
+
+/** A recent change on one editable cell (PE7, #126). `previous` is the SERVER's
+ *  prior display string (from the changed[] was→now diff / prior revision) —
+ *  rendered verbatim, never computed here. Keyed by {@link fieldChangeKey}. */
+export interface FieldChangeInfo {
+  previous: string;
+  by?: FieldChangeActor;
+  reverted?: boolean;
+}
+
+/** The cell key shared by ProjectionTab and the detail page so the "recent
+ *  change / was X / undo" affordance lines up with the cell it describes. Uses the
+ *  row's DAG node when present, else its label (the onEditCell identity). */
+export function fieldChangeKey(nodeOrLabel: string, year: number): string {
+  return `${nodeOrLabel}#${year}`;
+}
 
 export interface ProjectionTabProps {
   vm: ViewModel;
@@ -27,6 +44,11 @@ export interface ProjectionTabProps {
   recomputeStatus?: string;
   /** Activate an editable (input) driver/override cell — keyboard + click. */
   onEditCell?: (node: string, year: number) => void;
+  /** Recent per-field changes keyed by {@link fieldChangeKey} (PE7). */
+  fieldChanges?: Record<string, FieldChangeInfo>;
+  /** Per-field undo: revert THAT cell to its previous value via a forward PATCH
+   *  (the parent issues it → a new revision). Omit to render the change display-only. */
+  onUndoField?: (node: string, year: number) => void;
 }
 
 interface TileDef {
@@ -86,7 +108,13 @@ function shareFor(rows: Row[], year: 1 | 2 | 3): string | null {
   return cell ? cell.display : null;
 }
 
-export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: ProjectionTabProps) {
+export function ProjectionTab({
+  vm,
+  recomputeStatus = "",
+  onEditCell,
+  fieldChanges,
+  onUndoField,
+}: ProjectionTabProps) {
   const { reco, metrics, kpis, monthly, breakevenMonth, rows } = vm;
 
   // Each decision tile's reason is a tappable "Why?" disclosure (touch-safe; no
@@ -221,7 +249,13 @@ export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: Projecti
             </thead>
             <tbody>
               {rows.map((row) => (
-                <ThreeYearRow key={row.label} row={row} onEditCell={onEditCell} />
+                <ThreeYearRow
+                  key={row.label}
+                  row={row}
+                  onEditCell={onEditCell}
+                  fieldChanges={fieldChanges}
+                  onUndoField={onUndoField}
+                />
               ))}
             </tbody>
           </table>
@@ -234,9 +268,13 @@ export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: Projecti
 function ThreeYearRow({
   row,
   onEditCell,
+  fieldChanges,
+  onUndoField,
 }: {
   row: Row;
   onEditCell?: (node: string, year: number) => void;
+  fieldChanges?: Record<string, FieldChangeInfo>;
+  onUndoField?: (node: string, year: number) => void;
 }) {
   return (
     <tr>
@@ -244,7 +282,14 @@ function ThreeYearRow({
         {row.label}
       </th>
       {([1, 2, 3] as const).map((year) => (
-        <Cell key={year} row={row} year={year} onEditCell={onEditCell} />
+        <Cell
+          key={year}
+          row={row}
+          year={year}
+          onEditCell={onEditCell}
+          fieldChanges={fieldChanges}
+          onUndoField={onUndoField}
+        />
       ))}
     </tr>
   );
@@ -254,10 +299,14 @@ function Cell({
   row,
   year,
   onEditCell,
+  fieldChanges,
+  onUndoField,
 }: {
   row: Row;
   year: 1 | 2 | 3;
   onEditCell?: (node: string, year: number) => void;
+  fieldChanges?: Record<string, FieldChangeInfo>;
+  onUndoField?: (node: string, year: number) => void;
 }) {
   const value = row[`y${year}` as "y1" | "y2" | "y3"];
   const display = value ? value.display : "—";
@@ -265,6 +314,12 @@ function Cell({
   const testid = `cell-${row.label}-y${year}`;
   // Back-compat alias the detail page / e2e read (e.g. row-net_profit-y1).
   const rowTestid = `row-${rowSlug(row.label)}-y${year}`;
+
+  // PE7: a recent change on this editable cell (Penny or manual). The cell's own
+  // value stays prominent (the button); FieldChange adds the badge + subtle "was X"
+  // + per-field undo. The node identity matches onEditCell (row.node ?? row.label).
+  const nodeId = row.node ?? row.label;
+  const change = row.editable ? fieldChanges?.[fieldChangeKey(nodeId, year)] : undefined;
 
   // Editable (input/overridable component) cells are real buttons: keyboard
   // focusable, Enter/Space activatable. Derived/computed cells are read-only and
@@ -278,17 +333,31 @@ function Cell({
       }
     };
     return (
-      <td className="cell-wrap">
+      <td className="cell-wrap" data-changed={change ? "true" : undefined}>
         <button
           type="button"
           data-testid={testid}
           className={cls}
+          // Recent-change prominence (not color alone — the FieldChange badge
+          // carries icon + text). Inline so it never collides with tokens.css.
+          style={change ? { fontWeight: 700, outline: "2px solid #35644f", outlineOffset: 1 } : undefined}
           onClick={activate}
           onKeyDown={onKey}
           aria-label={`${row.label}, Year ${year}: ${display}`}
         >
           {display}
         </button>
+        {change && (
+          <FieldChange
+            label={`${row.label}, Year ${year}`}
+            current={display}
+            previous={change.previous}
+            by={change.by}
+            reverted={change.reverted}
+            showCurrent={false}
+            onUndo={onUndoField ? () => onUndoField(nodeId, year) : undefined}
+          />
+        )}
       </td>
     );
   }
