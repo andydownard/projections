@@ -223,6 +223,13 @@ def build_xlsx(result, path):
     pc = ws[f"B{row}"]
     pc.value = f'=IF(B{npr}<=0,"",B{startup_total_row}/B{npr})'
     pc.number_format = '0.0'
+    row += 1
+
+    # ---------- MILESTONES (grand opening / break-even / payback) -----------
+    # The three timeline milestones (§8 / #117), rendered as the SAME server display
+    # strings the view-model emits ("Month 6" / "N/A"). These are engine-resolved
+    # values, not divisions — no formula error surface to guard.
+    _build_milestones_block(ws, result, row)
 
     # ---------- MONTHLY tab -------------------------------------------------
     _build_monthly_tab(monthly_ws, result)
@@ -259,6 +266,34 @@ def _precalc_expense(label, year, result):
     years, _su, _st, _occ = compute_annual(
         result.inputs, result.assumptions, None, result.trade_area, {})
     return round_dollars(years[year].expenses[label])
+
+
+def _build_milestones_block(ws, result, row):
+    """Grand opening / break-even / payback as the SAME server display strings the
+    view-model emits ("Month 6" / "N/A"), so the workbook and the app never disagree.
+
+    Reuses ``engine.viewmodel._milestone`` (the single formatting authority) rather
+    than re-deriving the strings here. These are engine-resolved values, not Excel
+    divisions, so there is nothing to guard against #DIV/0!.
+    """
+    from engine.viewmodel import _milestone
+
+    dec = result.decision
+    g = dec.grand_opening_month
+    entries = [
+        ("Grand opening", _milestone(g, result.flags, "grand_opening_month")),
+        ("Break-even", _milestone(dec.break_even_month, result.flags, "break_even_month")),
+        ("Payback", _milestone(dec.payback_month, result.flags, "payback_month",
+                               opening_month=g)),
+    ]
+    ws[f"A{row}"] = "MILESTONES"
+    ws[f"A{row}"].font = BOLD
+    row += 1
+    for label, milestone in entries:
+        ws[f"A{row}"] = label
+        ws[f"A{row}"].font = BLACK
+        ws[f"B{row}"] = milestone["display"]
+        row += 1
 
 
 def _build_monthly_tab(ws, result):

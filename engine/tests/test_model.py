@@ -6,7 +6,8 @@ from engine import model
 
 def test_model_versions_stamped():
     assert model.MODEL_VERSION == "2.2.0"
-    assert model.COMPUTE_SCHEMA_VERSION == "1.1.0"
+    # 1.2.0: view-model gained the milestones block + payback-period KPI (shape only).
+    assert model.COMPUTE_SCHEMA_VERSION == "1.2.0"
 
 
 def test_demand_constants():

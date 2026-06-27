@@ -1,7 +1,7 @@
 # ENGINE_CONTRACT.md — The Math Authority
 
 > **Status:** Build spec (ready-to-build, not yet built) · **Repo:** `rallytasks/projections` · **Owner:** Andy Downard
-> **Model version this contract defines:** `model_version = "2.0.0"` · `compute_schema_version = "1.0.0"`
+> **Model version this contract defines:** `model_version = "2.2.0"` · `compute_schema_version = "1.2.0"` (2.2.0: multi-month pre-opening timeline + scheduled costs + 3 milestones; schema 1.2.0: view-model `milestones` block + Payback-period KPI, monthly `scheduledCosts`)
 > **Source of truth for requirements:** [`PRD.md`](reference/PRD.md) (cited inline as §) and [`methodology.md`](reference/thrift-store-projections-skill/reference/methodology.md).
 > **Sibling docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [BUILD_PLAN.md](BUILD_PLAN.md) · [DATA_MODEL.md](DATA_MODEL.md) · [API_SPEC.md](API_SPEC.md) · [SECURITY.md](SECURITY.md) · [OPS_RUNBOOK.md](OPS_RUNBOOK.md) · [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CLAUDE.md](CLAUDE.md) · [AGENTS.md](AGENTS.md) · [IDEA_FAB.md](IDEA_FAB.md)
 
@@ -241,8 +241,11 @@ peak_cash_shortfall   = |min(0, first_year_cash_gap)|
 startup_capital_required = peak_cash_shortfall + CASH_RESERVE_BUFFER   # trough already embeds startup (spent at M0) — NEVER add startup_total again
 cash_runway_months    = first m where cumulativeCash[m] ≥ 0     # months to cash-positive; null if never
 break_even_revenue    = solve(net == 0 over fixed+variable structure)   # monthly and annual
-break_even_month      = first m where net[m] ≥ 0 AND sustained thereafter   # null if never
+break_even_month      = first project month ≥ G where net[m] ≥ 0 AND sustained thereafter   # null if never
+payback_month         = first operating month where Σ(operating net since opening) ≥ startup_total   # the precise payback; null if never within horizon
 ```
+
+Months are numbered on the uniform **project-month timeline** `1..N` (`N = G+11`, `G = opening_month_number`); pre-opening months `1..G-1` accumulate their scheduled-cost losses into `cumulativeCash` from month 1 (§5).
 
 The decision banner surfaces `startup_capital_required` prominently (prototype: ~$277,990) with a **"Why? →"** reasons drill-down (§19.3).
 
@@ -274,7 +277,9 @@ The core emits a semantic **`reco.tag`** enum; the **client** maps enum → colo
 | `proceed` | positive Year-1 cash trajectory, capital need ≤ stated funds, ratios in band |
 
 ### 6.4 KPIs (§11)
-Per period, recomputed live (subject to §12.4 guards): Total revenue · Net profit · Net margin · **Sales per sales-floor sq ft** · Sales per total sq ft · Revenue per donation · Revenue per customer · Annual donations · Customers · Occupancy cost ratio · Labor ratio · Donations per sq ft · **Break-even month** · **Startup capital required** · **First-year cash gap** · Simple payback (yrs) · Revenue CAGR (Y1→Y3).
+Per period, recomputed live (subject to §12.4 guards): Total revenue · Net profit · Net margin · **Sales per sales-floor sq ft** · Sales per total sq ft · Revenue per donation · Revenue per customer · Annual donations · Customers · Occupancy cost ratio · Labor ratio · Donations per sq ft · **Break-even month** · **Startup capital required** · **First-year cash gap** · **Payback period** (the precise `payback_month`, §6.6) · Revenue CAGR (Y1→Y3).
+
+> `simple_payback_years` (`startup_total / net[1]`) is **retained internally** (still computed and listed as a non-pinnable derived node) but is **no longer surfaced on the view-model**: the KPI strip shows the precise **Payback period** milestone (`payback_month`) instead (§6.6).
 
 ```
 sales_per_salesfloor_sqft = total_rev[1] / (building_sqft × salesfloor_pct)   # N/A if denom 0
@@ -283,6 +288,18 @@ labor_ratio[y]            = Payroll[y] / total_rev[y]                          #
 simple_payback_years      = startup_total / net[1]                            # N/A if net[1] ≤ 0
 revenue_cagr              = (total_rev[3] / total_rev[1])^(1/2) − 1           # N/A if rev[1] == 0
 ```
+
+### 6.6 Milestones (project-month timeline, §8 / #117)
+
+Three milestones are computed precisely on the `1..N` timeline and emitted on the view-model as a top-level `milestones` block, each a dual-value `{raw, display}` (e.g. `{raw: 6, display: "Month 6"}`). The **server is the formatting authority** — the client renders the `display` string verbatim, never re-deriving "Month N".
+
+| Milestone | Definition | Value |
+|---|---|---|
+| `grandOpening` | `grand_opening_month = G` (the `opening_month_number` input) | always known |
+| `breakEven` | `break_even_month` — first sustained operating month (≥ G) with ongoing net ≥ 0 | `null` ⇒ N/A-with-reason |
+| `payback` | `payback_month` — first month where cumulative operating profit since opening ≥ `startup_total` (the investment is recovered) | `null` ⇒ N/A-with-reason; carries a `duration` display ("25 months") when reached |
+
+When a milestone is not reached within the horizon the value is the explicit N/A sentinel `{raw: null, display: "N/A", reason: "<engine flag reason>"}` (the existing `flags` pattern), **never a misleading 0**. The `.xlsx` `MILESTONES` block renders the same `display` strings (single formatting authority).
 
 ### 6.5 Numeric discipline (rounding authority)
 - **Compute in `Decimal` (or integer cents) internally; round only at display/compare** (§12.4).
@@ -379,8 +396,9 @@ It returns the **App-D view-model** as its native output — the **same** struct
 |---|---|
 | `reco` | `{ tag, headline, sub, color, bg, icon }` — `tag` is the §6.3 enum; `color/bg/icon` are **client-derived** (see §9.3) |
 | `metrics` | `{ capital, cashGap, breakeven }` + reasons `{ reasonCapital, reasonGap, reasonBreakeven }` |
-| `kpis[]` | `{ label, value, sub, color }` |
-| `monthly[]` | per month `{ revenue, expenses, net, cumulativeCash }` + top-level `breakevenMonth` |
+| `milestones` | `{ grandOpening, breakEven, payback }` — each `{ raw, display }`; unreached ⇒ `{ raw: null, display: "N/A", reason }`; `payback` adds `duration` ("25 months") when reached (§6.6) |
+| `kpis[]` | `{ label, value, sub, color }` — includes the **Payback period** KPI (sourced from `milestones.payback`); the `simple_payback_years` KPI is retired (§6.4) |
+| `monthly[]` | per **project month 1..N** `{ revenue, expenses, scheduledCosts, net, cumulativeCash }` (the same columns as the `.xlsx` Monthly tab; `net = revenue − expenses − scheduledCosts`, so a pre-opening month reads as a real loss) + top-level `breakevenMonth` |
 | `rows[]` | per 3-year line `{ label, group, y1, y2, y3, class: input\|computed\|overridden\|estimated, editable }` |
 | `overrides[]` | per pin `{ node, year, calculated, value, note, pinnedDate, affected[] }` |
 | `evidence[]` | `{ label, value, method, badge, change, meta }` |

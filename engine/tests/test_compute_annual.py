@@ -152,6 +152,34 @@ def test_month1_lump_opening_month_1_reproduces_legacy_numbers():
         [D(str(m.cumulative_cash)) for m in legacy.monthly]
 
 
+def test_migration_default_backfill_reproduces_legacy_view_model_byte_for_byte():
+    # Backward-compat guard (#120): a legacy/seeded projection with NO schedule,
+    # migrated to the month-1 lump via the SHIPPED migration backfill helper
+    # (model.default_cost_schedule() at opening_month_number=1), must compute the
+    # entire view-model byte-for-byte identical to the pre-change legacy default —
+    # existing projections' numbers (annual P&L, decision metrics, monthly curve,
+    # milestones) do not move.
+    import json
+
+    from engine.viewmodel import to_view_model
+    legacy = _hoh()  # no schedule; opening_month_number defaults to 1
+    migrated = _hoh(cost_schedule=tuple(model.default_cost_schedule()),
+                    opening_month_number=model.DEFAULT_OPENING_MONTH_NUMBER)
+    assert json.dumps(to_view_model(migrated), sort_keys=True) == \
+        json.dumps(to_view_model(legacy), sort_keys=True)
+
+
+def test_legacy_default_key_numbers_are_pinned():
+    # Literal regression anchor for the migration default (#120): the legacy lump
+    # numbers are frozen so a future engine change cannot silently move them.
+    res = _hoh()  # canonical 60% labor, no schedule (the seeded legacy default)
+    assert D(str(res.startup_total)) == Decimal("238500")
+    assert D(str(res.annual[1].net)) == Decimal("-44432.9056672000")
+    assert D(str(res.decision.startup_capital_required)) == Decimal("321939.7347072000000")
+    assert res.decision.break_even_month == 9
+    assert res.decision.payback_month is None  # never recovered in the horizon
+
+
 def test_schedule_total_equals_sum_of_outflow_map():
     # The per-month outflow map sums to startup_total (no double count, none dropped).
     from engine.compute import Assumptions, startup_outflows_by_month

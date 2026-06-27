@@ -55,6 +55,30 @@ def _pct_or_na(value):
     return na_view() if value is None else pct_view(value)
 
 
+def _milestone(month, flags, flag_key, opening_month=None):
+    """A timeline milestone as ``{raw, display}`` (§8 / #117).
+
+    ``month`` is the project month the milestone lands on, or ``None`` when it is
+    never reached within the horizon. The engine is the single formatting authority,
+    so the display string ("Month 6") is built here, never on the client. When a
+    milestone is unreached the value is the explicit N/A sentinel carrying the
+    engine's ``flags`` reason (N/A-with-reason), never a misleading 0. For payback,
+    ``opening_month`` adds a plain-language duration display ("25 months") measured
+    from grand opening to recovery (inclusive).
+    """
+    if month is None:
+        out = na_view()
+        reason = flags.get(flag_key)
+        if reason:
+            out["reason"] = reason
+        return out
+    out = {"raw": month, "display": f"Month {month}"}
+    if opening_month is not None:
+        n = month - opening_month + 1
+        out["duration"] = f"{n} {'month' if n == 1 else 'months'}"
+    return out
+
+
 def to_view_model(result):
     annual = result.annual
     dec = result.decision
@@ -68,6 +92,16 @@ def to_view_model(result):
     # ---- reco
     headline, sub = _RECO_HEADLINES.get(dec.reco_tag, ("", ""))
     reco = {"tag": dec.reco_tag, "headline": headline, "sub": sub}
+
+    # ---- three milestones (§8 / #117): grand opening, break-even, payback — each
+    # {raw, display}; N/A-with-reason (from the engine flags) when unreached.
+    g = dec.grand_opening_month
+    milestones = {
+        "grandOpening": _milestone(g, result.flags, "grand_opening_month"),
+        "breakEven": _milestone(dec.break_even_month, result.flags, "break_even_month"),
+        "payback": _milestone(dec.payback_month, result.flags, "payback_month",
+                              opening_month=g),
+    }
 
     # ---- metrics + reasons
     metrics = {
@@ -107,8 +141,8 @@ def to_view_model(result):
          "value": ({"raw": dec.break_even_month, "display": f"Month {dec.break_even_month}"}
                    if dec.break_even_month is not None else na_view()),
          "sub": "operating net", "color": "text"},
-        {"label": "Payback (yrs)", "value": _money_payback(dec.simple_payback_years),
-         "sub": "startup / Y1 net", "color": "text"},
+        {"label": "Payback period", "value": milestones["payback"],
+         "sub": "to recover startup", "color": "text"},
         {"label": "Occupancy ratio", "value": _pct_or_na(occ_ratio),
          "sub": "rent / revenue", "color": "text"},
         {"label": "Labor ratio", "value": _pct_or_na(labor_ratio),
@@ -148,12 +182,16 @@ def to_view_model(result):
         "y3": _pct_or_na(annual[3].margin), "class": "computed", "editable": False,
     })
 
-    # ---- monthly
+    # ---- monthly (project months 1..N; the SAME columns the .xlsx tab renders, so
+    # there is no second math surface). Net = revenue - operating expenses -
+    # scheduled one-time costs (= the xlsx Net column), so a pre-opening month reads
+    # as a real monthly loss and cumulativeCash is the running sum of net from M1.
     monthly = [{
         "month": m.index,
         "revenue": money_view(m.revenue),
         "expenses": money_view(m.expenses),
-        "net": money_view(m.net),
+        "scheduledCosts": money_view(m.startup_outflow),
+        "net": money_view(m.cash_net),
         "cumulativeCash": money_view(m.cumulative_cash),
     } for m in result.monthly]
 
@@ -196,6 +234,7 @@ def to_view_model(result):
     return {
         "reco": reco,
         "metrics": metrics,
+        "milestones": milestones,
         "kpis": kpis,
         "monthly": monthly,
         "breakevenMonth": result.monthly_breakeven,
@@ -230,12 +269,6 @@ def _unpinned_annual(result):
         for label, val in yr.expenses.items():
             out[(label, y)] = val
     return out
-
-
-def _money_payback(value):
-    if value is None:
-        return na_view()
-    return {"raw": float(D(value)), "display": f"~{D(value):.1f}"}
 
 
 def _driver_row(label, annual, attr, group, pct=False, num=False, computed=False):

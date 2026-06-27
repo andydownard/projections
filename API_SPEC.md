@@ -149,12 +149,22 @@ Every read or mutation of a projection returns the **same** view-model — the e
     "breakeven": { "raw": 5, "display": "Month 5" },
     "reasons":   { "reasonCapital": "...", "reasonGap": "...", "reasonBreakeven": "..." }
   },
-  "kpis": [ { "label": "Sales / sq ft", "value": {"raw":61,"display":"$61"}, "sub":"...", "color":"neutral" } ],
-
-  "monthly": {
-    "breakevenMonth": 5,
-    "rows": [ { "month": "M0", "revenue":{...}, "expenses":{...}, "net":{...}, "cumulativeCash":{...} } ]
+  "milestones": {
+    "grandOpening": { "raw": 1, "display": "Month 1" },
+    "breakEven":    { "raw": 5, "display": "Month 5" },
+    "payback":      { "raw": null, "display": "N/A", "reason": "N/A — startup costs are not recovered within the projection horizon" }
   },
+  "kpis": [
+    { "label": "Sales / sq ft", "value": {"raw":61,"display":"$61"}, "sub":"...", "color":"neutral" },
+    { "label": "Payback period", "value": {"raw":null,"display":"N/A"}, "sub":"to recover startup", "color":"text" }
+  ],
+
+  "monthly": [
+    { "month": 1, "revenue":{"raw":0,"display":"$0"}, "expenses":{"raw":0,"display":"$0"},
+      "scheduledCosts":{"raw":20000,"display":"$20,000"}, "net":{"raw":-20000,"display":"($20,000)"},
+      "cumulativeCash":{"raw":-20000,"display":"($20,000)"} }
+  ],
+  "breakevenMonth": 5,
 
   "rows": [
     { "label":"Donor market share", "group":"drivers",
@@ -189,6 +199,8 @@ Every read or mutation of a projection returns the **same** view-model — the e
 ```
 
 Notes:
+- **`milestones`** (`compute_schema_version ≥ 1.2.0`) is the three detail-page milestones — `grandOpening`, `breakEven`, `payback` — each `{raw, display}` (the server formats "Month 6"; the client renders it verbatim, no client math). An unreached milestone is `{raw:null, display:"N/A", reason}` (N/A-with-reason, **never 0**); `payback` adds a `duration` ("25 months") when reached. The **Payback period** KPI is sourced from `milestones.payback`; the old `simple_payback_years` KPI is gone from the wire surface (ENGINE_CONTRACT §6.6).
+- **`monthly`** is an array over **project months `1..N`** (`N = opening_month_number + 11`); each entry is `{month, revenue, expenses, scheduledCosts, net, cumulativeCash}` with `net = revenue − expenses − scheduledCosts` (same columns as the `.xlsx` Monthly tab). `breakevenMonth` is a sibling top-level field.
 - **`reco.tag`** is a **semantic enum**, not a hex color: `proceed | revise | find_cheaper_rent | raise_cash | delay | do_not_proceed` (§12.3). The client maps enum → design token (brand vs semantic separation). The API never emits hex.
 - **`row.class`** ∈ `input | computed | overridden | estimated`; `row.node` is the DAG node key used by overrides. Derived rows and KPIs have `editable:false` and are **non-pinnable** (server rejects pin attempts — §6.1).
 - **Override keys** are `"{node}#{year}"` in storage (`overrides_json`, [DATA_MODEL.md](./DATA_MODEL.md)); the `overrides[]` array splits them into `node`+`year` for the inspector.
