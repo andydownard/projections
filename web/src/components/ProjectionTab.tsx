@@ -19,7 +19,26 @@ import { useState, type KeyboardEvent } from "react";
 
 import { RecoChip } from "./RecoChip";
 import { CashflowChart } from "./CashflowChart";
-import type { Metrics, Row, ViewModel } from "../api/viewModel";
+import { FieldChange, type FieldChangeActor } from "./FieldChange";
+import { cashGapLabel, isNegative } from "./displayLabels";
+import type { ServerValue } from "../api/client";
+import type { Milestone, Row, ViewModel } from "../api/viewModel";
+
+/** A recent change on one editable cell (PE7, #126). `previous` is the SERVER's
+ *  prior display string (from the changed[] was→now diff / prior revision) —
+ *  rendered verbatim, never computed here. Keyed by {@link fieldChangeKey}. */
+export interface FieldChangeInfo {
+  previous: string;
+  by?: FieldChangeActor;
+  reverted?: boolean;
+}
+
+/** The cell key shared by ProjectionTab and the detail page so the "recent
+ *  change / was X / undo" affordance lines up with the cell it describes. Uses the
+ *  row's DAG node when present, else its label (the onEditCell identity). */
+export function fieldChangeKey(nodeOrLabel: string, year: number): string {
+  return `${nodeOrLabel}#${year}`;
+}
 
 export interface ProjectionTabProps {
   vm: ViewModel;
@@ -27,40 +46,80 @@ export interface ProjectionTabProps {
   recomputeStatus?: string;
   /** Activate an editable (input) driver/override cell — keyboard + click. */
   onEditCell?: (node: string, year: number) => void;
+  /** Recent per-field changes keyed by {@link fieldChangeKey} (PE7). */
+  fieldChanges?: Record<string, FieldChangeInfo>;
+  /** Per-field undo: revert THAT cell to its previous value via a forward PATCH
+   *  (the parent issues it → a new revision). Omit to render the change display-only. */
+  onUndoField?: (node: string, year: number) => void;
 }
 
-interface TileDef {
+/** One decision tile, resolved from the server view-model. `value` is a server
+ *  `{raw,display}` (money/month milestone) rendered verbatim — never re-derived. */
+interface TileVM {
   testid: string;
   /** Back-compat alias kept for the existing e2e/detail contract. */
   metricTestid: string;
   label: string;
-  value: (m: Metrics) => { display: string };
-  reason: (m: Metrics) => string | undefined;
+  value: ServerValue | Milestone;
+  /** Tappable "Why?" disclosure (downside/confidence detail). */
+  why?: string;
+  /** Always-visible N/A explanation when the milestone is unreached (raw == null);
+   *  never a bare, misleading "N/A" or a phantom 0 (#117). */
+  naReason?: string;
+  /** Apply the #148 negative color cue by the SIGN of server raw (money tiles). */
+  negativeAware?: boolean;
 }
 
-const TILES: TileDef[] = [
-  {
-    testid: "tile-capital",
-    metricTestid: "metric-capital",
-    label: "Startup capital required",
-    value: (m) => m.capital,
-    reason: (m) => m.reasonCapital,
-  },
-  {
-    testid: "tile-breakeven",
-    metricTestid: "metric-breakeven",
-    label: "Break-even (payback)",
-    value: (m) => m.breakeven,
-    reason: (m) => m.reasonBreakeven,
-  },
-  {
+/** Build the decision tiles from the view-model. Break-even and Payback are DISTINCT
+ *  milestones and are never conflated (#193): Break-even is the operating-profit
+ *  crossing; Payback (the recovered-investment month) is its own tile sourced from
+ *  `milestones.payback`, mirroring the DecisionBanner. The cash-trough tile is
+ *  sign-aware (#194) — a positive trough is a cushion, not a "gap". */
+function buildTiles(vm: ViewModel): TileVM[] {
+  const { metrics, milestones } = vm;
+  const tiles: TileVM[] = [
+    {
+      testid: "tile-capital",
+      metricTestid: "metric-capital",
+      label: "Startup capital required",
+      value: metrics.capital,
+      why: metrics.reasonCapital,
+      negativeAware: true,
+    },
+    {
+      testid: "tile-breakeven",
+      metricTestid: "metric-breakeven",
+      label: "Break-even",
+      // Prefer the milestone (carries its N/A-with-reason) when present; else the
+      // legacy break-even MONTH metric. Either way this is break-even only.
+      value: milestones ? milestones.breakEven : metrics.breakeven,
+      why: metrics.reasonBreakeven,
+      naReason: milestones?.breakEven.reason,
+    },
+  ];
+
+  // Payback is a separate milestone (#193) — only when the server emits milestones.
+  if (milestones) {
+    tiles.push({
+      testid: "tile-payback",
+      metricTestid: "metric-payback",
+      label: "Payback",
+      value: milestones.payback,
+      naReason: milestones.payback.reason,
+    });
+  }
+
+  tiles.push({
     testid: "tile-cashgap",
     metricTestid: "metric-cashgap",
-    label: "First-year cash gap",
-    value: (m) => m.cashGap,
-    reason: (m) => m.reasonGap,
-  },
-];
+    label: cashGapLabel(metrics.cashGap),
+    value: metrics.cashGap,
+    why: metrics.reasonGap,
+    negativeAware: true,
+  });
+
+  return tiles;
+}
 
 const LEGEND: Array<{ cls: string; label: string }> = [
   { cls: "input", label: "Input" },
@@ -86,8 +145,15 @@ function shareFor(rows: Row[], year: 1 | 2 | 3): string | null {
   return cell ? cell.display : null;
 }
 
-export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: ProjectionTabProps) {
-  const { reco, metrics, kpis, monthly, breakevenMonth, rows } = vm;
+export function ProjectionTab({
+  vm,
+  recomputeStatus = "",
+  onEditCell,
+  fieldChanges,
+  onUndoField,
+}: ProjectionTabProps) {
+  const { reco, kpis, monthly, breakevenMonth, rows } = vm;
+  const tiles = buildTiles(vm);
 
   // Each decision tile's reason is a tappable "Why?" disclosure (touch-safe; no
   // hover). Independent toggles so a board member can compare reasons side by side.
@@ -126,46 +192,59 @@ export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: Projecti
         </div>
 
         <dl className="decision-tiles" data-testid="decision-tiles">
-          {TILES.map((t) => (
-            <div
-              key={t.testid}
-              className="decision-tile metric"
-              data-testid={t.testid}
-              data-metric={t.metricTestid}
-            >
-              {/* Back-compat hook: the existing detail/e2e contract reads
-                  metric-capital / metric-breakeven / metric-cashgap. The tile IS
-                  that metric, now enriched with its downside/confidence reason. */}
-              <span data-testid={t.metricTestid} className="sr-only">
-                {t.value(metrics).display}
-              </span>
-              <dt className="decision-tile__label">{t.label}</dt>
-              <dd className="decision-tile__value num">{t.value(metrics).display}</dd>
-              {t.reason(metrics) && (
-                <div className="decision-tile__reason-wrap">
-                  <button
-                    type="button"
-                    className="decision-tile__why"
-                    aria-expanded={openReasons.has(t.testid)}
-                    aria-controls={`${t.testid}-reason`}
-                    onClick={() => toggleReason(t.testid)}
-                  >
-                    Why?
-                  </button>
-                  {/* Kept in the DOM (so aria-controls always resolves) but hidden
-                      from view + a11y tree until expanded. */}
-                  <p
-                    className="decision-tile__reason"
-                    id={`${t.testid}-reason`}
-                    role="note"
-                    hidden={!openReasons.has(t.testid)}
-                  >
-                    {t.reason(metrics)}
-                  </p>
-                </div>
-              )}
-            </div>
-          ))}
+          {tiles.map((t) => {
+            // An unreached milestone (raw == null) is N/A — show its reason inline,
+            // never a bare "N/A" or a misleading 0 (#117). data-negative is by SIGN.
+            const isNa = t.value.raw == null;
+            const negative =
+              t.negativeAware && isNegative(t.value as ServerValue) ? "true" : undefined;
+            return (
+              <div
+                key={t.testid}
+                className="decision-tile metric"
+                data-testid={t.testid}
+                data-metric={t.metricTestid}
+              >
+                {/* Back-compat hook: the existing detail/e2e contract reads
+                    metric-capital / metric-breakeven / metric-payback / metric-cashgap.
+                    The tile IS that metric, enriched with its downside/confidence reason. */}
+                <span data-testid={t.metricTestid} className="sr-only">
+                  {t.value.display}
+                </span>
+                <dt className="decision-tile__label">{t.label}</dt>
+                {/* #148: a loss (server raw < 0) gets the error color, PAIRED with
+                    the server's parentheses (the non-color cue) — never color alone. */}
+                <dd className="decision-tile__value num" data-negative={negative}>
+                  {t.value.display}
+                </dd>
+                {/* Explicit N/A-with-reason (never a misleading 0) — always visible. */}
+                {isNa && t.naReason && <p className="metric__reason">{t.naReason}</p>}
+                {t.why && (
+                  <div className="decision-tile__reason-wrap">
+                    <button
+                      type="button"
+                      className="decision-tile__why"
+                      aria-expanded={openReasons.has(t.testid)}
+                      aria-controls={`${t.testid}-reason`}
+                      onClick={() => toggleReason(t.testid)}
+                    >
+                      Why?
+                    </button>
+                    {/* Kept in the DOM (so aria-controls always resolves) but hidden
+                        from view + a11y tree until expanded. */}
+                    <p
+                      className="decision-tile__reason"
+                      id={`${t.testid}-reason`}
+                      role="note"
+                      hidden={!openReasons.has(t.testid)}
+                    >
+                      {t.why}
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </dl>
       </section>
 
@@ -178,7 +257,9 @@ export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: Projecti
             data-testid={/^total revenue$/i.test(k.label) ? "kpi-revenue" : `kpi-${k.label}`}
           >
             <span className="kpi__label">{k.label}</span>
-            <span className="kpi__value">{k.value.display}</span>
+            <span className="kpi__value" data-negative={isNegative(k.value) ? "true" : undefined}>
+              {k.value.display}
+            </span>
             {k.sub && <span className="kpi__sub">{k.sub}</span>}
           </div>
         ))}
@@ -186,7 +267,7 @@ export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: Projecti
 
       <section className="projection-tab__cashflow" aria-label="Monthly launch cash-flow">
         <h3 className="projection-tab__heading">Monthly launch cash-flow — Year 1</h3>
-        <CashflowChart monthly={monthly} breakevenMonth={breakevenMonth} />
+        <CashflowChart monthly={monthly} breakevenMonth={breakevenMonth} milestones={vm.milestones} />
       </section>
 
       <section className="projection-tab__rows" aria-label="3-year projection">
@@ -221,7 +302,13 @@ export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: Projecti
             </thead>
             <tbody>
               {rows.map((row) => (
-                <ThreeYearRow key={row.label} row={row} onEditCell={onEditCell} />
+                <ThreeYearRow
+                  key={row.label}
+                  row={row}
+                  onEditCell={onEditCell}
+                  fieldChanges={fieldChanges}
+                  onUndoField={onUndoField}
+                />
               ))}
             </tbody>
           </table>
@@ -234,9 +321,13 @@ export function ProjectionTab({ vm, recomputeStatus = "", onEditCell }: Projecti
 function ThreeYearRow({
   row,
   onEditCell,
+  fieldChanges,
+  onUndoField,
 }: {
   row: Row;
   onEditCell?: (node: string, year: number) => void;
+  fieldChanges?: Record<string, FieldChangeInfo>;
+  onUndoField?: (node: string, year: number) => void;
 }) {
   return (
     <tr>
@@ -244,7 +335,14 @@ function ThreeYearRow({
         {row.label}
       </th>
       {([1, 2, 3] as const).map((year) => (
-        <Cell key={year} row={row} year={year} onEditCell={onEditCell} />
+        <Cell
+          key={year}
+          row={row}
+          year={year}
+          onEditCell={onEditCell}
+          fieldChanges={fieldChanges}
+          onUndoField={onUndoField}
+        />
       ))}
     </tr>
   );
@@ -254,17 +352,30 @@ function Cell({
   row,
   year,
   onEditCell,
+  fieldChanges,
+  onUndoField,
 }: {
   row: Row;
   year: 1 | 2 | 3;
   onEditCell?: (node: string, year: number) => void;
+  fieldChanges?: Record<string, FieldChangeInfo>;
+  onUndoField?: (node: string, year: number) => void;
 }) {
   const value = row[`y${year}` as "y1" | "y2" | "y3"];
   const display = value ? value.display : "—";
   const cls = `cell cell--${row.class} num`;
+  // #148: flag losses (server raw < 0) for the error-color cue, kept PAIRED with
+  // the server's parentheses so meaning is never carried by color alone.
+  const negative = isNegative(value) ? "true" : undefined;
   const testid = `cell-${row.label}-y${year}`;
   // Back-compat alias the detail page / e2e read (e.g. row-net_profit-y1).
   const rowTestid = `row-${rowSlug(row.label)}-y${year}`;
+
+  // PE7: a recent change on this editable cell (Penny or manual). The cell's own
+  // value stays prominent (the button); FieldChange adds the badge + subtle "was X"
+  // + per-field undo. The node identity matches onEditCell (row.node ?? row.label).
+  const nodeId = row.node ?? row.label;
+  const change = row.editable ? fieldChanges?.[fieldChangeKey(nodeId, year)] : undefined;
 
   // Editable (input/overridable component) cells are real buttons: keyboard
   // focusable, Enter/Space activatable. Derived/computed cells are read-only and
@@ -278,23 +389,44 @@ function Cell({
       }
     };
     return (
-      <td className="cell-wrap">
+      <td className="cell-wrap" data-changed={change ? "true" : undefined}>
         <button
           type="button"
           data-testid={testid}
           className={cls}
+          data-negative={negative}
+          // Recent-change prominence (not color alone — the FieldChange badge
+          // carries icon + text). Inline so it never collides with tokens.css.
+          style={change ? { fontWeight: 700, outline: "2px solid #35644f", outlineOffset: 1 } : undefined}
           onClick={activate}
           onKeyDown={onKey}
           aria-label={`${row.label}, Year ${year}: ${display}`}
         >
           {display}
         </button>
+        {change && (
+          <FieldChange
+            label={`${row.label}, Year ${year}`}
+            current={display}
+            previous={change.previous}
+            by={change.by}
+            reverted={change.reverted}
+            showCurrent={false}
+            onUndo={onUndoField ? () => onUndoField(nodeId, year) : undefined}
+          />
+        )}
       </td>
     );
   }
 
   return (
-    <td data-testid={testid} data-row-testid={rowTestid} className={cls} aria-disabled="true">
+    <td
+      data-testid={testid}
+      data-row-testid={rowTestid}
+      className={cls}
+      data-negative={negative}
+      aria-disabled="true"
+    >
       {/* The slug alias is a hidden sibling so getByTestId(row-...) resolves to a
           node carrying the same aria-disabled state, without two attrs on one el. */}
       <span data-testid={rowTestid} aria-disabled="true" className="sr-only">

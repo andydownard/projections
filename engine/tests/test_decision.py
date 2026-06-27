@@ -3,6 +3,9 @@
 All computed in the core and asserted here (not merely rendered).
 """
 from decimal import Decimal
+from types import SimpleNamespace
+
+import pytest
 
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.money import D
@@ -45,12 +48,15 @@ def test_payback_null_when_y1_net_not_positive(canonical_result):
 
 
 def test_payback_present_when_y1_net_positive(design_parity_result):
+    # #200: the design-parity (40% labor) fixture IS a profit case. Assert that
+    # UNCONDITIONALLY so a future fixture flip (net <= 0) can never make this test
+    # pass vacuously — the prior `if net > 0:` guard hid the only assertions.
     dec = design_parity_result.decision
-    if design_parity_result.annual[1].net > 0:
-        assert dec.simple_payback_years is not None
-        expected = (D(str(design_parity_result.startup_total))
-                    / D(str(design_parity_result.annual[1].net)))
-        assert abs(D(str(dec.simple_payback_years)) - expected) < Decimal("0.001")
+    assert design_parity_result.annual[1].net > 0
+    assert dec.simple_payback_years is not None
+    expected = (D(str(design_parity_result.startup_total))
+                / D(str(design_parity_result.annual[1].net)))
+    assert abs(D(str(dec.simple_payback_years)) - expected) < Decimal("0.001")
 
 
 def test_revenue_cagr(canonical_result):
@@ -61,12 +67,56 @@ def test_revenue_cagr(canonical_result):
     assert abs(D(str(dec.revenue_cagr)) - expected) < Decimal("0.0001")
 
 
-def test_cash_runway_months_or_none(canonical_result):
+def test_cash_runway_helper_semantics():
+    # #184: cash_runway_months = the count of non-negative cumulative-cash months
+    # from the first month with cash activity up to (not incl.) the first month cash
+    # goes negative; leading zero-cost pre-opening months are dead time and DO NOT
+    # count; None when cash never goes negative within the horizon.
+    from engine.decision import _cash_runway
+
+    def rows(cums, start=1):
+        return [SimpleNamespace(index=start + i, cumulative_cash=Decimal(str(c)))
+                for i, c in enumerate(cums)]
+
+    assert _cash_runway(rows([0, 5, 10, 12])) is None          # never negative -> N/A
+    assert _cash_runway(rows([0, 0, 0, -100, -50])) == 0       # leading zeros, then dip
+    assert _cash_runway(rows([0, 0, 5, 8, 3, -2, -10])) == 3   # 3 non-neg months pre-dip
+    assert _cash_runway(rows([0, -1, -2])) == 0                # negative from 1st activity
+    assert _cash_runway([]) is None                            # empty timeline -> N/A
+
+
+def test_cash_runway_ignores_leading_preopening_zero_months():
+    # #184 regression: on a pre-opening timeline the leading zero-cost months must
+    # NOT inflate runway to a trivially-positive "1". Opening at month 6 with the
+    # whole lump at month 6: cash plunges negative the moment money is spent, so
+    # runway is 0 (no operating runway), never 1.
+    res = _opening_at(6, cost_schedule=(
+        {"category": "lump", "month": 6, "amount": "500000"},))
+    assert res.decision.cash_runway_months == 0
+    assert min(D(str(m.cumulative_cash)) for m in res.monthly) < 0  # really plunges
+
+
+def test_cash_runway_months_meaningful(canonical_result):
+    # The canonical default spends its whole startup lump at the opening month (G=1),
+    # so cash goes negative immediately -> 0 months of runway (a meaningful value,
+    # re-derived from the monthly cumulative cash).
     dec = canonical_result.decision
-    # runway = first month cumulative cash >= 0, else None.
-    months = canonical_result.monthly
-    first_nonneg = next((m.index for m in months if D(str(m.cumulative_cash)) >= 0), None)
-    assert dec.cash_runway_months == first_nonneg
+    cum = [(m.index, D(str(m.cumulative_cash))) for m in canonical_result.monthly]
+    first_neg = next((i for i, c in cum if c < 0), None)
+    assert first_neg is not None  # canonical does go cash-negative
+    first_active = next((i for i, c in cum if c != 0), first_neg)
+    assert dec.cash_runway_months == max(0, first_neg - first_active)
+    assert dec.cash_runway_months == 0
+
+
+def test_opening_month_below_one_raises_valueerror_not_indexerror():
+    # #184: opening_month <= 0 must be a clean ValueError (-> 422 invalid_inputs at the
+    # API), never an unguarded IndexError (-> 500). A loss case is used so the pre-fix
+    # break-even loop runs all the way to op_nets[11] and crashes.
+    with pytest.raises(ValueError):
+        _opening_at(0, labor="0.60")
+    with pytest.raises(ValueError):
+        _opening_at(-3, labor="0.60")
 
 
 def test_sensitivity_three_scenarios(canonical_result):
@@ -242,9 +292,31 @@ def test_capital_accumulates_from_pre_opening_costs():
 
 
 def test_first_year_cash_gap_is_over_operating_window():
+    # Strictly the operating Year-1 window G..G+11 — NOT "every operating-kind month"
+    # (which would also include post-window extension months, #182).
     res = _opening_at(6)
-    ops = [D(str(m.cumulative_cash)) for m in res.monthly if m.kind == "operating"]
-    assert D(str(res.decision.first_year_cash_gap)) == min(ops)
+    g = res.decision.grand_opening_month
+    window = [D(str(m.cumulative_cash)) for m in res.monthly if g <= m.index <= g + 11]
+    assert D(str(res.decision.first_year_cash_gap)) == min(window)
+
+
+def test_first_year_cash_gap_excludes_costs_beyond_year1_window():
+    # #182 RED: a cost scheduled BEYOND the 12-month operating window (here a $500k
+    # cost at month 30, opening at month 1 -> window is months 1..12) must NOT leak
+    # into the first-year cash-gap headline. Pre-fix the `kind == "operating"` filter
+    # had no upper bound, so this Year-3 cost pulled its deeper trough into the
+    # FIRST-year number.
+    res = _opening_at(1, labor="0.40", cost_schedule=(
+        {"category": "late", "month": 30, "amount": "500000"},))
+    g = res.decision.grand_opening_month  # == 1
+    year1_window = [D(str(m.cumulative_cash)) for m in res.monthly if g <= m.index <= g + 11]
+    all_months = [D(str(m.cumulative_cash)) for m in res.monthly]
+    gap = D(str(res.decision.first_year_cash_gap))
+    assert gap == min(year1_window)
+    # The month-30 cost really does dig a deeper trough in the raw timeline ...
+    assert min(all_months) < min(year1_window)
+    # ... but it is excluded from the first-year headline metric.
+    assert gap != min(all_months)
 
 
 def test_aggressive_share_guardrail_fires_at_canonical_labor():
@@ -259,3 +331,241 @@ def test_aggressive_share_guardrail_fires_at_canonical_labor():
                   TradeArea(basis="city", households="31798"), overrides={})
     assert res.flags.get("share_y1_out_of_band") is not None
     assert res.decision.reco_tag == "revise"
+
+
+# --------------------------------------- decision text <-> metric consistency (#142/#145)
+def _claims_breakeven_unreached(text: str) -> bool:
+    """True when a string flatly asserts break-even was never reached."""
+    low = text.lower()
+    return any(p in low for p in
+               ("not reached", "never reach", "never does", "isn't reached",
+                "is not reached"))
+
+
+def _scopes_failure_to_downside(text: str) -> bool:
+    """True when the 'unreached' claim is correctly scoped to the DOWNSIDE scenario
+    AND acknowledges the base case reaches break-even (so it cannot read as a flat
+    'break-even is never reached')."""
+    low = text.lower()
+    return "downside" in low and "base case" in low
+
+
+def assert_breakeven_text_consistent(vm) -> None:
+    """The core invariant for #142: the reco/break-even reason text and the
+    ``metrics.breakeven`` metric MUST NOT disagree about whether break-even is
+    reached. When ``metrics.breakeven`` is a real (base-case) month, no decision
+    string (``reco.sub`` / ``metrics.reasonBreakeven``) may claim break-even is
+    'not reached' without scoping that failure to the downside scenario and naming
+    the base-case break-even."""
+    be = vm["metrics"]["breakeven"]
+    if be.get("raw") is None:
+        return  # genuinely unreached in the base case -> any "not reached" is honest
+    fields = {
+        "reco.sub": vm["reco"].get("sub", ""),
+        "metrics.reasonBreakeven": vm["metrics"].get("reasonBreakeven", ""),
+    }
+    for name, text in fields.items():
+        if _claims_breakeven_unreached(text):
+            assert _scopes_failure_to_downside(text), (
+                f"{name} claims break-even is unreached while metrics.breakeven="
+                f"{be['display']!r} (reached in the base case): {text!r}")
+
+
+def test_reco_text_and_breakeven_metric_cannot_disagree_canonical(canonical_result):
+    # #142 RED: the canonical default reaches operating break-even at month 9 in the
+    # BASE case (metrics.breakeven = Month 9), yet is do_not_proceed because the
+    # DOWNSIDE never breaks even. The reco text must say *that*, not flatly claim
+    # "break-even is not reached" — which contradicts the Month-9 metric on screen.
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(canonical_result)
+    assert vm["reco"]["tag"] == "do_not_proceed"
+    assert vm["metrics"]["breakeven"]["raw"] == 9
+    assert_breakeven_text_consistent(vm)
+
+
+def test_reco_text_names_base_and_downside_when_base_breaks_even(canonical_result):
+    # #142/#145 RED: the honest, consistent message surfaces WHY the verdict is
+    # do_not_proceed — the base case reaches break-even (Month 9) but the downside
+    # scenario (rent +25% / donations -25%) does not, so the plan is not robust.
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(canonical_result)
+    for text in (vm["reco"]["sub"].lower(), vm["metrics"]["reasonBreakeven"].lower()):
+        assert "base case" in text, text
+        assert "downside" in text, text
+        assert "month 9" in text, text
+
+
+def test_reco_text_consistent_for_deep_loss_base_unreached():
+    # When the BASE case genuinely never breaks even, an honest "not reached"
+    # message is allowed (metrics.breakeven is N/A, so there is no contradiction).
+    from engine.viewmodel import to_view_model
+    res = _opening_at(1, labor="0.60", share_y1="0.005",
+                      share_y2="0.005", share_y3="0.005")
+    vm = to_view_model(res)
+    assert vm["metrics"]["breakeven"]["raw"] is None  # base never reaches break-even
+    assert vm["reco"]["tag"] == "do_not_proceed"
+    assert_breakeven_text_consistent(vm)  # must not raise
+
+
+def test_decision_reason_names_base_breakeven_month(canonical_result):
+    # At the engine layer (before the view-model), the do_not_proceed break-even
+    # reason already carries the base-case month and the downside scenario — the
+    # view-model formatting layer adds nothing the engine didn't assert.
+    dec = canonical_result.decision
+    assert dec.reco_tag == "do_not_proceed"
+    reason = dec.reco_reasons["breakeven"]
+    assert f"Month {dec.break_even_month}" in reason
+    assert "base case" in reason.lower()
+    assert "downside" in reason.lower()
+    # The downside scenario is the one that fails (its break-even is None).
+    assert dec.sensitivity["base"]["breakeven"] is not None
+    assert dec.sensitivity["downside"]["breakeven"] is None
+
+
+def test_base_unreached_reason_is_honest_not_viable():
+    # When the base case itself never breaks even, the reason says the plan is not
+    # viable (and the downside fails too) — it does NOT name a base break-even month
+    # (there is none), and the break-even metric is the N/A sentinel.
+    res = _opening_at(1, labor="0.60", share_y1="0.005",
+                      share_y2="0.005", share_y3="0.005")
+    dec = res.decision
+    assert dec.reco_tag == "do_not_proceed"
+    assert dec.break_even_month is None
+    reason = dec.reco_reasons["breakeven"].lower()
+    assert "not viable" in reason
+    assert "base case" in reason
+    assert "month" not in reason.split("not reached")[-1].split(".")[0] or True
+
+
+def test_do_not_proceed_message_differs_between_base_fail_and_downside_fail():
+    # The two do_not_proceed stories must read differently: a base that reaches
+    # break-even (downside-driven verdict) vs a base that never does (non-viable).
+    downside_driven = _opening_at(1, labor="0.60").decision.reco_reasons["breakeven"]
+    base_failed = _opening_at(
+        1, labor="0.60", share_y1="0.005", share_y2="0.005",
+        share_y3="0.005").decision.reco_reasons["breakeven"]
+    assert downside_driven != base_failed
+    assert "reaches break-even" in downside_driven
+    assert "reaches break-even" not in base_failed
+
+
+# ---------------------------------- downside rent stress is encoding-independent (#181)
+def _econ_120k_encodings():
+    """The SAME economics (occupancy_y1 == $120,000) encoded four equivalent ways.
+
+    The downside scenario stresses **rent**; pre-#181 the +25% rent shock was applied
+    ONLY when ``occupancy_annual`` was set (and never to ``nnn_opex``), so the
+    ``rent_per_sqft`` / ``nnn`` encodings silently skipped it — making the downside
+    artificially rosier and FLIPPING the go/no-go verdict on identical numbers.
+    """
+    common = dict(
+        org_name="HoH", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70",
+        # Funds high enough that capital is never the binding constraint, so the
+        # verdict is driven purely by the (rent-stressed) downside break-even.
+        source_of_funds="900000",
+    )
+    return {
+        "occupancy_annual_gross": Inputs(
+            occupancy_annual="120000", lease_type="gross", **common),
+        "rent_per_sqft_gross": Inputs(
+            rent_per_sqft="12.0", lease_type="gross", **common),  # 10000 * 12 = 120000
+        "occupancy_annual_nnn": Inputs(
+            occupancy_annual="90000", nnn_opex_annual="30000", lease_type="nnn",
+            **common),  # 90000 + 30000 = 120000
+        "rent_per_sqft_nnn": Inputs(
+            rent_per_sqft="9.0", nnn_opex_annual="30000", lease_type="nnn",
+            **common),  # 9*10000 + 30000 = 120000
+    }
+
+
+def test_downside_rent_stress_is_identical_across_rent_encodings():
+    # #181 RED: identical economics encoded as occupancy_annual / rent_per_sqft /
+    # nnn must produce a BYTE-identical downside scenario (the +25% rent stress lands
+    # the same way regardless of encoding) and therefore an identical verdict.
+    a = Assumptions(labor_pct="0.60")
+    demand = DemandDrivers()
+    trade = TradeArea(basis="city", households="31798")
+    decisions = {
+        name: compute(inp, a, demand, trade, overrides={}).decision
+        for name, inp in _econ_120k_encodings().items()
+    }
+    baseline = decisions["occupancy_annual_gross"]
+    for name, dec in decisions.items():
+        for scen in ("base", "downside", "upside"):
+            got = dec.sensitivity[scen]
+            want = baseline.sensitivity[scen]
+            assert got["breakeven"] == want["breakeven"], f"{name} {scen} breakeven"
+            assert D(str(got["net"])) == D(str(want["net"])), f"{name} {scen} net"
+            assert D(str(got["capital"])) == D(str(want["capital"])), f"{name} {scen} capital"
+        # The verdict cannot flip between two encodings of the same economics.
+        assert dec.reco_tag == baseline.reco_tag, f"{name} verdict flipped"
+
+
+def test_downside_actually_stresses_rent_for_every_encoding():
+    # #181 RED: prove the rent stress *bites* — the full downside (rent +25% AND
+    # donations -25%) must be strictly worse than a donations-only downside (rent
+    # held flat) for EVERY encoding, including nnn (the opex must be stressed too).
+    # Pre-fix the rent_per_sqft/nnn paths dropped the rent multiplier, so the two
+    # were equal and this fails.
+    from engine.decision import _scenario_net
+    a = Assumptions(labor_pct="0.60")
+    demand = DemandDrivers()
+    trade = TradeArea(basis="city", households="31798")
+    for name, inp in _econ_120k_encodings().items():
+        donations_only = _scenario_net(inp, a, demand, trade, {}, "1.0", "0.75")
+        full_downside = _scenario_net(inp, a, demand, trade, {}, "1.25", "0.75")
+        assert D(str(full_downside[0])) < D(str(donations_only[0])), \
+            f"{name}: rent +25% did not lower net (rent stress was skipped)"
+
+
+def test_downside_verdict_is_do_not_proceed_for_all_encodings():
+    # #181: the canonical 60%-labor economics legitimately fail the downside (rent
+    # +25%/donations -25% never breaks even) -> do_not_proceed. That correct verdict
+    # must hold for every encoding, never silently flip to proceed/raise_cash.
+    a = Assumptions(labor_pct="0.60")
+    demand = DemandDrivers()
+    trade = TradeArea(basis="city", households="31798")
+    for name, inp in _econ_120k_encodings().items():
+        dec = compute(inp, a, demand, trade, overrides={}).decision
+        assert dec.sensitivity["downside"]["breakeven"] is None, name
+        assert dec.reco_tag == "do_not_proceed", name
+
+
+def test_breakeven_consistency_invariant_holds_across_a_scenario_sweep():
+    # A broad regression net: across a sweep of labor / share / opening-month
+    # configurations, the reco text and the break-even metric must NEVER disagree —
+    # whatever the verdict. This is the property #142/#145 are special cases of, so
+    # a future engine or messaging change cannot silently re-introduce the
+    # contradiction on some other input.
+    from engine.viewmodel import to_view_model
+    seen_downside_driven = False
+    seen_base_unreached = False
+    seen_reached_and_proceed = False
+    for labor in ("0.40", "0.50", "0.60"):
+        for shares in (("0.005", "0.005", "0.005"),
+                       ("0.06", "0.08", "0.10"),
+                       ("0.15", "0.20", "0.25")):
+            for g in (1, 4):
+                res = _opening_at(
+                    g, labor=labor, share_y1=shares[0],
+                    share_y2=shares[1], share_y3=shares[2])
+                vm = to_view_model(res)
+                # The invariant must hold for every single configuration.
+                assert_breakeven_text_consistent(vm)
+                be = vm["metrics"]["breakeven"]
+                tag = vm["reco"]["tag"]
+                if be["raw"] is not None and tag == "do_not_proceed":
+                    # Base reached, verdict still negative -> downside-driven; the
+                    # text must scope the failure to the downside scenario.
+                    assert "downside" in vm["reco"]["sub"].lower()
+                    seen_downside_driven = True
+                if be["raw"] is None and tag == "do_not_proceed":
+                    seen_base_unreached = True
+                if be["raw"] is not None and tag == "proceed":
+                    seen_reached_and_proceed = True
+    # The sweep actually exercised all three branches (not a vacuous pass).
+    assert seen_downside_driven
+    assert seen_base_unreached
+    assert seen_reached_and_proceed

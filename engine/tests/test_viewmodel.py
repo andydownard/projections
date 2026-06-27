@@ -120,8 +120,136 @@ def test_view_model_is_json_serializable(canonical_result):
 
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
-    assert vm["model_version"] == "2.2.0"
-    assert vm["compute_schema_version"] == "1.1.0"
+    assert vm["model_version"] == "2.4.0"
+    # Adding the milestones block + replacing the simple-payback KPI is a view-model
+    # SHAPE change (no math change) -> COMPUTE_SCHEMA_VERSION bumps to 1.2.0.
+    assert vm["compute_schema_version"] == "1.2.0"
+
+
+# ----------------------------------------------------- three milestones (§8, #117)
+def _preopening_result(opening_month_number=3):
+    """A pre-opening result: grand opening on month G with a timed cost schedule
+    placing one-time costs on the pre-opening months and the opening month."""
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+        opening_month_number=opening_month_number,
+        cost_schedule=(
+            {"category": "Consultant", "month": 1, "amount": "20000"},
+            {"category": "Build-out", "month": 2, "amount": "50000"},
+            {"category": "Equipment", "month": 3, "amount": "30000"},
+        ),
+    )
+    return compute(inputs, Assumptions(), DemandDrivers(),
+                   TradeArea(basis="city", households="31798"))
+
+
+def _recovered_payback_result():
+    """A strongly profitable case that recovers startup within the 12 operating
+    months, so payback is a real milestone (not N/A)."""
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="Strong", city="x", opening_status="pre_launch",
+        share_y1="0.15", share_y2="0.20", share_y3="0.25",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="800000",
+        opening_month_number=1,
+    )
+    return compute(inputs, Assumptions(labor_pct="0.40"), DemandDrivers(),
+                   TradeArea(basis="city", households="31798"))
+
+
+def test_milestones_block_has_three_dual_value_milestones(canonical_result):
+    vm = to_view_model(canonical_result)
+    ms = vm["milestones"]
+    assert set(ms) == {"grandOpening", "breakEven", "payback"}
+    # grand opening = the input G (month 1 default); always reached, dual-value.
+    assert ms["grandOpening"] == {"raw": 1, "display": "Month 1"}
+    # break-even is a real project month for the canonical fixture (month 9).
+    assert ms["breakEven"]["raw"] == canonical_result.decision.break_even_month
+    assert ms["breakEven"]["display"] == f"Month {canonical_result.decision.break_even_month}"
+
+
+def test_payback_milestone_is_na_with_reason_when_unreached(canonical_result):
+    vm = to_view_model(canonical_result)
+    pb = vm["milestones"]["payback"]
+    # Explicit N/A with the engine's reason string — never a misleading 0.
+    assert pb["raw"] is None
+    assert pb["display"] == "N/A"
+    assert pb["reason"].startswith("N/A")
+
+
+def test_payback_milestone_carries_month_and_duration_when_reached():
+    res = _recovered_payback_result()
+    assert res.decision.payback_month is not None  # guard the fixture's intent
+    pb = to_view_model(res)["milestones"]["payback"]
+    g = res.decision.grand_opening_month
+    pm = res.decision.payback_month
+    assert pb["raw"] == pm
+    assert pb["display"] == f"Month {pm}"
+    # duration = months from opening to recovery (inclusive), server-formatted.
+    assert pb["duration"] == f"{pm - g + 1} months"
+
+
+def test_breakeven_milestone_is_na_with_reason_when_unreached():
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="Deep loss", city="x", opening_status="pre_launch",
+        share_y1="0.005", share_y2="0.005", share_y3="0.005",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"))
+    be = to_view_model(res)["milestones"]["breakEven"]
+    assert be["raw"] is None and be["display"] == "N/A"
+    assert be["reason"].startswith("N/A")
+
+
+def test_simple_payback_years_kpi_is_replaced_by_payback_period(canonical_result):
+    vm = to_view_model(canonical_result)
+    labels = [k["label"] for k in vm["kpis"]]
+    # The crude startup/Y1-net KPI is retired from the view-model surface.
+    assert "Payback (yrs)" not in labels
+    assert not any(k.get("sub") == "startup / Y1 net" for k in vm["kpis"])
+    # A precise payback-period KPI takes its place, sourced from the milestone.
+    payback_kpis = [k for k in vm["kpis"] if k["label"] == "Payback period"]
+    assert len(payback_kpis) == 1
+    assert payback_kpis[0]["value"]["raw"] == vm["milestones"]["payback"]["raw"]
+    assert payback_kpis[0]["value"]["display"] == vm["milestones"]["payback"]["display"]
+
+
+def test_monthly_covers_all_project_months_one_to_n_with_preopening():
+    res = _preopening_result(opening_month_number=3)
+    vm = to_view_model(res)
+    months = [m["month"] for m in vm["monthly"]]
+    n = res.inputs.opening_month_number + 11
+    assert months == list(range(1, n + 1))  # 1..N, x-axis from month 1
+    m1 = vm["monthly"][0]
+    # The monthly view mirrors the xlsx columns: scheduled one-time costs are their
+    # own field and Net = revenue - operating expenses - scheduled costs.
+    assert "scheduledCosts" in m1
+    assert m1["scheduledCosts"]["raw"] == 20000.0          # the month-1 schedule row
+    assert m1["revenue"]["raw"] == 0.0 and m1["expenses"]["raw"] == 0.0
+    # Pre-opening month 1 reads as a real monthly loss and feeds cumulative cash
+    # from month 1 (never dropped or forced into month 1).
+    assert m1["net"]["raw"] == -20000.0
+    assert m1["cumulativeCash"]["raw"] == -20000.0
+
+
+def test_monthly_net_is_revenue_minus_expenses_minus_scheduled_costs(canonical_result):
+    # Single-structure parity with the xlsx Net column (= B - C - D), and
+    # cumulativeCash is the running sum of net.
+    vm = to_view_model(canonical_result)
+    running = 0.0
+    for m in vm["monthly"]:
+        expected_net = m["revenue"]["raw"] - m["expenses"]["raw"] - m["scheduledCosts"]["raw"]
+        assert abs(m["net"]["raw"] - expected_net) < 0.5
+        running += m["net"]["raw"]
+        assert abs(m["cumulativeCash"]["raw"] - running) < 0.5
 
 
 def test_compute_populates_view_model_natively(canonical_result):
@@ -129,3 +257,83 @@ def test_compute_populates_view_model_natively(canonical_result):
     assert canonical_result.view_model
     assert canonical_result.view_model["reco"]["tag"] in {
         "proceed", "revise", "find_cheaper_rent", "raise_cash", "delay", "do_not_proceed"}
+
+
+# --------------------------------- decision-text <-> break-even consistency (#142/#145)
+def _do_not_proceed_base_reaches_downside_fails(opening_month_number=1):
+    """A do_not_proceed result whose BASE case reaches break-even but whose DOWNSIDE
+    does not — the canonical 60%-labor economics, parameterizable on opening month so
+    the consistency holds when the timeline is shifted, not just at month 1."""
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+        opening_month_number=opening_month_number,
+    )
+    return compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                   TradeArea(basis="city", households="31798"))
+
+
+def test_do_not_proceed_sub_is_engine_reason_not_static_fallback(canonical_result):
+    # The verdict sub for do_not_proceed must be the engine's precise break-even
+    # reason (single source of truth) — NOT the static _RECO_HEADLINES fallback —
+    # so reco.sub can never drift from the metric's reason text (#142).
+    from engine.viewmodel import _RECO_HEADLINES, to_view_model
+    vm = to_view_model(canonical_result)
+    assert vm["reco"]["tag"] == "do_not_proceed"
+    static_sub = _RECO_HEADLINES["do_not_proceed"][1]
+    assert vm["reco"]["sub"] != static_sub
+    assert vm["reco"]["sub"] == canonical_result.decision.reco_reasons["breakeven"]
+
+
+def test_do_not_proceed_sub_equals_reason_breakeven(canonical_result):
+    # The banner sub and the break-even tile's reason are the SAME server string,
+    # so the two surfaces can never tell a board member different stories (#145).
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(canonical_result)
+    assert vm["reco"]["sub"] == vm["metrics"]["reasonBreakeven"]
+
+
+def test_do_not_proceed_reason_month_matches_breakeven_metric(canonical_result):
+    # The Month-N named in the reason text is exactly the base-case break-even month
+    # rendered in metrics.breakeven — they are derived from the same value, so the
+    # words and the number can never disagree.
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(canonical_result)
+    be = vm["metrics"]["breakeven"]
+    assert be["raw"] is not None
+    assert f"Month {be['raw']}" in vm["reco"]["sub"]
+    assert be["display"] in vm["reco"]["sub"]
+
+
+def test_breakeven_consistency_holds_when_timeline_shifts():
+    # Shifting grand opening still yields a base-reaches / downside-fails verdict
+    # whose text names both scenarios and never contradicts the (shifted) metric.
+    from engine.tests.test_decision import assert_breakeven_text_consistent
+    from engine.viewmodel import to_view_model
+    for g in (1, 3, 6):
+        res = _do_not_proceed_base_reaches_downside_fails(opening_month_number=g)
+        if res.decision.reco_tag != "do_not_proceed":
+            continue
+        vm = to_view_model(res)
+        if vm["metrics"]["breakeven"]["raw"] is None:
+            continue  # base unreached at this offset — covered elsewhere
+        assert_breakeven_text_consistent(vm)
+        assert "downside" in vm["reco"]["sub"].lower()
+
+
+def test_proceed_case_keeps_default_breakeven_reason_and_is_consistent(design_parity_result):
+    # A non-do_not_proceed verdict (the design-parity 40% proceed case) is untouched:
+    # reasonBreakeven falls back to the plain definition, reco.sub is the proceed
+    # sub, and the consistency invariant still holds (break-even reached, no "not
+    # reached" claim anywhere).
+    from engine.tests.test_decision import assert_breakeven_text_consistent
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(design_parity_result)
+    assert vm["reco"]["tag"] == "proceed"
+    assert vm["metrics"]["reasonBreakeven"] == (
+        "First month operating net turns and stays non-negative.")
+    assert "downside" not in vm["reco"]["sub"].lower()
+    assert_breakeven_text_consistent(vm)

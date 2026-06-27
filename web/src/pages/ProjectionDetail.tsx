@@ -6,9 +6,16 @@
 //
 // EDIT (/p/<slug>/edit#<edit-secret>): the fragment secret is read once then
 // scrubbed from the address bar (SECURITY.md §2.5). Owner/edit token drives the
-// autosave PATCH (If-Match: version). A stale save → the 409 SaveConflictModal
+// autosave PATCH (If-Match: version) — for the OWNER the fallback owner token in
+// localStorage authorizes it, so the editable surface is reachable from the list
+// with no secret in the URL (issue #143). A stale save → the 409 SaveConflictModal
 // (reload / overwrite / save-as-copy). Net profit is a derived total — its cell
 // is non-pinnable (aria-disabled), enforced server-side too (PRD §14).
+//
+// A 404 (bad/expired/removed slug) rejects the load; we render a load-failed
+// DegradedState rather than spinning "Loading…" forever (issue #146). The model
+// version + autosave state are published to the shared TopBar header chips —
+// detail-page-only (issue #150).
 //
 // NO client math: every figure is the server's { display } string.
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
@@ -16,14 +23,20 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
 import { patchProjection, PatchConflictError } from "../api/patch";
 import { submitFeedback } from "../api/feedback";
-import { ProjectionTab } from "../components/ProjectionTab";
+import { ProjectionTab, fieldChangeKey, type FieldChangeInfo } from "../components/ProjectionTab";
+import type { FieldChangeActor } from "../components/FieldChange";
 import { TradeAreaMap } from "../components/TradeAreaMap";
 import { EvidencePanel } from "../components/EvidencePanel";
 import { FeedbackModal } from "../components/FeedbackModal";
 import { SaveConflictModal } from "../components/SaveConflictModal";
 import { SettingsTab } from "../components/SettingsTab";
 import { DegradedState } from "../components/DegradedState";
+import { PennyAssistant } from "../components/PennyDrawer";
+import { OverrideInspector, type InspectorOverride } from "../components/OverrideInspector";
+import { SidePanelProvider } from "../components/sidePanels";
+import type { SaveState } from "../components/TopBar";
 import type { ConflictBody } from "../state/autosaveReducer";
+import { clearDetailHeader, setDetailHeader } from "../state/detailHeader";
 import type { ServerValue } from "../api/client";
 import type { PatchHandlerArgs } from "../components/SettingsTab";
 import { readFragmentSecret } from "../router/route";
@@ -36,6 +49,26 @@ export interface ProjectionDetailProps {
 
 type SaveLabel = "All changes saved" | "Saving…" | "Save failed — retry" | "";
 
+/** Map the in-page autosave label to the TopBar save-state enum (header chip). */
+function labelToSaveState(label: SaveLabel): SaveState {
+  switch (label) {
+    case "Saving…":
+      return "saving";
+    case "All changes saved":
+      return "saved";
+    case "Save failed — retry":
+      return "error";
+    default:
+      return "idle";
+  }
+}
+
+/** SPA-navigate home (the shell re-renders on popstate). */
+function goHome() {
+  window.history.pushState(null, "", "/");
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 const DETAIL_TABS = [
   { id: "projection", label: "Projection" },
   { id: "settings", label: "Settings" },
@@ -45,6 +78,61 @@ type DetailTabId = (typeof DETAIL_TABS)[number]["id"];
 function sv(v: ServerValue | number | string | undefined): ServerValue {
   if (v && typeof v === "object" && "raw" in v) return v;
   return { raw: typeof v === "number" ? v : 0, display: String(v ?? "") };
+}
+
+// PE7 (#126): the per-field "recent change / was X / undo" affordance is DERIVED,
+// not computed. We snapshot the editable donor-share cells' SERVER display strings
+// and diff them across a mutation (Penny apply or manual) — a string compare, never
+// any math (PRD §13). The "previous value" is the prior revision's display string;
+// the undo is a normal FORWARD PATCH restoring the prior input value → recompute →
+// version++ → a NEW revision (it never erases the revision that introduced the
+// change). We scope undo to the donor-share inputs because those map cleanly +
+// reversibly to the `inputs.demand.share_y{n}` PATCH key; broader editable rows can
+// be added as their reversible PATCH mapping is confirmed.
+interface TrackedCell {
+  key: string; // fieldChangeKey(node, year)
+  display: string; // server display string (verbatim)
+  raw: number; // the share input value (0..1) used to revert
+  patchKey: string; // share_y1 | share_y2 | share_y3
+}
+
+/** The editable donor-share cells of a view-model, snapshotted for diffing. */
+function shareCells(vm: ViewModel): TrackedCell[] {
+  const out: TrackedCell[] = [];
+  const row = vm.rows.find((r) => r.editable && r.group === "drivers" && /share/i.test(r.label));
+  if (!row) return out;
+  const node = row.node ?? row.label;
+  for (const year of [1, 2, 3] as const) {
+    const cell = row[`y${year}` as "y1" | "y2" | "y3"];
+    if (!cell) continue;
+    out.push({
+      key: fieldChangeKey(node, year),
+      display: cell.display,
+      raw: cell.raw,
+      patchKey: `share_y${year}`,
+    });
+  }
+  return out;
+}
+
+/** Derive the Override Inspector's audit list from the view-model — the SERVER
+ *  display string of every overridden cell, rendered VERBATIM (no client math, no
+ *  re-classification: a cell is "overridden" only because the engine said so via
+ *  `row.class`). The inspector is the forensic RIGHT partner to Penny (Spec B §10);
+ *  resetting a pin is a future host-owned forward edit, so no reset seam is wired
+ *  here yet (read-only audit). */
+function inspectorOverrides(vm: ViewModel): InspectorOverride[] {
+  const out: InspectorOverride[] = [];
+  for (const row of vm.rows) {
+    if (row.class !== "overridden") continue;
+    const node = row.node ?? row.label;
+    for (const year of [1, 2, 3] as const) {
+      const cell = row[`y${year}` as "y1" | "y2" | "y3"];
+      if (!cell) continue;
+      out.push({ node, year, label: `${row.label}, Year ${year}`, value: cell.display });
+    }
+  }
+  return out;
 }
 
 /** Build the SettingsTab view-model from the server settings map. */
@@ -72,6 +160,17 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const [conflict, setConflict] = useState<ConflictBody | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTabId>("projection");
+  const [loadError, setLoadError] = useState(false);
+
+  // PE7: the recent per-field changes (keyed by fieldChangeKey) + the refs that
+  // derive them. `prevCellsRef` is the editable-share snapshot from the last vm;
+  // `revertRef` remembers the prior value to PATCH back for an inline undo;
+  // `pendingActorRef` carries the attribution (penny / user / undo) for the NEXT
+  // vm diff. The badge persists in `fieldChanges` until acknowledged/superseded.
+  const [fieldChanges, setFieldChanges] = useState<Record<string, FieldChangeInfo>>({});
+  const prevCellsRef = useRef<Map<string, TrackedCell>>(new Map());
+  const revertRef = useRef<Map<string, { patchKey: string; raw: number }>>(new Map());
+  const pendingActorRef = useRef<{ by: FieldChangeActor; reverted: boolean } | null>(null);
 
   // Roving tab navigation (WAI-ARIA tabs): Left/Right move + focus the next tab.
   function onTabKey(e: KeyboardEvent<HTMLButtonElement>) {
@@ -103,16 +202,84 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   // Load the stored snapshot.
   useEffect(() => {
     let cancelled = false;
-    void fetchProjection(slug).then((data) => {
-      if (cancelled) return;
-      setVm(data);
-      setVersion(data.version);
-      setName(data.name);
-    });
+    setLoadError(false);
+    void fetchProjection(slug)
+      .then((data) => {
+        if (cancelled) return;
+        setVm(data);
+        setVersion(data.version);
+        setName(data.name);
+      })
+      .catch(() => {
+        // 404 / network failure: degrade to a labelled error state, never spin.
+        if (!cancelled) setLoadError(true);
+      });
     return () => {
       cancelled = true;
     };
   }, [slug]);
+
+  // Publish the detail-only header chips (model version + autosave state) to the
+  // shared TopBar (#150). The shell also gates these on the detail route, but we
+  // reset on unmount so nothing lingers after navigating away.
+  useEffect(() => {
+    setDetailHeader({ modelVersion: vm?.model_version });
+  }, [vm?.model_version]);
+  useEffect(() => {
+    setDetailHeader({ saveState: edit ? labelToSaveState(saveLabel) : "idle" });
+  }, [edit, saveLabel]);
+  useEffect(() => clearDetailHeader, []);
+
+  // #203 — give every projection its own page title (was the static
+  // "Thrift Store Projection" for all of them) so AT/tab/history identify it.
+  useEffect(() => {
+    if (!vm) return;
+    const named = (name || vm.name || "").trim();
+    document.title = named
+      ? `${named} — Thrift Store Projection`
+      : "Thrift Store Projection";
+  }, [vm, name]);
+
+  // PE7: derive the per-field change badges by diffing the editable-share display
+  // strings whenever the view-model settles. `pendingActorRef` (set by the mutation
+  // that triggered this settle) attributes the change; on the initial load there is
+  // no actor, so we only seed the snapshot. No client math — display strings only.
+  useEffect(() => {
+    if (!vm) return;
+    const cells = shareCells(vm);
+    const prev = prevCellsRef.current;
+    const meta = pendingActorRef.current;
+    if (meta && prev.size > 0) {
+      const next: Record<string, FieldChangeInfo> = {};
+      for (const c of cells) {
+        const p = prev.get(c.key);
+        if (p && p.display !== c.display) {
+          next[c.key] = { previous: p.display, by: meta.by, reverted: meta.reverted };
+          revertRef.current.set(c.key, { patchKey: c.patchKey, raw: p.raw });
+        }
+      }
+      if (Object.keys(next).length > 0) setFieldChanges((cur) => ({ ...cur, ...next }));
+    }
+    prevCellsRef.current = new Map(cells.map((c) => [c.key, c]));
+    pendingActorRef.current = null;
+  }, [vm]);
+
+  // PE7: per-field inline undo — a FORWARD PATCH restoring the share input to its
+  // prior value (carries Bearer + If-Match), producing a NEW revision. Never erases
+  // the revision that introduced the change; re-undoable (the revert is itself a
+  // recent change the next diff surfaces as "reverted — was …").
+  function onUndoField(node: string, year: number) {
+    const revert = revertRef.current.get(fieldChangeKey(node, year));
+    if (!revert) return;
+    pendingActorRef.current = { by: "user", reverted: true };
+    setSaveLabel("Saving…");
+    doPatch({ inputs: { demand: { [revert.patchKey]: revert.raw } } }, version)
+      .then(() => setSaveLabel("All changes saved"))
+      .catch((err) => {
+        if (err instanceof PatchConflictError) setConflict(err.conflict);
+        else setSaveLabel("Save failed — retry");
+      });
+  }
 
   async function doPatch(body: Record<string, unknown>, ver: number) {
     const res = await patchProjection({
@@ -124,6 +291,25 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     setVm(res.viewModel as ViewModel);
     setVersion(res.version);
     return res.version;
+  }
+
+  // Re-read the stored snapshot after Penny applies an edit (server-side, inside
+  // the tool-use loop's normal PATCH/If-Match path). This is the ONLY way a
+  // decision-metric delta reaches the screen — the client never streams a number
+  // (Spec B §2/§5.1). It also re-syncs `version` so a later manual autosave carries
+  // the correct If-Match.
+  function refreshViewModel() {
+    // The next vm settle is a Penny-applied edit (PE7 attribution).
+    pendingActorRef.current = { by: "penny", reverted: false };
+    void fetchProjection(slug)
+      .then((data) => {
+        setVm(data);
+        setVersion(data.version);
+        setName(data.name);
+      })
+      .catch(() => {
+        /* a transient read failure leaves the prior snapshot in place */
+      });
   }
 
   function onNameChange(value: string) {
@@ -144,6 +330,8 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   }
 
   async function onSettingsPatch(args: PatchHandlerArgs) {
+    // A manual settings edit (PE7 attribution: actor user).
+    pendingActorRef.current = { by: "user", reverted: false };
     setSaveLabel("Saving…");
     try {
       const v = await doPatch(args.body as Record<string, unknown>, args.version);
@@ -184,18 +372,34 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     setSaveLabel("All changes saved");
   }
 
+  if (loadError) {
+    return (
+      <div className="detail">
+        <DegradedState
+          kind="load-failed"
+          onAction={goHome}
+          actionLabel="Back to your projections"
+        />
+      </div>
+    );
+  }
+
   if (!vm) {
     return <div className="detail detail--loading">Loading…</div>;
   }
 
   return (
     <div className="detail">
-      {edit && (
-        <span data-testid="save-label" role="status" aria-live="polite">
-          {saveLabel}
-        </span>
-      )}
+      {/* #203 — a visible top-level page heading naming the projection (the read
+          view previously had none; the first heading was an <h3>, skipping h1/h2).
+          WCAG 1.3.1 (A) / 2.4.6 (AA). Inline styles only — tokens.css is owned
+          elsewhere and these detail screens are not yet in its parity backlog. */}
+      <h1 style={{ margin: "0 0 1rem", fontSize: "1.5rem", lineHeight: 1.25 }}>
+        {(name || vm.name || "").trim() || "Thrift store projection"}
+      </h1>
 
+      {/* The autosave status is now a header chip in the shared TopBar (#150);
+          ProjectionTab keeps its own recompute live-region for SR users. */}
       {edit && (
         <label className="detail__name">
           Store name
@@ -214,7 +418,19 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       {(() => {
         const projection = (
           <>
-            <ProjectionTab key={slug} vm={vm} recomputeStatus={edit ? saveLabel : ""} />
+            {/* #203 — a section-level h2 so the decision + the existing in-tab
+                h3s ("Monthly launch cash-flow", "3-year projection") nest under
+                the page h1 instead of skipping straight to h3. */}
+            <h2 style={{ margin: "0 0 0.75rem", fontSize: "1.125rem", lineHeight: 1.3 }}>
+              Decision &amp; 3-year projection
+            </h2>
+            <ProjectionTab
+              key={slug}
+              vm={vm}
+              recomputeStatus={edit ? saveLabel : ""}
+              fieldChanges={fieldChanges}
+              onUndoField={edit ? onUndoField : undefined}
+            />
             <TradeAreaMap
               slug={slug}
               location={vm.location}
@@ -327,6 +543,31 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
             return res.support_id;
           }}
         />
+      )}
+
+      {/* Penny — the LEFT slide-out assistant (apply-immediately + narrate, Spec B
+          §2/§5.1). Mounted only in edit mode (her mutate path needs the owner/edit
+          token); with ?ai=off she degrades to the muted Settings FAB (never a
+          dead-end). Her applied edits flow back through onApplied → refreshViewModel,
+          which the PE7 diff (above) surfaces as the per-field "recent change / was X
+          / undo" affordance on the share cells. */}
+      {/* Coexistence (Spec B §10, issue #129): Penny LEFT + the Override Inspector
+          RIGHT share ONE coordinator so they obey the spatial grammar — ≥1180px
+          both non-modal (center stays interactive, no double-dim, opening Penny
+          never steals the Inspector's focus); <1180px modal full-screen sheets that
+          are mutually exclusive (opening one closes + politely announces the other).
+          Both are edit-only (Penny's mutate path + pin resets need the token). */}
+      {edit && (
+        <SidePanelProvider>
+          <PennyAssistant
+            viewSlug={slug}
+            token={token.current ?? ""}
+            aiEnabled={!aiOff}
+            settingsHref={`/p/${encodeURIComponent(slug)}/edit`}
+            onApplied={() => refreshViewModel()}
+          />
+          <OverrideInspector overrides={inspectorOverrides(vm)} />
+        </SidePanelProvider>
       )}
     </div>
   );

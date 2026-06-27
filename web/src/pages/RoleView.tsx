@@ -3,6 +3,10 @@
 // The verdict travels verbatim (M5-G3): the same decision banner + metrics a
 // board/funder sees. Read-only — no editable affordance. Numbers are the
 // server's stored snapshot.
+//
+// A bad/expired/removed slug 404s; the fetch rejects, so we render a load-failed
+// DegradedState (not an infinite spinner — issue #146), the surface degrades but
+// never crashes.
 import { useEffect, useState } from "react";
 
 import { fetchRoleView, type ViewModel } from "../api/viewModel";
@@ -13,27 +17,63 @@ export interface RoleViewProps {
   slug: string;
 }
 
+/** SPA-navigate home (the shell re-renders on popstate). */
+function goHome() {
+  window.history.pushState(null, "", "/");
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 export function RoleView({ slug }: RoleViewProps) {
   const [vm, setVm] = useState<ViewModel | null>(null);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    void fetchRoleView(slug).then((data) => {
-      if (!cancelled) setVm(data);
-    });
+    setLoadError(false);
+    void fetchRoleView(slug)
+      .then((data) => {
+        if (!cancelled) setVm(data);
+      })
+      .catch(() => {
+        // 404 / network failure: degrade to a labelled error state, never spin.
+        if (!cancelled) setLoadError(true);
+      });
     return () => {
       cancelled = true;
     };
   }, [slug]);
 
+  // #203 — per-projection page title (was the static "Thrift Store Projection"
+  // for every share link), so a board member's tab/history identifies it.
+  useEffect(() => {
+    if (!vm) return;
+    const named = (vm.name || "").trim();
+    document.title = named ? `${named} — Thrift Store Projection` : "Thrift Store Projection";
+  }, [vm]);
+
+  if (loadError) {
+    return (
+      <div className="role-view">
+        <DegradedState kind="load-failed" onAction={goHome} actionLabel="Go to home" />
+      </div>
+    );
+  }
+
   if (!vm) return <div className="role-view role-view--loading">Loading…</div>;
 
   return (
     <div className="role-view" data-role={vm.role}>
+      {/* #203 — the board/funder read view previously had ZERO headings of any
+          level. A visible h1 names the projection so AT users can orient + navigate
+          (WCAG 1.3.1 / 2.4.6). Inline style only (tokens.css owned elsewhere; the
+          role-view screen is still in its parity backlog). */}
+      <h1 style={{ margin: "0 0 1rem", fontSize: "1.5rem", lineHeight: 1.25 }}>
+        {(vm.name || "").trim() || "Thrift store projection"}
+      </h1>
       {/* Read-only notice (M7 I2): a shared link can read/download/export but not
           edit — announced politely (role="status"), meaning carried in text. */}
       <DegradedState kind="read-only" />
-      <DecisionBanner reco={vm.reco} metrics={vm.metrics} />
+      <DecisionBanner reco={vm.reco} metrics={vm.metrics} milestones={vm.milestones} />
     </div>
   );
 }

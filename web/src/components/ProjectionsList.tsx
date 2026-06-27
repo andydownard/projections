@@ -7,19 +7,25 @@
 import type { ProjectionListItem } from "../api/projections";
 import { RecoChip } from "./RecoChip";
 import { TradeAreaMap } from "./TradeAreaMap";
+import { basisLabel, formatListDate, isNegative } from "./displayLabels";
 
 export interface ProjectionsListProps {
   projections: ProjectionListItem[];
   onCreate: () => void;
   onOpen: (viewSlug: string) => void;
+  /** Open the EDITABLE detail (Settings/sliders/overrides/autosave) for an owned
+   *  projection (#143). The list is owner-scoped, so every row is editable by its
+   *  owner; the owner token in localStorage authorizes the PATCH (no secret in the
+   *  URL). Omitted ⇒ no Edit affordance renders. */
+  onEdit?: (viewSlug: string) => void;
 }
 
-function formatUpdated(iso: string): string {
-  // Display-only date; not a projection figure. Render server timestamp shortened.
-  return iso.slice(0, 10);
-}
-
-export function ProjectionsList({ projections, onCreate, onOpen }: ProjectionsListProps) {
+export function ProjectionsList({
+  projections,
+  onCreate,
+  onOpen,
+  onEdit,
+}: ProjectionsListProps) {
   if (projections.length === 0) {
     return (
       <section className="list-empty" aria-labelledby="empty-heading">
@@ -86,15 +92,50 @@ export function ProjectionsList({ projections, onCreate, onOpen }: ProjectionsLi
                       {p.name}
                     </button>
                     <span className="list__sub">
-                      {p.location} · {p.basis}
+                      {/* #151: render a human basis label, never the raw enum
+                          code (e.g. "city" → "City"). */}
+                      {p.location} · {basisLabel(p.basis)}
                     </span>
+                    {onEdit && (
+                      <button
+                        type="button"
+                        data-testid={`projection-edit-${p.view_slug}`}
+                        aria-label={`Edit ${p.name}`}
+                        onClick={() => onEdit(p.view_slug)}
+                        // PE1 inline style: a compact secondary action that doesn't
+                        // depend on shared tokens.css (avoids cross-agent CSS churn).
+                        style={{
+                          display: "inline-block",
+                          marginTop: "0.25rem",
+                          padding: "0.125rem 0.5rem",
+                          fontSize: "0.75rem",
+                          fontWeight: 600,
+                          color: "var(--brand-primary)",
+                          background: "transparent",
+                          border: "1px solid var(--line)",
+                          borderRadius: "6px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Edit
+                      </button>
+                    )}
                   </div>
                 </div>
               </td>
-              <td>{formatUpdated(p.updated_at)}</td>
-              <td className="num">{p.y1_revenue.display}</td>
-              <td className="num">{p.y1_net.display}</td>
-              <td className="num">{p.capital_required.display}</td>
+              {/* #151: friendly, locale-stable date — not a raw ISO slice. */}
+              <td>{formatListDate(p.updated_at)}</td>
+              {/* #148: losses get the error color PAIRED with the server's
+                  parentheses (the non-color cue); positives are unflagged. */}
+              <td className="num" data-negative={isNegative(p.y1_revenue) ? "true" : undefined}>
+                {p.y1_revenue.display}
+              </td>
+              <td className="num" data-negative={isNegative(p.y1_net) ? "true" : undefined}>
+                {p.y1_net.display}
+              </td>
+              <td className="num" data-negative={isNegative(p.capital_required) ? "true" : undefined}>
+                {p.capital_required.display}
+              </td>
               <td>
                 <RecoChip tag={p.reco_tag} />
               </td>

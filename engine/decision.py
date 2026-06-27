@@ -36,21 +36,40 @@ class Decision:
 
 
 def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, donation_mult):
-    """Full re-run of the core with perturbed rent & donations -> (net, breakeven, capital)."""
-    from engine.compute import Inputs, compute_annual, startup_outflows_by_month
+    """Full re-run of the core with perturbed rent & donations -> (net, breakeven, capital).
+
+    The rent stress (``rent_mult``) is applied to the **resolved** occupancy — the
+    full annual rent the model actually charges, whether it was entered as an
+    explicit ``occupancy_annual``, derived from ``rent_per_sqft × building_sqft``, or
+    carries an ``nnn`` opex add-on. Pre-#181 the multiplier was applied ONLY to
+    ``occupancy_annual`` (and never to ``nnn_opex``), so a ``rent_per_sqft``/``nnn``
+    projection silently skipped the +25% rent shock — making the downside artificially
+    rosier and flipping the go/no-go verdict on identical economics. Resolving to one
+    quantity here makes the stress encoding-independent by construction (§6.2).
+    """
+    from engine.compute import (
+        Inputs,
+        _occupancy_y1,
+        compute_annual,
+        startup_outflows_by_month,
+    )
     from engine.monthly import build_monthly
 
-    # perturb shares (proxy for donations) and occupancy.
+    # Resolve the full annual rent (incl. nnn opex), stress it, then collapse it back
+    # into a single explicit ``occupancy_annual`` so compute() can't re-diverge by
+    # encoding: clear rent_per_sqft and zero the (now folded-in) nnn opex.
+    stressed_occ = _occupancy_y1(inputs) * D(str(rent_mult))
+    # perturb shares (proxy for donations) and the resolved rent.
     new_inputs = Inputs(
         **{**inputs.__dict__,
            "share_y1": str(D(inputs.share_y1) * D(str(donation_mult))),
            "share_y2": str(D(inputs.share_y2) * D(str(donation_mult))),
-           "share_y3": str(D(inputs.share_y3) * D(str(donation_mult)))}
+           "share_y3": str(D(inputs.share_y3) * D(str(donation_mult))),
+           "occupancy_annual": str(stressed_occ),
+           "rent_per_sqft": None,
+           "lease_type": "gross",
+           "nnn_opex_annual": "0"}
     )
-    occ = inputs.occupancy_annual
-    if occ is not None:
-        new_inputs = Inputs(**{**new_inputs.__dict__,
-                               "occupancy_annual": str(D(occ) * D(str(rent_mult)))})
     years, startup, startup_total, occupancy = compute_annual(
         new_inputs, assumptions, demand, trade, overrides)
     startup_by_month = startup_outflows_by_month(new_inputs, assumptions, occupancy[1])
@@ -62,6 +81,24 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
     # startup_total again (that double-count is the §6.1 capital bug).
     capital = peak + D(assumptions.reserve_buffer)
     return years[1].net, be, capital
+
+
+def _cash_runway(monthly):
+    """Months of non-negative cumulative cash before it first goes negative (§6.1).
+
+    Counts from the first month with any cash activity (cumulative != 0) up to — but
+    not including — the first month cumulative cash goes negative. Leading zero-cost
+    pre-opening months carry ``cumulative_cash == 0``; they are dead time, not runway,
+    so they DO NOT count (pre-#184 they made runway trivially ``1`` on any pre-opening
+    timeline even as cash later plunged deeply negative). Returns ``None`` (N/A) when
+    cash never goes negative within the horizon — there is no runway constraint then.
+    """
+    cum = [(m.index, D(str(m.cumulative_cash))) for m in monthly]
+    first_negative = next((i for i, c in cum if c < 0), None)
+    if first_negative is None:
+        return None
+    first_active = next((i for i, c in cum if c != 0), first_negative)
+    return max(0, first_negative - first_active)
 
 
 def build_decision(result, inputs, assumptions, demand, trade, overrides, flags):
@@ -79,12 +116,15 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
     capital = peak_shortfall + D(assumptions.reserve_buffer)
 
     # First-year cash gap: the most-negative cumulative cash over the operating
-    # Year-1 window (G..G+11). The opening month's cumulative has already absorbed
-    # every pre-opening outflow, so this captures the worst operating-window position.
-    op_cumulative = [D(str(m.cumulative_cash)) for m in monthly if m.kind == "operating"]
+    # Year-1 window (strictly G..G+11). The opening month's cumulative has already
+    # absorbed every pre-opening outflow, so this captures the worst operating-window
+    # position. Scope it by month INDEX, not by ``kind == "operating"`` — the latter
+    # also tags post-window extension months (a scheduled cost beyond G+11), letting a
+    # later-year cost leak its deeper trough into the FIRST-year headline (#182).
+    op_cumulative = [D(str(m.cumulative_cash)) for m in monthly if g <= m.index <= g + 11]
     cash_gap = min(op_cumulative) if op_cumulative else Decimal("0")
 
-    runway = next((m.index for m in monthly if D(str(m.cumulative_cash)) >= 0), None)
+    runway = _cash_runway(monthly)
     break_even_month = result.monthly_breakeven
     if break_even_month is None:
         flags.setdefault(
@@ -169,9 +209,25 @@ def _recommend(result, capital, assumptions, inputs, flags, sensitivity, break_e
     horizon_reached_down = sensitivity["downside"]["breakeven"] is not None
 
     if not horizon_reached_base or not horizon_reached_down:
-        reasons["breakeven"] = (
-            "Break-even is not reached within the first year under base or downside."
-        )
+        # do_not_proceed fires when EITHER the base OR the downside scenario never
+        # reaches break-even. The reason must say WHICH so it can never contradict
+        # the break-even metric on the same screen (#142) and a non-finance reader
+        # sees WHY the verdict is "do not proceed" (#145).
+        if not horizon_reached_base:
+            reasons["breakeven"] = (
+                "Break-even is not reached within the horizon under the base case "
+                "(and the downside scenario fails as well) — the plan is not viable "
+                "as configured."
+            )
+        else:
+            # Base DOES break even (the headline Month-N metric is real); only the
+            # downside (rent +25% / donations -25%) never does. Surface that so the
+            # verdict reads as a robustness gap, not a flat "never breaks even".
+            reasons["breakeven"] = (
+                f"Base case reaches break-even at Month {break_even_month}, but the "
+                "downside scenario (rent +25% / donations -25%) never does — the plan "
+                "is not robust to a tougher market."
+            )
         return "do_not_proceed", reasons
 
     if capital > funds:

@@ -1,6 +1,6 @@
 {
   "breakevenMonth": 5,
-  "compute_schema_version": "1.1.0",
+  "compute_schema_version": "1.2.0",
   "evidence": [],
   "flags": {
     "model_upgrade_available": false,
@@ -64,11 +64,12 @@
     },
     {
       "color": "text",
-      "label": "Payback (yrs)",
-      "sub": "startup / Y1 net",
+      "label": "Payback period",
+      "sub": "to recover startup",
       "value": {
-        "display": "~5.0",
-        "raw": 5.036032269062973
+        "display": "N/A",
+        "raw": null,
+        "reason": "N/A \u2014 startup costs are not recovered within the projection horizon"
       }
     },
     {
@@ -116,7 +117,22 @@
     "reasonCapital": "Worst-case cumulative cash trough (already includes one-time startup) plus reserve.",
     "reasonGap": "Most-negative cumulative cash across the first year."
   },
-  "model_version": "2.2.0",
+  "milestones": {
+    "breakEven": {
+      "display": "Month 5",
+      "raw": 5
+    },
+    "grandOpening": {
+      "display": "Month 1",
+      "raw": 1
+    },
+    "payback": {
+      "display": "N/A",
+      "raw": null,
+      "reason": "N/A \u2014 startup costs are not recovered within the projection horizon"
+    }
+  },
+  "model_version": "2.4.0",
   "monthly": [
     {
       "cumulativeCash": {
@@ -129,12 +145,16 @@
       },
       "month": 1,
       "net": {
-        "display": "($7,840)",
-        "raw": -7839.832345984
+        "display": "($246,340)",
+        "raw": -246339.832345984
       },
       "revenue": {
         "display": "$17,078",
         "raw": 17077.5101952
+      },
+      "scheduledCosts": {
+        "display": "$238,500",
+        "raw": 238500.0
       }
     },
     {
@@ -154,6 +174,10 @@
       "revenue": {
         "display": "$21,347",
         "raw": 21346.887744
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     },
     {
@@ -173,6 +197,10 @@
       "revenue": {
         "display": "$25,616",
         "raw": 25616.2652928
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     },
     {
@@ -192,6 +220,10 @@
       "revenue": {
         "display": "$27,751",
         "raw": 27750.9540672
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     },
     {
@@ -211,6 +243,10 @@
       "revenue": {
         "display": "$32,020",
         "raw": 32020.331616
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     },
     {
@@ -230,6 +266,10 @@
       "revenue": {
         "display": "$36,290",
         "raw": 36289.7091648
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     },
     {
@@ -249,6 +289,10 @@
       "revenue": {
         "display": "$38,424",
         "raw": 38424.3979392
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     },
     {
@@ -268,6 +312,10 @@
       "revenue": {
         "display": "$40,559",
         "raw": 40559.0867136
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     },
     {
@@ -287,6 +335,10 @@
       "revenue": {
         "display": "$42,694",
         "raw": 42693.775488
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     },
     {
@@ -306,6 +358,10 @@
       "revenue": {
         "display": "$44,828",
         "raw": 44828.4642624
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     },
     {
@@ -325,6 +381,10 @@
       "revenue": {
         "display": "$46,963",
         "raw": 46963.1530368
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     },
     {
@@ -344,6 +404,10 @@
       "revenue": {
         "display": "$53,367",
         "raw": 53367.21936
+      },
+      "scheduledCosts": {
+        "display": "$0",
+        "raw": 0.0
       }
     }
   ],
@@ -769,5 +833,5 @@
     "suppliesPct": 0.05
   },
   "staleNodes": [],
-  "version": "2.2.0"
+  "version": "2.4.0"
 }

@@ -92,6 +92,54 @@ def test_golden_gate_design_parity_40(design_parity_result, tmp_path):
     assert _reconcile(design_parity_result, tmp_path) >= 30
 
 
+def test_golden_gate_preopening_custom_schedule(tmp_path):
+    # Golden coverage INCLUDING pre-opening months (#120): grand opening on month 3
+    # with a timed multi-month cost schedule (two pre-opening months + the opening
+    # month) must still reconcile the 3-year table three ways AND recalc clean —
+    # the pre-opening monthly rows, the scheduled-cost column and the milestones
+    # block carry zero formula errors.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="400000",
+        opening_month_number=3,
+        cost_schedule=(
+            {"category": "Consultant", "month": 1, "amount": "20000"},
+            {"category": "Build-out", "month": 2, "amount": "50000"},
+            {"category": "Equipment", "month": 3, "amount": "30000"},
+            {"category": "Post-open support", "month": 15, "amount": "8000"},
+        ),
+    )
+    res = compute(inputs, Assumptions(labor_pct="0.40"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"))
+    pre_open = [m for m in res.monthly if m.kind == "pre_open"]
+    assert pre_open, "fixture must have pre-opening months"
+    assert _reconcile(res, tmp_path) >= 30
+
+
+def test_golden_gate_month1_lump_default(tmp_path):
+    # The month-1-lump default leg (#120): the migration default (no schedule,
+    # opening_month_number=1) reconciles three ways and recalcs clean.
+    from engine import model
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+        opening_month_number=model.DEFAULT_OPENING_MONTH_NUMBER,
+        cost_schedule=tuple(model.default_cost_schedule()),
+    )
+    res = compute(inputs, Assumptions(labor_pct="0.40"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"))
+    assert all(m.kind == "operating" for m in res.monthly)  # no pre-opening months
+    assert _reconcile(res, tmp_path) >= 30
+
+
 def test_golden_gate_with_payroll_override(canonical_inputs, tmp_path):
     # §18: totals stay live formulas over the now-hard-coded orange override cell,
     # and the §12.4 guards must still recalc clean WITH an override present.
@@ -123,3 +171,45 @@ def test_golden_gate_loss_case_recalcs_clean(tmp_path):
     )
     assert res.annual[1].net < 0, "fixture must be a loss case"
     assert _reconcile(res, tmp_path) >= 30
+
+
+def test_concurrent_recalc_calls_are_hermetic(
+        canonical_result, design_parity_result, tmp_path):
+    # #199 regression: two recalc() calls running CONCURRENTLY on distinct workbooks
+    # must BOTH succeed. Each gets its own throwaway LibreOffice profile (a unique
+    # -env:UserInstallation), so they never contend for the single shared profile.
+    # Pre-fix, the second call would forward its document to the already-running
+    # instance and return 0 WITHOUT recalculating -> empty cached cells (the flaky
+    # "empty cell after recalc" red). This proves the harness is now hermetic, so the
+    # slowest CI job can be parallelised (pytest-xdist) without flaking.
+    import concurrent.futures
+
+    import recalc as recalc_harness
+
+    xa = tmp_path / "a.xlsx"
+    xb = tmp_path / "b.xlsx"
+    build_xlsx(canonical_result, str(xa))
+    build_xlsx(design_parity_result, str(xb))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        fa = ex.submit(recalc_harness.recalc, str(xa), 90)
+        fb = ex.submit(recalc_harness.recalc, str(xb), 90)
+        reports = [fa.result(), fb.result()]
+
+    for r in reports:
+        assert "error" not in r, r
+        assert r["status"] == "success", r
+        assert r["total_errors"] == 0, r
+
+    # Both workbooks must carry actual recalculated values (not empty cached cells):
+    # the Total Revenue Y1 cell is a live formula that must resolve to a number.
+    for x in (xa, xb):
+        wb = load_workbook(str(x), data_only=True)
+        ws = wb["Projection"]
+        vals = [
+            ws.cell(row=r, column=2).value
+            for r in range(1, ws.max_row + 1)
+            if ws.cell(row=r, column=1).value == "Total Revenue"
+        ]
+        assert vals and isinstance(vals[0], (int, float)), vals
+        wb.close()

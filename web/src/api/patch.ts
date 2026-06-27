@@ -74,7 +74,14 @@ export async function patchProjection({
   });
 
   if (resp.status === 409) {
-    const conflict = (await resp.json()) as ConflictBody;
+    // The live server raises 409 via FastAPI `HTTPException(detail={...})`, which
+    // serializes as `{ "detail": {...} }` (API_SPEC §1.4). Read the NESTED envelope
+    // (a flat body is tolerated too — older mocks / a future flat handler) so the
+    // recovery fields (`current_version`, `current_state`) survive the parse. The
+    // flat read left them `undefined`, so Overwrite re-sent the STALE If-Match and
+    // the owner could never force-save (#188).
+    const body = (await resp.json()) as { detail?: ConflictBody } & Partial<ConflictBody>;
+    const conflict = (body.detail ?? (body as ConflictBody)) as ConflictBody;
     throw new PatchConflictError(conflict);
   }
   if (!resp.ok) {

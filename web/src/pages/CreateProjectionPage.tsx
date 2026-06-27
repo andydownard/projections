@@ -9,21 +9,87 @@
 // returns the Appendix-D view-model, which renders the decision banner + KPI
 // strip + monthly cash-flow. NO client math — every figure is the server's
 // { display } string (PRD §13 / CLAUDE.md hard rule).
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import type { PennyDraftApplied, PennyDraftState } from "../api/penny";
+import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
 import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
 import { CashflowChart } from "../components/CashflowChart";
 import { DecisionBanner } from "../components/DecisionBanner";
-import { buildCreatePayload, toServerCreateBody, type WizardDraft } from "../wizard/shareHelper";
+import { PennyDraftAssistant } from "../components/PennyDrawer";
+import { SidePanelProvider } from "../components/sidePanels";
+import {
+  buildCreatePayload,
+  DEFAULT_OPENING_MONTH_NUMBER,
+  toServerCreateBody,
+  type CostScheduleRow,
+  type WizardDraft,
+} from "../wizard/shareHelper";
 import { StepIndicator } from "../wizard/StepIndicator";
 import { StepStore } from "../wizard/StepStore";
 import { StepTradeArea } from "../wizard/StepTradeArea";
 import { StepDonorMarket } from "../wizard/StepDonorMarket";
 import { StepCostSchedule } from "../wizard/StepCostSchedule";
 import { StepReview } from "../wizard/StepReview";
-import { useWizardState } from "../wizard/useWizardState";
+import { useWizardState, type WizardState } from "../wizard/useWizardState";
 
 const EXAMPLE_SLUG = "example";
+
+// Human labels for the server `draft_state` field keys Penny mutates (Spec §6.2),
+// shown on each per-field FieldChange affordance in the wizard drawer.
+const DRAFT_FIELD_LABELS: Record<string, string> = {
+  name: "Store name",
+  org_name: "Store name",
+  city: "Store address",
+  address: "Store address",
+  households: "Trade-area households",
+  share_y1: "Year-1 donor share",
+  share_y2: "Year-2 donor share",
+  share_y3: "Year-3 donor share",
+  basket: "Average basket",
+  donation_value: "Donation value",
+  occupancy_annual: "Annual occupancy",
+  opening_month_number: "Opening month",
+  target_opening_date: "Target opening date",
+  cost_schedule: "Cost schedule",
+};
+
+function labelDraftField(field: string): string {
+  return DRAFT_FIELD_LABELS[field] ?? field;
+}
+
+/** Mint an EPHEMERAL session Bearer for the wizard's /penny/draft calls. There is no
+ *  projection (and no owner/edit token) yet, so this is only a rate-limit id; it is
+ *  never persisted, never put in a URL/log, and dropped when the wizard unmounts. */
+function makeWizardDraftToken(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c && typeof c.randomUUID === "function") return `wizdraft-${c.randomUUID()}`;
+  return `wizdraft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** Shape the live wizard state as the server `draft_state` Penny reads + mutates
+ *  (Spec §5.2/§12). Pure field shaping — NO client math (mirrors shareHelper). */
+function wizardToDraftState(wiz: WizardState): PennyDraftState {
+  return {
+    name: wiz.draft.name,
+    inputs: {
+      city: wiz.draft.city,
+      org_name: wiz.draft.name,
+      opening_month_number: wiz.draft.openingMonthNumber ?? DEFAULT_OPENING_MONTH_NUMBER,
+      target_opening_date: wiz.draft.targetOpeningDate ?? null,
+    },
+    assumptions: {
+      share_y1: String(wiz.draft.shareY1),
+      share_y2: String(wiz.draft.shareY2),
+      share_y3: String(wiz.draft.shareY3),
+      basket: String(wiz.draft.basket),
+      donation_value: String(wiz.draft.donationValue),
+      occupancy_annual: String(wiz.draft.occupancyAnnual),
+    },
+    trade_area: { households: String(wiz.householdsValue ?? wiz.draft.households ?? "") },
+    cost_schedule: (wiz.draft.costSchedule ?? []).map((r) => ({ ...r })),
+  };
+}
 
 export interface CreateProjectionPageProps {
   aiOff?: boolean;
@@ -33,6 +99,105 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
   const wiz = useWizardState();
   const [vm, setVm] = useState<ViewModel | null>(null);
   const [busy, setBusy] = useState(false);
+  // One ephemeral Bearer for the whole wizard session's /penny/draft calls.
+  const draftToken = useRef<string>(makeWizardDraftToken());
+
+  // #203 — on Generate the form (incl. the focused Generate button) unmounts and
+  // the result view mounts. Move focus to the result heading so a keyboard user
+  // isn't dropped to <body>/top-of-document, and announce the busy→ready transition
+  // via the polite live region below so a screen-reader user hears the projection
+  // was produced (WCAG 2.4.3 / 4.1.3).
+  const resultHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    if (vm) resultHeadingRef.current?.focus();
+  }, [vm]);
+  const generateStatus = vm ? "Projection ready." : busy ? "Generating your projection…" : "";
+
+  // --- Penny (DRAFT mode) ↔ wizard bridge (Spec §5.2) ------------------------
+  // She fills/refines any wizard field and builds the cost schedule by mutating the
+  // in-memory draft via /penny/draft; her returned edits are mapped straight onto
+  // the live wizard inputs (no client math) and persist nowhere until Generate.
+
+  // When Penny sets the address, kick off the SAME Places→Census resolve the manual
+  // combobox uses (households stay server-derived; the key never reaches the client).
+  async function resolveDraftAddress(address: string) {
+    if (!address.trim()) return;
+    try {
+      const session = newSessionToken();
+      const preds = await placesAutocomplete(address, session);
+      if (preds.length === 0) {
+        wiz.onResolveError("location_not_found");
+        return;
+      }
+      const resolved = await placesResolve(preds[0].place_id, wiz.basis, session);
+      wiz.onResolved(resolved);
+    } catch {
+      wiz.onResolveError("network");
+    }
+  }
+
+  // Map ONE server `draft_state` field key → the matching wizard setter. Used both to
+  // apply Penny's edits and to undo a single field (a forward draft edit). Coercion
+  // only — the projection numbers still come from the server on Generate (PRD §13).
+  function applyDraftField(field: string, value: unknown) {
+    switch (field) {
+      case "name":
+      case "org_name":
+        wiz.set("name", String(value ?? ""));
+        break;
+      case "city":
+      case "address":
+        wiz.set("city", String(value ?? ""));
+        void resolveDraftAddress(String(value ?? ""));
+        break;
+      case "households":
+        wiz.setHouseholds(Number(value));
+        break;
+      case "share_y1":
+        wiz.set("shareY1", Number(value));
+        break;
+      case "share_y2":
+        wiz.set("shareY2", Number(value));
+        break;
+      case "share_y3":
+        wiz.set("shareY3", Number(value));
+        break;
+      case "basket":
+        wiz.set("basket", Number(value));
+        break;
+      case "donation_value":
+        wiz.set("donationValue", Number(value));
+        break;
+      case "occupancy_annual":
+        wiz.set("occupancyAnnual", Number(value));
+        break;
+      case "opening_month_number":
+        wiz.set("openingMonthNumber", Number(value));
+        break;
+      case "target_opening_date":
+        wiz.set("targetOpeningDate", String(value ?? ""));
+        break;
+      case "cost_schedule":
+        wiz.set("costSchedule", (value as CostScheduleRow[]) ?? []);
+        break;
+      default:
+        break; // an unmapped field is ignored (the manual path is unaffected)
+    }
+  }
+
+  // Apply EXACTLY what Penny changed this turn (named in `applied`), reading values
+  // from the returned draft. Avoids clobbering fields the user is editing manually.
+  function onApplyDraft(next: PennyDraftState, applied: PennyDraftApplied[]) {
+    let scheduleTouched = false;
+    for (const entry of applied) {
+      if (entry.tool === "edit_cost_schedule") scheduleTouched = true;
+      for (const c of entry.changed ?? []) applyDraftField(c.field, c.now);
+    }
+    if (scheduleTouched) {
+      const sched = (next as { cost_schedule?: unknown }).cost_schedule;
+      if (Array.isArray(sched)) applyDraftField("cost_schedule", sched as CostScheduleRow[]);
+    }
+  }
 
   async function onGenerate(d: WizardDraft) {
     setBusy(true);
@@ -89,11 +254,48 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
     }
   }
 
+  // A polite live region kept at the SAME fragment position in BOTH the form and
+  // result trees, so it stays mounted across the Generate swap and a screen reader
+  // hears the text change (busy→ready) rather than a fresh, silent subtree (#203).
+  const liveRegion = (
+    <div
+      data-testid="generate-status"
+      aria-live="polite"
+      aria-atomic="true"
+      style={{
+        position: "absolute",
+        width: 1,
+        height: 1,
+        padding: 0,
+        margin: -1,
+        overflow: "hidden",
+        clip: "rect(0 0 0 0)",
+        whiteSpace: "nowrap",
+        border: 0,
+      }}
+    >
+      {generateStatus}
+    </div>
+  );
+
   if (vm) {
     return (
-      <div className="wizard">
-        <div className="wizard__result">
-          <DecisionBanner reco={vm.reco} metrics={vm.metrics} />
+      <>
+        {liveRegion}
+        <div className="wizard">
+          <div className="wizard__result">
+            {/* #203 — the result view used to start with the DecisionBanner (a
+                <section> whose headline is a <p>), so there was no heading to land
+                on and focus reverted to <body>. A focusable result h1 (tabindex=-1)
+                receives focus on mount and names the projection. */}
+            <h1
+              ref={resultHeadingRef}
+              tabIndex={-1}
+              style={{ outline: "none", margin: "0 0 1rem", fontSize: "1.5rem", lineHeight: 1.25 }}
+            >
+              {vm.name?.trim() ? `${vm.name} — projection ready` : "Your projection is ready"}
+            </h1>
+            <DecisionBanner reco={vm.reco} metrics={vm.metrics} milestones={vm.milestones} />
 
           <div className="kpis" data-testid="kpi-strip">
             {vm.kpis.map((k) => (
@@ -108,7 +310,11 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
             ))}
           </div>
 
-          <CashflowChart monthly={vm.monthly} breakevenMonth={vm.breakevenMonth} />
+          <CashflowChart
+            monthly={vm.monthly}
+            breakevenMonth={vm.breakevenMonth}
+            milestones={vm.milestones}
+          />
 
           <a
             className="btn"
@@ -119,13 +325,16 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
           >
             Download .xlsx
           </a>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
   return (
-    <div className="wizard wizard--full">
+    <>
+      {liveRegion}
+      <div className="wizard wizard--full">
       <header className="wizard__intro">
         <h1>Create Projection</h1>
       </header>
@@ -134,6 +343,12 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
 
       <form
         className="wizard__form"
+        // #149: the express form caps at 20rem (.wizard__form) which leaves the
+        // full-page wizard's step content cramped in a ~320px column inside the
+        // 44rem panel. Override component-locally (not the shared token, which the
+        // express WizardPage still relies on) so cost rows lay out 3-up and the
+        // review list uses the panel width — reading as a real full-page wizard.
+        style={{ maxWidth: "44rem" }}
         onSubmit={(e) => {
           e.preventDefault();
           if (wiz.isLast) {
@@ -164,6 +379,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
               type="submit"
               className="btn btn--primary"
               disabled={busy || !wiz.canGenerate}
+              aria-describedby={wiz.blockReason ? "wizard-block-reason" : undefined}
             >
               Generate
             </button>
@@ -172,6 +388,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
               type="submit"
               className="btn btn--primary"
               disabled={busy || !wiz.canProceed}
+              aria-describedby={wiz.blockReason ? "wizard-block-reason" : undefined}
             >
               Next
             </button>
@@ -186,8 +403,67 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
             Start from example
           </button>
         </div>
+
+        {/* #147: state WHY the Next/Generate button is disabled, right beside it.
+            role=status + aria-live=polite announces the reason to assistive tech
+            when it changes; the submit button references this via aria-describedby.
+            Always rendered (empty when the step is satisfiable) so the live region
+            is stable, and the cue is TEXT (with a non-color icon), never color-only. */}
+        <p
+          id="wizard-block-reason"
+          role="status"
+          aria-live="polite"
+          style={
+            wiz.blockReason
+              ? {
+                  display: "flex",
+                  gap: "0.5rem",
+                  alignItems: "flex-start",
+                  margin: "0.75rem 0 0",
+                  maxWidth: "52ch",
+                  fontSize: "0.8125rem",
+                  lineHeight: 1.45,
+                  color: "var(--text-muted)",
+                }
+              : { margin: 0 }
+          }
+        >
+          {wiz.blockReason && (
+            <>
+              <span
+                aria-hidden="true"
+                style={{ flex: "0 0 auto", fontWeight: 700, color: "var(--brand-primary)" }}
+              >
+                ⓘ
+              </span>
+              <span>{wiz.blockReason}</span>
+            </>
+          )}
+        </p>
       </form>
-    </div>
+
+      {/* Penny — the LEFT slide-out assistant in DRAFT mode (Spec §5.2). She fills/
+          refines any wizard field + builds the cost schedule by mutating the in-memory
+          draft via /penny/draft; her edits flow into the live inputs above and persist
+          NOTHING until Generate (which sends the draft, incl. any Penny-built schedule
+          WITH provenance). With ?ai=off she degrades to the muted Settings FAB and the
+          whole manual wizard stays intact (CLAUDE.md "AI opt-out works end-to-end"). */}
+      {/* The wizard is full-page with NO Override Inspector, so Penny is the only
+          side panel here (Spec B §10, issue #129). Wrapped in the shared coordinator
+          for identical breakpoint behaviour (non-modal ≥1180px, modal sheet below)
+          and the shared polite live region. */}
+      <SidePanelProvider>
+        <PennyDraftAssistant
+          token={draftToken.current}
+          aiEnabled={!aiOff}
+          buildDraftState={() => wizardToDraftState(wiz)}
+          onApplyDraft={onApplyDraft}
+          onRevertField={applyDraftField}
+          labelField={labelDraftField}
+        />
+      </SidePanelProvider>
+      </div>
+    </>
   );
 }
 

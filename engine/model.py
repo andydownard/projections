@@ -5,10 +5,33 @@ constant here. Money/percent literals are kept as strings or exact Decimals at
 the point of use; these module constants name the *default* assumption values.
 """
 
-MODEL_VERSION = "2.2.0"          # math/shape change => bump (2.2.0: multi-month
-# pre-opening timeline + scheduled costs + recomputed metrics + 3 milestones)
-# view-model shape changes => bump (1.1.0: +sales/sqft, occupancy & labor ratio KPIs)
-COMPUTE_SCHEMA_VERSION = "1.1.0"
+MODEL_VERSION = "2.4.0"          # math/shape change => bump (2.4.0: first_year_cash_gap
+# is scoped STRICTLY to the operating Year-1 window G..G+11, so a scheduled cost beyond
+# G+11 no longer leaks its deeper trough into the first-year headline (#182); cash_runway_
+# months ignores leading zero-cost pre-opening months instead of trivially reporting 1
+# (#184); 2.3.0: downside sensitivity rent stress is applied to the RESOLVED occupancy —
+# rent_per_sqft and nnn opex are now stressed too, not just occupancy_annual (#181);
+# 2.2.0: multi-month pre-opening timeline + scheduled costs + recomputed metrics + 3
+# milestones)
+# view-model shape changes => bump (1.1.0: +sales/sqft, occupancy & labor ratio
+# KPIs; 1.2.0: +milestones{grandOpening,breakEven,payback} {raw,display}, payback-
+# period KPI replaces simple-payback-years, monthly[]+scheduledCosts)
+COMPUTE_SCHEMA_VERSION = "1.2.0"
+
+# --- export trust copy (#192). Single source for the "planning estimates, not
+# advice" disclaimer + AI-narrative disclosure that the terms gate exists to
+# protect. Lives in the engine (the format authority) so BOTH the server-rendered
+# Board Packet (app/packet.py) and the formula-driven .xlsx (engine/xlsx.py) stamp
+# the SAME words — the caveat can never be stripped from the artifact a board reads.
+TERMS_VERSION = "1.0"             # app/terms.py re-exports this (one version source)
+EXPORT_DISCLAIMER = (
+    "These figures are planning estimates, not financial, legal, or investment "
+    "advice. They are model projections built from assumptions that may not hold; "
+    "verify independently before making funding or lease commitments."
+)
+AI_NARRATIVE_DISCLOSURE = (
+    "Narrative drafted with AI assistance; every figure is grounded in the model."
+)
 
 # --- demand engine
 DONATIONS_PER_HH_PER_YEAR = 3        # §7.3

@@ -36,6 +36,11 @@ class PostgresStore:
     def list_by_owner(self, owner_token_hash: str, *, include_trashed: bool = False) -> list[dict]:
         self._stub("list_by_owner")
 
+    def list_card_summaries(
+        self, owner_token_hash: str, *, include_trashed: bool = False
+    ) -> list[dict]:
+        self._stub("list_card_summaries")
+
     def create_projection(self, p: dict) -> dict:
         self._stub("create_projection")
 
@@ -43,6 +48,11 @@ class PostgresStore:
         self, id: str, expected_version: int, patch: dict[str, Any]
     ) -> int:
         self._stub("update_with_version_check")
+
+    def update_with_version_check_and_revision(
+        self, id: str, expected_version: int, patch: dict[str, Any], revision: dict
+    ) -> int:
+        self._stub("update_with_version_check_and_revision")
 
     def rotate_tokens(
         self, id: str, expected_version: int, new_hashes: dict[str, Any]
@@ -54,6 +64,9 @@ class PostgresStore:
 
     def soft_delete(self, id: str, expected_version: int) -> int:
         self._stub("soft_delete")
+
+    def purge_projection(self, id: str, expected_version: int) -> int:
+        self._stub("purge_projection")
 
     def insert_revision(self, rev: dict) -> None:
         self._stub("insert_revision")
@@ -78,6 +91,16 @@ class PostgresStore:
 
     def create_intent(self, intent: dict) -> dict:
         self._stub("create_intent")
+
+    # --- penny transcripts (§7) ---
+    def create_transcript(self, t: dict) -> dict:
+        self._stub("create_transcript")
+
+    def append_transcript_turn(self, projection_id: str, turn: dict) -> dict:
+        self._stub("append_transcript_turn")
+
+    def get_transcript_by_projection(self, projection_id: str) -> dict | None:
+        self._stub("get_transcript_by_projection")
 
     def get_terms_accepted_at(self, id: str) -> str | None:
         self._stub("get_terms_accepted_at")

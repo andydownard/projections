@@ -119,11 +119,15 @@ Limits apply **per IP and per token** (PRD §20/§27), 429 on breach with `Retry
 | `POST /api/intent` | 5 / hour | — | CRM spam. |
 | `POST /api/projections` (create) | 20 / hour | — | Projection-creation flood. |
 | `POST …/evidence` (file upload) | 30 / hour | 60 / hour / projection | Upload abuse. |
+| `POST …/penny`, `POST /api/penny/draft` | 600 / hour (coarse) | **120 / hour / token, 240 / hour / projection** | Bounded provider tool-use loop — **keyed on token/projection, not the shared proxy IP** (§6.6, issue #189). |
+| `POST /api/penny/proposal` | 120 / hour (coarse) | 60 / hour / token | Upload intake (token-hashed key). |
 | `PATCH …` (autosave) | 600 / 5 min | 600 / 5 min / projection | High by design (debounced autosave); serialized server-side. Client debounces ~300–400 ms. |
 | `GET …/xlsx`, `GET …/packet` | 60 / hour | — | Export cost (LibreOffice/render). |
 | All other `GET` | 600 / 5 min | — | General read. |
 
 `429` body: `{ "error": "rate_limited", "retry_after_seconds": <int>, "scope": "ip" | "token" }`.
+
+The Penny endpoints **key the rate limit primarily on the caller's capability token (SHA-256-hashed) and the `projection_id`, not the client IP** — behind Railway's single shared proxy IP a per-IP cap is one global bucket that lets one owner lock out all others (issue #189). The per-IP cap is a coarse safety bound only. See SECURITY.md §10.1.
 
 ---
 
@@ -149,12 +153,22 @@ Every read or mutation of a projection returns the **same** view-model — the e
     "breakeven": { "raw": 5, "display": "Month 5" },
     "reasons":   { "reasonCapital": "...", "reasonGap": "...", "reasonBreakeven": "..." }
   },
-  "kpis": [ { "label": "Sales / sq ft", "value": {"raw":61,"display":"$61"}, "sub":"...", "color":"neutral" } ],
-
-  "monthly": {
-    "breakevenMonth": 5,
-    "rows": [ { "month": "M0", "revenue":{...}, "expenses":{...}, "net":{...}, "cumulativeCash":{...} } ]
+  "milestones": {
+    "grandOpening": { "raw": 1, "display": "Month 1" },
+    "breakEven":    { "raw": 5, "display": "Month 5" },
+    "payback":      { "raw": null, "display": "N/A", "reason": "N/A — startup costs are not recovered within the projection horizon" }
   },
+  "kpis": [
+    { "label": "Sales / sq ft", "value": {"raw":61,"display":"$61"}, "sub":"...", "color":"neutral" },
+    { "label": "Payback period", "value": {"raw":null,"display":"N/A"}, "sub":"to recover startup", "color":"text" }
+  ],
+
+  "monthly": [
+    { "month": 1, "revenue":{"raw":0,"display":"$0"}, "expenses":{"raw":0,"display":"$0"},
+      "scheduledCosts":{"raw":20000,"display":"$20,000"}, "net":{"raw":-20000,"display":"($20,000)"},
+      "cumulativeCash":{"raw":-20000,"display":"($20,000)"} }
+  ],
+  "breakevenMonth": 5,
 
   "rows": [
     { "label":"Donor market share", "group":"drivers",
@@ -189,6 +203,8 @@ Every read or mutation of a projection returns the **same** view-model — the e
 ```
 
 Notes:
+- **`milestones`** (`compute_schema_version ≥ 1.2.0`) is the three detail-page milestones — `grandOpening`, `breakEven`, `payback` — each `{raw, display}` (the server formats "Month 6"; the client renders it verbatim, no client math). An unreached milestone is `{raw:null, display:"N/A", reason}` (N/A-with-reason, **never 0**); `payback` adds a `duration` ("25 months") when reached. The **Payback period** KPI is sourced from `milestones.payback`; the old `simple_payback_years` KPI is gone from the wire surface (ENGINE_CONTRACT §6.6).
+- **`monthly`** is an array over **project months `1..N`** (`N = opening_month_number + 11`); each entry is `{month, revenue, expenses, scheduledCosts, net, cumulativeCash}` with `net = revenue − expenses − scheduledCosts` (same columns as the `.xlsx` Monthly tab). `breakevenMonth` is a sibling top-level field.
 - **`reco.tag`** is a **semantic enum**, not a hex color: `proceed | revise | find_cheaper_rent | raise_cash | delay | do_not_proceed` (§12.3). The client maps enum → design token (brand vs semantic separation). The API never emits hex.
 - **`row.class`** ∈ `input | computed | overridden | estimated`; `row.node` is the DAG node key used by overrides. Derived rows and KPIs have `editable:false` and are **non-pinnable** (server rejects pin attempts — §6.1).
 - **Override keys** are `"{node}#{year}"` in storage (`overrides_json`, [DATA_MODEL.md](./DATA_MODEL.md)); the `overrides[]` array splits them into `node`+`year` for the inspector.
@@ -243,7 +259,7 @@ Notes:
 ```
 
 - **Validation:** `share_y1/y2/y3` are **three explicit values** — no auto-midpoint (PRD §7.1; supersedes `methodology.md` line 17). `salesfloor_pct ∈ (0,1]`; `building_sqft > 0` (0 sq ft blocked, §12.4); `terms_accepted` must be `true` before any export/share is later allowed (§21) — create may proceed without it, but exports are gated (see §6/§7).
-- **Behavior:** computes server-side (the only math authority), persists `inputs/assumptions/trade_area/computed_json/monthly_json/flags`, stamps `model_version`, sets `version=1`, mints owner + edit + view tokens.
+- **Behavior:** computes server-side (the only math authority), persists `inputs/assumptions/trade_area/computed_json/monthly_json/flags`, stamps `model_version`, sets `version=1`, mints owner + edit + view tokens. When `terms_accepted: true` is sent, the server **stamps `terms_accepted_at` = now** so the later `.xlsx`/packet exports (§6/§7) are reachable; when it is absent/`false`, `terms_accepted_at` stays unset and exports `403 terms_required`. `terms_accepted` defaults to `false` — an unchecked box must never silently accept.
 - **Response `201`:** the full view-model (§3) **plus** the one-time secrets, returned **only here** (never stored in retrievable plaintext on the server beyond `view_slug`):
 
 ```json
@@ -449,6 +465,64 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 - **Response `200`:** `application/pdf` or the `.docx` content type; `Content-Disposition: attachment`.
 - **Errors:** `403 terms_required`; `404`; `429`.
 
+### 6.5 `GET /api/projections/{view_slug}/penny/transcript` — Penny conversation (read seam)
+
+- **Auth:** owner/edit Bearer. **Capability:** owner OR this projection's edit token (Spec B §7/§12). A view-only caller (no/invalid token) or a different owner's token → `403 forbidden`; unknown slug → `404`.
+- **Behavior:** returns the persisted per-project Penny transcript verbatim (the server is the one shape authority; the client renders turns as-is). Wizard-draft conversations have no projection and are **never persisted** (Spec B §7), so there is nothing to read for them. No cross-owner leakage (the read keys on the slug-resolved `projection_id`).
+- **Response `200`:**
+
+```json
+{ "view_slug":"…", "transcript_id":"pt_…", "created_at":"…", "updated_at":"…",
+  "turns":[
+    {"role":"user","content":"Set Year-1 share to 8%.","ts":"…"},
+    {"role":"assistant","content":"Done — now 8%.","provider":"anthropic","ts":"…"}
+  ] }
+```
+
+  An absent transcript returns `200` with `"transcript_id": null` and `"turns": []`. Turn shape + the retention cap are normative in [`DATA_MODEL.md`](./DATA_MODEL.md) §3.9/§4.9.
+- **Errors:** `403 forbidden`; `404 not_found`.
+
+### 6.6 `POST /api/projections/{view_slug}/penny` — run the tool-use loop (PE5)
+
+- **Auth:** owner/edit Bearer. **Capability:** owner OR this projection's edit token may **mutate**; a view-only caller (no/invalid token) is **answer-only** (the loop still runs, but every `mutate` tool refuses and nothing is persisted to the owner's transcript). Unknown slug → `404`.
+- **Body:** `{ "message": "…", "proposal_ref": "prop_…"? }`. There is **NO top-level `If-Match`** — the loop's internal `PATCH`es each carry the caller's known version (Spec B §12).
+- **Behavior:** runs the bounded server-side tool-use loop (Spec B §6.1): system prompt + grounding context (current `computed_json` + editable surface) + user message → the provider replies with prose or tool calls → each tool runs server-side → repeat until a final message or a hard cap. The user message and any proposal text are wrapped as **untrusted DATA** (injection-marker stripped, extract-only framing — SECURITY §6.3). Every `mutate` tool converges on the **same** `apply_projection_patch` write path the manual UI hits, so each applied edit produces `version++` + **one** `actor:penny` revision as a side effect (no parallel writer, no privileged path). Detail-page turns persist to `penny_transcripts` (PE2); a view-only caller's answer-only turns persist **nothing**.
+- **Response `200`:**
+
+```json
+{ "provider":"anthropic",
+  "narration":"Done — I lowered the labor assumption; capital updated.",
+  "applied_revisions":[
+    {"tool":"set_assumption","version":2,"actor":"penny",
+     "changed":[{"label":"Capital required","was":"$277,990","now":"$281,400"}]}
+  ],
+  "turns_appended":[
+    {"role":"user","content":"cut labor to 0.55","ts":"…"},
+    {"role":"tool","content":"Applied set_assumption → version 2.","tool_name":"set_assumption","revision_id":2,"ts":"…"},
+    {"role":"assistant","content":"Done — …","provider":"anthropic","ts":"…"}
+  ] }
+```
+
+  `applied_revisions[].changed` is the engine's recomputed view-model diff (`was→now`), so Penny narrates the effect without inventing a figure. `provider` reflects the **actual** provider used.
+- **Errors:** `409 ai_disabled` (per-projection opt-out, deployment kill switch, or no provider key — **zero** provider calls); `503 ai_unavailable` (both providers down); `429 rate_limited` with `{ "retry_after_seconds": N }` + a `Retry-After` header (surfaced **before** any provider call — **keyed on the caller's hashed token and the `projection_id`, not the shared proxy IP**, so one owner cannot lock out others, §2.3/SECURITY §10.1, issue #189); `422` relays a rejected edit to the model (e.g. `node_not_pinnable`, `invalid_inputs`) and `input_too_large` when the assembled prompt exceeds the input-token cap; `404 not_found`.
+
+### 6.7 `POST /api/penny/draft` — wizard-draft loop (PE5)
+
+- **Auth:** edit Bearer (any bearer token present; there is no projection yet). Missing token → `403 forbidden`.
+- **Body:** `{ "message":"…", "draft_state":{…}, "proposal_ref":"prop_…"? }`.
+- **Behavior:** the **same** loop, but every `mutate` tool edits the supplied `draft_state` (the wizard's in-progress inputs/assumptions/overrides/cost-schedule) instead of routing through `apply_projection_patch`. **Persists nothing** — no transcript row, no revision, no projection (the ephemeral wizard transcript stays in client state, Spec B §7). The figure-strip guard still applies (no LLM-computed figure reaches the draft).
+- **Response `200`:** `{ "draft":{…mutated…}, "narration":"…", "provider":"anthropic", "applied":[…] }`.
+- **Errors:** `403 forbidden`; `409 ai_disabled`; `503 ai_unavailable`; `429 rate_limited`.
+
+### 6.8 `POST /api/penny/proposal` — proposal upload intake (PE5)
+
+- **Auth:** owner/edit Bearer (any bearer token present). Missing token → `403 forbidden`.
+- **Body:** either a **raw PDF body** (`Content-Type: application/pdf`, optional `?filename=`) **or** JSON `{ "source_url":"…" }`.
+- **Behavior:** accepts the consultant proposal **server-side as untrusted bytes** and returns an opaque `proposal_ref`. The bytes are **never executed or rendered**; they are extracted (text only) lazily by the `parse_proposal` tool inside the Penny loop (PE9, SECURITY §6.3.2), never here. Guards: **type** — a magic-byte sniff (`%PDF-`) is the authority (a forgeable `Content-Type`/filename is advisory only); **size** — capped (`413` over the limit); **SSRF** — a `source_url` is validated with the research fetcher's scheme allowlist + private/loopback/link-local/metadata IP rejection (a blocked host → `422 ssrf_blocked`, fail-closed; remote fetching itself is out of scope, so a clean URL returns `422 remote_intake_unavailable`).
+- **Response `201`:** `{ "proposal_ref":"prop_…", "filename":"plan.pdf", "size":1234, "content_type":"application/pdf" }`.
+- **Errors:** `403 forbidden`; `413 file_too_large`; `415 unsupported_type`; `422 ssrf_blocked` / `remote_intake_unavailable` / `empty_upload`; `429 rate_limited`.
+- **`parse_proposal` result (PE9):** when the loop calls `parse_proposal` with this ref it returns extract-only candidates — `{ extract_only, untrusted, candidates:[{amount_text, amount, category, snippet, tier?}], tiers:[…], needs_tier_choice, phases:[{phase, description, duration_months, month}], phase_month_map:[{phase, month}], opening_month, needs_month_confirm }` — every figure traceable to the document; multiple tiers force disambiguation and the phase→month mapping is confirmed before any row is populated via `edit_cost_schedule` (`provenance.source="ai"`).
+
 ---
 
 ## 7. Research & external-data proxies
@@ -551,6 +625,21 @@ The endpoints exist and the table ships (so it is not a later migration, PRD §2
 
 ---
 
+## 10a. `GET /api/config` — price/gate flag (CTA seam)
+
+The **single server config** for the free-vs-paid business-model decision (PRD §3). The SPA reads it to render the correct call-to-action — "Download free" vs "Request expert review — $X" — with **no client-side price math** (PRD §13).
+
+- **Auth:** none (public, like `/api/health`). Not rate-limited.
+- **Query:** `cohort` (optional) — addresses an A/B split (`GATE_MODE__<COHORT>`); the M-1 experiment seam. Falls back to the global mode.
+- **Response `200`:** `{ "gate_mode": "free" | "paid_review", "price_usd": <number|null> }`. `price_usd` is non-null **only** in `paid_review`; the client renders it, never derives it.
+- **Safe default:** an unset/unknown `GATE_MODE` resolves to `free` (the flywheel default). This config is **never** a required boot secret — a missing value defaults to free and does **not** refuse boot ([SECURITY.md](./SECURITY.md) §3/§4). It is re-read every request, so a settings/env change flips it on the **next** request with no deploy ([OPS_RUNBOOK.md](./OPS_RUNBOOK.md) §9a).
+
+**Enforcement boundary — the gate governs the expert-review / sign-off surface ONLY.** The basic `.xlsx` (§6.3) and basic packet (§6.4) stay **free and ungated in every mode** (GTM decision). The gate is **orthogonal** to the terms-acceptance gate (§6.3/§21): terms are always required before export/share regardless of mode, and a paid gate never bypasses terms.
+
+- `POST /api/expert-review` — the gated expert-review **stub** (the only surface behind the gate dependency; real intake lands M6.3 / M2-INTENT). In `free`, returns `201 { "status":"received", "gate": { "gate_mode", "price_usd", "cohort" } }` — the gate state is emitted for conversion **attribution** (A/B seam). In `paid_review`, the gate raises `402 { "error":"payment_required", "gate_mode":"paid_review", "price_usd":<number|null>, "cohort":<string|null> }`. Flipping `GATE_MODE` back to `free` removes the gate. Payment collection (Stripe) is out of v1 scope.
+
+---
+
 ## 11. Error response catalogue
 
 All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (extra fields per error). Generic to clients — no internal IDs, stack traces, or secrets.
@@ -559,6 +648,7 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 |---|---|---|
 | `400` | `validation` / `if_match_malformed` / `secret_in_url` | Bad request shape; secret leaked into URL. |
 | `401` | `auth_required` | Mutation with no `Authorization`. |
+| `402` | `payment_required` | Expert-review / sign-off surface while `gate_mode=paid_review` (§10a); carries `price_usd`. A business-model gate, not an access bug — basic export is unaffected. |
 | `403` | `forbidden` / `read_only` / `owner_required` / `terms_required` | Capability insufficient; terms not accepted before export/share. |
 | `404` | `not_found` | Unknown `view_slug` (or trashed and requester not owner). |
 | `409` | `version_conflict` | Stale `If-Match` — body carries `current_version` + `current_state` (§1.4). |
@@ -593,12 +683,18 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `POST …/{slug}/narrative:regenerate` | owner/edit | **yes** | yes | regenerate |
 | `POST …/{slug}/evidence` | owner/edit | **yes** | yes | upload |
 | `GET …/{slug}/xlsx` · `…/packet` | owner/edit/view | — | no | export |
+| `GET …/{slug}/penny/transcript` | owner/edit | — | no | read |
+| `POST …/{slug}/penny` | owner/edit (view = answer-only) | — (loop's internal `PATCH`es carry it) | yes (`actor:penny` via the loop) | penny |
+| `POST /api/penny/draft` | edit Bearer | — | no (persists nothing) | penny |
+| `POST /api/penny/proposal` | owner/edit Bearer | — | holds bytes (no parse) | upload |
 | `GET/POST …/{slug}/actuals` | owner/edit(/view GET) | POST: **yes** | POST yes | read |
 | `POST /api/research` | (none) | no | no | research |
 | `GET /api/places/autocomplete` | (none) | — | no | read |
 | `POST /api/feedback` | (none) | no | persist | feedback |
 | `POST /api/intent` | (none) | no | persist | intent |
 | `GET /api/health` | (none) | — | no | none |
+| `GET /api/config` | (none) | — | no | none |
+| `POST /api/expert-review` | (none) | no | no (stub) | — |
 
 ---
 
@@ -615,3 +711,4 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 9. **Excel ↔ computed_json reconcile** (<$0.50 / 0.1 pp, zero formula errors) with and without overrides, CI-blocking (§18) — the only thing keeping "single math authority" true.
 10. **`/preview` is provably read-only** (epic-N N12): a dry-run never persists, never bumps `version`, never writes a revision — CI-asserted over repeated calls.
 11. **No ungrounded LLM figure reaches a render path** (§6.1, SECURITY §6.3): every currency/percent token in narrative/packet prose must be a display string the engine produced; an ungrounded `$`/`%` token is rejected. Injection markers are stripped from untrusted text. AI opt-out runs the full compute/save/`.xlsx` flow with **all AI keys unset**.
+12. **Penny mutates only through the one write path** (§6.6, Spec B §4/§6.2): the `POST …/penny` tool-use loop applies every edit via `apply_projection_patch` — the same merge → recompute → `If-Match` → one revision the manual `PATCH` uses — producing `version++` + an `actor:penny` revision; there is no parallel writer and no privileged Penny path. Capability-gated (a view-only caller is answer-only, mutate tools refuse). `409 ai_disabled` makes **zero** provider calls; both providers down → `503 ai_unavailable`; an LLM-bucket breach → `429 retry_after_seconds`. `POST /api/penny/draft` mutates only the supplied draft and **persists nothing**. `POST /api/penny/proposal` holds the upload as untrusted bytes (type/size/SSRF guarded) and never executes/renders it — all CI-asserted with **stubbed providers**.

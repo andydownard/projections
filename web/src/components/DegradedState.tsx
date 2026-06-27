@@ -1,7 +1,8 @@
 // web/src/components/DegradedState.tsx — the one accessible error/degraded surface.
 //
 // ENGINEERING_HANDOFF I2 (AC: "each designed + handled"): rent-failed,
-// low-confidence, location-not-found, 409, offline, stale, read-only, AI opt-out.
+// low-confidence, location-not-found, 409, offline, stale, read-only, AI opt-out,
+// load-failed (a detail/role fetch that 404s or errors — issue #146).
 //
 // A11y rules (DESIGN_PROMPT a11y / PRD §13):
 //   - meaning never relies on color alone: a TEXT title carries the severity and a
@@ -21,7 +22,8 @@ export type DegradedKind =
   | "offline"
   | "stale"
   | "read-only"
-  | "ai-opt-out";
+  | "ai-opt-out"
+  | "load-failed";
 
 export type Severity = "error" | "warning" | "info";
 
@@ -83,6 +85,12 @@ export const DEGRADED_STATES: Record<DegradedKind, DegradedDef> = {
     body: "The decision and every number above are computed without AI. Compute, save, and .xlsx export all work with zero AI calls.",
     severity: "info",
     icon: "i",
+  },
+  "load-failed": {
+    title: "Couldn't load this projection",
+    body: "This link may be mistyped or expired, or the projection may have been removed. Check the link, or head back to your projections.",
+    severity: "error",
+    icon: "!",
   },
 };
 

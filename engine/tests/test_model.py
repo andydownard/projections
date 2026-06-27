@@ -5,8 +5,12 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    assert model.MODEL_VERSION == "2.2.0"
-    assert model.COMPUTE_SCHEMA_VERSION == "1.1.0"
+    # 2.4.0: first_year_cash_gap scoped strictly to the Year-1 window G..G+11 (a cost
+    # beyond G+11 no longer leaks into the headline, #182) + cash_runway_months ignores
+    # leading zero-cost pre-opening months (#184).
+    assert model.MODEL_VERSION == "2.4.0"
+    # 1.2.0: view-model gained the milestones block + payback-period KPI (shape only).
+    assert model.COMPUTE_SCHEMA_VERSION == "1.2.0"
 
 
 def test_demand_constants():

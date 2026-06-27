@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
-from app import narrative_provider, ratelimit
+from app import config, narrative_provider, ratelimit
 from app.deps import hash_token, parse_if_match, token_matches
 from app.geo.client import GeoUpstreamError, static_map_bytes
 from app.narrative import (
@@ -45,7 +45,11 @@ from app.packet import build_packet, render_packet_docx, render_packet_md
 from app.store import Store, get_store
 from engine import dag
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute, compute_annual
-from engine.model import DEFAULT_OPENING_MONTH_NUMBER, default_cost_schedule
+from engine.model import (
+    DEFAULT_OPENING_MONTH_NUMBER,
+    MODEL_VERSION,
+    default_cost_schedule,
+)
 from engine.money import D, number_view
 from engine.viewmodel import to_view_model
 from engine.xlsx import build_xlsx
@@ -63,15 +67,74 @@ _PREVIEW_IP_LIMIT = 600
 _PREVIEW_TOKEN_LIMIT = 600
 _PREVIEW_WINDOW_SECONDS = 300
 
+# Cost-DoS caps (SECURITY.md §10; issues #164/#168). create is UNAUTHENTICATED and
+# each call mints tokens + runs the engine + a durable write -> 20/hr/IP per §10.1
+# (per-token is "—" since the flood is anonymous). The export surfaces are reachable
+# with only the public view_slug: xlsx/packet rebuild an uncached workbook/packet on
+# every call (CPU), staticmap proxies the billed Google Static Maps API (bytes are
+# cached per location, so the Google-bill blast radius is first-fetch-per-location).
+_CREATE_IP_LIMIT = 20
+_CREATE_WINDOW_SECONDS = 3600
+_EXPORT_IP_LIMIT = 30  # xlsx + packet, per IP
+_EXPORT_TOKEN_LIMIT = 60  # xlsx + packet, per token when a bearer is presented
+_EXPORT_WINDOW_SECONDS = 3600
+_STATICMAP_IP_LIMIT = 120  # cached per (lat,lng,kind); per IP only (view-capability)
+_STATICMAP_WINDOW_SECONDS = 3600
+
 router = APIRouter(prefix="/api/projections", tags=["projections"])
 
 
 def _client_ip(request: Request) -> str:
-    """Right-most untrusted hop from X-Forwarded-For, else the socket peer."""
+    """Right-most untrusted hop from X-Forwarded-For, else the socket peer.
+
+    Railway terminates TLS at a single proxy that appends the real client IP as the
+    LAST X-Forwarded-For entry, so the right-most hop is the only one a client cannot
+    spoof (anything it sends arrives to the left of the proxy's append). SECURITY §10.
+    """
     xff = request.headers.get("x-forwarded-for")
     if xff:
         return xff.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _rate_limit_bypassed() -> bool:
+    """True only under the non-prod E2E seed flag (mirrors app/main.py's seed gate).
+
+    The Playwright gate drives create->export across three viewports (plus CI retries)
+    against one server from one IP; bypassing the caps there keeps the cost-DoS brakes
+    real in production while the E2E flow never trips them. Never active in prod.
+    """
+    return os.environ.get("E2E_SEED") == "1" and not config.is_production()
+
+
+def _rate_limited(
+    endpoint: str,
+    request: Request,
+    *,
+    ip_limit: int,
+    token: Optional[str] = None,
+    token_limit: Optional[int] = None,
+    window_seconds: int = 3600,
+) -> Optional[JSONResponse]:
+    """Shared §10 gate: a 429 JSONResponse when over the per-IP/per-token cap, else
+    None. Emitted BEFORE any compute/build/upstream call (the cheapest rejection)."""
+    if _rate_limit_bypassed():
+        return None
+    allowed, retry_after = ratelimit.check(
+        endpoint,
+        ip=_client_ip(request),
+        token=token,
+        ip_limit=ip_limit,
+        token_limit=token_limit,
+        window_seconds=window_seconds,
+    )
+    if allowed:
+        return None
+    return JSONResponse(
+        status_code=429,
+        content={"error": "rate_limited", "retry_after_seconds": retry_after, "scope": "ip"},
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 def _utcnow() -> str:
@@ -122,7 +185,13 @@ def _require_owner(store: Store, view_slug: str, authorization: Optional[str]) -
 # ----------------------------------------------------------------- request body
 class CostScheduleItemIn(BaseModel):
     """One timed startup line item (Spec §5): a labelled cost landing on a project
-    month. Server-validated — ``month >= 1`` and ``amount >= 0`` (no client math)."""
+    month. Server-validated — ``month >= 1`` and ``amount >= 0`` (no client math).
+
+    A row MAY also carry opaque ``provenance`` metadata (DATA_MODEL §7) — Penny
+    stamps ``{"source": "ai", ...}`` on rows she creates (Spec B §6.2/§9). Provenance
+    is validated/stored by ``_validate_schedule_inputs`` (not modelled here so the
+    create round-trip stays ``{category, month, amount}`` exactly); it never feeds
+    the engine (cost_schedule is filtered out of the engine args)."""
     category: str
     month: int = Field(ge=1)
     amount: float = Field(ge=0)
@@ -162,6 +231,17 @@ _NON_ENGINE_INPUT_KEYS = (
     "opening_month_number",
     "cost_schedule",
 )
+
+# Max rows in a timed ``cost_schedule`` (DoS guard, issue #166). The schedule is
+# JSON-serialized into ``inputs_json``/``cost_schedule_json`` AND snapshotted into a
+# fresh revision on every save, so an unbounded array is a per-projection blob /
+# revision-bloat amplifier (durable volume + Litestream cost, large-JSON CPU/mem).
+# 200 is generous — far above any real launch schedule (~10-30 timed startup rows)
+# yet a hard domain bound below the request-body ceiling — and mirrors the existing
+# 200-row cap used elsewhere (the Penny transcript ``MAX_TURNS`` retention bound,
+# DATA_MODEL §penny_transcripts). Enforced server-side on the manual PATCH
+# (``_validate_schedule_inputs``) and after Penny's ``edit_cost_schedule`` ops.
+MAX_COST_SCHEDULE_ROWS = 200
 
 
 class TradeAreaIn(BaseModel):
@@ -215,6 +295,11 @@ class CreateProjectionIn(BaseModel):
     demand: Optional[dict] = None
     overrides: dict = Field(default_factory=dict)
     location: LocationIn = Field(default_factory=LocationIn)
+    # Terms acceptance (PRD §21 / API_SPEC §4.2): the operator's explicit "these are
+    # planning estimates, not advice" check. Persisted as terms_accepted_at on create
+    # so exports (.xlsx / packet) are reachable; defaults False so an unchecked box
+    # never silently accepts and the export gate stays honest.
+    terms_accepted: bool = False
 
 
 class PatchProjectionIn(BaseModel):
@@ -239,15 +324,34 @@ def _build_engine_args(body: CreateProjectionIn):
 def _validate_schedule_inputs(inputs_d: dict) -> None:
     """Server-side validation of the timed cost schedule + opening anchor (Spec §5).
 
-    Enforces ``month >= 1``, ``amount >= 0``, ``opening_month_number >= 1`` on the
+    Enforces ``month >= 1``, ``amount >= 0``, ``opening_month_number >= 1`` and a
+    ``len(cost_schedule) <= MAX_COST_SCHEDULE_ROWS`` count cap (issue #166) on the
     PATCH path (create is validated by ``InputsIn`` at body parse). Raises HTTP 422
-    with ``invalid_inputs`` on a bad row so the client never relies on client math.
+    with ``invalid_inputs`` on a bad/oversized schedule so the client never relies on
+    client math.
+
+    An optional ``provenance`` object (Penny's AI-created rows, DATA_MODEL §7) is
+    tolerated and must be an object; it is stripped before the ``{category, month,
+    amount}`` shape is validated so any other unknown key is still rejected.
     """
     try:
         schedule = inputs_d.get("cost_schedule")
         if schedule is not None:
+            # COUNT cap first (issue #166): reject an oversized array before paying to
+            # validate/serialize every row — bounds blob + per-save revision bloat.
+            if len(schedule) > MAX_COST_SCHEDULE_ROWS:
+                raise ValueError(
+                    f"cost_schedule may not exceed {MAX_COST_SCHEDULE_ROWS} rows "
+                    f"(got {len(schedule)})"
+                )
             for item in schedule:
-                CostScheduleItemIn(**item)
+                if not isinstance(item, dict):
+                    raise TypeError("cost row must be an object")
+                provenance = item.get("provenance")
+                if provenance is not None and not isinstance(provenance, dict):
+                    raise ValueError("provenance must be an object")
+                CostScheduleItemIn(**{k: v for k, v in item.items()
+                                      if k != "provenance"})
         anchor = inputs_d.get("opening_month_number")
         if anchor is not None and int(anchor) < 1:
             raise ValueError("opening_month_number must be >= 1")
@@ -362,14 +466,6 @@ def _enrich_view_model(vm: dict, location_d: dict, trade_d: dict) -> None:
             "moe_display": moe_display,
         })
     vm["evidence"] = evidence
-
-
-def _kpi_value(vm: dict, label: str) -> dict:
-    """The {raw, display} of a named KPI in the view-model (for the list row)."""
-    for k in vm.get("kpis") or []:
-        if isinstance(k, dict) and k.get("label") == label:
-            return k.get("value") or {"raw": 0, "display": "—"}
-    return {"raw": 0, "display": "—"}
 
 
 def _compute_result_from_dicts(
@@ -522,6 +618,7 @@ def _metrics_subset(vm: dict) -> dict:
 @router.post("", status_code=201)
 def create_projection(
     body: CreateProjectionIn,
+    request: Request,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
 ):
@@ -530,6 +627,14 @@ def create_projection(
     If a valid owner bearer token is presented the projection joins that workspace;
     otherwise a new owner token is minted and returned exactly once.
     """
+    # §10.1: create is unauthenticated and mints tokens + runs the engine + a durable
+    # write on every call, so cap it per-IP BEFORE any compute/insert (#164).
+    limited = _rate_limited(
+        "create_projection", request,
+        ip_limit=_CREATE_IP_LIMIT, window_seconds=_CREATE_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
     try:
         vm = _compute_view_model(body)
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
@@ -567,6 +672,9 @@ def create_projection(
         "assumptions_json": json.dumps(body.assumptions.model_dump() if body.assumptions else {}),
         "overrides_json": json.dumps(body.overrides or {}),
         "computed_json": json.dumps(vm),
+        # Server-checked terms gate (PRD §21): stamp acceptance now when the operator
+        # actively accepted; NULL otherwise so exports correctly 403 terms_required.
+        "terms_accepted_at": now if body.terms_accepted else None,
         "created_at": now,
         "updated_at": now,
         **_schedule_columns(inputs_dump),
@@ -594,37 +702,47 @@ def list_projections(
     owner = _bearer(authorization)
     if owner is None:
         return {"projections": []}
-    rows = store.list_by_owner(hash_token(owner))
+    # #178: read the small denormalized card columns (summary_json) only — the store
+    # never SELECTs or parses the full ~10KB computed_json per row for the owner list.
+    rows = store.list_card_summaries(hash_token(owner))
     items = []
     for r in rows:
         try:
-            vm = json.loads(r.get("computed_json") or "{}")
+            summary = json.loads(r.get("summary_json") or "{}")
         except json.JSONDecodeError:
-            vm = {}
-        ta = vm.get("trade_area") or {}
-        loc = vm.get("location") or {}
+            summary = {}
         items.append({
             "view_slug": r["view_slug"],
             "name": r["name"],
-            "location": ta.get("geography_name") or loc.get("formatted_address") or "",
-            "basis": ta.get("basis") or "",
-            "y1_revenue": _kpi_value(vm, "Total revenue"),
-            "y1_net": _kpi_value(vm, "Net profit"),
-            "capital_required": (vm.get("metrics") or {}).get("capital")
-                                or {"raw": 0, "display": "—"},
-            "reco_tag": (vm.get("reco") or {}).get("tag") or "revise",
             "status": r.get("status") or "active",
             "version": r["version"],
             "updated_at": r["updated_at"],
+            # card fields denormalized at write time (build_card_summary)
+            "location": summary.get("location", ""),
+            "basis": summary.get("basis", ""),
+            "y1_revenue": summary.get("y1_revenue") or {"raw": 0, "display": "—"},
+            "y1_net": summary.get("y1_net") or {"raw": 0, "display": "—"},
+            "capital_required": summary.get("capital_required")
+                                or {"raw": 0, "display": "—"},
+            "reco_tag": summary.get("reco_tag") or "revise",
             # lat/lng for the list-row mini-map; null when location was never resolved.
-            "coords": vm.get("location"),
+            "coords": summary.get("coords"),
         })
     return {"projections": items}
 
 
 @router.get("/{view_slug}")
 def get_projection(view_slug: str, response: Response, store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
-    """Read by capability slug: return the STORED snapshot verbatim (no recompute)."""
+    """Read by capability slug: return the STORED snapshot verbatim (no recompute).
+
+    Regression Registry #12 (Hard Rule): a projection stored under an OLDER
+    ``model_version`` is returned byte-for-byte as stored — never silently recomputed
+    on the current engine. Staleness is surfaced as a READ-TIME signal only
+    (``upgrade_available``, API_SPEC §4.3/§13) by comparing the stored stamp to the
+    live engine ``MODEL_VERSION``; the stored bytes and the stored ``model_version``
+    are left untouched. Applying the new model is an explicit upgrade-model revision
+    (#34), not this read.
+    """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -632,18 +750,38 @@ def get_projection(view_slug: str, response: Response, store: Store = Depends(ge
         vm = json.loads(row.get("computed_json") or "{}")
     except json.JSONDecodeError:
         vm = {}
+    stored_mv = row.get("model_version") or vm.get("model_version") or ""
+    upgrade_available = bool(stored_mv) and stored_mv != MODEL_VERSION
     response.headers["ETag"] = str(row["version"])
-    return {**vm, "view_slug": view_slug, "version": row["version"], "name": row["name"]}
+    return {
+        **vm,
+        "view_slug": view_slug,
+        "version": row["version"],
+        "name": row["name"],
+        "upgrade_available": upgrade_available,
+    }
 
 
 @router.get("/{view_slug}/staticmap")
-def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
+def static_map(
+    view_slug: str,
+    request: Request,
+    size: str = "thumb",
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+):
     """Server-proxied Google Static Map for the projection's resolved location.
 
     The Places key is appended server-side and never reaches the browser (hard
     rule 7). 404 when the projection has no resolved lat/lng so the client shows a
     neutral placeholder instead of a broken image (never a map over a typed count).
     """
+    # §10/#168: the slug alone reaches this billed-Google proxy; cap per IP first.
+    limited = _rate_limited(
+        "export_staticmap", request,
+        ip_limit=_STATICMAP_IP_LIMIT, window_seconds=_STATICMAP_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -672,7 +810,12 @@ def static_map(view_slug: str, size: str = "thumb", store: Store = Depends(get_s
 
 
 @router.get("/{view_slug}/xlsx")
-def export_xlsx(view_slug: str, store: Store = Depends(get_store)):  # noqa: B008  FastAPI dependency default (accepted pattern)
+def export_xlsx(
+    view_slug: str,
+    request: Request,
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
+):
     """Formula-driven .xlsx export (API_SPEC §6.3).
 
     Owner/edit/view may download (the slug already grants read). Terms acceptance
@@ -681,6 +824,18 @@ def export_xlsx(view_slug: str, store: Store = Depends(get_store)):  # noqa: B00
     live formulas, orange overrides + audit comment, guarded IF divisions, monthly
     tab. Written to a server-controlled temp file, streamed, then deleted.
     """
+    # §10/#168: an uncached workbook rebuild on every call, reachable with just the
+    # public slug -> cap per IP (and per token when a bearer is presented) FIRST.
+    _xlsx_token = _bearer(authorization)
+    limited = _rate_limited(
+        "export_xlsx", request,
+        ip_limit=_EXPORT_IP_LIMIT,
+        token=hash_token(_xlsx_token) if _xlsx_token else None,
+        token_limit=_EXPORT_TOKEN_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -698,7 +853,9 @@ def export_xlsx(view_slug: str, store: Store = Depends(get_store)):  # noqa: B00
 
     fd, path = tempfile.mkstemp(suffix=".xlsx", prefix="projection-")
     os.close(fd)
-    build_xlsx(result, path)
+    # Stamp the export with the terms version + acceptance date (#192): the
+    # "planning estimates, not advice" caveat travels into the workbook itself.
+    build_xlsx(result, path, terms_accepted_at=row.get("terms_accepted_at"))
 
     stem = _safe_filename_stem(row.get("name") or "")
     filename = f"{stem} 3-Year Projection.xlsx"
@@ -927,9 +1084,11 @@ def regenerate_narrative(
 @router.get("/{view_slug}/packet")
 def export_packet(
     view_slug: str,
+    request: Request,
     role: Optional[str] = None,
     format: str = "md",
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
 ):
     """Board / Funder / Advisor packet (API_SPEC §6.4).
 
@@ -939,6 +1098,18 @@ def export_packet(
     structured/evidence section). Terms acceptance required (§21) -> 403 otherwise.
     The role flag tailors emphasis/CTAs only — never the numbers.
     """
+    # §10/#168: an uncached packet render on every call, reachable with just the
+    # public slug -> cap per IP (and per token when a bearer is presented) FIRST.
+    _pkt_token = _bearer(authorization)
+    limited = _rate_limited(
+        "export_packet", request,
+        ip_limit=_EXPORT_IP_LIMIT,
+        token=hash_token(_pkt_token) if _pkt_token else None,
+        token_limit=_EXPORT_TOKEN_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -962,7 +1133,8 @@ def export_packet(
         nar = store.get_narrative(row["id"]) or {}
         narrative_md = (nar.get("body_md") or "") or None
 
-    pkt = build_packet(live_vm, role=role or "board", narrative_md=narrative_md)
+    pkt = build_packet(live_vm, role=role or "board", narrative_md=narrative_md,
+                       terms_accepted_at=row.get("terms_accepted_at"))
 
     stem = _safe_filename_stem(row.get("name") or "")
     if (format or "md").lower() == "docx":
@@ -985,26 +1157,31 @@ def export_packet(
     )
 
 
-@router.patch("/{view_slug}")
-def patch_projection(
-    view_slug: str,
+def apply_projection_patch(
+    *,
+    row: dict,
     body: PatchProjectionIn,
-    response: Response,
-    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
-    if_match: int = Depends(parse_if_match),
-):
-    """Autosave (API_SPEC §4.4): merge patch -> recompute server-side -> persist.
+    store: Store,
+    token: Optional[str],
+    if_match: int,
+    actor: str = "user",
+    change_summary: str = "autosave",
+) -> tuple[dict[str, Any], int, str]:
+    """The single server-authoritative mutation/recompute write path (API_SPEC §4.4).
 
-    Requires Authorization: Bearer (owner OR this projection's edit token) and
-    If-Match: <version>. Optimistic concurrency: a stale version writes 0 rows and
-    returns HTTP 409 with the current server state. One revision snapshot per settle.
+    Shared by the manual autosave PATCH (``actor='user'``) AND the Penny tool loop
+    (``actor='penny'``, Spec B §4/§6.2): there is NO parallel writer and NO
+    privileged Penny path. Auth, override-DAG validation, cost-schedule validation,
+    optimistic concurrency, recompute, and the one-revision-per-write audit are
+    therefore IDENTICAL for an AI edit and a human edit — Penny carries intents
+    through exactly the same wall the manual UI hits.
+
+    Auth: requires the owner OR this projection's edit token; a view-only/absent
+    token -> 403 forbidden. Raises HTTPException(403 forbidden | 422 node_not_pinnable
+    | 422 invalid_inputs | 409 version_conflict) exactly as the manual PATCH does.
+    Returns ``(view_model, new_version, name)`` and writes ONE revision tagged
+    ``actor`` (DATA_MODEL §4: the revision ``actor`` enum — user | penny | …).
     """
-    row = store.get_projection_by_slug(view_slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail={"error": "not_found"})
-
-    token = _bearer(authorization)
     is_owner = token is not None and token_matches(token, row["owner_token_hash"])
     is_editor = (
         token is not None
@@ -1013,6 +1190,7 @@ def patch_projection(
     )
     if not (is_owner or is_editor):
         # view-only (no/invalid token) cannot mutate (SECURITY.md §2; API_SPEC §4.4).
+        # A Penny mutate tool gates on capability first, but this is the real wall.
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
     # is_owner/is_editor both imply a presented token (see checks above).
     assert token is not None
@@ -1053,24 +1231,11 @@ def patch_projection(
         "model_version": vm.get("model_version", ""),
         **_schedule_columns(inputs_d),
     }
-    affected = store.update_with_version_check(row["id"], if_match, patch)
-    if affected == 0:
-        current = store.get_projection_by_slug(view_slug)
-        try:
-            cur_vm = json.loads(current["computed_json"] or "{}") if current else {}
-        except json.JSONDecodeError:
-            cur_vm = {}
-        raise HTTPException(status_code=409, detail={
-            "error": "version_conflict",
-            "current_version": current["version"] if current else None,
-            "your_version": if_match,
-            "current_state": {**cur_vm, "view_slug": view_slug,
-                              "version": current["version"] if current else None},
-            "recovery": "reload | overwrite | save_as_copy",
-        })
-
+    # Version-checked UPDATE + the revision snapshot commit in ONE transaction (#186):
+    # 0 rows -> 409 and NO revision; else both land together — a crash can never leave
+    # a version bump without its snapshot (an unrecoverable restore/audit-trail hole).
     new_version = if_match + 1
-    store.insert_revision({
+    revision = {
         "id": _new_id(),
         "projection_id": row["id"],
         "seq": new_version,
@@ -1081,9 +1246,53 @@ def patch_projection(
         "computed_json": patch["computed_json"],
         "model_version": patch["model_version"],
         "actor_token_hash": hash_token(token),
-        "change_summary": "autosave",
+        "actor": actor,
+        "change_summary": change_summary,
         "created_at": _utcnow(),
-    })
+    }
+    affected = store.update_with_version_check_and_revision(
+        row["id"], if_match, patch, revision)
+    if affected == 0:
+        current = store.get_projection_by_slug(row["view_slug"])
+        try:
+            cur_vm = json.loads(current["computed_json"] or "{}") if current else {}
+        except json.JSONDecodeError:
+            cur_vm = {}
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict",
+            "current_version": current["version"] if current else None,
+            "your_version": if_match,
+            "current_state": {**cur_vm, "view_slug": row["view_slug"],
+                              "version": current["version"] if current else None},
+            "recovery": "reload | overwrite | save_as_copy",
+        })
+    return vm, new_version, name
+
+
+@router.patch("/{view_slug}")
+def patch_projection(
+    view_slug: str,
+    body: PatchProjectionIn,
+    response: Response,
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
+    if_match: int = Depends(parse_if_match),
+):
+    """Autosave (API_SPEC §4.4): merge patch -> recompute server-side -> persist.
+
+    Requires Authorization: Bearer (owner OR this projection's edit token) and
+    If-Match: <version>. Optimistic concurrency: a stale version writes 0 rows and
+    returns HTTP 409 with the current server state. One revision snapshot per settle.
+    The merge/recompute/persist/audit body lives in :func:`apply_projection_patch`
+    so the Penny tool loop converges on the exact same write path (actor:penny).
+    """
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    token = _bearer(authorization)
+    vm, new_version, name = apply_projection_patch(
+        row=row, body=body, store=store, token=token, if_match=if_match)
     response.headers["ETag"] = str(new_version)
     return {**vm, "view_slug": view_slug, "version": new_version, "name": name}
 
@@ -1203,14 +1412,12 @@ def rotate_tokens(
         "view_slug": new_slug,
         "role_tokens_json": json.dumps(new_role_map),
     }
-    affected = store.rotate_tokens(row["id"], if_match, new_hashes)
-    if affected == 0:
-        raise HTTPException(status_code=409, detail={
-            "error": "version_conflict", "your_version": if_match,
-            "recovery": "reload | overwrite | save_as_copy"})
-
+    # The capability re-hash (same version-checked UPDATE as rotate_tokens) and its
+    # audit revision commit in ONE transaction (#186): 0 rows -> 409 with neither;
+    # else both land together, so a rotation can never half-apply (tokens swapped but
+    # no audit row, or vice versa).
     new_version = if_match + 1
-    store.insert_revision({
+    revision = {
         "id": _new_id(),
         "projection_id": row["id"],
         "seq": new_version,
@@ -1223,7 +1430,14 @@ def rotate_tokens(
         "actor_token_hash": hash_token(new_owner),
         "change_summary": "tokens_rotated",
         "created_at": _utcnow(),
-    })
+    }
+    affected = store.update_with_version_check_and_revision(
+        row["id"], if_match, new_hashes, revision)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+
     response.headers["ETag"] = str(new_version)
     return {
         "view_slug": new_slug,
@@ -1306,15 +1520,12 @@ def restore_revision(
         # restored inputs_json (the canonical copy).
         **_schedule_columns(inputs_d),
     }
-    affected = store.update_with_version_check(row["id"], if_match, patch)
-    if affected == 0:
-        raise HTTPException(status_code=409, detail={
-            "error": "version_conflict", "your_version": if_match,
-            "recovery": "reload | overwrite | save_as_copy"})
-
+    # The version-checked UPDATE and the new forward revision commit in ONE
+    # transaction (#186): 0 rows -> 409 with neither; else both land together, so a
+    # restore can never bump the version without writing its snapshot.
     new_version = if_match + 1
     token = _bearer(authorization)
-    store.insert_revision({
+    revision = {
         "id": _new_id(),
         "projection_id": row["id"],
         "seq": new_version,
@@ -1327,7 +1538,14 @@ def restore_revision(
         "actor_token_hash": hash_token(token) if token else None,
         "change_summary": f"restore from v{rev['seq']}",
         "created_at": _utcnow(),
-    })
+    }
+    affected = store.update_with_version_check_and_revision(
+        row["id"], if_match, patch, revision)
+    if affected == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "version_conflict", "your_version": if_match,
+            "recovery": "reload | overwrite | save_as_copy"})
+
     response.headers["ETag"] = str(new_version)
     return {**vm, "view_slug": view_slug, "version": new_version, "name": row["name"]}
 
@@ -1393,12 +1611,15 @@ def delete_projection(
     if_match: int = Depends(parse_if_match),
 ):
     """Hard delete / purge (API_SPEC §4.8). Owner-only; permitted ONLY when the
-    projection is already trashed (else 409 not_trashed). Irreversible: sets
-    deleted_at so the row is excluded from every read."""
+    projection is already trashed (else 409 not_trashed). Irreversible: hard-DELETEs
+    the projection AND cascades to every child it owns (revisions, narratives,
+    evidence, penny_transcripts, actuals, role links) so the confidential financials
+    and Penny conversation are actually ERASED, not merely hidden (#202, DATA_MODEL
+    §5.4)."""
     row = _require_owner(store, view_slug, authorization)
     if row.get("status") != "trashed":
         raise HTTPException(status_code=409, detail={"error": "not_trashed"})
-    affected = store.soft_delete(row["id"], if_match)
+    affected = store.purge_projection(row["id"], if_match)
     if affected == 0:
         raise HTTPException(status_code=409, detail={
             "error": "version_conflict", "your_version": if_match,

@@ -86,6 +86,28 @@ describe("CreateProjectionPage shell", () => {
   });
 });
 
+describe("CreateProjectionPage — disabled Next/Generate states WHY (#147)", () => {
+  it("announces the blocking reason in a status region tied to the disabled button", async () => {
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+
+    const next = screen.getByRole("button", { name: /^next$/i });
+    expect(next).toBeDisabled();
+    // The reason is surfaced as a status message (announced to AT), not color-only.
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(/store name/i);
+    expect(status).toHaveAttribute("aria-live", "polite");
+    // The disabled button references the reason for assistive tech.
+    expect(next).toHaveAttribute("aria-describedby", status.id);
+
+    // Once the requirement is met, the reason clears and Next enables.
+    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
+    expect(next).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    expect(next).not.toHaveAttribute("aria-describedby");
+  });
+});
+
 describe("CreateProjectionPage — Places predictions render", () => {
   it("shows address predictions in the combobox list", async () => {
     const bodies: Record<string, unknown> = {};
@@ -175,20 +197,73 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     expect(screen.getByRole("heading", { name: /cost schedule/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 5. Review -> Generate
+    // 5. Review -> accept terms (explicit, #141/PRD §21) -> Generate
     expect(screen.getByRole("heading", { name: /review/i })).toBeInTheDocument();
+    // Generate is gated until the operator actively accepts terms (not pre-checked).
+    expect(screen.getByRole("button", { name: /generate/i })).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: /planning estimates/i }));
     await user.click(screen.getByRole("button", { name: /generate/i }));
 
     await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
     const body = bodies["/api/projections"] as {
       inputs: { opening_month_number: number; cost_schedule: unknown[]; target_opening_date: string | null };
       trade_area: { households_source: string };
+      terms_accepted: boolean;
     };
     expect(body.inputs.opening_month_number).toBe(1);
     expect(Array.isArray(body.inputs.cost_schedule)).toBe(true);
     expect(body.trade_area.households_source).toBe("census_acs");
+    // #141: the operator's acceptance travels in the create body so the server can
+    // persist terms_accepted_at and the .xlsx / packet exports are reachable.
+    expect(body.terms_accepted).toBe(true);
     // result screen renders the server display string verbatim (no client math)
     const kpis = within(screen.getByTestId("kpi-strip"));
     expect(kpis.getByText("$426,911")).toBeInTheDocument();
+  });
+});
+
+// #203 — on Generate, swapping the form for the result must NOT strand focus
+// (the Generate button unmounts → focus reverts to <body>) and must announce
+// completion to AT (no aria-live → a screen-reader user never hears the
+// projection — the entire point of the app — was produced). WCAG 2.4.3 / 4.1.3.
+describe("CreateProjectionPage — create-result focus + announce (a11y #203)", () => {
+  async function stepToResult(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
+    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
+    await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+    await waitFor(() =>
+      expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"),
+    );
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> cost schedule
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> review
+    await user.click(screen.getByRole("checkbox", { name: /planning estimates/i }));
+    await user.click(screen.getByRole("button", { name: /generate/i }));
+    await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
+  }
+
+  it("renders a result h1 and moves focus to it (no stranded focus)", async () => {
+    wireFetch({});
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToResult(user);
+
+    const h1 = screen.getByRole("heading", { level: 1 });
+    expect(h1).toHaveTextContent(/House of Hope/i);
+    // Focus moved to the result heading (was lost to <body> before the fix).
+    await waitFor(() => expect(h1).toHaveFocus());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("announces completion via an aria-live status region", async () => {
+    wireFetch({});
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToResult(user);
+
+    const status = screen.getByTestId("generate-status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveTextContent(/projection ready/i);
   });
 });

@@ -91,6 +91,111 @@ def test_overridden_cell_is_orange_with_exact_comment(tmp_path):
     assert "set to $200,000 on 2026-06-24" in found.comment.text
 
 
+def _projection_label_map(ws):
+    """Map a column-A string label -> its row index on the Projection sheet."""
+    return {
+        ws.cell(row=r, column=1).value: r
+        for r in range(1, ws.max_row + 1)
+        if isinstance(ws.cell(row=r, column=1).value, str)
+    }
+
+
+def _all_text(ws):
+    return " ".join(
+        str(c.value) for row in ws.iter_rows() for c in row
+        if isinstance(c.value, str)
+    )
+
+
+# ----------------------------------------------- #192 export disclaimer in the .xlsx
+def test_projection_sheet_has_notes_and_disclaimer_block(tmp_path):
+    # #192: the workbook a board reads detached from the app must carry the
+    # "planning estimates, not advice" caveat — server-formatted text, no client math.
+    from engine.model import EXPORT_DISCLAIMER
+    _res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    assert "NOTES & DISCLAIMER" in labels
+    assert EXPORT_DISCLAIMER in _all_text(ws)
+
+
+def test_xlsx_disclaimer_is_text_only_no_formula(tmp_path):
+    # The disclaimer block is pure server-formatted text: no formulas (so it can
+    # never introduce a recalc error onto the correctness spine).
+    _res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    start = labels["NOTES & DISCLAIMER"]
+    for r in range(start, ws.max_row + 1):
+        for col in range(1, 4):
+            v = ws.cell(row=r, column=col).value
+            assert not (isinstance(v, str) and v.startswith("=")), f"formula at row {r}"
+
+
+def test_xlsx_disclaimer_stamps_terms_version_and_accepted_date(tmp_path):
+    # When the caller knows the terms version + acceptance date they are stamped, so
+    # the artifact records WHICH terms the operator accepted and WHEN (#192).
+    from engine.model import TERMS_VERSION
+    res = compute(_inputs(), Assumptions(), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"))
+    path = tmp_path / "stamped.xlsx"
+    build_xlsx(res, str(path), terms_accepted_at="2026-06-27T12:00:00Z")
+    wb = openpyxl.load_workbook(path)
+    text = _all_text(wb["Projection"])
+    assert f"Terms v{TERMS_VERSION}" in text
+    assert "2026-06-27" in text
+
+
+def test_projection_sheet_has_milestones_block(tmp_path):
+    # The workbook reflects the three milestones (§8 / #117) consistently with the
+    # view-model: grand opening = G, break-even, payback — each as its server display.
+    res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    assert "MILESTONES" in labels
+    for name in ("Grand opening", "Break-even", "Payback"):
+        assert name in labels, name
+    from engine.viewmodel import to_view_model
+    ms = to_view_model(res)["milestones"]
+    assert ws.cell(row=labels["Grand opening"], column=2).value == ms["grandOpening"]["display"]
+    assert ws.cell(row=labels["Break-even"], column=2).value == ms["breakEven"]["display"]
+    assert ws.cell(row=labels["Payback"], column=2).value == ms["payback"]["display"]
+
+
+def test_milestones_block_renders_payback_na_not_zero(tmp_path):
+    # The canonical default never recovers startup within the horizon: the workbook
+    # must show an explicit N/A, never a misleading 0 (matches the view-model).
+    res, path = _build(tmp_path)
+    assert res.decision.payback_month is None
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    assert ws.cell(row=labels["Payback"], column=2).value == "N/A"
+
+
+def test_milestones_block_shows_payback_month_when_recovered(tmp_path):
+    # A strongly profitable case recovers startup within the operating ramp; the
+    # workbook shows the payback month (consistent with the view-model display).
+    inputs = Inputs(
+        org_name="Strong", city="x", opening_status="pre_launch",
+        share_y1="0.15", share_y2="0.20", share_y3="0.25",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="800000",
+    )
+    res = compute(inputs, Assumptions(labor_pct="0.40"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"))
+    assert res.decision.payback_month is not None
+    path = tmp_path / "strong.xlsx"
+    build_xlsx(res, str(path))
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    assert ws.cell(row=labels["Payback"], column=2).value == f"Month {res.decision.payback_month}"
+
+
 def test_monthly_tab_has_twelve_month_rows(tmp_path):
     _res, path = _build(tmp_path)
     wb = openpyxl.load_workbook(path)

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -142,5 +142,59 @@ describe("CostScheduleEditor", () => {
       />,
     );
     expect(screen.getByTestId("cost-schedule-totals")).toHaveTextContent("$208,500");
+  });
+});
+
+describe("CostScheduleEditor — per-field change affordance (PE7, #126)", () => {
+  const noopHandlers = () => ({
+    onAddRow: vi.fn(),
+    onUpdateRow: vi.fn(),
+    onRemoveRow: vi.fn(),
+    onChangeOpeningMonth: vi.fn(),
+    onChangeTargetDate: vi.fn(),
+  });
+
+  it("shows the recent-change badge + subtle 'was X' on a row field Penny just changed", () => {
+    render(
+      <CostScheduleEditor
+        rows={[{ category: "Consultant", month: 1, amount: 100000 }]}
+        openingMonthNumber={1}
+        targetOpeningDate="2026-06"
+        changes={{ "0:amount": { previous: "$45,000", by: "penny" } }}
+        {...noopHandlers()}
+      />,
+    );
+    const fc = screen.getByTestId("field-change");
+    expect(within(fc).getByTestId("field-change-badge")).toHaveTextContent(/changed by penny/i);
+    expect(within(fc).getByTestId("field-change-was")).toHaveTextContent("was $45,000");
+  });
+
+  it("per-field undo reverts THAT row field — calls onUndoChange(index, field)", async () => {
+    const user = userEvent.setup();
+    const onUndoChange = vi.fn();
+    render(
+      <CostScheduleEditor
+        rows={[{ category: "Consultant", month: 1, amount: 100000 }]}
+        openingMonthNumber={1}
+        targetOpeningDate="2026-06"
+        changes={{ "0:amount": { previous: "$45,000", by: "penny" } }}
+        onUndoChange={onUndoChange}
+        {...noopHandlers()}
+      />,
+    );
+    await user.click(screen.getByTestId("field-change-undo"));
+    expect(onUndoChange).toHaveBeenCalledWith(0, "amount");
+  });
+
+  it("renders no affordance for fields without a recent change", () => {
+    render(
+      <CostScheduleEditor
+        rows={[{ category: "Consultant", month: 1, amount: 100000 }]}
+        openingMonthNumber={1}
+        targetOpeningDate="2026-06"
+        {...noopHandlers()}
+      />,
+    );
+    expect(screen.queryByTestId("field-change")).not.toBeInTheDocument();
   });
 });

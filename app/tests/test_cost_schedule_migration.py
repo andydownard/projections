@@ -19,11 +19,42 @@ from app.store.migration_safety import (
     scan_sql,
 )
 from app.store.migrations import MIGRATIONS, m0005_cost_schedule
+from app.store.migrations.m0005_cost_schedule import (
+    FROZEN_DEFAULT_COST_SCHEDULE_JSON,
+    _sql_str_literal,
+)
 from app.store.sqlite import SqliteStore
 from engine.model import default_cost_schedule
 
 _NAME = "0005_cost_schedule"
 _NEW_COLUMNS = {"target_opening_date", "opening_month_number", "cost_schedule_json"}
+# The FROZEN shipped default (issue #187). Backfill assertions compare production
+# rows against THIS immutable literal — never against ``default_cost_schedule()``,
+# the mutable function the DEFAULT was historically derived from (a tautology that
+# moves with the engine and protects nothing about what rows actually contain).
+_FROZEN_SCHEDULE = json.loads(FROZEN_DEFAULT_COST_SCHEDULE_JSON)
+
+
+# ----------------------------------------------------------- frozen-default guard
+def test_frozen_default_still_matches_engine_default():
+    # Forward guard (issue #187): the shipped 0005 DEFAULT is frozen, but it must
+    # still equal today's engine default. If someone changes default_cost_schedule(),
+    # this fails RED — forcing a NEW migration instead of silently rewriting the
+    # immutable 0005 backfill (which would diverge two DBs migrated at different times).
+    assert default_cost_schedule() == _FROZEN_SCHEDULE
+
+
+def test_migration_default_is_a_frozen_literal_not_engine_output():
+    # The DEFAULT embedded in the DDL is the hand-frozen literal — NOT json.dumps of
+    # the live (mutable) engine constant — so the SQL an already-applied 0005 runs can
+    # never drift with the engine.
+    assert f"DEFAULT '{FROZEN_DEFAULT_COST_SCHEDULE_JSON}'" in m0005_cost_schedule.SQL
+
+
+def test_sql_string_literal_escaping_doubles_apostrophes():
+    # The apostrophe-injection guard the old json.dumps-in-DDL approach lacked: a
+    # category with an apostrophe must be doubled so it cannot terminate the literal.
+    assert _sql_str_literal("Owner's draw") == "'Owner''s draw'"
 
 
 # ----------------------------------------------------------- registration
@@ -33,8 +64,11 @@ def test_m0005_is_registered():
 
 
 def test_m0005_is_appended_last():
-    # Append-only discipline (migrations are an ordered, append-only list).
-    assert MIGRATIONS[-1][0] == _NAME
+    # Append-only discipline (migrations are an ordered, append-only list): m0005
+    # sits immediately after its predecessor m0004. Later migrations (e.g. m0006)
+    # append AFTER it, never before — so assert order, not a frozen tail position.
+    names = [name for name, _ in MIGRATIONS]
+    assert names.index(_NAME) == names.index("0004_narrative_edit_origin") + 1
 
 
 def test_m0005_has_nonempty_sql():
@@ -184,7 +218,7 @@ def test_legacy_row_backfills_schedule_to_startup_lump(tmp_path):
         "SELECT cost_schedule_json FROM projections WHERE id='p1'"
     ).fetchone()[0]
     con.close()
-    assert json.loads(schedule_json) == default_cost_schedule()
+    assert json.loads(schedule_json) == _FROZEN_SCHEDULE
 
 
 def test_legacy_row_backfills_target_opening_date_null(tmp_path):
@@ -218,10 +252,10 @@ def test_multiple_legacy_rows_all_backfill(tmp_path):
     assert len(rows) == 5
     for opening, schedule_json in rows:
         assert opening == 1
-        assert json.loads(schedule_json) == default_cost_schedule()
+        assert json.loads(schedule_json) == _FROZEN_SCHEDULE
 
 
-def test_backfilled_schedule_total_equals_startup(tmp_path):
+def test_backfilled_schedule_total_equals_frozen_startup(tmp_path):
     db = tmp_path / "legacy.db"
     con = sqlite3.connect(db)
     _apply_pre_m0005(con)
@@ -234,9 +268,10 @@ def test_backfilled_schedule_total_equals_startup(tmp_path):
     ).fetchone()[0]
     con.close()
     schedule = json.loads(schedule_json)
-    from engine.model import STARTUP
-
-    assert sum(r["amount"] for r in schedule) == sum(STARTUP.values())
+    # Frozen production total (issue #187) — a literal, NOT re-derived from the engine
+    # constant. 100000 + 45000 + 50000 + 13500.
+    assert sum(r["amount"] for r in schedule) == 208500
+    assert schedule == _FROZEN_SCHEDULE
 
 
 def test_pre_m0005_schema_lacks_new_columns(tmp_path):
@@ -294,4 +329,4 @@ def test_default_column_value_parses_as_json(tmp_path):
     schedule_json = store._conn.execute(
         "SELECT cost_schedule_json FROM projections WHERE id='p1'"
     ).fetchone()[0]
-    assert json.loads(schedule_json) == default_cost_schedule()
+    assert json.loads(schedule_json) == _FROZEN_SCHEDULE

@@ -41,7 +41,14 @@ def _f(value):
     return float(D(str(value)))
 
 
-def build_xlsx(result, path):
+def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
+    """Build the formula-driven workbook.
+
+    ``terms_version`` / ``terms_accepted_at`` stamp the "Notes & Disclaimer" block
+    (#192) so the exported sheet a board reads carries the same planning-estimates
+    caveat the in-app terms gate protects. ``terms_version`` defaults to the engine's
+    canonical ``TERMS_VERSION`` so app and export copy never drift.
+    """
     wb = Workbook()
     ws = wb.active
     ws.title = "Projection"
@@ -223,12 +230,52 @@ def build_xlsx(result, path):
     pc = ws[f"B{row}"]
     pc.value = f'=IF(B{npr}<=0,"",B{startup_total_row}/B{npr})'
     pc.number_format = '0.0'
+    row += 1
+
+    # ---------- MILESTONES (grand opening / break-even / payback) -----------
+    # The three timeline milestones (§8 / #117), rendered as the SAME server display
+    # strings the view-model emits ("Month 6" / "N/A"). These are engine-resolved
+    # values, not divisions — no formula error surface to guard.
+    _build_milestones_block(ws, result, row)
+
+    # ---------- NOTES & DISCLAIMER (#192) ----------------------------------
+    # The "planning estimates, not advice" caveat the terms gate protects, carried
+    # into the artifact a board reads detached from the app. Pure text, no formulas.
+    _build_disclaimer_block(ws, terms_version, terms_accepted_at)
 
     # ---------- MONTHLY tab -------------------------------------------------
     _build_monthly_tab(monthly_ws, result)
 
     ws.column_dimensions["A"].width = 34
     wb.save(path)
+
+
+def _build_disclaimer_block(ws, terms_version, terms_accepted_at):
+    """Server-formatted 'Notes & Disclaimer' block (#192).
+
+    The planning-estimates disclaimer + the terms version/date, placed below the
+    last written row of the Projection sheet. Pure text — there are NO formulas here,
+    so the block can never introduce a recalc error onto the three-way golden gate.
+    ``terms_version`` defaults to the engine's canonical ``TERMS_VERSION``.
+    """
+    from engine.model import EXPORT_DISCLAIMER, TERMS_VERSION
+
+    version = terms_version or TERMS_VERSION
+    row = ws.max_row + 2
+    ws[f"A{row}"] = "NOTES & DISCLAIMER"
+    ws[f"A{row}"].font = BOLD
+    row += 1
+    body = ws[f"A{row}"]
+    body.value = EXPORT_DISCLAIMER
+    body.font = BLACK
+    body.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    row += 1
+    terms_line = f"Terms v{version}"
+    if terms_accepted_at:
+        terms_line += f" accepted {terms_accepted_at}"
+    tc = ws[f"A{row}"]
+    tc.value = terms_line
+    tc.font = BLACK
 
 
 def _expense_formula(label, col, tr, sh, rowmap):
@@ -259,6 +306,34 @@ def _precalc_expense(label, year, result):
     years, _su, _st, _occ = compute_annual(
         result.inputs, result.assumptions, None, result.trade_area, {})
     return round_dollars(years[year].expenses[label])
+
+
+def _build_milestones_block(ws, result, row):
+    """Grand opening / break-even / payback as the SAME server display strings the
+    view-model emits ("Month 6" / "N/A"), so the workbook and the app never disagree.
+
+    Reuses ``engine.viewmodel._milestone`` (the single formatting authority) rather
+    than re-deriving the strings here. These are engine-resolved values, not Excel
+    divisions, so there is nothing to guard against #DIV/0!.
+    """
+    from engine.viewmodel import _milestone
+
+    dec = result.decision
+    g = dec.grand_opening_month
+    entries = [
+        ("Grand opening", _milestone(g, result.flags, "grand_opening_month")),
+        ("Break-even", _milestone(dec.break_even_month, result.flags, "break_even_month")),
+        ("Payback", _milestone(dec.payback_month, result.flags, "payback_month",
+                               opening_month=g)),
+    ]
+    ws[f"A{row}"] = "MILESTONES"
+    ws[f"A{row}"].font = BOLD
+    row += 1
+    for label, milestone in entries:
+        ws[f"A{row}"] = label
+        ws[f"A{row}"].font = BLACK
+        ws[f"B{row}"] = milestone["display"]
+        row += 1
 
 
 def _build_monthly_tab(ws, result):

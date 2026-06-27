@@ -47,11 +47,41 @@ describe("ProjectionsList — populated", () => {
     render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
     const row = screen.getByTestId("projection-row-p_8x");
     expect(within(row).getByText("House of Hope — Longview, TX")).toBeInTheDocument();
-    // location + basis sub-line (a single node combining both)
-    expect(within(row).getByText(/Longview, TX · city/)).toBeInTheDocument();
+    // location + basis sub-line (a single node combining both); basis is a
+    // humanized label, never the raw enum code (#151).
+    expect(within(row).getByText(/Longview, TX · City/)).toBeInTheDocument();
     expect(within(row).getByText("$426,911")).toBeInTheDocument();
     expect(within(row).getByText("$47,100")).toBeInTheDocument();
     expect(within(row).getByText("$277,990")).toBeInTheDocument();
+  });
+
+  it("colors a negative Y1 net as a loss — error color paired with the server parentheses [#148]", () => {
+    const loss: ProjectionListItem = {
+      ...item,
+      view_slug: "p_loss",
+      y1_net: { raw: -44433, display: "($44,433)" },
+    };
+    render(<ProjectionsList projections={[loss]} onCreate={() => {}} onOpen={() => {}} />);
+    const row = screen.getByTestId("projection-row-p_loss");
+    const net = within(row).getByText("($44,433)");
+    expect(net).toHaveAttribute("data-negative", "true");
+    expect(net).toHaveTextContent("($44,433)"); // parentheses (non-color cue) kept
+    // Positive figures are never flagged negative.
+    expect(within(row).getByText("$426,911")).not.toHaveAttribute("data-negative");
+  });
+
+  it("renders a friendly, locale-stable updated date — not a raw ISO slice [#151]", () => {
+    render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
+    const row = screen.getByTestId("projection-row-p_8x");
+    expect(within(row).getByText("Jun 24, 2026")).toBeInTheDocument();
+    expect(within(row).queryByText("2026-06-24")).toBeNull();
+  });
+
+  it("renders a human trade-area basis label, never the raw enum code [#151]", () => {
+    render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
+    const row = screen.getByTestId("projection-row-p_8x");
+    expect(within(row).getByText(/· City$/)).toBeInTheDocument();
+    expect(within(row).queryByText(/· city$/)).toBeNull();
   });
 
   it("renders a per-row trade-area mini-map when coordinates are present", () => {
@@ -78,5 +108,29 @@ describe("ProjectionsList — populated", () => {
   it("offers a Create action in the header when projections exist", () => {
     render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
     expect(screen.getByRole("button", { name: /new projection/i })).toBeInTheDocument();
+  });
+
+  // #143 — an explicit Edit affordance routes an owned projection to the EDITABLE
+  // detail (Settings/sliders/overrides/autosave). The list is owner-scoped, so
+  // every listed row is owner-editable.
+  it("offers an Edit action per row that routes to the editable detail by view_slug", () => {
+    let edited = "";
+    render(
+      <ProjectionsList
+        projections={[item]}
+        onCreate={() => {}}
+        onOpen={() => {}}
+        onEdit={(s) => (edited = s)}
+      />,
+    );
+    const row = screen.getByTestId("projection-row-p_8x");
+    within(row).getByRole("button", { name: /edit house of hope/i }).click();
+    expect(edited).toBe("p_8x");
+  });
+
+  it("omits the Edit action when no onEdit handler is provided", () => {
+    render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
+    const row = screen.getByTestId("projection-row-p_8x");
+    expect(within(row).queryByRole("button", { name: /edit house of hope/i })).toBeNull();
   });
 });

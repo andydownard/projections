@@ -26,6 +26,9 @@ import zipfile
 from typing import Any
 from xml.sax.saxutils import escape as _xml_escape
 
+from app.terms import TERMS_VERSION
+from engine.model import AI_NARRATIVE_DISCLOSURE, EXPORT_DISCLAIMER
+
 PACKET_ROLES = ("board", "funder", "advisor")
 
 # Role-tailored call-to-action / emphasis (numbers never change — only framing).
@@ -146,16 +149,33 @@ def _kpis(vm: dict[str, Any]) -> list[dict[str, str]]:
     return out
 
 
+def _disclaimer(narrative_md: str | None, terms_accepted_at: str | None) -> dict[str, Any]:
+    """The server-owned export footer (#192) — a single source for the "planning
+    estimates, not advice" caveat the terms gate exists to protect, plus the
+    AI-narrative disclosure (only when generated prose is present). Reuses the
+    engine constants + ``app.terms.TERMS_VERSION`` so app and export copy never drift.
+    """
+    return {
+        "body": EXPORT_DISCLAIMER,
+        "ai_disclosure": AI_NARRATIVE_DISCLOSURE if narrative_md else None,
+        "terms_version": TERMS_VERSION,
+        "terms_accepted_at": terms_accepted_at or "",
+    }
+
+
 def build_packet(
     vm: dict[str, Any],
     role: str = "board",
     narrative_md: str | None = None,
+    terms_accepted_at: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the role-tailored packet from a computed_json view-model.
 
     ``narrative_md`` is the grounded, sanitized prose (app/narrative.py). Pass
     ``None`` when AI is disabled or no narrative exists: the packet then omits the
     prose section but keeps every structured/evidence section (§21 opt-out).
+    ``terms_accepted_at`` (when known) stamps the export footer with the acceptance
+    date alongside the terms version (#192).
     """
     role = _norm_role(role)
     sections: dict[str, Any] = {}
@@ -173,6 +193,9 @@ def build_packet(
     sections["kpis"] = _kpis(vm)
     if narrative_md:
         sections["narrative"] = {"body_md": narrative_md}
+    # Always present: the planning-estimates caveat + AI disclosure (the latter only
+    # when prose is present) travels into every exported artifact (#192).
+    sections["disclaimer"] = _disclaimer(narrative_md, terms_accepted_at)
 
     return {
         "role": role,
@@ -237,7 +260,26 @@ def render_packet_md(pkt: dict[str, Any]) -> str:
 
     if "narrative" in s:
         lines.append("## Narrative")
+        # Disclose AI authorship BEFORE the prose so a reader sees it was AI-drafted
+        # and that every figure is model-grounded (#192) — never an undisclosed claim.
+        d = s.get("disclaimer") or {}
+        if d.get("ai_disclosure"):
+            lines.append(f"_{_md_escape(d['ai_disclosure'])}_")
+            lines.append("")
         lines.append(s["narrative"]["body_md"])
+        lines.append("")
+
+    # Footer: the planning-estimates disclaimer + terms version/date (#192). Always
+    # present so the caveat is never stripped from the artifact a board reads.
+    disc = s.get("disclaimer")
+    if disc:
+        lines.append("---")
+        lines.append("## Disclaimer")
+        lines.append(_md_escape(disc["body"]))
+        terms_line = f"Terms v{_md_escape(disc.get('terms_version', ''))}"
+        if disc.get("terms_accepted_at"):
+            terms_line += f" accepted {_md_escape(disc['terms_accepted_at'])}"
+        lines.append(f"_{terms_line}._")
         lines.append("")
 
     return "\n".join(lines)

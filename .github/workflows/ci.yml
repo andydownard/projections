@@ -28,12 +28,17 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl \
+          pip install "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl bleach \
                       pytest pytest-cov ruff mypy hypothesis
       - name: Lint (ruff)
         run: ruff check app engine scripts
       - name: Types (mypy)
         run: mypy app engine
+      - name: Migration safety gate (additive-only scanner)
+        # Fail-closed: rejects DROP TABLE/COLUMN/INDEX, RENAME, destructive ALTER,
+        # TRUNCATE, bulk DELETE, or table-recreate in any shipped migration BEFORE
+        # it can run against the single durable volume (OPS_RUNBOOK §8 / #90).
+        run: python -m scripts.migration_lint
       - name: pytest + engine branch coverage gate (fail_under=90)
         run: pytest -q --cov --cov-report=term-missing
 
@@ -121,16 +126,24 @@ jobs:
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
-          pip install "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl
+          pip install "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl bleach
       - name: Install web deps (Vite webServer runs from ../web)
         working-directory: web
         run: npm install --no-audit --no-fund
       - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
-      - name: E2E flows (happy / override+409 / read-only / feedback / AI-disabled)
-        # Specs are viewport-matrixed; until the M2 UI ships they record explicit
-        # skip reasons (never silently pass). Screenshots archived on failure.
+      - name: E2E flows (happy / override+409 / read-only / feedback / AI-disabled / degraded-a11y)
+        # The webServer (playwright.config.ts) boots uvicorn with E2E_SEED=1 (seeds
+        # the `example` projection + `board-slug` role link AND bypasses the rate
+        # limiter) + Vite, across the 1440/768/375 viewport matrix. The happy path
+        # drives the real wizard -> server compute -> decision banner + milestones ->
+        # a 200 .xlsx download (#141). Screenshots archived on failure.
         run: npx playwright test
+      - name: Assert the E2E gate actually ran (fail-on-empty, #198)
+        # Playwright has no built-in fail-on-empty: a suite that skips 100% of its
+        # tests still exits 0. This guard fails the build unless real tests executed,
+        # so the "Playwright E2E" check can never again be green on a hollow run.
+        run: node assert_e2e_ran.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

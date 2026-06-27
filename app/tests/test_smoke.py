@@ -24,7 +24,7 @@ def test_health_returns_api_spec_shape(client):
     # API_SPEC §10 response shape.
     assert body["status"] == "ok"
     assert "build_sha" in body
-    assert body["model_version"] == "2.2.0"
+    assert body["model_version"] == "2.4.0"
     assert "db" in body
     assert "litestream" in body
 
@@ -39,6 +39,17 @@ def test_security_headers_present_on_every_response(client):
     assert "'unsafe-inline'" not in csp
     assert resp.headers.get("x-robots-tag") == "noindex, nofollow"
     assert "max-age=" in resp.headers.get("strict-transport-security", "")
+
+
+def test_csp_connect_src_is_self_only(client):
+    # #167 — all AI is server-proxied (hard rule 7); the browser only ever calls the
+    # app's own /penny endpoint, never a provider. So connect-src must NOT list the
+    # provider origins — they were needless post-XSS exfil / SSRF-pivot surface.
+    resp = client.get("/api/health")
+    csp = resp.headers.get("content-security-policy", "")
+    assert "connect-src 'self'" in csp
+    assert "api.anthropic.com" not in csp
+    assert "api.openai.com" not in csp
 
 
 def test_robots_disallow_all(client):

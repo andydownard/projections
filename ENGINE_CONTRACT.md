@@ -1,7 +1,7 @@
 # ENGINE_CONTRACT.md — The Math Authority
 
 > **Status:** Build spec (ready-to-build, not yet built) · **Repo:** `rallytasks/projections` · **Owner:** Andy Downard
-> **Model version this contract defines:** `model_version = "2.0.0"` · `compute_schema_version = "1.0.0"`
+> **Model version this contract defines:** `model_version = "2.4.0"` · `compute_schema_version = "1.2.0"` (2.4.0: `first_year_cash_gap` is scoped **strictly** to the operating Year-1 window `G..G+11`, so a scheduled cost beyond `G+11` no longer leaks its deeper trough into the first-year headline (#182); `cash_runway_months` ignores leading zero-cost pre-opening months instead of trivially reporting `1` (#184); 2.3.0: downside sensitivity rent stress applied to the **resolved** occupancy — `rent_per_sqft` and `nnn` opex are stressed too, not just `occupancy_annual` (#181); 2.2.0: multi-month pre-opening timeline + scheduled costs + 3 milestones; schema 1.2.0: view-model `milestones` block + Payback-period KPI, monthly `scheduledCosts`)
 > **Source of truth for requirements:** [`PRD.md`](reference/PRD.md) (cited inline as §) and [`methodology.md`](reference/thrift-store-projections-skill/reference/methodology.md).
 > **Sibling docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [BUILD_PLAN.md](BUILD_PLAN.md) · [DATA_MODEL.md](DATA_MODEL.md) · [API_SPEC.md](API_SPEC.md) · [SECURITY.md](SECURITY.md) · [OPS_RUNBOOK.md](OPS_RUNBOOK.md) · [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CLAUDE.md](CLAUDE.md) · [AGENTS.md](AGENTS.md) · [IDEA_FAB.md](IDEA_FAB.md)
 
@@ -236,13 +236,20 @@ All computed in the core; all asserted by golden tests (not merely rendered).
 ### 6.1 Capital & cash (§12.1)
 
 ```
-first_year_cash_gap   = min(cumulativeCash[M0..M12])           # most-negative position; ≤ 0
+first_year_cash_gap   = min(cumulativeCash[m] for G ≤ m ≤ G+11)  # most-negative position in the operating Year-1 window; ≤ 0 (#182)
 peak_cash_shortfall   = |min(0, first_year_cash_gap)|
 startup_capital_required = peak_cash_shortfall + CASH_RESERVE_BUFFER   # trough already embeds startup (spent at M0) — NEVER add startup_total again
-cash_runway_months    = first m where cumulativeCash[m] ≥ 0     # months to cash-positive; null if never
+cash_runway_months    = # non-negative cumulative-cash months from the first month with cash activity until cash first goes negative; leading zero-cost pre-opening months don't count; null when cash never goes negative within the horizon (#184)
 break_even_revenue    = solve(net == 0 over fixed+variable structure)   # monthly and annual
-break_even_month      = first m where net[m] ≥ 0 AND sustained thereafter   # null if never
+break_even_month      = first project month ≥ G where net[m] ≥ 0 AND sustained thereafter   # null if never
+payback_month         = first operating month where Σ(operating net since opening) ≥ startup_total   # the precise payback; null if never within horizon
 ```
+
+> **`first_year_cash_gap` is the Year-1 OPERATING window, not "every operating-kind month" (#182).** The timeline can extend past `G+11` to place a scheduled cost on a post-open month (`N = max(G+11, last scheduled month)`); those extension months are tagged `operating` but are **outside** the 12-month Year-1 window. The gap is bounded by month **index** `G..G+11`, so a Year-3 cost (e.g. a cost at month 30) can never pull its deeper trough into the first-year funding headline.
+
+> **`cash_runway_months` ignores leading zero-cost pre-opening months (#184).** Pre-opening months that carry no scheduled cost have `cumulativeCash == 0`; counting them as "cash-positive" made runway trivially `1` on every pre-opening timeline even when cash later plunged deeply negative. Runway now counts the non-negative months from the **first month with cash activity** up to the first month cash goes negative; it is `0` when cash goes negative the moment money is first spent, and `null` (N/A) when cash never goes negative within the horizon.
+
+Months are numbered on the uniform **project-month timeline** `1..N` (`N = G+11`, `G = opening_month_number`); pre-opening months `1..G-1` accumulate their scheduled-cost losses into `cumulativeCash` from month 1 (§5).
 
 The decision banner surfaces `startup_capital_required` prominently (prototype: ~$277,990) with a **"Why? →"** reasons drill-down (§19.3).
 
@@ -260,6 +267,8 @@ Each driver has an advisory benchmark band. Exceeding it sets a `flags` entry **
 
 **Sensitivity:** base / downside / upside at `±SENSITIVITY_DELTA` (25%) on **rent** and **donations**, showing the effect on net profit, break-even month, and capital required. Each scenario is a full re-run of the core. Downside scenarios are **fixtured** (§13.6) so a sign/compounding error cannot ship behind a passing happy path.
 
+> **Rent stress is encoding-independent (#181).** "Rent" for the stress is the **resolved annual occupancy** the model actually charges — whether it was entered as an explicit `occupancy_annual`, derived from `rent_per_sqft × building_sqft`, or carries an `nnn` opex add-on. The scenario resolves occupancy to a single quantity and multiplies it by the rent factor, so the `±25%` shock lands identically no matter how rent was encoded. (Pre-2.3.0 the multiplier was applied only to `occupancy_annual` and never to `nnn` opex, so a `rent_per_sqft`/`nnn` projection silently skipped the +25% downside rent shock — making the downside artificially rosier and **flipping the go/no-go verdict** on identical economics. Golden-asserted across all four encodings.)
+
 ### 6.3 Recommendation (rules-based, explainable, §12.3)
 
 The core emits a semantic **`reco.tag`** enum; the **client** maps enum → color/token (the API never hard-codes hex — see §9.3). Resolution order (first match wins), each with the reasons shown:
@@ -273,8 +282,29 @@ The core emits a semantic **`reco.tag`** enum; the **client** maps enum → colo
 | `revise` | outcome hinges on out-of-band inputs (flagged) |
 | `proceed` | positive Year-1 cash trajectory, capital need ≤ stated funds, ratios in band |
 
+**`do_not_proceed` messaging must distinguish base vs downside (#142/#145).** The
+trigger above fires when **either** the base **or** the downside scenario fails to
+reach break-even, but those are very different stories and the reason text must say
+which — it can never read as a flat "break-even is never reached" when the headline
+`metrics.breakeven` shows a real Month-N for the base case (a self-contradiction on
+one screen). The engine emits the precise reason in `reco_reasons["breakeven"]`, and
+the view-model uses that same string as **both** `reco.sub` and
+`metrics.reasonBreakeven` (single source of truth, no second surface):
+
+- **Base never breaks even:** "Break-even is not reached within the horizon under the base case (and the downside scenario fails as well) — the plan is not viable as configured." (Here `metrics.breakeven` is the N/A sentinel, so there is no contradiction.)
+- **Base breaks even but the downside does not** (the canonical 60%-labor default, break-even Month 9): "Base case reaches break-even at Month N, but the downside scenario (rent +25% / donations -25%) never does — the plan is not robust to a tougher market." This surfaces the downside as the driver of the verdict so a non-finance ED isn't confused by "Do not proceed" sitting next to a "Month 9" break-even.
+
+> **Consistency invariant (golden-asserted):** when `metrics.breakeven.raw` is a real
+> month, neither `reco.sub` nor `metrics.reasonBreakeven` may claim break-even is
+> "not reached" without scoping that to the downside scenario and naming the
+> base-case break-even. Enforced by `assert_breakeven_text_consistent` over both the
+> live view-model and the frozen `house_of_hope_canonical_60` golden. The verdict
+> threshold/guardrail logic is unchanged — this is messaging/transparency only.
+
 ### 6.4 KPIs (§11)
-Per period, recomputed live (subject to §12.4 guards): Total revenue · Net profit · Net margin · **Sales per sales-floor sq ft** · Sales per total sq ft · Revenue per donation · Revenue per customer · Annual donations · Customers · Occupancy cost ratio · Labor ratio · Donations per sq ft · **Break-even month** · **Startup capital required** · **First-year cash gap** · Simple payback (yrs) · Revenue CAGR (Y1→Y3).
+Per period, recomputed live (subject to §12.4 guards): Total revenue · Net profit · Net margin · **Sales per sales-floor sq ft** · Sales per total sq ft · Revenue per donation · Revenue per customer · Annual donations · Customers · Occupancy cost ratio · Labor ratio · Donations per sq ft · **Break-even month** · **Startup capital required** · **First-year cash gap** · **Payback period** (the precise `payback_month`, §6.6) · Revenue CAGR (Y1→Y3).
+
+> `simple_payback_years` (`startup_total / net[1]`) is **retained internally** (still computed and listed as a non-pinnable derived node) but is **no longer surfaced on the view-model**: the KPI strip shows the precise **Payback period** milestone (`payback_month`) instead (§6.6).
 
 ```
 sales_per_salesfloor_sqft = total_rev[1] / (building_sqft × salesfloor_pct)   # N/A if denom 0
@@ -283,6 +313,18 @@ labor_ratio[y]            = Payroll[y] / total_rev[y]                          #
 simple_payback_years      = startup_total / net[1]                            # N/A if net[1] ≤ 0
 revenue_cagr              = (total_rev[3] / total_rev[1])^(1/2) − 1           # N/A if rev[1] == 0
 ```
+
+### 6.6 Milestones (project-month timeline, §8 / #117)
+
+Three milestones are computed precisely on the `1..N` timeline and emitted on the view-model as a top-level `milestones` block, each a dual-value `{raw, display}` (e.g. `{raw: 6, display: "Month 6"}`). The **server is the formatting authority** — the client renders the `display` string verbatim, never re-deriving "Month N".
+
+| Milestone | Definition | Value |
+|---|---|---|
+| `grandOpening` | `grand_opening_month = G` (the `opening_month_number` input) | always known |
+| `breakEven` | `break_even_month` — first sustained operating month (≥ G) with ongoing net ≥ 0 | `null` ⇒ N/A-with-reason |
+| `payback` | `payback_month` — first month where cumulative operating profit since opening ≥ `startup_total` (the investment is recovered) | `null` ⇒ N/A-with-reason; carries a `duration` display ("25 months") when reached |
+
+When a milestone is not reached within the horizon the value is the explicit N/A sentinel `{raw: null, display: "N/A", reason: "<engine flag reason>"}` (the existing `flags` pattern), **never a misleading 0**. The `.xlsx` `MILESTONES` block renders the same `display` strings (single formatting authority).
 
 ### 6.5 Numeric discipline (rounding authority)
 - **Compute in `Decimal` (or integer cents) internally; round only at display/compare** (§12.4).
@@ -323,7 +365,7 @@ Rules:
 - **No upstream back-solve.** Pinning a downstream node does **not** mutate any upstream input. An upstream row that no longer drives any pinned downstream value gets a **`stale` flag** (rendered as the "no longer drives a pinned value" hint; §14).
 - **Derived rows + totals + margins + KPIs are NEVER pinnable** so the statement always foots. Pin writes to a non-pinnable node are **rejected at the API boundary** (HTTP 4xx), not merely hidden in the UI. The non-pinnable node list:
   `total_revenue, total_expenses, net_profit, net_margin, customers (derived), salvage_sales, donating_households, donations`, plus **every KPI and every decision metric** (`break_even_month, startup_capital_required, first_year_cash_gap, cash_runway_months, simple_payback_years, revenue_cagr`).
-  **Pinnable** nodes: the input drivers (`share[y]`, `donation_value`, `donations_per_hh`, `basket`, `sqft`, `rent/occupancy`, the `%` assumptions) and the **component expense lines** (`Payroll, Marketing & outreach, Supplies & processing, Credit card fees, Payroll taxes, Rent, Insurance, Internet, Pest control, Repairs, Security, Utilities`).
+  **Pinnable** nodes — and this set is **honest**: every member, when pinned, measurably changes computed output, so the API never accepts-and-persists a no-op pin (#183) — are the per-year revenue driver `share[y]` and the **component expense lines** (`Payroll, Marketing & outreach, Supplies & processing, Credit card fees, Payroll taxes, Rent, Insurance, Internet, Pest control, Repairs, Security, Utilities`). The rate/driver inputs (`labor_pct, marketing_pct, supplies_pct, card_pct, payroll_tax_pct, salvage_pct, escalator, basket, donation_value, donations_per_hh, sqft, rent_per_sqft, occupancy`) are **NOT** per-year pins — they are edited as **global assumptions** (`compute()` reads them directly, never via a pin), so a pin on them is **rejected** (HTTP 4xx), not silently ignored. To change one, edit the assumption; to fix a year's resulting expense, pin the component line (e.g. pin `Payroll`, not `labor_pct`).
 - **Reset:** per-pin reset deletes that key; global reset clears all keys.
 - **Totals always derive from resolved component values** so the in-sheet `=SUM(...)` and the server's resolved total are computed from **the same** numbers (this is the case most likely to break the <$0.50 gate — see §11.4).
 
@@ -331,6 +373,7 @@ Rules:
 - Pin a component → the total re-foots via formula over the now-hardcoded cell.
 - Pin then reset → returns to the computed value.
 - Attempt to pin a derived/total/KPI/decision node → **rejected** server-side.
+- **Every** node in `PINNABLE_NODES`, when pinned, **measurably changes** computed output (no advertised-but-ignored pin); a pin on a non-honored rate/driver input is **rejected**, not silently accepted (#183).
 - Pin an upstream input that no longer drives any pinned downstream node → **`stale` flag set**.
 - Property: the statement **always foots** (`total_exp == Σ resolved expense lines`; `net == total_rev − total_exp`) under any subset of legal pins.
 
@@ -379,8 +422,9 @@ It returns the **App-D view-model** as its native output — the **same** struct
 |---|---|
 | `reco` | `{ tag, headline, sub, color, bg, icon }` — `tag` is the §6.3 enum; `color/bg/icon` are **client-derived** (see §9.3) |
 | `metrics` | `{ capital, cashGap, breakeven }` + reasons `{ reasonCapital, reasonGap, reasonBreakeven }` |
-| `kpis[]` | `{ label, value, sub, color }` |
-| `monthly[]` | per month `{ revenue, expenses, net, cumulativeCash }` + top-level `breakevenMonth` |
+| `milestones` | `{ grandOpening, breakEven, payback }` — each `{ raw, display }`; unreached ⇒ `{ raw: null, display: "N/A", reason }`; `payback` adds `duration` ("25 months") when reached (§6.6) |
+| `kpis[]` | `{ label, value, sub, color }` — includes the **Payback period** KPI (sourced from `milestones.payback`); the `simple_payback_years` KPI is retired (§6.4) |
+| `monthly[]` | per **project month 1..N** `{ revenue, expenses, scheduledCosts, net, cumulativeCash }` (the same columns as the `.xlsx` Monthly tab; `net = revenue − expenses − scheduledCosts`, so a pre-opening month reads as a real loss) + top-level `breakevenMonth` |
 | `rows[]` | per 3-year line `{ label, group, y1, y2, y3, class: input\|computed\|overridden\|estimated, editable }` |
 | `overrides[]` | per pin `{ node, year, calculated, value, note, pinnedDate, affected[] }` |
 | `evidence[]` | `{ label, value, method, badge, change, meta }` |
@@ -447,8 +491,13 @@ Every divided cell uses the guard pattern so LibreOffice recalc never yields `#D
 Applied to: net margin (`=net/totrev`, was line 257), simple payback (`=startup/Y1net`, was line 284), customers (`=retail/basket`), and every per-unit KPI. A `null` from the core renders as a **blank cell + comment** describing the N/A (§8).
 
 ### 11.6 Tabs
-- **`Projection`** — inputs (blue), 3-year P&L (formulas), startup costs, KPIs, decision metrics.
+- **`Projection`** — inputs (blue), 3-year P&L (formulas), startup costs, KPIs, decision metrics, and a **Notes & Disclaimer** block (§11.7).
 - **`Monthly Cash Flow`** — M0–M12 rows; the Year-1 P&L column on the `Projection` tab references these cells (§18, §10.3).
+
+### 11.7 Notes & Disclaimer block (#192)
+The exported `.xlsx` and the Board Packet (`app/packet.py`) both carry a server-owned **"planning estimates, not advice"** disclaimer — the same defensibility caveat the in-app terms gate protects, so it is never stripped from the artifact a board reads detached from the app. The wording is a single source in `engine.model` (`EXPORT_DISCLAIMER`, `AI_NARRATIVE_DISCLOSURE`, `TERMS_VERSION`; `app.terms` re-exports `TERMS_VERSION`):
+- **`.xlsx`** — a `NOTES & DISCLAIMER` text block on the `Projection` sheet with the disclaimer + `Terms v{TERMS_VERSION}` (+ acceptance date when known). **Pure text, no formulas** — it adds no recalc-error surface to the three-way golden gate.
+- **Packet** — a footer with the same disclaimer + terms version/date; when an AI narrative is present, an **AI-narrative disclosure** ("Narrative drafted with AI assistance; every figure is grounded in the model.") is prepended to the prose. Server-formatted only; no client math.
 
 ---
 

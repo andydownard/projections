@@ -37,7 +37,22 @@ def test_canonical_is_a_loss_case():
     # margin display negative (parentheses) and reco is not proceed.
     assert vm["rows"][-1]["y1"]["display"].startswith("(")
     assert vm["reco"]["tag"] != "proceed"
-    assert vm["model_version"] == "2.2.0"
+    assert vm["model_version"] == "2.4.0"
+
+
+def test_canonical_reco_text_consistent_with_breakeven_metric():
+    # #142 regression guard at the FROZEN-FIXTURE layer: the shipped default output
+    # can never again encode a "break-even not reached" reco next to a real Month-N
+    # break-even metric. The base case reaches break-even (do_not_proceed is driven
+    # by the DOWNSIDE), so the reco/reason text must name both — never contradict it.
+    from engine.tests.test_decision import assert_breakeven_text_consistent
+    vm = _load("house_of_hope_canonical_60.json")
+    assert vm["metrics"]["breakeven"]["raw"] is not None
+    assert vm["reco"]["tag"] == "do_not_proceed"
+    assert_breakeven_text_consistent(vm)
+    # Both the verdict sub and the metric reason must surface the downside driver.
+    for text in (vm["reco"]["sub"].lower(), vm["metrics"]["reasonBreakeven"].lower()):
+        assert "base case" in text and "downside" in text
 
 
 def test_design_parity_reproduces_headline():

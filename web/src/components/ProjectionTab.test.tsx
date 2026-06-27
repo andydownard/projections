@@ -1,9 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ProjectionTab } from "./ProjectionTab";
-import type { ViewModel } from "../api/viewModel";
+import type { Milestones, ViewModel } from "../api/viewModel";
 
 // SLICE 3 — the Projection tab. It renders the Appendix-D view-model VERBATIM:
 // decision banner (reco chip carrying icon + TEXT, never color alone), the three
@@ -134,6 +134,54 @@ describe("ProjectionTab", () => {
   });
 });
 
+describe("ProjectionTab — negative (loss) treatment [#148]", () => {
+  it("flags a negative table cell with data-negative while keeping the server parentheses (non-color cue)", () => {
+    const m = vm({
+      rows: [
+        {
+          label: "Net profit",
+          group: "expenses",
+          y1: { raw: -44433, display: "($44,433)" },
+          y2: { raw: 10000, display: "$10,000" },
+          y3: { raw: 20000, display: "$20,000" },
+          class: "computed",
+          editable: false,
+        },
+      ],
+    });
+    render(<ProjectionTab vm={m} />);
+    const neg = screen.getByTestId("cell-Net profit-y1");
+    // Color cue (CSS [data-negative]) is PAIRED with the server's parentheses,
+    // which remain the non-color cue — meaning is never carried by color alone.
+    expect(neg).toHaveAttribute("data-negative", "true");
+    expect(neg).toHaveTextContent("($44,433)");
+    // A positive sibling cell carries no negative hook.
+    expect(screen.getByTestId("cell-Net profit-y2")).not.toHaveAttribute("data-negative");
+  });
+
+  it("flags the negative cash-gap decision tile value but not the positive capital tile", () => {
+    render(<ProjectionTab vm={vm()} />);
+    const gapValue = screen.getByTestId("tile-cashgap").querySelector(".decision-tile__value")!;
+    expect(gapValue).toHaveAttribute("data-negative", "true");
+    expect(gapValue).toHaveTextContent("($219,990)");
+    const capValue = screen.getByTestId("tile-capital").querySelector(".decision-tile__value")!;
+    expect(capValue).not.toHaveAttribute("data-negative");
+  });
+
+  it("flags a negative KPI value but not a positive one", () => {
+    const m = vm({
+      kpis: [
+        { label: "Total revenue", value: { raw: 426911, display: "$426,911" }, sub: "Year 1" },
+        { label: "Net profit", value: { raw: -44433, display: "($44,433)" }, sub: "Year 1" },
+      ],
+    });
+    render(<ProjectionTab vm={m} />);
+    const strip = screen.getByTestId("kpi-strip");
+    expect(within(strip).getByText("($44,433)")).toHaveAttribute("data-negative", "true");
+    expect(within(strip).getByText("$426,911")).not.toHaveAttribute("data-negative");
+  });
+});
+
 describe("ProjectionTab a11y", () => {
   it("exposes a recompute live-region for autosave/recompute status", () => {
     render(<ProjectionTab vm={vm()} recomputeStatus="Updated" />);
@@ -167,5 +215,125 @@ describe("ProjectionTab a11y", () => {
     const table = screen.getByRole("table", { name: /3-year projection/i });
     expect(table).toBeInTheDocument();
     expect(within(table).getByRole("rowheader", { name: /Donor market share/i })).toBeInTheDocument();
+  });
+});
+
+describe("ProjectionTab — per-field change affordance (PE7, #126)", () => {
+  it("renders the FieldChange affordance on an editable cell that recently changed", () => {
+    render(
+      <ProjectionTab
+        vm={vm()}
+        fieldChanges={{ "Donor market share#1": { previous: "4.0%", by: "penny" } }}
+      />,
+    );
+    const cell = screen.getByTestId("cell-Donor market share-y1").closest("td");
+    const fc = within(cell as HTMLElement).getByTestId("field-change");
+    // recent-change badge (icon + text, not color alone) + subtle "was X".
+    expect(within(fc).getByTestId("field-change-badge")).toHaveTextContent(/changed by penny/i);
+    expect(within(fc).getByTestId("field-change-was")).toHaveTextContent("was 4.0%");
+  });
+
+  it("does not render the affordance on cells with no recent change", () => {
+    render(<ProjectionTab vm={vm()} fieldChanges={{ "Donor market share#1": { previous: "4.0%" } }} />);
+    // The Rent editable cell has no change entry → no affordance there.
+    const rent = screen.getByTestId("cell-Rent-y1").closest("td");
+    expect(within(rent as HTMLElement).queryByTestId("field-change")).not.toBeInTheDocument();
+  });
+
+  it("per-field undo reverts THAT field — calls onUndoField with the node + year", async () => {
+    const onUndoField = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProjectionTab
+        vm={vm()}
+        fieldChanges={{ "Donor market share#1": { previous: "4.0%", by: "penny" } }}
+        onUndoField={onUndoField}
+      />,
+    );
+    await user.click(screen.getByTestId("field-change-undo"));
+    expect(onUndoField).toHaveBeenCalledWith("Donor market share", 1);
+  });
+
+  it("renders no undo control when onUndoField is absent (display-only)", () => {
+    render(
+      <ProjectionTab
+        vm={vm()}
+        fieldChanges={{ "Donor market share#1": { previous: "4.0%", by: "penny" } }}
+      />,
+    );
+    expect(screen.queryByTestId("field-change-undo")).not.toBeInTheDocument();
+  });
+});
+
+describe("ProjectionTab — break-even / payback are NOT conflated [#193]", () => {
+  const milestones: Milestones = {
+    grandOpening: { raw: 3, display: "Month 3" },
+    breakEven: { raw: 5, display: "Month 5" },
+    payback: { raw: 25, display: "Month 25", duration: "25 months" },
+  };
+
+  it("labels the break-even tile 'Break-even' — never 'Break-even (payback)'", () => {
+    render(<ProjectionTab vm={vm()} />);
+    const be = screen.getByTestId("tile-breakeven");
+    expect(be).toHaveTextContent(/break-even/i);
+    // The conflated label is gone — break-even must not claim it is payback.
+    expect(be).not.toHaveTextContent(/payback/i);
+  });
+
+  it("renders a SEPARATE Payback tile from milestones.payback (distinct month)", () => {
+    render(<ProjectionTab vm={vm({ milestones })} />);
+    const be = screen.getByTestId("tile-breakeven");
+    expect(be).toHaveTextContent("Month 5");
+    const payback = screen.getByTestId("tile-payback");
+    expect(within(payback).getByText(/payback/i)).toBeInTheDocument();
+    // The recovered-investment month is its own number, not the break-even month.
+    expect(payback).toHaveTextContent("Month 25");
+    // Back-compat metric hook mirrors the DecisionBanner.
+    expect(within(payback).getByTestId("metric-payback")).toBeInTheDocument();
+  });
+
+  it("omits the Payback tile for legacy snapshots without milestones", () => {
+    render(<ProjectionTab vm={vm()} />);
+    expect(screen.queryByTestId("tile-payback")).not.toBeInTheDocument();
+  });
+
+  it("renders an unreached payback as N/A with reason, never a misleading 0", () => {
+    const naMilestones: Milestones = {
+      grandOpening: { raw: 3, display: "Month 3" },
+      breakEven: { raw: 5, display: "Month 5" },
+      payback: { raw: null, display: "N/A", reason: "N/A — startup costs not recovered in Year 1" },
+    };
+    render(<ProjectionTab vm={vm({ milestones: naMilestones })} />);
+    const payback = screen.getByTestId("tile-payback");
+    expect(payback).toHaveTextContent("N/A");
+    expect(payback).not.toHaveTextContent("$0");
+    expect(payback).toHaveTextContent(/not recovered in Year 1/i);
+  });
+});
+
+describe("ProjectionTab — cash-gap label is sign-aware [#194]", () => {
+  it("labels a negative trough 'First-year cash gap' (a real shortfall)", () => {
+    render(<ProjectionTab vm={vm()} />);
+    const gap = screen.getByTestId("tile-cashgap");
+    expect(gap).toHaveTextContent(/First-year cash gap/i);
+    expect(gap).toHaveTextContent("($219,990)");
+  });
+
+  it("labels a positive trough 'Lowest first-year cash balance' — a cushion, not a gap", () => {
+    const m = vm({
+      metrics: {
+        capital: { raw: 277990, display: "$277,990" },
+        cashGap: { raw: 40000, display: "$40,000" },
+        breakeven: { raw: 5, display: "Month 5" },
+        reasonGap: "Most-negative cumulative cash across the first year.",
+      },
+    });
+    render(<ProjectionTab vm={m} />);
+    const gap = screen.getByTestId("tile-cashgap");
+    expect(gap).toHaveTextContent(/Lowest first-year cash balance/i);
+    expect(gap).not.toHaveTextContent(/cash gap/i);
+    // Server display verbatim; a positive cushion carries no negative color cue.
+    expect(gap).toHaveTextContent("$40,000");
+    expect(gap.querySelector(".decision-tile__value")).not.toHaveAttribute("data-negative");
   });
 });

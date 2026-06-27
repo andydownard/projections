@@ -30,6 +30,8 @@ This document is the canonical schema and data-access contract for the projectio
 | `research_cache` | global (not owner-scoped) | TTL'd Census + rent-research results keyed by normalized location+size. | §16, §24 |
 | `feedback` | global | Redacted bug reports → GitHub issue; **no projection link, no financial fields.** | §22, §24 |
 | `actuals` | many per projection | **Post-launch (M7), schema only in v1.** Monthly forecast-vs-actual + opt-in benchmarks. | §6.3, §24 |
+| `penny_transcripts` | 0..1 per projection | Persisted per-project Penny conversation (Spec B §7). Wizard-draft transcripts (no projection) are **never** persisted. | Spec B §7 |
+| `role_links` | many per projection | Indexed role-share links (board/funder/advisor): slug PK → projection + role, for O(1) exact-match resolution of `/api/r/{slug}` (#180). | §6.2, §20 |
 | `schema_migrations` | global | Applied-migration ledger (timpager pattern). | §26 |
 
 ```
@@ -37,6 +39,8 @@ projections ──1:N── revisions
             ──1:N── evidence
             ──1:1── narratives
             ──1:N── actuals        (post-launch)
+            ──1:1── penny_transcripts  (NULL projection_id => never persisted)
+            ──1:N── role_links     (slug PK; indexed role-share resolution)
 research_cache  (independent, global, TTL)
 feedback        (independent, global, no FK to projections)
 schema_migrations (global)
@@ -82,11 +86,18 @@ CREATE TABLE IF NOT EXISTS projections (
   overrides_json       TEXT NOT NULL DEFAULT '{}',  -- see 4.6, keyed "{node}#{year}"
   monthly_json         TEXT NOT NULL DEFAULT '{}',  -- see 4.7 (M0..M12 cash-flow)
   computed_json        TEXT NOT NULL DEFAULT '{}',  -- see 4.8 (resolved P&L + KPIs + decision + flags)
+  cohort_json          TEXT NOT NULL DEFAULT '{}',  -- 0001: frozen cohort fingerprint (BACKLOG data-network)
   terms_accepted_at    TEXT,                        -- terms gate before export/share (§21)
   ai_opt_out           INTEGER NOT NULL DEFAULT 0,  -- 1 = no AI calls (§21)
   created_at           TEXT NOT NULL,
   updated_at           TEXT NOT NULL,
-  deleted_at           TEXT                         -- hard-delete marker (post-DELETE); distinct from status='trashed'
+  deleted_at           TEXT,                        -- legacy soft-delete marker; the hard purge (§5.4) DELETEs the row outright
+  -- 0005: timed cost schedule + opening anchor (Spec §5/§7); canonical copy lives in inputs_json (§4.3).
+  target_opening_date  TEXT,                        -- ISO month/date of grand opening
+  opening_month_number INTEGER NOT NULL DEFAULT 1,  -- project month (>=1) opening lands on (frozen literal DEFAULT)
+  cost_schedule_json   TEXT NOT NULL DEFAULT '[...]', -- [{category,month,amount}]; frozen month-1 lump (see 0005, #187)
+  -- 0008: compact owner-list card summary, denormalized from computed_json at write time (#178).
+  summary_json         TEXT NOT NULL DEFAULT '{}'   -- {location,basis,y1_revenue,y1_net,capital_required,reco_tag,coords}
 );
 ```
 
@@ -96,7 +107,7 @@ CREATE TABLE IF NOT EXISTS projections (
 | `view_slug` | TEXT UNIQUE | ≥128-bit URL-safe token, **stored plaintext** because it is the read lookup key (PRD §20, §24). Generated `secrets.token_urlsafe(16)`. Not a secret on its own — read-only access. |
 | `owner_token_hash` | TEXT | SHA-256 hex of the owner bearer token (≥256-bit, `secrets.token_urlsafe(32)`). The raw token lives only in the client `localStorage` (§7). |
 | `edit_token_hash` | TEXT, nullable | SHA-256 of the edit token. Raw token is delivered via URL **fragment** only, never path/query, never logged (PRD §20). Null until an edit link is minted. |
-| `role_tokens_json` | TEXT | JSON map of role-share links: `{ "board": {"slug": "...", "token_hash": "..."}, "funder": {...}, "advisor": {...} }`. Each role view is a read-only capability link with role-emphasis (PRD §6.2). Rotated atomically with owner/edit (§7.4). |
+| `role_tokens_json` | TEXT | JSON map of role-share links (each a read-only capability link with role-emphasis, PRD §6.2), rotated atomically with owner/edit (§7.4). **Canonical role-link storage + resolution moved to the indexed `role_links` table (§3.10, #180); this column is a denormalized mirror kept in sync on every write.** The store's sync parser tolerates BOTH the documented `{ role_name: {slug, token_hash} }` shape and the legacy shipped `{ slug: role_name }` shape. |
 | `name` | TEXT | Display name. |
 | `status` | TEXT | `active` \| `trashed`. Trash with restore (PRD §19.1). |
 | `version` | INTEGER | Monotonic per-projection. Every mutation does `SET version = version + 1 ... WHERE id=? AND version=?`; 0 rows → HTTP 409 (§6). |
@@ -113,7 +124,8 @@ CREATE TABLE IF NOT EXISTS projections (
 | `terms_accepted_at` | TEXT, nullable | Timestamp of terms acceptance; export/share gated until set (PRD §21). |
 | `ai_opt_out` | INTEGER | 1 → app computes/saves/exports `.xlsx` with zero AI calls (PRD §21). |
 | `created_at` / `updated_at` | TEXT | App-set ISO-8601 UTC. |
-| `deleted_at` | TEXT, nullable | Set on hard `DELETE` flow (post-trash purge). `status='trashed'` is the user-visible soft delete; `deleted_at` marks the irreversible removal grace marker. Rows with `deleted_at` set are excluded from all reads. |
+| `deleted_at` | TEXT, nullable | **Legacy** soft-delete marker (`status='trashed'` is the user-visible soft delete). The hard purge now **DELETEs the row outright** + cascades (§5.4, #202); reads still filter `deleted_at IS NULL` to exclude any legacy soft-deleted rows. |
+| `summary_json` | TEXT | **0008 (#178).** Compact owner-list card summary `{location, basis, y1_revenue, y1_net, capital_required, reco_tag, coords}`, denormalized from `computed_json` at write time. `list_card_summaries` SELECTs only this + the small identity columns so the owner list never `SELECT *` + parses the full ~10KB `computed_json` per row. See §4.10. |
 
 **Indexes:**
 ```sql
@@ -121,7 +133,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_projections_view_slug   ON projections(vie
 CREATE INDEX        IF NOT EXISTS idx_projections_owner        ON projections(owner_token_hash, status, updated_at DESC);
 CREATE INDEX        IF NOT EXISTS idx_projections_edit         ON projections(edit_token_hash);
 ```
-The owner index backs the **owner-scoped list** (`GET /api/projections`) — there is **no global index of projections** (PRD §20). The list query is always `WHERE owner_token_hash = ? AND status = 'active' AND deleted_at IS NULL ORDER BY updated_at DESC`.
+The owner index backs the **owner-scoped list** (`GET /api/projections`) — there is **no global index of projections** (PRD §20). The list query is always `WHERE owner_token_hash = ? AND status = 'active' AND deleted_at IS NULL ORDER BY updated_at DESC`, and (since #178) selects **only** `view_slug, name, status, version, updated_at, summary_json` — never the heavy JSON blobs.
 
 ### 3.2 `revisions` (append-only snapshots)
 
@@ -130,22 +142,28 @@ CREATE TABLE IF NOT EXISTS revisions (
   id               TEXT PRIMARY KEY,            -- ULID
   projection_id    TEXT NOT NULL,
   seq              INTEGER NOT NULL,            -- the projections.version this snapshot represents
-  inputs_json      TEXT NOT NULL,
-  assumptions_json TEXT NOT NULL,
-  overrides_json   TEXT NOT NULL,
-  monthly_json     TEXT NOT NULL,
-  computed_json    TEXT NOT NULL,
+  inputs_json      TEXT NOT NULL,                -- recoverable inputs (read by restore)
+  assumptions_json TEXT NOT NULL,                -- recoverable inputs (read by restore)
+  overrides_json   TEXT NOT NULL,                -- recoverable inputs (read by restore)
+  monthly_json     TEXT NOT NULL,                -- 0009/#179: stored '{}' — recomputable, never read back
+  computed_json    TEXT NOT NULL,                -- 0009/#179: stored '{}' — recomputable, never read back
   model_version    TEXT NOT NULL,
   actor_token_hash TEXT,                        -- which token made the change (forensics)
+  actor            TEXT NOT NULL DEFAULT 'user', -- author class: user|penny|penny_undo|user_undo (Spec B §3/§4)
   change_summary   TEXT NOT NULL DEFAULT '',    -- e.g. "edited labor %", "pinned Payroll#2"
   created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_revisions_projection ON revisions(projection_id, seq DESC);
+-- 0007: UNIQUE(projection_id, seq) backstop so a miscomputed/duplicate seq fails
+-- loudly (IntegrityError) instead of silently corrupting the restore/audit trail.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_revisions_projection_seq ON revisions(projection_id, seq);
 ```
 
-A full snapshot is written **per autosave settle** and per explicit save / model upgrade / restore (PRD §19.3, §24). `actor_token_hash` records which capability token authored the change (audit/forensics, PRD §20). Restore (`POST …/revisions/{id}/restore`) writes a **new** revision rather than rewinding in place. `model_version` is captured so a restored snapshot is never silently recomputed.
+A snapshot is written **per autosave settle** and per explicit save / model upgrade / restore (PRD §19.3, §24). **It stores the recoverable inputs only — `inputs_json` / `assumptions_json` / `overrides_json` / `model_version` + metadata.** The compute snapshot (`computed_json`, `monthly_json`) is **NOT persisted** in a revision (`strip_recomputable` blanks it to `'{}'` before insert, #179): restore recomputes the view-model from the inputs and **never reads `rev['computed_json']`**, and `list_revisions` returns metadata only — so storing the full ~10KB blob per revision was pure durable-volume + Litestream write-amplification with no reader. The columns remain `NOT NULL` (additive-only; never dropped) and simply hold `'{}'`. `actor_token_hash` records which capability token authored the change (audit/forensics, PRD §20). The **`actor` enum** (`user | penny | penny_undo | user_undo`, added in migration `0006`, default `'user'`) attributes each revision to its author class so the audit trail distinguishes a Penny edit, a per-field undo, and a manual edit (Spec B §3/§4); it is app-enforced (SQLite has no native enum) and carries to Postgres as the same column. Restore (`POST …/revisions/{id}/restore`) writes a **new** revision rather than rewinding in place. `model_version` is captured so a restored snapshot is never silently recomputed.
 
-> **Retention (ops concern, see [`OPS_RUNBOOK.md`](./OPS_RUNBOOK.md)):** autosave can produce heavy append volume on a single projection. v1 keeps all revisions but a compaction/retention policy (e.g. keep all from the last 30 days + daily milestones beyond that) is a documented backlog item; growth must be bounded before high write rates (backend-lens risk).
+**Atomic version bump + snapshot (issue #186).** The version-checked UPDATE and its revision snapshot are written in **one transaction** via `update_with_version_check_and_revision` (§9): 0 rows → HTTP 409 and **no** revision is written; otherwise the `projections.version++` and the matching `revisions` row commit together. This closes the crash window where a separate `version++` commit landed but the snapshot commit did not — a version with no recoverable snapshot, a silent hole in the restore/audit trail. The additive **`UNIQUE(projection_id, seq)`** index (migration `0007`) is the DB-level backstop: `seq` integrity no longer rests solely on the app computing `seq = if_match + 1` — a duplicate fails loudly rather than corrupting the list.
+
+> **Retention (#179, `app/store/revision_retention.py`).** Autosave produces heavy append volume on a single projection, so growth is now **bounded**: on each insert the store prunes the oldest revisions beyond `MAX_REVISIONS_PER_PROJECTION` (100) **except protected ones** — any revision whose `change_summary` marks a **model upgrade** (the pre-upgrade restore point, §5.3) or a **token rotation** (security audit, §6.1) is never pruned, so the restore/audit contract survives compaction. The cap is applied above the Store interface so SQLite and Postgres behave identically. Combined with dropping the unread compute snapshot (above), per-projection revision storage is bounded in both count and per-row size.
 
 ### 3.3 `narratives` (grounded prose, 0..1 per projection)
 
@@ -273,7 +291,43 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 ```
 
-Mirrors timpager's applied-migration ledger (timpager `SCHEMA.md`). Migrations run **before** any other statement on boot (§10).
+Mirrors timpager's applied-migration ledger (timpager `SCHEMA.md`). Migrations run **before** any other statement on boot (§10). Each pending migration's DDL and its `schema_migrations` INSERT commit in **one transaction** (atomic), and every `ALTER ADD COLUMN` re-run is a no-op (idempotent), so an interrupted apply recovers on the next boot rather than crash-looping (§8, issue #185).
+
+### 3.9 `penny_transcripts` (per-project Penny conversation — Spec B §7)
+
+```sql
+CREATE TABLE IF NOT EXISTS penny_transcripts (
+  id            TEXT PRIMARY KEY,                          -- ULID
+  projection_id TEXT REFERENCES projections(id),           -- NULLable: wizard drafts are NEVER persisted
+  turns_json    TEXT NOT NULL DEFAULT '[]',                -- ordered list of turn objects (§4.9)
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_penny_transcripts_projection ON penny_transcripts(projection_id);
+```
+
+Added in migration `0006_penny_transcripts`. One persisted transcript per **saved** projection; the **edit/detail-page** conversation. `projection_id` is a **NULLable** FK by design: a Penny **wizard-draft** conversation has no projection yet, lives only in client state, and is **never written** (Spec B §7) — the Store seam (`create_transcript` / `append_transcript_turn`) **fails closed** (`ValueError`) on a missing/NULL `projection_id` so an ephemeral draft can never be persisted. Owner scoping is enforced at the router: `GET /api/projections/{view_slug}/penny/transcript` resolves the slug under the owner/edit Bearer, then keys on the resolved `projection_id` (no cross-owner read). `turns_json` is opaque `TEXT` ((de)serialized by the app — no JSON1 above the Store interface). **Retention/size cap** (Spec B §7) is applied above the interface on every append (`app/store/penny_retention.py`): keep the most-recent `MAX_TURNS` (200) turns, and truncate the heavy machine payload (`tool_args`, `tool_result_ref`) of `tool` turns older than the most-recent `TOOL_PAYLOAD_RETENTION` (40) window while keeping each turn's human-readable `content` summary. No financial leakage beyond what the projection already holds for that owner.
+
+The **seven-tool surface** (`app/penny/tools.py`, PE4) that drives mutations is registered into the bounded tool-use loop: every mutate tool converges on the shared `apply_projection_patch` service (the same PATCH/`If-Match` write path the manual UI uses), so each applied Penny edit bumps `version` and writes **one revision tagged `actor='penny'`** (§3.2). The **POST endpoint** (`POST …/penny`) that wires the loop to HTTP and appends transcript turns is a later slice (PE5); v1 of this table ships the data model + owner-scoped read seam only.
+
+### 3.10 `role_links` (indexed role-share resolution — #180)
+
+```sql
+CREATE TABLE IF NOT EXISTS role_links (
+  slug          TEXT PRIMARY KEY,                          -- plaintext role-share lookup key (like view_slug)
+  projection_id TEXT NOT NULL REFERENCES projections(id),
+  role_name     TEXT NOT NULL,                             -- board | funder | advisor
+  token_hash    TEXT,                                      -- SHA-256(slug): documented hashed-at-rest companion (§6)
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_role_links_projection ON role_links(projection_id);
+```
+
+Added in migration `0009_role_links`. This is the **canonical, indexed home** for role-share links and the realization of the documented `{ role_name, slug, token_hash }` shape (§3.1) as a relational table. It replaces the previous resolver, which scanned the whole `projections` table with a leading-wildcard `role_tokens_json LIKE '%"<slug>"%'` — **unindexed, O(table-size) per UNAUTHENTICATED `/api/r/{slug}` request, and non-portable to Postgres `jsonb`** (#180). Resolution (`get_projection_by_role_slug`) is now an **O(1) exact match** on the `slug` primary key joined to the live projection (`deleted_at IS NULL`), identical on Postgres.
+
+- **slug is plaintext** — it is a read-only lookup capability exactly analogous to `view_slug` (§6), delivered in the `/api/r/{slug}` path and stored as the indexed PK. `token_hash = SHA-256(slug)` is also stored as the §6 hashed-at-rest companion (decision: **plaintext lookup key + hashed companion**, resolving the §3.1 / §6 ambiguity for role slugs).
+- **Kept in sync from `role_tokens_json`.** `SqliteStore` rebuilds a projection's `role_links` rows on every write that carries `role_tokens_json` (`create_projection`, `rotate_tokens` — in the **same transaction** as the rotation, so an old role slug stops resolving the moment it rotates), via the tolerant `parse_role_tokens` (both the documented and legacy shapes). A one-time `_backfill_role_links` populates existing rows on the boot that applies `0009`.
+- The `idx_role_links_projection` index backs the per-projection cascade erased by the hard purge (§5.4, #202).
 
 ---
 
@@ -305,10 +359,18 @@ These are the contracts for the opaque `TEXT` JSON columns. The DB treats them a
   "lease_type": "nnn",
   "donation_value": 74,
   "demand": { "mode": "market_share", "share_y1": 0.06, "share_y2": 0.08, "share_y3": 0.10 },
-  "source_of_funds": { "cash": 150000, "grant": 50000, "loan": 0, "campaign": 0 }
+  "source_of_funds": { "cash": 150000, "grant": 50000, "loan": 0, "campaign": 0 },
+  "opening_month_number": 5,
+  "cost_schedule": [
+    { "category": "Build-out / Renovations", "month": 2, "amount": 50000,
+      "provenance": { "source": "ai", "turn_id": "pt_…#7", "created_at": "2026-06-27T00:00:00Z" } },
+    { "category": "Equipment & Fixtures", "month": 4, "amount": 45000 }
+  ]
 }
 ```
 **`share_y1`, `share_y2`, `share_y3` are three explicit inputs (PRD §7.1).** The legacy engine's Year-2 = midpoint rule (`generate_projection.py:65`, `methodology.md` lines 17–18) is **superseded** — there is no derived midpoint anywhere in v1. The wizard's "even ramp" helper may *pre-fill* `share_y2` but all three persist as explicit values. `mode` may also be `donations_per_week` (the app converts to share).
+
+**Timed cost schedule + opening anchor (Spec A §5; added in migration `0005`).** `opening_month_number` (`≥ 1`) is the project month grand opening lands on; `cost_schedule` is the list of timed startup rows `{category, month (≥ 1), amount (≥ 0)}`. The canonical copy lives here in `inputs_json`; first-class columns (`cost_schedule_json`, `opening_month_number`, `target_opening_date`) mirror it for queryability. A row MAY carry an optional **`provenance`** object attributing how it was created: Penny stamps `{ "source": "ai", "turn_id", "created_at" }` on each row she builds from a consultant proposal (Spec B §6.2/§9 `edit_cost_schedule`). `provenance` is **opaque audit/UI metadata** — it never feeds the engine (`cost_schedule` is filtered out of the engine args) and is validated as `{ source, … }` (an object) alongside the `{category, month, amount}` shape; manually-created rows simply omit it. Server validation (`month ≥ 1`, `amount ≥ 0`, `opening_month_number ≥ 1`) is enforced on every create/PATCH so the client never relies on client math. The array is also **COUNT-capped at `MAX_COST_SCHEDULE_ROWS = 200`** rows (generous vs. the ~10-30 rows a real launch carries) — because the schedule is serialized into `inputs_json`/`cost_schedule_json` **and** snapshotted into a fresh revision on every save, an unbounded array is a blob / revision-bloat DoS (issue #166). The cap is enforced server-side on the manual PATCH (`_validate_schedule_inputs`) **and** after Penny's `edit_cost_schedule` ops; an over-cap array is rejected with **422 `invalid_inputs`** ([`SECURITY.md`](./SECURITY.md) §9).
 
 ### 4.4 `demand_drivers_json`
 ```json
@@ -416,8 +478,15 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
     "breakeven":{ "raw": 5, "display": "Month 5" },
     "reasons": { "reasonCapital": "...", "reasonGap": "...", "reasonBreakeven": "..." }
   },
+  "milestones": {
+    "grandOpening": { "raw": 1, "display": "Month 1" },
+    "breakEven":    { "raw": 5, "display": "Month 5" },
+    "payback":      { "raw": null, "display": "N/A",
+                      "reason": "N/A — startup costs are not recovered within the projection horizon" }
+  },
   "kpis": [
-    { "label": "Sales / sq ft", "value": {"raw": 61, "display": "$61"}, "sub": "Year 1", "severity": "ok" }
+    { "label": "Sales / sq ft", "value": {"raw": 61, "display": "$61"}, "sub": "Year 1", "severity": "ok" },
+    { "label": "Payback period", "value": {"raw": null, "display": "N/A"}, "sub": "to recover startup" }
   ],
   "rows": [
     { "label": "Donor market share", "group": "drivers",
@@ -453,11 +522,57 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
 ```
 
 **Contract notes:**
+- `milestones` (`compute_schema_version ≥ 1.2.0`) carries the three detail-page milestones (`grandOpening`, `breakEven`, `payback`), each a `{raw, display}` project-month value with the **server as the formatting authority** ("Month 6"). An unreached milestone is `{raw: null, display: "N/A", reason}` (the N/A-with-reason flag pattern, **never a misleading 0**); `payback` adds a `duration` display ("25 months") when reached. The KPI strip's **Payback period** KPI is sourced from `milestones.payback`; the legacy `simple_payback_years` KPI is retired from the view-model surface (still computed internally). See [`ENGINE_CONTRACT.md`](./ENGINE_CONTRACT.md) §6.6.
+- `monthly[]` covers **all project months `1..N`** (`N = opening_month_number + 11`), x-axis from month 1. Each entry is `{ revenue, expenses, scheduledCosts, net, cumulativeCash }` — the same columns as the `.xlsx` Monthly tab, with `net = revenue − expenses − scheduledCosts`, so a pre-opening month (`1..G-1`) reads as a real monthly loss and `cumulativeCash` accumulates from month 1.
 - `reco.tag ∈ {proceed, revise, find_cheaper_rent, raise_cash, delay, do_not_proceed}` (PRD §12.3). The engine emits the **semantic tag + severity**, never a hex color; the client maps tag→token (frontend lens, brand-vs-semantic token separation). `reco.color/bg/icon` from the prototype are **not** emitted by the API.
 - `flags` is the explicit **null + flags map** required by PRD §12.4: `revenue == 0 → margin/per-unit KPIs null`; `Y1 net ≤ 0 → payback null` (`"N/A — no Year 1 profit"`); `Y1 revenue == 0 → CAGR null`. Negatives carry through as `{raw: <neg>, display: "($X)"}`. The `.xlsx` renders every null as blank + comment, never `#DIV/0!` (PRD §18).
 - `class ∈ {input, computed, overridden, estimated}` (Appendix D `rows[].class`) drives the cell-state UI and the Excel cell-class (blue input / live formula / orange override / N/A).
 - `stale_upstream` lists nodes that no longer drive any pinned downstream value (the no-back-solve rule, PRD §14).
 - Every figure here is what the narrative grounding validator checks against (PRD §17).
+
+### 4.9 `penny_transcripts.turns_json` (Penny conversation turns — Spec B §7)
+```json
+[
+  {
+    "role": "user",
+    "content": "Set the Year-1 donor share to 8%.",
+    "ts": "2026-06-27T17:03:11Z"
+  },
+  {
+    "role": "assistant",
+    "content": "Done — Year-1 share is now 8%. Break-even moved to month 6.",
+    "provider": "anthropic",
+    "ts": "2026-06-27T17:03:14Z"
+  },
+  {
+    "role": "tool",
+    "content": "set_assumption(share_y1=0.08) applied",
+    "tool_name": "set_assumption",
+    "tool_args": {"node": "share_y1", "value": "0.08"},
+    "tool_result_ref": "ref_…",
+    "revision_id": "01J…",
+    "ts": "2026-06-27T17:03:13Z"
+  }
+]
+```
+- `role ∈ {user, assistant, tool}`. `content` is the human-readable line shown in the transcript (and the summary kept when an old tool payload is truncated).
+- `tool_name` / `tool_args` / `tool_result_ref` appear on `tool` turns (the §6 tool surface). `revision_id` links a turn that mutated to the revision it produced — the provenance side of the §4 audit trail (revisions carry the matching `actor` enum).
+- `provider ∈ {anthropic, openai}` records which provider actually produced an assistant turn (Spec B §8). `ts` is ISO-8601 UTC.
+- **Retention** (Spec B §7) bounds the list: the oldest turns fall off past `MAX_TURNS`; older `tool` turns keep `content` but have `tool_args`/`tool_result_ref` nulled (marked `"truncated": true`). The cap is applied above the Store interface (`app/store/penny_retention.py`) so both backends behave identically.
+
+### 4.10 `summary_json` (owner-list card summary — #178)
+```json
+{
+  "location": "Longview city",
+  "basis": "city",
+  "y1_revenue": { "raw": 426911, "display": "$426,911" },
+  "y1_net":     { "raw": 46900,  "display": "$46,900" },
+  "capital_required": { "raw": 277990, "display": "$277,990" },
+  "reco_tag": "proceed",
+  "coords": { "place_id": "...", "lat": 32.5007, "lng": -94.7405, "formatted_address": "Longview, TX, USA" }
+}
+```
+The compact card the owner home list (`GET /api/projections`) renders per row, **denormalized from `computed_json` at write time** by `build_card_summary` (`app/store/card_summary.py`) so the list never `SELECT *` + `json.loads` the full ~10KB `computed_json` per row (#178). `list_card_summaries` selects only this blob + the small identity columns. It is pure display derivation (the engine remains the single math authority); a one-time `_backfill_card_summaries` populates legacy rows on the boot that applies `0008`, and every create/PATCH/restore refreshes it from the new `computed_json`.
 
 ---
 
@@ -472,14 +587,18 @@ UPDATE projections
 ```
 A 0-row result → **HTTP 409** with the current server state in the body so the UI can offer reload / overwrite / save-as-copy (PRD §19.4). The new `version` is returned in the body and as an `ETag`-style header. See [`API_SPEC.md`](./API_SPEC.md).
 
-### 5.2 Single-writer + WAL
-SQLite is a single writer under WAL with `busy_timeout` (§10). Autosave is debounced client-side; writes serialize server-side; each settle writes one `revisions` row (§3.2). Concurrent edit-link sessions on one projection serialize through the version check (a stale writer gets a 409, not a lost update).
+### 5.2 Single-writer + WAL (connection-per-request reads)
+SQLite is a single writer under WAL with `busy_timeout` (§10). **Writes** all go through one primary connection under a process-wide write lock, preserving the single-writer invariant; each autosave settle writes one `revisions` row (§3.2). **Reads** use a **per-thread reader connection** (`SqliteStore._read_conn`, issue #177): a single shared connection for every read serialized all access through SQLite's per-connection mutex, nullified WAL's concurrent-reader benefit, and let one slow query head-of-line-block every other request — including the `/api/health` probe, which could then exceed the healthcheck window and trip a restart loop. With a reader per thread, WAL delivers concurrent reads alongside the single writer, and the health probe runs on its own connection. (An in-memory DB is per-connection, so dev/test reads fall back to the primary connection.) Concurrent edit-link sessions on one projection still serialize through the version check (a stale writer gets a 409, not a lost update).
 
 ### 5.3 Model-version lifecycle
 `computed_json`/`monthly_json` are stored with `model_version`. On read, if `model_version != current_engine_version`, the API returns the stored snapshot verbatim plus an `upgrade_available: true` flag — **never recompute silently** (PRD §13). `POST …/upgrade-model` recomputes under the new engine and writes a **new revision**, preserving the prior. `compute_schema_version` is tracked separately so a view-model shape change is distinguishable from a math change.
 
-### 5.4 Soft delete vs hard delete
-`status = 'trashed'` is the user-visible Trash (restorable, PRD §19.1). `deleted_at` is the irreversible post-purge marker; rows with `deleted_at` set are excluded everywhere. Following timpager's NEVER-DROP discipline, we soft-delete rows; we do not physically delete in the hot path.
+### 5.4 Trash (soft delete) vs purge (hard delete + cascade)
+`status = 'trashed'` is the user-visible **Trash** — recoverable (PRD §19.1). **Purge** (`DELETE /api/projections/{view_slug}`, owner-only, permitted only when already trashed) is a **true, irreversible hard delete** (#202): `purge_projection` does a version-checked `DELETE FROM projections` **and cascades** to every child the projection owns — `revisions`, `narratives`, `evidence`, `penny_transcripts`, `actuals`, `role_links` — in one transaction (children deleted before the parent, since the FKs carry no `ON DELETE CASCADE` and `PRAGMA foreign_keys = ON`). A version mismatch returns 0 (HTTP 409) and erases nothing.
+
+This is a deliberate, scoped exception to timpager's NEVER-physically-delete discipline: a privacy "purge" of a tool holding a nonprofit's confidential financials **and** the user's Penny conversation must actually erase the data and stop propagating it, not merely hide it behind `deleted_at` (a misleading contract + data-minimization gap). The NEVER-DROP discipline still governs **migrations** (no `DROP TABLE`/`DROP COLUMN`); this is a row-level data-subject erasure in app code, not a schema change. The legacy `deleted_at` soft-delete marker (`soft_delete`) is retained for backward-compatibility and reads still filter `deleted_at IS NULL`, but the purge path no longer uses it.
+
+> **Backups (SECURITY §13 / OPS_RUNBOOK):** erasure clears the live DB immediately; a **finite Litestream backup-retention window** bounds how long a purged row can survive in object-store snapshots before it is unrecoverable everywhere. Document/enforce that window in ops config (out of the app-code scope of #202).
 
 ### 5.5 Numeric discipline at rest
 The DB never does arithmetic on stored money. The engine computes in cents/`Decimal` and writes both `raw` (numeric) and `display` (formatted string) into the blobs (PRD §12.4). This makes the server the single rounding/formatting authority shared by UI, `.xlsx`, and packet (frontend lens). See [`ENGINE_CONTRACT.md`](./ENGINE_CONTRACT.md) for the golden/LibreOffice reconciliation gate (< $0.50 / 0.1pp, zero formula errors).
@@ -494,7 +613,7 @@ The DB never does arithmetic on stored money. The engine computes in cents/`Deci
 |---|---|---|---|
 | Owner bearer token | ≥256-bit | `secrets.token_urlsafe(32)` | `owner_token_hash` = SHA-256(token), hex. Raw token only in client `localStorage`. |
 | Edit token | ≥128-bit | `secrets.token_urlsafe(24)` | `edit_token_hash`. Raw delivered via URL **fragment** only; never path/query; never logged. |
-| Role tokens (board/funder/advisor) | ≥128-bit | `secrets.token_urlsafe(16)` | hashes in `role_tokens_json`. |
+| Role slugs (board/funder/advisor) | ≥128-bit | `secrets.token_urlsafe(16)` | **plaintext** `role_links.slug` (the read-only lookup capability, like `view_slug`; delivered in the `/api/r/{slug}` path), plus `role_links.token_hash = SHA-256(slug)` as the hashed-at-rest companion (#180, §3.10). |
 | `view_slug` | ≥128-bit | `secrets.token_urlsafe(16)` | **plaintext** (lookup key, read-only access only). |
 
 - **Why SHA-256, not bcrypt/argon2:** these are high-entropy random tokens, not user-chosen passwords; a fast hash is appropriate and constant-time comparison defeats timing attacks. Compare with `hmac.compare_digest` (constant-time) — **never** `==`.
@@ -516,9 +635,11 @@ PRAGMA journal_mode = WAL;      -- durable, concurrent reads + single writer; NE
 PRAGMA busy_timeout = 5000;     -- ms; serialize writers without immediate SQLITE_BUSY
 PRAGMA synchronous  = NORMAL;   -- safe + fast under WAL with Litestream replication
 PRAGMA foreign_keys = ON;       -- enforce FKs (projection_id -> projections)
+PRAGMA query_only   = ON;       -- READER connections only (#177); writes stay on the primary
 ```
 
 - **WAL only — never change the journal mode** (timpager hard rule). Litestream relies on WAL for continuous replication.
+- **One writer connection, a reader connection per thread (#177).** The PRAGMAs above are applied on *every* connection at open. Writes use the single primary connection under a write lock; reads use a lazily-opened per-thread reader (opened `query_only = ON` so a read path can never write). This is what actually delivers WAL's "concurrent reads + single writer" — a lone shared connection would serialize everything through SQLite's per-connection mutex and could stall the healthcheck into a restart loop.
 - The DB lives at `DB_PATH=/data/projections.db` on the **durable Railway volume** — never `/app`, never ephemeral container FS. (Explicitly avoid the timpager `litestream.yml` bug which points at `/app/timpager.db`; our `litestream.yml` replicates `/data/projections.db`.) See [`OPS_RUNBOOK.md`](./OPS_RUNBOOK.md).
 - **Litestream** continuous replication to object storage (R2/S3) from the `/data` volume, with a documented, **tested** restore drill (`PRAGMA integrity_check` + `computed_json` round-trip), RPO (near-zero), RTO (~2 min), and backup purge limits (PRD §21, §26).
 
@@ -529,8 +650,10 @@ PRAGMA foreign_keys = ON;       -- enforce FKs (projection_id -> projections)
 (Mirrors timpager `SCHEMA.md` Schema Rules + ARCHITECTURE Database Rules.)
 
 - **NEVER `DROP TABLE`; NEVER `DROP COLUMN`.** Use `ALTER TABLE ADD COLUMN`. New nullable/defaulted columns only.
-- **`CREATE TABLE IF NOT EXISTS` always.** Wrap `ALTER TABLE ADD COLUMN` to tolerate "duplicate column" (idempotent migrations).
-- **Prepared statements only. No string concatenation into SQL.**
+- **`CREATE TABLE/INDEX IF NOT EXISTS` always.** Each `ALTER TABLE ADD COLUMN` is applied **idempotently**: the runner swallows "duplicate column name" so a re-run (e.g. after a crash) is a no-op (issue #185). This is now enforced in code (`SqliteStore._execute_idempotent`), not just asserted in a docstring.
+- **Atomic apply (issue #185).** Each migration's DDL **and** its `schema_migrations` ledger INSERT run in **one explicit transaction** (`SqliteStore._apply_migration`). `executescript` is NOT used — it issues an implicit COMMIT that auto-committed the DDL independently of the ledger, so a crash/OOM in that window left the column physically added but the migration name absent from the ledger; the next boot re-ran the bare `ALTER`, hit "duplicate column name", and **boot-crash-looped the single durable volume**. With apply+ledger atomic and every `ALTER` idempotent, a partial apply commits nothing and an interrupted run **recovers on the next boot** instead of looping. Re-running the full set on an already-migrated DB is a no-op.
+- **Boot never fails on an existing duplicate, even for a UNIQUE-index migration (`0007`, #186).** The `UNIQUE(projection_id, seq)` revisions backstop (below) cannot blindly run `CREATE UNIQUE INDEX`: if a legacy/corrupted durable volume already held a duplicate `(projection_id, seq)`, the index build would raise `IntegrityError` and crash-loop the unattended boot. So `0007` is applied by `m0007_revision_seq_unique.apply` (a runtime hook dispatched by `SqliteStore._apply_migration`, inside the same atomic apply+ledger transaction) which **detects an existing duplicate first**. With none (the expected case) it creates the **UNIQUE** backstop; with a duplicate (unexpected) it **degrades**: it creates a **non-unique** index instead (lookups/restore stay fast), **never deletes a revision row** (additive-only — duplicates are never resolved by deleting data), logs a loud structured warning naming the affected `projection_id`s (`app.migrations`, `event=revision_seq_duplicate_degraded_index`), and still records `0007` so boot proceeds. Idempotent (a no-op when the index already exists). Operator de-dup + UNIQUE-index restore is documented in [`OPS_RUNBOOK.md`](./OPS_RUNBOOK.md) §8.2.
+- **Prepared statements only. No string concatenation into SQL. Frozen migration literals.** A migration is an immutable historical artifact: its embedded DEFAULTs are hand-written, apostrophe-escaped literals, **never** `json.dumps(<live engine constant>)` evaluated at import time (issue #187) — which would drift with the engine across deploys and risk an apostrophe terminating the SQL string. A forward-guard test fails RED if the engine default diverges from the frozen literal, forcing a NEW migration.
 - **Migrations run before any other statement on boot**, recorded in `schema_migrations`. A single durable volume with no staging copy means a bad migration corrupts live data — take a **pre-migration Litestream checkpoint/snapshot** before applying (see [`OPS_RUNBOOK.md`](./OPS_RUNBOOK.md)).
 - **Additive-only** keeps the Postgres path (§9) trivial: every column added to SQLite is added to the Postgres DDL the same way.
 - Boot **refuses** if required secrets/env are unset (no fallback chains) — see [`SECURITY.md`](./SECURITY.md). `DB_BACKEND ∈ {sqlite, postgres}` is explicit so the data-access path is never ambiguous.
@@ -545,15 +668,19 @@ All persistence goes through a single `Store` interface (Python `typing.Protocol
 class Store(Protocol):
     # --- projections (root aggregate) ---
     def get_projection_by_slug(self, view_slug: str) -> Projection | None: ...
-    def get_projection_for_role(self, role_slug: str) -> tuple[Projection, str] | None: ...  # (proj, role)
+    def get_projection_by_role_slug(self, role_slug: str) -> Projection | None: ...  # O(1) role_links slug PK (#180)
     def list_by_owner(self, owner_token_hash: str, *, include_trashed: bool = False) -> list[Projection]: ...
+    def list_card_summaries(self, owner_token_hash: str, *, include_trashed: bool = False) -> list[dict]: ...  # small card cols only (#178)
     def create_projection(self, p: Projection) -> Projection: ...        # app-generated ULID + view_slug
     def update_with_version_check(self, id: str, expected_version: int,
                                   patch: ProjectionPatch) -> int: ...     # rows-affected; 0 -> 409
+    def update_with_version_check_and_revision(self, id: str, expected_version: int,
+                                  patch: ProjectionPatch, revision: Revision) -> int: ...  # version++ AND snapshot in ONE txn; 0 -> 409 (no revision)
     def set_status(self, id: str, status: str, expected_version: int) -> int: ...  # trash/restore
-    def soft_delete(self, id: str, expected_version: int) -> int: ...     # sets deleted_at
+    def soft_delete(self, id: str, expected_version: int) -> int: ...     # legacy: sets deleted_at (recoverable)
+    def purge_projection(self, id: str, expected_version: int) -> int: ...  # hard DELETE + cascade (#202); 0 -> 409
     def rotate_tokens(self, id: str, expected_version: int,
-                      new_hashes: TokenBundle) -> int: ...                # atomic, one txn
+                      new_hashes: TokenBundle) -> int: ...                # atomic, one txn (re-syncs role_links)
 
     # --- revisions ---
     def insert_revision(self, rev: Revision) -> None: ...
@@ -579,6 +706,11 @@ class Store(Protocol):
     # --- actuals (post-launch) ---
     def upsert_actual(self, a: Actual) -> None: ...
     def list_actuals(self, projection_id: str) -> list[Actual]: ...
+
+    # --- penny transcripts (Spec B §7) ---
+    def create_transcript(self, t: Transcript) -> Transcript: ...            # rejects NULL projection_id (wizard drafts never persisted)
+    def append_transcript_turn(self, projection_id: str, turn: Turn) -> Transcript: ...  # create-on-demand + retention cap
+    def get_transcript_by_projection(self, projection_id: str) -> Transcript | None: ...  # owner-scoped (projection_id pre-resolved)
 ```
 
 **Portability rules enforced by a conformance suite run against BOTH backends:**
@@ -629,11 +761,14 @@ Single-writer SQLite serializes all writes; high autosave write-amplification ac
 | `projections` | `(owner_token_hash, status, updated_at DESC)` | Owner-scoped list (no global index). |
 | `projections` | `(edit_token_hash)` | Edit-token resolution. |
 | `revisions` | `(projection_id, seq DESC)` | Revisions list + restore. |
+| `revisions` | `UNIQUE(projection_id, seq)` | Seq-integrity backstop (0007): a duplicate seq fails loudly, never silently corrupts the trail (#186). On a legacy DB that *already* holds a duplicate, 0007 degrades to a **non-unique** index so boot never fails (§8). |
 | `evidence` | `(projection_id, field)` | Evidence panel per field. |
 | `research_cache` | PK `(cache_key)`, `(expires_at)` | Cache hit + TTL sweep. |
 | `actuals` | `UNIQUE(projection_id, month)`, `(projection_id, month)` | Forecast-vs-actual. |
 | `narratives` | PK `(projection_id)` | 1:1 lookup. |
 | `feedback` | PK `(support_id)` | Support-ID resolution (staff). |
+| `penny_transcripts` | PK `(id)`, `(projection_id)` | Per-project transcript read by projection. |
+| `role_links` | PK `(slug)`, `(projection_id)` | O(1) exact-match role-share resolution (0009, #180); per-projection cascade on purge. |
 
 ---
 
@@ -669,11 +804,17 @@ CREATE TABLE IF NOT EXISTS projections (
   overrides_json TEXT NOT NULL DEFAULT '{}',
   monthly_json TEXT NOT NULL DEFAULT '{}',
   computed_json TEXT NOT NULL DEFAULT '{}',
+  cohort_json TEXT NOT NULL DEFAULT '{}',         -- frozen cohort fingerprint (0001)
   terms_accepted_at TEXT,
   ai_opt_out INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  deleted_at TEXT
+  deleted_at TEXT,
+  -- 0005: timed cost schedule + opening anchor (Spec §5/§7). Frozen literal DEFAULTs.
+  target_opening_date TEXT,
+  opening_month_number INTEGER NOT NULL DEFAULT 1,
+  cost_schedule_json TEXT NOT NULL DEFAULT '[{"category": "Thrift Store Consultant", "month": 1, "amount": 100000}, {"category": "Equipment & Fixtures", "month": 1, "amount": 45000}, {"category": "Build-out / Renovations / Tenant Improvements", "month": 1, "amount": 50000}, {"category": "Legal, Permits, Insurance Setup, Signage", "month": 1, "amount": 13500}]',
+  summary_json TEXT NOT NULL DEFAULT '{}'         -- 0008: owner-list card summary, denormalized from computed_json (#178)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projections_view_slug ON projections(view_slug);
 CREATE INDEX IF NOT EXISTS idx_projections_owner ON projections(owner_token_hash, status, updated_at DESC);
@@ -690,18 +831,22 @@ CREATE TABLE IF NOT EXISTS revisions (
   computed_json TEXT NOT NULL,
   model_version TEXT NOT NULL,
   actor_token_hash TEXT,
+  actor TEXT NOT NULL DEFAULT 'user',            -- 0006: user|penny|penny_undo|user_undo (Spec B §3/§4)
   change_summary TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_revisions_projection ON revisions(projection_id, seq DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_revisions_projection_seq ON revisions(projection_id, seq);  -- 0007: seq backstop (#186)
 
 CREATE TABLE IF NOT EXISTS narratives (
   projection_id TEXT PRIMARY KEY REFERENCES projections(id),
   body_md TEXT NOT NULL DEFAULT '',
   edited INTEGER NOT NULL DEFAULT 0,
   computed_hash TEXT,
+  snapshot_json TEXT NOT NULL DEFAULT '{}',       -- 0002: computed_json at generation time
   provider TEXT,
   model_version TEXT,
+  edit_origin TEXT,                               -- 0004: 'ai' | 'human' | NULL
   updated_at TEXT NOT NULL
 );
 
@@ -766,6 +911,24 @@ CREATE TABLE IF NOT EXISTS actuals (
   UNIQUE(projection_id, month)
 );
 CREATE INDEX IF NOT EXISTS idx_actuals_projection ON actuals(projection_id, month);
+
+CREATE TABLE IF NOT EXISTS penny_transcripts (
+  id TEXT PRIMARY KEY,
+  projection_id TEXT REFERENCES projections(id),   -- NULLable: wizard drafts are NEVER persisted
+  turns_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_penny_transcripts_projection ON penny_transcripts(projection_id);
+
+CREATE TABLE IF NOT EXISTS role_links (             -- 0009: indexed role-share resolution (#180)
+  slug TEXT PRIMARY KEY,                            -- plaintext role-share lookup key (like view_slug)
+  projection_id TEXT NOT NULL REFERENCES projections(id),
+  role_name TEXT NOT NULL,                          -- board | funder | advisor
+  token_hash TEXT,                                  -- SHA-256(slug): hashed-at-rest companion (§6)
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_role_links_projection ON role_links(projection_id);
 ```
 
 ---

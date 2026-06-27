@@ -15,7 +15,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import config
 from app.middleware import SecurityHeadersMiddleware
-from app.routers import feedback, health, intent, places, projections, roles
+from app.routers import (
+    feedback,
+    gate,
+    health,
+    intent,
+    metrics,
+    penny,
+    places,
+    projections,
+    roles,
+)
 from app.store import build_store
 
 logger = logging.getLogger("app")
@@ -24,6 +34,14 @@ ROBOTS_TXT = "User-agent: *\nDisallow: /\n"
 
 
 def create_app() -> FastAPI:
+    # 0) observability first (#190): structured JSON logging with deploy context +
+    # secret scrubbing, then the opt-in Sentry hook (no-op when SENTRY_DSN unset or
+    # sentry_sdk absent), so boot-config failures below are captured durably.
+    from app.observability import configure_logging, init_sentry
+
+    configure_logging()
+    init_sentry()
+
     # 1) migrate (build_store runs migrations for sqlite).
     try:
         build_store()
@@ -60,11 +78,14 @@ def create_app() -> FastAPI:
     app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(health.router)
+    app.include_router(gate.router)
     app.include_router(projections.router)
+    app.include_router(penny.router)
     app.include_router(roles.router)
     app.include_router(feedback.router)
     app.include_router(intent.router)
     app.include_router(places.router)
+    app.include_router(metrics.router)  # owner-gated GET /api/metrics (M7.7 #95)
 
     @app.get("/robots.txt", include_in_schema=False)
     def robots() -> Response:
