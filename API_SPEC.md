@@ -620,6 +620,21 @@ The endpoints exist and the table ships (so it is not a later migration, PRD §2
 
 ---
 
+## 10a. `GET /api/config` — price/gate flag (CTA seam)
+
+The **single server config** for the free-vs-paid business-model decision (PRD §3). The SPA reads it to render the correct call-to-action — "Download free" vs "Request expert review — $X" — with **no client-side price math** (PRD §13).
+
+- **Auth:** none (public, like `/api/health`). Not rate-limited.
+- **Query:** `cohort` (optional) — addresses an A/B split (`GATE_MODE__<COHORT>`); the M-1 experiment seam. Falls back to the global mode.
+- **Response `200`:** `{ "gate_mode": "free" | "paid_review", "price_usd": <number|null> }`. `price_usd` is non-null **only** in `paid_review`; the client renders it, never derives it.
+- **Safe default:** an unset/unknown `GATE_MODE` resolves to `free` (the flywheel default). This config is **never** a required boot secret — a missing value defaults to free and does **not** refuse boot ([SECURITY.md](./SECURITY.md) §3/§4). It is re-read every request, so a settings/env change flips it on the **next** request with no deploy ([OPS_RUNBOOK.md](./OPS_RUNBOOK.md) §9a).
+
+**Enforcement boundary — the gate governs the expert-review / sign-off surface ONLY.** The basic `.xlsx` (§6.3) and basic packet (§6.4) stay **free and ungated in every mode** (GTM decision). The gate is **orthogonal** to the terms-acceptance gate (§6.3/§21): terms are always required before export/share regardless of mode, and a paid gate never bypasses terms.
+
+- `POST /api/expert-review` — the gated expert-review **stub** (the only surface behind the gate dependency; real intake lands M6.3 / M2-INTENT). In `free`, returns `201 { "status":"received", "gate": { "gate_mode", "price_usd", "cohort" } }` — the gate state is emitted for conversion **attribution** (A/B seam). In `paid_review`, the gate raises `402 { "error":"payment_required", "gate_mode":"paid_review", "price_usd":<number|null>, "cohort":<string|null> }`. Flipping `GATE_MODE` back to `free` removes the gate. Payment collection (Stripe) is out of v1 scope.
+
+---
+
 ## 11. Error response catalogue
 
 All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (extra fields per error). Generic to clients — no internal IDs, stack traces, or secrets.
@@ -628,6 +643,7 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 |---|---|---|
 | `400` | `validation` / `if_match_malformed` / `secret_in_url` | Bad request shape; secret leaked into URL. |
 | `401` | `auth_required` | Mutation with no `Authorization`. |
+| `402` | `payment_required` | Expert-review / sign-off surface while `gate_mode=paid_review` (§10a); carries `price_usd`. A business-model gate, not an access bug — basic export is unaffected. |
 | `403` | `forbidden` / `read_only` / `owner_required` / `terms_required` | Capability insufficient; terms not accepted before export/share. |
 | `404` | `not_found` | Unknown `view_slug` (or trashed and requester not owner). |
 | `409` | `version_conflict` | Stale `If-Match` — body carries `current_version` + `current_state` (§1.4). |
@@ -672,6 +688,8 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `POST /api/feedback` | (none) | no | persist | feedback |
 | `POST /api/intent` | (none) | no | persist | intent |
 | `GET /api/health` | (none) | — | no | none |
+| `GET /api/config` | (none) | — | no | none |
+| `POST /api/expert-review` | (none) | no | no (stub) | — |
 
 ---
 
