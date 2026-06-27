@@ -14,11 +14,11 @@ from pydantic import ValidationError
 
 from app.routers.projections import (
     _NON_ENGINE_INPUT_KEYS,
+    CostScheduleItemIn,
+    InputsIn,
     _build_engine_args_from_dicts,
     _schedule_columns,
     _validate_schedule_inputs,
-    CostScheduleItemIn,
-    InputsIn,
 )
 from engine.model import DEFAULT_OPENING_MONTH_NUMBER, default_cost_schedule
 
