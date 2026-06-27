@@ -59,6 +59,12 @@ class Inputs:
     rent_per_sqft: str | None = None        # OR sqft x rate
     lease_type: str = "gross"                  # "gross" | "nnn"
     nnn_opex_annual: str = "0"                 # added to occupancy if nnn
+    # Opening anchor + timed cost schedule (Spec §5/§6). `opening_month_number` (G)
+    # is the project month grand opening lands on (a milestone marker, >= 1).
+    # `cost_schedule` is an iterable of {category, month, amount} rows; when empty
+    # the legacy single-lump-at-opening default applies (reproduces today's numbers).
+    opening_month_number: int = 1
+    cost_schedule: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -209,12 +215,42 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
             expenses=ordered, total_exp=total_exp, net=net, margin=margin,
         )
 
-    # one-time startup (Year 0). Lease deposit uses rent_y1 (un-escalated).
-    startup = {k: D(v) for k, v in assumptions.startup.items()}
+    # one-time startup. A user cost_schedule (Spec §5) supersedes the legacy STARTUP
+    # lump: the per-category breakdown is the schedule aggregated by category. The
+    # lease deposit is always computed from rent_y1 (un-escalated) and added on top.
+    if inputs.cost_schedule:
+        startup: dict = {}
+        for item in inputs.cost_schedule:
+            cat = item["category"]
+            startup[cat] = startup.get(cat, Decimal("0")) + D(str(item["amount"]))
+    else:
+        startup = {k: D(v) for k, v in assumptions.startup.items()}
     startup["Lease Deposit + First Month Rent"] = occ1 / 12 * 3
     startup_total = sum(startup.values(), Decimal("0"))
 
     return years, startup, startup_total, occupancy
+
+
+def startup_outflows_by_month(inputs, assumptions, occupancy_y1) -> dict:
+    """Map project-month int -> one-time startup cash outflow Decimal (Spec §5/§6).
+
+    Scheduled costs land on their own month numbers (before or after opening); when
+    no schedule is given the whole legacy lump lands on the opening month. The lease
+    deposit + first month rent always lands at the opening month. The sum of this map
+    equals ``startup_total`` (no double counting, no dropped startup).
+    """
+    g = inputs.opening_month_number
+    lease_deposit = occupancy_y1 / 12 * 3
+    by_month: dict = {}
+    if inputs.cost_schedule:
+        for item in inputs.cost_schedule:
+            m = int(item["month"])
+            by_month[m] = by_month.get(m, Decimal("0")) + D(str(item["amount"]))
+    else:
+        lump = sum((D(v) for v in assumptions.startup.values()), Decimal("0"))
+        by_month[g] = by_month.get(g, Decimal("0")) + lump
+    by_month[g] = by_month.get(g, Decimal("0")) + lease_deposit
+    return by_month
 
 
 def compute(inputs, assumptions=None, demand_drivers=None, trade_area=None, overrides=None):
@@ -233,8 +269,9 @@ def compute(inputs, assumptions=None, demand_drivers=None, trade_area=None, over
 
     from engine.monthly import build_monthly
 
+    startup_by_month = startup_outflows_by_month(inputs, assumptions, occupancy[1])
     monthly_rows, breakeven = build_monthly(
-        years[1], occupancy[1], startup_total, assumptions, inputs.opening_status)
+        years[1], assumptions, inputs.opening_month_number, startup_by_month)
 
     result = ComputeResult(
         annual=years, startup=startup, startup_total=startup_total,

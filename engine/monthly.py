@@ -1,6 +1,14 @@
-"""Monthly launch cash-flow model M0-M12 (ENGINE_CONTRACT §5).
+"""Monthly launch cash-flow model on a uniform pre-opening timeline (ENGINE_CONTRACT
+§5 / Spec §6).
 
-The model is monthly-first: Year-1 annual totals are the *roll-up* of the 12
+The timeline is project months ``1..N`` where ``opening_month_number`` (``G``) is a
+milestone marker and ``N = G + 11`` (pre-opening + the 12 operating months). Months
+``1..G-1`` are **pre-opening, first-class P&L months**: no operating revenue and no
+operating expenses (the store is not open), so their P&L is exactly the scheduled
+one-time costs landing that month (a real monthly loss). Months ``G..N`` carry the
+12-month operating ramp **plus** any scheduled costs that land on them.
+
+The model is monthly-first: the Year-1 annual totals are the *roll-up* of the 12
 operating months, so the annual P&L and the monthly model can never disagree
 (asserted to the penny by a golden test).
 
@@ -10,9 +18,8 @@ Decimal, with the **last operating month absorbing the rounding residual**. The
 sum of monthly values is therefore bit-identical to the annual value.
 
 Cash terms: cumulative cash starts at 0 and is decremented by timed one-time
-startup outflows (pre-opening costs in M0/M1, the remaining build-out spread into
-the opening month) on top of operating net, so the trough reflects the real cash
-low point that sets the capital requirement.
+startup outflows (which begin accumulating in pre-opening) on top of operating net,
+so the trough reflects the real cash low point that sets the capital requirement.
 """
 from __future__ import annotations
 
@@ -38,7 +45,7 @@ _PAYROLL_WEIGHTS = [
 
 @dataclass
 class MonthRow:
-    index: int                 # 0 for pre-open, 1..12 for operating
+    index: int                 # project month number (1..N); G..N are operating
     kind: str                  # "pre_open" | "operating"
     revenue: Decimal
     expenses: Decimal          # operating expenses (excludes one-time startup)
@@ -61,13 +68,26 @@ def _distribute(total: Decimal, weights):
     return parts
 
 
-def build_monthly(annual_y1, occupancy_y1, startup_total, assumptions, opening_status):
-    """Return (rows, breakeven_month).
+def build_monthly(annual_y1, assumptions, opening_month_number, startup_by_month):
+    """Return (rows, breakeven_month) over the project-month timeline 1..N.
 
-    `annual_y1` is the AnnualYear for Year 1; the monthly series re-expresses it.
-    `breakeven_month` is the first operating month whose net >= 0 and stays
-    non-negative thereafter (None if never within the 12 months).
+    `annual_y1` is the AnnualYear for Year 1; the 12 operating months re-express it.
+    `opening_month_number` (G) is the grand-opening milestone; ``N = G + 11``.
+    `startup_by_month` maps a project-month int -> one-time outflow Decimal; the sum
+    of its values is the total startup (placed by the schedule, never double-counted).
+
+    `breakeven_month` is the first operating month (>= G) whose net >= 0 and stays
+    non-negative thereafter, numbered in **project months** (None if never).
+
+    The timeline runs to ``N = max(G + 11, last scheduled month)`` so a post-open
+    support cost beyond the 12-month operating window is still placed on its month
+    (the trough and startup total reconcile); those extra months carry the scheduled
+    cost only — the operating ramp covers exactly the 12 months ``G..G+11``.
     """
+    g = int(opening_month_number)
+    last_scheduled = max(startup_by_month.keys(), default=0)
+    n = max(g + 11, int(last_scheduled))
+
     total_rev = D(str(annual_y1.total_rev))
     total_exp = D(str(annual_y1.total_exp))
 
@@ -81,43 +101,46 @@ def build_monthly(annual_y1, occupancy_y1, startup_total, assumptions, opening_s
     payroll_parts = _distribute(payroll_annual, _PAYROLL_WEIGHTS)
     other_parts = _distribute(other_exp_annual, _REVENUE_WEIGHTS)
 
-    # Timed one-time startup outflow: model it as fully spent before/at opening.
-    # Place the entire startup_total at the pre-open month (M0) when pre_launch,
-    # else at the first operating month. This sets the cash trough deterministically.
     rows = []
     cumulative = Decimal("0")
+    op_nets = []  # operating-month nets, indexed 0..11 (project month = g + i)
 
-    pre_launch = opening_status == "pre_launch"
-    if pre_launch:
-        cumulative -= D(str(startup_total))
-        rows.append(MonthRow(
-            index=0, kind="pre_open", revenue=Decimal("0"), expenses=Decimal("0"),
-            net=Decimal("0"), startup_outflow=D(str(startup_total)),
-            cash_net=-D(str(startup_total)), cumulative_cash=cumulative,
-        ))
-
-    breakeven = None
-    op_nets = []
-    for i in range(12):
-        rev = rev_parts[i]
-        exp = payroll_parts[i] + other_parts[i]
-        net = rev - exp
-        op_nets.append(net)
-        startup_outflow = Decimal("0")
-        if not pre_launch and i == 0:
-            startup_outflow = D(str(startup_total))
-        cash_net = net - startup_outflow
+    for month in range(1, n + 1):
+        outflow = D(str(startup_by_month.get(month, Decimal("0"))))
+        if month < g:
+            # Pre-opening: a first-class P&L month with no operating activity; its
+            # loss is exactly the scheduled costs landing this month.
+            rev = Decimal("0")
+            exp = Decimal("0")
+            net = Decimal("0")
+            kind = "pre_open"
+        elif month <= g + 11:
+            oi = month - g
+            rev = rev_parts[oi]
+            exp = payroll_parts[oi] + other_parts[oi]
+            net = rev - exp
+            op_nets.append(net)
+            kind = "operating"
+        else:
+            # Beyond the 12-month operating ramp: the store is open but this month
+            # carries only its scheduled cost (no modeled operating activity).
+            rev = Decimal("0")
+            exp = Decimal("0")
+            net = Decimal("0")
+            kind = "operating"
+        cash_net = net - outflow
         cumulative += cash_net
         rows.append(MonthRow(
-            index=i + 1, kind="operating", revenue=rev, expenses=exp, net=net,
-            startup_outflow=startup_outflow, cash_net=cash_net,
-            cumulative_cash=cumulative,
+            index=month, kind=kind, revenue=rev, expenses=exp, net=net,
+            startup_outflow=outflow, cash_net=cash_net, cumulative_cash=cumulative,
         ))
 
-    # break-even month: first month with net>=0 that stays non-negative.
+    # break-even month: first operating month with net>=0 that stays non-negative,
+    # numbered in project months (g + offset).
+    breakeven = None
     for i in range(12):
-        if op_nets[i] >= 0 and all(n >= 0 for n in op_nets[i:]):
-            breakeven = i + 1
+        if op_nets[i] >= 0 and all(net_ >= 0 for net_ in op_nets[i:]):
+            breakeven = g + i
             break
 
     return rows, breakeven

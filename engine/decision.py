@@ -26,11 +26,18 @@ class Decision:
     reco_tag: str
     reco_reasons: dict = field(default_factory=dict)
     sensitivity: dict = field(default_factory=dict)
+    # Three milestones on the project-month timeline (Spec §8), all in project
+    # months: grand_opening_month is the input G (always known); break_even_month is
+    # the first sustained operating net >= 0; payback_month is the first month whose
+    # cumulative operating profit since opening >= total startup (None when unreached
+    # within the horizon — surfaced as N/A-with-reason in `flags`, never a 0).
+    grand_opening_month: int = 1
+    payback_month: int | None = None
 
 
 def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, donation_mult):
     """Full re-run of the core with perturbed rent & donations -> (net, breakeven, capital)."""
-    from engine.compute import Inputs, compute_annual
+    from engine.compute import Inputs, compute_annual, startup_outflows_by_month
     from engine.monthly import build_monthly
 
     # perturb shares (proxy for donations) and occupancy.
@@ -46,11 +53,12 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
                                "occupancy_annual": str(D(occ) * D(str(rent_mult)))})
     years, startup, startup_total, occupancy = compute_annual(
         new_inputs, assumptions, demand, trade, overrides)
-    rows, be = build_monthly(years[1], occupancy[1], startup_total, assumptions,
-                             inputs.opening_status)
+    startup_by_month = startup_outflows_by_month(new_inputs, assumptions, occupancy[1])
+    rows, be = build_monthly(years[1], assumptions, new_inputs.opening_month_number,
+                             startup_by_month)
     trough = min((D(str(m.cumulative_cash)) for m in rows), default=Decimal("0"))
     peak = abs(min(Decimal("0"), trough))
-    # `peak` already embeds the M0 startup outflow (monthly.py) — do NOT add
+    # `peak` already embeds the timed startup outflow (monthly.py) — do NOT add
     # startup_total again (that double-count is the §6.1 capital bug).
     capital = peak + D(assumptions.reserve_buffer)
     return years[1].net, be, capital
@@ -59,17 +67,47 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
 def build_decision(result, inputs, assumptions, demand, trade, overrides, flags):
     annual = result.annual
     monthly = result.monthly
+    g = int(inputs.opening_month_number)
 
-    cumulative = [D(str(m.cumulative_cash)) for m in monthly]
-    cash_gap = min(cumulative) if cumulative else Decimal("0")
-    peak_shortfall = abs(min(Decimal("0"), cash_gap))
-    # The monthly trough already embeds the full startup outflow (spent at M0 in
-    # monthly.py), so |peak shortfall| IS the cash hole *including* startup. Adding
-    # result.startup_total again double-counts it (the ~$518k-vs-$277,990 bug).
+    # Capital required: peak cumulative cash deficit across the WHOLE timeline
+    # (it begins accumulating in pre-opening). The trough already embeds the timed
+    # startup outflows, so startup_total is NEVER added again (the ~$518k-vs-$277,990
+    # §6.1 double-count bug).
+    cumulative_all = [D(str(m.cumulative_cash)) for m in monthly]
+    trough = min(cumulative_all) if cumulative_all else Decimal("0")
+    peak_shortfall = abs(min(Decimal("0"), trough))
     capital = peak_shortfall + D(assumptions.reserve_buffer)
+
+    # First-year cash gap: the most-negative cumulative cash over the operating
+    # Year-1 window (G..G+11). The opening month's cumulative has already absorbed
+    # every pre-opening outflow, so this captures the worst operating-window position.
+    op_cumulative = [D(str(m.cumulative_cash)) for m in monthly if m.kind == "operating"]
+    cash_gap = min(op_cumulative) if op_cumulative else Decimal("0")
 
     runway = next((m.index for m in monthly if D(str(m.cumulative_cash)) >= 0), None)
     break_even_month = result.monthly_breakeven
+    if break_even_month is None:
+        flags.setdefault(
+            "break_even_month",
+            "N/A — operating net never turns sustainably positive within the horizon")
+
+    # Payback milestone: first operating month where cumulative operating profit
+    # since opening >= total startup costs (the investment is recovered). Project-
+    # month numbered; N/A-with-reason when unreached within the horizon (never a 0).
+    payback_month = None
+    cum_op_profit = Decimal("0")
+    startup_total_d = D(str(result.startup_total))
+    for m in monthly:
+        if m.kind != "operating":
+            continue
+        cum_op_profit += D(str(m.net))
+        if cum_op_profit >= startup_total_d:
+            payback_month = m.index
+            break
+    if payback_month is None:
+        flags.setdefault(
+            "payback_month",
+            "N/A — startup costs are not recovered within the projection horizon")
 
     # break-even revenue (annual): revenue at which net == 0 holding the cost
     # structure. fixed = non-%-of-revenue cost; var_rate = sum of %-of-revenue rates.
@@ -118,6 +156,7 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
         break_even_month=break_even_month, break_even_revenue_annual=break_even_revenue,
         simple_payback_years=payback, revenue_cagr=cagr,
         reco_tag=reco_tag, reco_reasons=reasons, sensitivity=sensitivity,
+        grand_opening_month=g, payback_month=payback_month,
     )
 
 
