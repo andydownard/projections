@@ -15,7 +15,7 @@ watchPatterns = ["**"]
 # service target port (8080 historically). Without this startCommand the deploy
 # ran on :8000 and the healthcheck failed "service unavailable" (outage).
 # Bind Railway's injected $PORT when present, else the documented 8080.
-startCommand = "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"
+startCommand = 'sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"'
 healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 numReplicas = 1
