@@ -132,10 +132,13 @@ export function CashflowChart({
 
   return (
     <figure className="cashflow-chart" data-testid="cashflow-chart">
+      {/* #196: no fixed pixel height — the box follows the viewBox aspect via CSS
+          (.cashflow-chart svg { width:100%; height:auto }) so a narrow phone column
+          scales the chart proportionally instead of letterboxing a ~55% empty band.
+          The viewBox keeps the 660x240 drawing geometry. */}
       <svg
         viewBox={`0 0 ${width} ${height}`}
         width="100%"
-        height={height}
         role="img"
         preserveAspectRatio="xMidYMid meet"
         aria-label={`Monthly cumulative cash. Low point ${trough.cumulativeCash.display} in month ${trough.month}; break-even ${beLabel}. Full figures in the table below.`}

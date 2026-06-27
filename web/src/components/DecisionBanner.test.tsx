@@ -63,6 +63,26 @@ describe("DecisionBanner", () => {
     expect(beTip).toHaveAttribute("role", "tooltip");
   });
 
+  it("labels a negative trough 'First-year cash gap' (a real shortfall) [#194]", () => {
+    render(<DecisionBanner reco={reco} metrics={metrics} />);
+    const gap = screen.getByTestId("metric-cashgap");
+    expect(gap).toHaveTextContent(/First-year cash gap/i);
+    expect(gap).toHaveTextContent("($12,000)");
+  });
+
+  it("labels a positive trough 'Lowest first-year cash balance' — a cushion, not a gap [#194]", () => {
+    const cushion: Metrics = {
+      ...metrics,
+      cashGap: { raw: 40000, display: "$40,000" },
+    };
+    render(<DecisionBanner reco={reco} metrics={cushion} />);
+    const gap = screen.getByTestId("metric-cashgap");
+    expect(gap).toHaveTextContent(/Lowest first-year cash balance/i);
+    expect(gap).not.toHaveTextContent(/cash gap/i);
+    // Server display rendered verbatim — no client math.
+    expect(gap).toHaveTextContent("$40,000");
+  });
+
   it("renders an unreached payback as N/A with reason, never a misleading 0", () => {
     const naMilestones: Milestones = {
       grandOpening: { raw: 3, display: "Month 3" },

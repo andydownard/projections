@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { basisLabel, formatListDate, isNegative } from "./displayLabels";
+import { basisLabel, cashGapLabel, formatListDate, isNegative } from "./displayLabels";
 
 // PRESENTATION-only helpers (#148 negative cue, #151 enum/date labels). They do
 // NO math and re-derive NO figure: isNegative only reads the SIGN of the server
@@ -18,6 +18,27 @@ describe("isNegative", () => {
   it("is false for a missing figure (no value to color)", () => {
     expect(isNegative(null)).toBe(false);
     expect(isNegative(undefined)).toBe(false);
+  });
+});
+
+describe("cashGapLabel [#194]", () => {
+  it("calls a negative trough a 'First-year cash gap' (a real shortfall)", () => {
+    expect(cashGapLabel({ raw: -219990, display: "($219,990)" })).toBe("First-year cash gap");
+    expect(cashGapLabel({ raw: -1, display: "($1)" })).toBe("First-year cash gap");
+  });
+
+  it("calls a non-negative trough the 'Lowest first-year cash balance' (a cushion, not a gap)", () => {
+    // A well-capitalized plan whose operating window never goes cash-negative: the
+    // min cumulative cash is a positive low-water balance, NOT a shortfall.
+    expect(cashGapLabel({ raw: 40000, display: "$40,000" })).toBe("Lowest first-year cash balance");
+    // Boundary: exactly $0 is not a gap either.
+    expect(cashGapLabel({ raw: 0, display: "$0" })).toBe("Lowest first-year cash balance");
+  });
+
+  it("does the same with no client math — picks by sign only, never re-derives the figure", () => {
+    // Sign of `raw` alone drives the label; the displayed string is untouched.
+    expect(cashGapLabel(null)).toBe("Lowest first-year cash balance");
+    expect(cashGapLabel(undefined)).toBe("Lowest first-year cash balance");
   });
 });
 

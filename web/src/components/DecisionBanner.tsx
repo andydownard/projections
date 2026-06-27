@@ -8,6 +8,7 @@
 // (icon + text, not color alone), and an unreached milestone renders an explicit
 // N/A-with-reason — never a misleading 0 (issue #117).
 import { RecoChip } from "./RecoChip";
+import { cashGapLabel } from "./displayLabels";
 import type { Metrics, Milestone, Milestones, Reco } from "../api/viewModel";
 
 export interface DecisionBannerProps {
@@ -87,7 +88,13 @@ export function DecisionBanner({ reco, metrics, milestones }: DecisionBannerProp
     });
   }
 
-  cells.push({ testid: "metric-cashgap", label: "First-year cash gap", value: metrics.cashGap });
+  // #194: sign-aware label — a positive trough is a cushion (lowest cash balance),
+  // not a "gap". Server `display` is rendered verbatim; only the label flips by sign.
+  cells.push({
+    testid: "metric-cashgap",
+    label: cashGapLabel(metrics.cashGap),
+    value: metrics.cashGap,
+  });
 
   return (
     <section

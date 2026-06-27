@@ -44,6 +44,17 @@ describe("CashflowChart", () => {
     expect(screen.getByTestId("breakeven-marker")).toBeInTheDocument();
   });
 
+  it("does not pin a fixed pixel height — follows the viewBox aspect so phones don't letterbox [#196]", () => {
+    const { container } = render(<CashflowChart monthly={monthly} breakevenMonth={3} />);
+    const svg = container.querySelector("svg")!;
+    // No fixed `height="240"`: the box follows the viewBox ratio (CSS width:100%/height:auto)
+    // so a narrow mobile column gets a proportional height, not a ~55% empty band.
+    expect(svg.getAttribute("height")).not.toBe("240");
+    expect(svg).toHaveAttribute("width", "100%");
+    // The drawing geometry still uses the 660x240 coordinate space.
+    expect(svg).toHaveAttribute("viewBox", "0 0 660 240");
+  });
+
   it("omits the marker when break-even never occurs", () => {
     render(<CashflowChart monthly={monthly} breakevenMonth={null} />);
     expect(screen.queryByTestId("breakeven-marker")).not.toBeInTheDocument();
