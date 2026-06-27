@@ -20,7 +20,7 @@ from app.store import revision_retention
 from app.store.card_summary import build_card_summary
 from app.store.litestream import force_pre_migration_checkpoint
 from app.store.migration_safety import assert_migrations_additive
-from app.store.migrations import MIGRATIONS
+from app.store.migrations import MIGRATIONS, m0007_revision_seq_unique
 from app.store.penny_retention import apply_retention
 from app.store.role_links import parse_role_tokens, slug_token_hash
 
@@ -69,6 +69,18 @@ def _split_sql_statements(script: str) -> list[str]:
 def _new_transcript_id() -> str:
     # App-generated, time-ordered string PK (no DB autoincrement; Postgres-portable).
     return "pt_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + secrets.token_hex(6)
+
+
+# Migrations whose apply step needs runtime logic the static-SQL path cannot express,
+# keyed by migration name -> callable(conn). The runner dispatches to the hook inside
+# the SAME explicit transaction it uses for the DDL + ledger INSERT (so the hook stays
+# atomic + idempotent), instead of executing the migration's SQL string. The hook lives
+# in the migration module (logic stays with the migration); the runner only dispatches.
+# 0007 must degrade to a NON-UNIQUE index — never crash the boot — if the durable volume
+# already holds a duplicate (projection_id, seq) (see m0007_revision_seq_unique.apply).
+_MIGRATION_APPLY_HOOKS: dict[str, Callable[[sqlite3.Connection], None]] = {
+    "0007_revision_seq_unique": m0007_revision_seq_unique.apply,
+}
 
 
 class SqliteStore:
@@ -200,8 +212,14 @@ class SqliteStore:
         instead of boot-crash-looping.
         """
         with self._explicit_transaction() as conn:
-            for statement in _split_sql_statements(sql):
-                self._execute_idempotent(conn, statement)
+            hook = _MIGRATION_APPLY_HOOKS.get(name)
+            if hook is not None:
+                # Runtime-logic migration (e.g. 0007 degrade-on-dup): the hook owns the
+                # DDL decision; the ledger INSERT below keeps it atomic + idempotent.
+                hook(conn)
+            else:
+                for statement in _split_sql_statements(sql):
+                    self._execute_idempotent(conn, statement)
             conn.execute(
                 "INSERT INTO schema_migrations(name, applied_at) VALUES (?, ?)",
                 (name, _utcnow()),
