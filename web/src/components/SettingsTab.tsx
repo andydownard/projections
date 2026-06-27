@@ -139,11 +139,7 @@ export function SettingsTab({
   }
 
   function onSlide(control: ControlDef, value: string) {
-    // Percent controls are edited in percent space (e.g. "60" for 60%); convert
-    // back to the 0..1 `raw` the API expects BEFORE buildBody so the PATCH body
-    // still carries the fraction (API_SPEC §4.4). Money controls are 1:1.
-    const raw = control.kind === "pct" ? Number(value) / 100 : Number(value);
-    pending.current = { control, raw };
+    pending.current = { control, raw: Number(value) };
     dispatch({ type: "EDIT" });
     scheduleFlush();
   }
@@ -199,41 +195,23 @@ export function SettingsTab({
       <div className="settings-tab__controls">
         {allControls.map((c) => {
           const sv = settings[c.field];
-          const isPct = c.kind === "pct";
-          // Percent controls are edited in PERCENT space so the treasurer types
-          // "60" for 60% (not the 0.6 fraction the API stores). The number and
-          // the readable label now agree; onSlide converts back to raw before
-          // the PATCH. Money controls stay 1:1 with their raw value.
-          const inputValue = isPct ? sv.raw * 100 : sv.raw;
           return (
             <label key={c.field} className="settings-tab__control">
               <span className="settings-tab__control-label">{c.label}</span>
               {/* A number spinner (not a range slider): a dense, finance-grade
-                  control (DESIGN_PROMPT) that is directly fillable in E2E. */}
-              <span className="settings-tab__input" data-kind={c.kind}>
-                <input
-                  type="number"
-                  aria-label={c.label}
-                  inputMode="decimal"
-                  min={isPct ? c.min * 100 : c.min}
-                  max={isPct ? c.max * 100 : c.max}
-                  step={isPct ? c.step * 100 : c.step}
-                  defaultValue={inputValue}
-                  onChange={(e) => onSlide(c, e.target.value)}
-                />
-                {isPct && (
-                  // Trailing unit adornment so the edited value reads as "60%",
-                  // not a bare fraction. aria-hidden: the server display below
-                  // already speaks the full value to assistive tech.
-                  <span className="settings-tab__adornment" aria-hidden="true">
-                    %
-                  </span>
-                )}
-              </span>
-              {/* Server display string — the authoritative readout, rendered
-                  verbatim inline (no client math). With percents now edited in
-                  percent space, this agrees with the input instead of competing
-                  with it. */}
+                  control (DESIGN_PROMPT) that is directly fillable in E2E. The
+                  value is the server `raw` (0..1 for percents); the adjacent
+                  <output> shows the server `display` verbatim (no client math). */}
+              <input
+                type="number"
+                aria-label={c.label}
+                min={c.min}
+                max={c.max}
+                step={c.step}
+                defaultValue={sv.raw}
+                onChange={(e) => onSlide(c, e.target.value)}
+              />
+              {/* Server display string — rendered verbatim (no client math). */}
               <output className="settings-tab__control-value">{sv.display}</output>
             </label>
           );
@@ -242,5 +220,3 @@ export function SettingsTab({
     </section>
   );
 }
-
-export default SettingsTab;

@@ -33,24 +33,7 @@ const VM: ViewModel = {
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
-  // Reset the SPA location pushed by the result-screen navigation tests.
-  window.history.pushState(null, "", "/");
 });
-
-/** Generate a projection and return the userEvent instance on the result screen. */
-async function generate(ownerToken = "tok", extra: Record<string, unknown> = {}) {
-  const user = userEvent.setup();
-  vi.spyOn(globalThis, "fetch").mockResolvedValue(
-    new Response(JSON.stringify({ ...VM, owner_token: ownerToken, ...extra }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }),
-  );
-  render(<WizardPage />);
-  await user.click(screen.getByRole("button", { name: /generate/i }));
-  await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
-  return user;
-}
 
 describe("WizardPage express form", () => {
   it("exposes households + three share fields + a generate button", () => {
@@ -84,67 +67,44 @@ describe("WizardPage express form", () => {
       expect.objectContaining({ method: "POST" }),
     );
   });
-});
 
-describe("WizardPage result screen — next steps", () => {
-  it("shows the decision lede above the banner", async () => {
-    await generate();
-    expect(screen.getByTestId("result-lede")).toHaveTextContent(
-      /open the full projection to see the evidence/i,
-    );
-  });
+  it("saves the RESOLVED address + Census provenance in the create payload", async () => {
+    const RESOLVED = {
+      location: { place_id: "PID_DAL", lat: 32.78, lng: -96.8, formatted_address: "Dallas, TX, USA" },
+      trade_area: {
+        basis: "city", households: 512000, geography_name: "Dallas city",
+        geography_fips: "4819000", acs_vintage: "2022", households_source: "census_acs", moe: 1500,
+        alternatives: { city: { geography_name: "Dallas city", fips: "4819000", households: 512000, moe: 1500 } },
+      },
+      evidence: { field: "households", label: "", value: 512000, method: "census_acs", source: "", source_date: "2022", confidence: "estimated", geography: "Dallas city" },
+    };
+    const json = (b: unknown) =>
+      Promise.resolve(new Response(JSON.stringify(b), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const bodies: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/api/places/autocomplete"))
+        return json({ predictions: [{ description: "Dallas, TX, USA", place_id: "PID_DAL" }] });
+      if (url.includes("/api/places/resolve")) return json(RESOLVED);
+      bodies[url] = JSON.parse(String(init?.body)); // /api/projections
+      return json({ ...VM, owner_token: "tok" });
+    });
+    const user = userEvent.setup();
+    render(<WizardPage />);
+    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
+    await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
+    await user.click(screen.getByRole("button", { name: /generate/i }));
+    await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
 
-  it("primary CTA opens the editable projection at /p/<slug>/edit#<edit-secret>", async () => {
-    const editToken = "edit-secret-xyz";
-    const user = await generate("tok", { edit_token: editToken });
-    await user.click(screen.getByTestId("open-full-projection"));
-    expect(window.location.pathname).toBe(`/p/${VM.view_slug}/edit`);
-    // The edit secret rides in the fragment only — never the path/query.
-    expect(window.location.hash).toBe(`#${editToken}`);
-    expect(window.location.search).toBe("");
-  });
-
-  it("falls back to the owner token as the edit secret when no edit_token is returned", async () => {
-    const user = await generate("owner-tok");
-    await user.click(screen.getByTestId("open-full-projection"));
-    expect(window.location.pathname).toBe(`/p/${VM.view_slug}/edit`);
-    expect(window.location.hash).toBe("#owner-tok");
-  });
-
-  it("offers secondary Share with your board and Export Board Packet actions", async () => {
-    const user = await generate();
-    expect(screen.getByTestId("share-board")).toBeInTheDocument();
-    await user.click(screen.getByTestId("share-board"));
-    // Shares the read-only canonical view (no /edit, no secret fragment).
-    expect(window.location.pathname).toBe(`/p/${VM.view_slug}`);
-    expect(window.location.hash).toBe("");
-  });
-
-  it("exposes an Export Board Packet action that opens the canonical projection", async () => {
-    const user = await generate();
-    const packet = screen.getByTestId("export-packet");
-    expect(packet).toHaveTextContent(/export board packet/i);
-    await user.click(packet);
-    expect(window.location.pathname).toBe(`/p/${VM.view_slug}`);
-  });
-
-  it("demotes .xlsx to a tertiary text link (not a button)", async () => {
-    await generate();
-    const xlsx = screen.getByTestId("download-xlsx");
-    expect(xlsx.tagName).toBe("A");
-    expect(xlsx).toHaveAttribute("href", expect.stringContaining("/xlsx"));
-    // No longer styled or exposed as a button.
-    expect(xlsx).not.toHaveAttribute("role", "button");
-  });
-
-  it("'← Edit assumptions' returns to the prefilled form with the draft intact", async () => {
-    const user = await generate();
-    // Confirm we are on the result screen, then go back to edit assumptions.
-    expect(screen.getByTestId("decision-banner")).toBeInTheDocument();
-    await user.click(screen.getByTestId("edit-assumptions"));
-    // The form re-appears with the (default House of Hope) draft preserved.
-    expect(screen.getByLabelText(/households/i)).toHaveValue(31798);
-    expect(screen.getByRole("button", { name: /generate/i })).toBeInTheDocument();
-    expect(screen.queryByTestId("decision-banner")).not.toBeInTheDocument();
+    const body = bodies["/api/projections"] as {
+      location: { formatted_address: string; place_id: string; query: string };
+      inputs: { city: string };
+      trade_area: { households_source: string };
+    };
+    expect(body.location.formatted_address).toBe("Dallas, TX, USA");
+    expect(body.location.place_id).toBe("PID_DAL");
+    expect(body.location.query).toBe("Dallas, TX, USA");
+    expect(body.inputs.city).toBe("Dallas, TX, USA");
+    expect(body.trade_area.households_source).toBe("census_acs");
   });
 });

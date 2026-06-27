@@ -1,21 +1,22 @@
 # railway.toml — Railway service config (M0.7 / OPS_RUNBOOK).
 # Single replica, durable volume at /data, healthcheck on /api/health.
-# watchPatterns=["**"] so no change deploys as silently SKIPPED.
 
 [build]
 builder = "dockerfile"
 dockerfilePath = "./Dockerfile"
-# watchPatterns belongs under [build] as a direct string array (Railway schema).
-# The old [deploy.watchPatterns] sub-table was invalid and ignored, so GitHub
-# pushes fell back to the dashboard setting and deployed as silently SKIPPED.
+# watchPatterns must be a direct string array under [build] (Railway schema). A
+# [deploy.watchPatterns] sub-table is invalid and silently ignored, which made
+# GitHub pushes fall back to the dashboard setting and deploy as SKIPPED. "**"
+# = deploy on ANY repo change; never narrow it to a pattern that can drop app
+# code. NOTE: also set the dashboard watch pattern to ["**"] — the trigger-time
+# skip decision reads the dashboard, so a config-as-code fix can't bootstrap itself.
 watchPatterns = ["**"]
 
 [deploy]
-# The Dockerfile CMD binds :8000, but Railway routes the healthcheck to the
-# service target port (8080 historically). Without this startCommand the deploy
-# ran on :8000 and the healthcheck failed "service unavailable" (outage).
-# Bind Railway's injected $PORT when present, else the documented 8080.
-startCommand = 'sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"'
+# NO startCommand here on purpose: the Docker image's start.sh entrypoint runs
+# uvicorn UNDER `litestream replicate` and binds ${PORT:-8000}. A startCommand
+# would override start.sh and disable continuous backups. The service has a
+# PORT var so the container binds the port Railway routes the healthcheck to.
 healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 numReplicas = 1

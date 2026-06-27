@@ -20,7 +20,7 @@ interface MetricDef {
 
 const METRICS: MetricDef[] = [
   { testid: "metric-capital", label: "Startup capital required", pick: (m) => m.capital },
-  { testid: "metric-breakeven", label: "Break-even month", pick: (m) => m.breakeven },
+  { testid: "metric-breakeven", label: "Break-even", pick: (m) => m.breakeven },
   { testid: "metric-cashgap", label: "First-year cash gap", pick: (m) => m.cashGap },
 ];
 
@@ -50,5 +50,3 @@ export function DecisionBanner({ reco, metrics }: DecisionBannerProps) {
     </section>
   );
 }
-
-export default DecisionBanner;

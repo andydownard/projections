@@ -1,79 +1,10 @@
-// web/src/wizard/shareHelper.ts — wizard-only estimate affordance + payload builder.
+// web/src/wizard/shareHelper.ts — the wizard's create-payload builder.
 //
 // IMPORTANT (PRD §13 / CLAUDE.md hard rule): the projection is server-authoritative.
-// This file does NOT compute the projection. It renders a pre-create "at a glance"
-// helper — "X% of ~N households → ~D donations/week → ~$R revenue" — so a
-// non-finance user can sanity-check a Year share BEFORE Generate (PRD §7.1 says
-// "the app converts" share ⇄ donations/week). The authoritative numbers come back
-// from the server's compute on POST /api/projections. Nothing here is rendered as
-// a projection figure; the detail page renders only the server view-model.
-
-export interface ShareHelperInput {
-  households: number;
-  sharePct: number;
-  donationsPerHh: number;
-  basket: number;
-}
-
-export interface ShareHelperResult {
-  donationsPerWeek: number | null;
-  annualRevenue: number | null;
-  text: string;
-}
-
-const WEEKS_PER_YEAR = 52;
-
-/** Pre-create estimate of donations/week and annual revenue for one share value. */
-export function shareHelper(input: ShareHelperInput): ShareHelperResult {
-  const { households, sharePct, donationsPerHh, basket } = input;
-  if (!households || households <= 0) {
-    return {
-      donationsPerWeek: null,
-      annualRevenue: null,
-      text: "Enter households to preview donations/week",
-    };
-  }
-  const donationsPerYear = households * (sharePct / 100) * donationsPerHh;
-  const donationsPerWeek = Math.round(donationsPerYear / WEEKS_PER_YEAR);
-  const annualRevenue = Math.round(donationsPerYear * basket);
-  // NO client-side number formatting (PRD §13 / CLAUDE.md): the server is the sole
-  // formatting authority. This is a pre-create estimate affordance with no server
-  // {display} string to defer to, so the raw values are rendered without any
-  // client-side grouping (no client number formatting at all).
-  return {
-    donationsPerWeek,
-    annualRevenue,
-    text:
-      `${sharePct}% of ~${households} households → ` +
-      `~${donationsPerWeek} donations/week → ` +
-      `~$${annualRevenue}/yr revenue`,
-  };
-}
-
-export interface SharePreset {
-  label: string;
-  /** Year-1, Year-2, Year-3 share percentages (a ramp the user then edits). */
-  shares: [number, number, number];
-}
-
-// Benchmark presets (PRD §7.1). Each pre-fills a ramp the user edits per year;
-// all three years stay EXPLICIT (no auto-midpoint at create — PRD §7.1 / trap #1).
-export const PRESETS: SharePreset[] = [
-  { label: "Conservative", shares: [5, 6, 7] },
-  { label: "Moderate", shares: [7, 8, 9] },
-  { label: "Aggressive", shares: [10, 12, 14] },
-];
-
-export const SHARE_BENCHMARK_NOTE =
-  "An established Longview store runs ≈ 7% of trade-area households.";
-
-/**
- * Even-ramp helper: pre-fill Year 2 as the midpoint of Year 1 and Year 3. The
- * field stays editable — this only seeds a starting value (PRD §7.1).
- */
-export function evenRampY2(y1: number, y3: number): number {
-  return Math.round(((y1 + y3) / 2) * 10) / 10;
-}
+// This file does NOT compute the projection — it only shapes the create-request
+// body (buildCreatePayload + toServerCreateBody). The authoritative numbers come
+// back from the server's compute on POST /api/projections; the detail page renders
+// only the server view-model.
 
 export type TradeAreaBasis = "city" | "county" | "manual";
 export type LeaseType = "gross" | "nnn";
@@ -145,8 +76,23 @@ export interface ServerCreateBody {
     lease_type: LeaseType;
     nnn_opex_annual: string;
   };
-  trade_area: { basis: TradeAreaBasis; households: string };
-  location: { query: string };
+  trade_area: {
+    basis: TradeAreaBasis;
+    households: string;
+    // Places->Census provenance (optional; server persists + emits it).
+    geography_name?: string;
+    geography_fips?: string;
+    acs_vintage?: string;
+    households_source?: string;
+    moe?: number | null;
+  };
+  location: {
+    query: string;
+    place_id?: string;
+    lat?: number;
+    lng?: number;
+    formatted_address?: string;
+  };
   terms_accepted: boolean;
 }
 

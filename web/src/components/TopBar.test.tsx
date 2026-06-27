@@ -14,9 +14,16 @@ describe("TopBar", () => {
     expect(screen.getByText(/Thrift Store Projection/i)).toBeInTheDocument();
   });
 
-  it("shows a placeholder version chip until a projection loads", () => {
+  it("renders the Thriftly logo as a home link on every route", () => {
     render(<TopBar />);
-    expect(screen.getByTestId("version-chip")).toHaveTextContent("model —");
+    const home = screen.getByRole("link", { name: /thriftly home/i });
+    expect(home).toHaveAttribute("href", "/");
+    expect(screen.getByRole("img", { name: /thriftly/i })).toBeInTheDocument();
+  });
+
+  it("shows no version chip until a projection loads (no 'model —' placeholder)", () => {
+    render(<TopBar />);
+    expect(screen.queryByTestId("version-chip")).not.toBeInTheDocument();
   });
 
   it("renders the server-provided model version verbatim", () => {
@@ -39,12 +46,12 @@ describe("TopBar", () => {
 
   it("renders the saved state with explicit text (not color alone)", () => {
     render(<TopBar saveState="saved" />);
-    expect(screen.getByTestId("save-label")).toHaveTextContent("Saved");
+    expect(screen.getByTestId("save-label")).toHaveTextContent("All changes saved");
   });
 
   it("renders a retry-able error state", () => {
     render(<TopBar saveState="error" />);
-    expect(screen.getByTestId("save-label")).toHaveTextContent("Couldn't save — retry");
+    expect(screen.getByTestId("save-label")).toHaveTextContent("Save failed — retry");
   });
 
   it("hides the save label when idle", () => {

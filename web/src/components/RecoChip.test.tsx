@@ -37,32 +37,4 @@ describe("RecoChip (enum → token, never color-only)", () => {
     render(<RecoChip tag="raise_cash" />);
     expect(screen.getByLabelText(/recommendation/i)).toBeInTheDocument();
   });
-
-  it("prepends a per-tag status glyph so the verdict survives in grayscale", () => {
-    // proceed → ✓, do_not_proceed → ✕, every conditional/revise verdict → △.
-    const cases: Array<[Parameters<typeof RecoChip>[0]["tag"], string]> = [
-      ["proceed", "✓"],
-      ["do_not_proceed", "✕"],
-      ["revise", "△"],
-      ["find_cheaper_rent", "△"],
-      ["raise_cash", "△"],
-      ["delay", "△"],
-    ];
-    for (const [tag, glyph] of cases) {
-      const { unmount } = render(<RecoChip tag={tag} />);
-      const glyphEl = screen.getByTestId("reco-chip-glyph");
-      expect(glyphEl).toHaveTextContent(glyph);
-      // Decorative only: the glyph must be hidden from assistive tech because the
-      // aria-label already speaks the verdict.
-      expect(glyphEl).toHaveAttribute("aria-hidden", "true");
-      unmount();
-    }
-  });
-
-  it("keeps the verdict glyph out of the accessibility tree (aria-label unchanged)", () => {
-    render(<RecoChip tag="proceed" />);
-    // The accessible name is exactly the verdict — the glyph contributes nothing.
-    expect(screen.getByLabelText("Recommendation: Proceed")).toBeInTheDocument();
-    expect(screen.getByTestId("reco-chip-glyph")).toHaveAttribute("aria-hidden", "true");
-  });
 });

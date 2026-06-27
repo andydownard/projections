@@ -8,6 +8,8 @@ dbs:
     replicas:
       - type: s3
         bucket: ${LITESTREAM_BUCKET}
+        # Path prefix isolates this DB within a shared bucket (Cloudflare R2).
+        path: ${LITESTREAM_PATH}
         endpoint: ${LITESTREAM_ENDPOINT}
         region: ${LITESTREAM_REGION}
         access-key-id: ${LITESTREAM_ACCESS_KEY_ID}

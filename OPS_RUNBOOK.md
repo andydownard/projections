@@ -56,9 +56,6 @@ A single Railway **service** lives inside the existing **`thriftly.com` Railway 
 
 Config-as-code overrides the dashboard. This guarantees every change deploys and prevents the timpager class of bug where dashboard watch-paths silently skipped directories and PRs deployed as SKIPPED.
 
-> **Gotcha (2026-06-26):** two failure modes here, both surface as `SKIPPED`.
-> (1) `watchPatterns` is a **direct string array under `[build]`** — a `[deploy.watchPatterns]` sub-table is invalid and silently ignored. (2) The trigger-time skip decision reads the **last-applied / dashboard** watch pattern, **not** the incoming commit's config — so a config-as-code fix cannot bootstrap itself (the very push that fixes it is still skipped by the old setting). The dashboard `watchPatterns` must therefore *also* be `["**"]`. Set it via the API (`update_service watch_patterns=["**"]`) or the dashboard, then push a real file change to trigger the first git-linked deploy.
-
 ```toml
 [build]
 builder = "dockerfile"

@@ -10,8 +10,6 @@
 // slider again. SAVE_SUCCESS for the in-flight request must bump the version but
 // NOT clear the freshly-pending edit, or that edit would never get persisted.
 
-import { SAVE_LABEL } from "./saveLabels";
-
 export type RecoveryOption = "reload" | "overwrite" | "save_as_copy";
 
 /** The 409 body the server returns on a stale mutation (API_SPEC §1.4). */
@@ -103,16 +101,12 @@ export function autosaveReducer(state: AutosaveState, action: AutosaveAction): A
   }
 }
 
-// One vocabulary, drawn from the shared SAVE_LABEL map (UX fix #10). The reducer's
-// extra lifecycle states collapse onto the three canonical labels: dirty reads as
-// in-flight ("Saving…"), idle/saved both read as "Saved". Conflict keeps its own
-// recovery-specific copy (it is not a plain save outcome).
 const LABELS: Record<AutosaveStatus, string> = {
-  idle: SAVE_LABEL.idle,
-  saved: SAVE_LABEL.saved,
-  dirty: SAVE_LABEL.saving,
-  saving: SAVE_LABEL.saving,
-  error: SAVE_LABEL.error,
+  idle: "Saved automatically",
+  saved: "Saved automatically",
+  dirty: "Saving…",
+  saving: "Saving…",
+  error: "Couldn’t save — retry",
   conflict: "This projection changed elsewhere",
 };
 

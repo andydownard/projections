@@ -48,7 +48,6 @@ export function ListPage() {
     <ProjectionsList
       projections={projections}
       onCreate={() => navigate("/wizard")}
-      onStartExample={() => navigate("/p/example")}
       onOpen={(slug) => navigate(`/p/${slug}`)}
     />
   );

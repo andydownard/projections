@@ -5,8 +5,8 @@ constant here. Money/percent literals are kept as strings or exact Decimals at
 the point of use; these module constants name the *default* assumption values.
 """
 
-MODEL_VERSION = "2.0.0"          # math changes => bump
-COMPUTE_SCHEMA_VERSION = "1.0.0"  # view-model shape changes => bump
+MODEL_VERSION = "2.1.0"          # math changes => bump (2.1.0: capital double-count fix)
+COMPUTE_SCHEMA_VERSION = "1.1.0"  # view-model shape changes => bump (1.1.0: +sales/sqft, occupancy & labor ratio KPIs)
 
 # --- demand engine
 DONATIONS_PER_HH_PER_YEAR = 3        # §7.3
@@ -45,13 +45,7 @@ STARTUP = {
 CASH_RESERVE_BUFFER = 25000          # §7.3 / §12.1
 SENSITIVITY_DELTA = "0.25"           # §12.2 ±25% on rent & donations
 
-# --- monthly ramp (calibration backlog — low-confidence, §12.5)
-RAMP_MONTHS = 5
-RAMP_CURVE = "logistic"
-DONATION_TO_REVENUE_LAG_MONTHS = 1
-
 # --- guardrail advisory bands (§12.2)
 SHARE_Y1_BAND_MAX = "0.08"           # donor market share ≤ ~8% for a new store
 NET_MARGIN_FLAG_MAX = "0.30"         # flag > ~30% as unusual for a new store
-LABOR_RATIO_BAND = ("0.25", "0.60")
 OCCUPANCY_RATIO_BAND_MAX = "0.20"

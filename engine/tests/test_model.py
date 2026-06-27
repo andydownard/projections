@@ -5,8 +5,8 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    assert model.MODEL_VERSION == "2.0.0"
-    assert model.COMPUTE_SCHEMA_VERSION == "1.0.0"
+    assert model.MODEL_VERSION == "2.1.0"
+    assert model.COMPUTE_SCHEMA_VERSION == "1.1.0"
 
 
 def test_demand_constants():

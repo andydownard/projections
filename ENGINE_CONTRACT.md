@@ -108,9 +108,9 @@ CASH_RESERVE_BUFFER       = 25000    # §7.3 / §12.1
 SENSITIVITY_DELTA         = 0.25     # §12.2 ±25% on rent & donations
 
 # --- monthly ramp (calibration backlog — label low-confidence, §12.5)
-RAMP_MONTHS               = 5        # donation S-curve to steady state (~3–6, §10.2)
-RAMP_CURVE                = "logistic"
-DONATION_TO_REVENUE_LAG_MONTHS = 1  # §10.2 retail follows donations
+# The donation S-curve to steady state is implemented as fixed monthly weight
+# vectors in engine/monthly.py (_REVENUE_WEIGHTS / _PAYROLL_WEIGHTS), not scalar
+# constants here.
 ```
 
 **Calibration reference (Longview, TX — methodology lines 51–57):** ~6,900 first-year donations → ~2,300 donating households → ~7% donor share of ~31,800 city households; retail ~$573K → ~$83 resale value/donation; basket ~$15–$20. Use as the reality check the guardrails (§12.2) enforce.
@@ -216,8 +216,8 @@ For each month:
 | Component | Rule |
 |---|---|
 | **Startup outflows** (timed) | Lease deposit, build-out, fixtures/equipment, opening inventory, legal/permits, consultant placed in **their actual months**, not averaged. |
-| **Donation ramp** | Donations build from opening to steady state over `RAMP_MONTHS` (default 5, S-curve `RAMP_CURVE`), seasonality-adjusted. Steady state = Year-1 annual donations / 12 once ramped. |
-| **Revenue ramp** | `retail[m]` follows `donations[m − DONATION_TO_REVENUE_LAG_MONTHS]`; `salvage[m]` follows `retail[m]`. |
+| **Donation ramp** | Donations build from opening to steady state over an S-curve (the fixed `_REVENUE_WEIGHTS` / `_PAYROLL_WEIGHTS` vectors in engine/monthly.py, summing to 1). Steady state = Year-1 annual donations / 12 once ramped. |
+| **Revenue ramp** | `retail[m]` follows the monthly revenue weight; `salvage[m]` follows `retail[m]`. |
 | **Costs** | Payroll begins at **hire dates** (may precede opening); fixed costs begin at **lease start**; variable costs (`card, marketing, supplies, payroll-tax`) scale with **that month's** revenue. |
 | **Net** | `net[m] = revenue[m] − expenses[m]` (expenses include timed startup outflows in cash terms). |
 | **Cumulative cash** | `cumulativeCash[m] = cumulativeCash[m−1] + net[m]`, with stated funds as the starting balance where modeled. |
@@ -238,7 +238,7 @@ All computed in the core; all asserted by golden tests (not merely rendered).
 ```
 first_year_cash_gap   = min(cumulativeCash[M0..M12])           # most-negative position; ≤ 0
 peak_cash_shortfall   = |min(0, first_year_cash_gap)|
-startup_capital_required = startup_total + peak_cash_shortfall + CASH_RESERVE_BUFFER
+startup_capital_required = peak_cash_shortfall + CASH_RESERVE_BUFFER   # trough already embeds startup (spent at M0) — NEVER add startup_total again
 cash_runway_months    = first m where cumulativeCash[m] ≥ 0     # months to cash-positive; null if never
 break_even_revenue    = solve(net == 0 over fixed+variable structure)   # monthly and annual
 break_even_month      = first m where net[m] ≥ 0 AND sustained thereafter   # null if never
@@ -454,7 +454,7 @@ Applied to: net margin (`=net/totrev`, was line 257), simple payback (`=startup/
 
 ## 12. Calibration & confidence (PRD §29, §6.3)
 
-The monthly ramp (`RAMP_MONTHS`, `RAMP_CURVE`), seasonality, peak-shortfall timing, and therefore `break_even_month` have **never been calibrated against a real opening**. They are emitted with `flags.ramp_low_confidence = true`, shown with a confidence label and sensitivity (§6.2), and feed the **calibration backlog** that the post-launch actuals store (PRD §6.3, §24) will close. Treat a confidently-wrong break-even month as a defect, not a feature.
+The monthly ramp (the S-curve weight vectors in engine/monthly.py), seasonality, peak-shortfall timing, and therefore `break_even_month` have **never been calibrated against a real opening**. They are emitted with `flags.ramp_low_confidence = true`, shown with a confidence label and sensitivity (§6.2), and feed the **calibration backlog** that the post-launch actuals store (PRD §6.3, §24) will close. Treat a confidently-wrong break-even month as a defect, not a feature.
 
 ---
 

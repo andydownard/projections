@@ -1,7 +1,8 @@
 """Decision metrics, guardrails & recommendation (ENGINE_CONTRACT §6).
 
 All computed in the core; all asserted by golden tests (not merely rendered).
-Capital required = Σ startup + |peak cash shortfall| + reserve buffer.
+Capital required = |peak cash shortfall| + reserve buffer. The monthly trough
+already embeds the M0 startup outflow, so startup is NEVER added a second time.
 """
 from __future__ import annotations
 
@@ -50,7 +51,9 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
                              inputs.opening_status)
     trough = min((D(str(m.cumulative_cash)) for m in rows), default=Decimal("0"))
     peak = abs(min(Decimal("0"), trough))
-    capital = startup_total + peak + D(assumptions.reserve_buffer)
+    # `peak` already embeds the M0 startup outflow (monthly.py) — do NOT add
+    # startup_total again (that double-count is the §6.1 capital bug).
+    capital = peak + D(assumptions.reserve_buffer)
     return years[1].net, be, capital
 
 
@@ -61,7 +64,10 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
     cumulative = [D(str(m.cumulative_cash)) for m in monthly]
     cash_gap = min(cumulative) if cumulative else Decimal("0")
     peak_shortfall = abs(min(Decimal("0"), cash_gap))
-    capital = D(str(result.startup_total)) + peak_shortfall + D(assumptions.reserve_buffer)
+    # The monthly trough already embeds the full startup outflow (spent at M0 in
+    # monthly.py), so |peak shortfall| IS the cash hole *including* startup. Adding
+    # result.startup_total again double-counts it (the ~$518k-vs-$277,990 bug).
+    capital = peak_shortfall + D(assumptions.reserve_buffer)
 
     runway = next((m.index for m in monthly if D(str(m.cumulative_cash)) >= 0), None)
     break_even_month = result.monthly_breakeven
@@ -129,8 +135,7 @@ def _recommend(result, capital, assumptions, inputs, flags, sensitivity, break_e
         return "do_not_proceed", reasons
 
     if capital > funds:
-        reasons["capital"] = (
-            f"Capital required exceeds the stated source of funds.")
+        reasons["capital"] = "Capital required exceeds the stated source of funds."
         return "raise_cash", reasons
 
     occ_ratio = (D(str(y1.expenses["Rent"])) / D(str(y1.total_rev))

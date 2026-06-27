@@ -11,18 +11,19 @@
 // is non-pinnable (aria-disabled), enforced server-side too (PRD §14).
 //
 // NO client math: every figure is the server's { display } string.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
 import { patchProjection, PatchConflictError } from "../api/patch";
 import { submitFeedback } from "../api/feedback";
 import { ProjectionTab } from "../components/ProjectionTab";
+import { TradeAreaMap } from "../components/TradeAreaMap";
+import { EvidencePanel } from "../components/EvidencePanel";
 import { FeedbackModal } from "../components/FeedbackModal";
 import { SaveConflictModal } from "../components/SaveConflictModal";
 import { SettingsTab } from "../components/SettingsTab";
 import { DegradedState } from "../components/DegradedState";
 import type { ConflictBody } from "../state/autosaveReducer";
-import { SAVE_LABEL, type SaveState } from "../state/saveLabels";
 import type { ServerValue } from "../api/client";
 import type { PatchHandlerArgs } from "../components/SettingsTab";
 import { readFragmentSecret } from "../router/route";
@@ -32,6 +33,14 @@ export interface ProjectionDetailProps {
   edit: boolean;
   aiOff?: boolean;
 }
+
+type SaveLabel = "All changes saved" | "Saving…" | "Save failed — retry" | "";
+
+const DETAIL_TABS = [
+  { id: "projection", label: "Projection" },
+  { id: "settings", label: "Settings" },
+] as const;
+type DetailTabId = (typeof DETAIL_TABS)[number]["id"];
 
 function sv(v: ServerValue | number | string | undefined): ServerValue {
   if (v && typeof v === "object" && "raw" in v) return v;
@@ -59,13 +68,22 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const [vm, setVm] = useState<ViewModel | null>(null);
   const [version, setVersion] = useState(0);
   const [name, setName] = useState("");
-  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [saveLabel, setSaveLabel] = useState<SaveLabel>("");
   const [conflict, setConflict] = useState<ConflictBody | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
+  const [activeTab, setActiveTab] = useState<DetailTabId>("projection");
+
+  // Roving tab navigation (WAI-ARIA tabs): Left/Right move + focus the next tab.
+  function onTabKey(e: KeyboardEvent<HTMLButtonElement>) {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    const i = DETAIL_TABS.findIndex((t) => t.id === activeTab);
+    const n = DETAIL_TABS.length;
+    const next = DETAIL_TABS[e.key === "ArrowRight" ? (i + 1) % n : (i - 1 + n) % n];
+    setActiveTab(next.id);
+    document.getElementById(`detail-tab-${next.id}`)?.focus();
+  }
   const nameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // The last PATCH body we attempted, so the failure-state retry button can
-  // re-fire exactly that mutation (UX fix #10) at the current If-Match version.
-  const lastPatch = useRef<Record<string, unknown> | null>(null);
   // Capture the edit secret from the fragment ONCE on first render (a lazy ref
   // initializer), BEFORE StrictMode's double-invoke can re-read the (scrubbed)
   // hash. Fall back to the owner token. Then scrub the fragment from the URL so
@@ -97,8 +115,6 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   }, [slug]);
 
   async function doPatch(body: Record<string, unknown>, ver: number) {
-    // Remember the last attempted mutation so a failed save can be retried verbatim.
-    lastPatch.current = body;
     const res = await patchProjection({
       viewSlug: slug,
       token: token.current ?? "",
@@ -112,51 +128,35 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
 
   function onNameChange(value: string) {
     setName(value);
-    setSaveState("saving");
+    setSaveLabel("Saving…");
     if (nameTimer.current) clearTimeout(nameTimer.current);
     nameTimer.current = setTimeout(() => {
       doPatch({ name: value }, version)
-        .then(() => setSaveState("saved"))
+        .then(() => setSaveLabel("All changes saved"))
         .catch((err) => {
           if (err instanceof PatchConflictError) {
             setConflict(err.conflict);
           } else {
-            setSaveState("error");
+            setSaveLabel("Save failed — retry");
           }
         });
     }, 150);
   }
 
   async function onSettingsPatch(args: PatchHandlerArgs) {
-    setSaveState("saving");
+    setSaveLabel("Saving…");
     try {
       const v = await doPatch(args.body as Record<string, unknown>, args.version);
-      setSaveState("saved");
+      setSaveLabel("All changes saved");
       return { version: v, viewModel: vm };
     } catch (err) {
       if (err instanceof PatchConflictError) {
         setConflict(err.conflict);
       } else {
-        setSaveState("error");
+        setSaveLabel("Save failed — retry");
       }
       throw err;
     }
-  }
-
-  // Failure-state recovery: re-fire the last PATCH body at the current version.
-  function retry() {
-    const body = lastPatch.current;
-    if (!body) return;
-    setSaveState("saving");
-    doPatch(body, version)
-      .then(() => setSaveState("saved"))
-      .catch((err) => {
-        if (err instanceof PatchConflictError) {
-          setConflict(err.conflict);
-        } else {
-          setSaveState("error");
-        }
-      });
   }
 
   function resolveReload() {
@@ -168,60 +168,31 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       setName(data.name);
     });
     setVersion(v);
-    setSaveState("saved");
+    setSaveLabel("All changes saved");
   }
 
   function resolveOverwrite() {
     const v = conflict?.current_version ?? version;
     setConflict(null);
     doPatch({ name }, v)
-      .then(() => setSaveState("saved"))
-      .catch(() => setSaveState("error"));
+      .then(() => setSaveLabel("All changes saved"))
+      .catch(() => setSaveLabel("Save failed — retry"));
   }
 
   function resolveSaveAsCopy() {
     setConflict(null);
-    setSaveState("saved");
+    setSaveLabel("All changes saved");
   }
 
   if (!vm) {
-    // First-class loading state (UX fix #9): a skeleton that reserves the real
-    // layout — banner block, a 5-tile KPI strip, ~8 table rows — so first paint
-    // does not jump the viewport. Shimmer is gated behind prefers-reduced-motion
-    // in the CSS (.skeleton); markup stays inert (aria-hidden under aria-busy).
-    return (
-      <div className="detail detail--loading" aria-busy="true" data-testid="detail-skeleton">
-        <span className="sr-only" role="status" aria-live="polite">
-          Loading projection…
-        </span>
-        <div className="skeleton skeleton--banner" aria-hidden="true" />
-        <div className="skeleton-kpis" aria-hidden="true">
-          {Array.from({ length: 5 }, (_, i) => (
-            <div key={i} className="skeleton skeleton--kpi" />
-          ))}
-        </div>
-        <div className="skeleton-rows" aria-hidden="true">
-          {Array.from({ length: 8 }, (_, i) => (
-            <div key={i} className="skeleton skeleton--row" />
-          ))}
-        </div>
-      </div>
-    );
+    return <div className="detail detail--loading">Loading…</div>;
   }
 
   return (
     <div className="detail">
-      {edit && saveState !== "idle" && (
+      {edit && (
         <span data-testid="save-label" role="status" aria-live="polite">
-          {saveState === "error" ? (
-            // The failure state is a real recovery affordance, not the bare word
-            // "retry": clicking it re-fires the last PATCH (UX fix #10).
-            <button type="button" className="save-label__retry" onClick={retry}>
-              {SAVE_LABEL.error}
-            </button>
-          ) : (
-            SAVE_LABEL[saveState]
-          )}
+          {saveLabel}
         </span>
       )}
 
@@ -236,26 +207,73 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
         </label>
       )}
 
-      {/* The Projection tab renders the stored view-model verbatim: decision
-          banner + tiles, KPI strip, monthly cash-flow SVG, and the 3-year table
-          with the Input/Computed/Overridden/Estimated legend and cell-state
-          classes. No client math. The recompute live-region carries the autosave
-          settle label so a recompute is announced (a11y). */}
-      <ProjectionTab
-        vm={vm}
-        recomputeStatus={edit && saveState !== "idle" ? SAVE_LABEL[saveState] : ""}
-      />
-
-      {edit && (
-        <div data-testid="settings-tab">
-          <SettingsTab
-            settings={settingsVm(vm.settings)}
-            version={version}
-            onPatch={onSettingsPatch}
-            onSaveAsCopy={resolveSaveAsCopy}
-          />
-        </div>
-      )}
+      {/* Projection content: the stored view-model verbatim (decision banner +
+          tiles, KPI strip, cash-flow SVG, 3-year table — no client math), the
+          trade-area map, and the evidence/confidence panel. In edit mode it's the
+          first of a Projection | Settings tablist; read mode shows it directly. */}
+      {(() => {
+        const projection = (
+          <>
+            <ProjectionTab key={slug} vm={vm} recomputeStatus={edit ? saveLabel : ""} />
+            <TradeAreaMap
+              slug={slug}
+              location={vm.location}
+              basis={vm.trade_area?.basis}
+              geography={vm.trade_area?.geography_name}
+              size="detail"
+            />
+            <EvidencePanel evidence={vm.evidence ?? []} />
+          </>
+        );
+        if (!edit) return projection;
+        return (
+          <div className="detail__tabs">
+            <div role="tablist" aria-label="Projection views" className="tabs">
+              {DETAIL_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  id={`detail-tab-${t.id}`}
+                  aria-selected={activeTab === t.id}
+                  aria-controls={`detail-panel-${t.id}`}
+                  tabIndex={activeTab === t.id ? 0 : -1}
+                  className={activeTab === t.id ? "tabs__tab tabs__tab--active" : "tabs__tab"}
+                  onClick={() => setActiveTab(t.id)}
+                  onKeyDown={onTabKey}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <div
+              role="tabpanel"
+              id="detail-panel-projection"
+              aria-labelledby="detail-tab-projection"
+              className="detail__panel"
+              hidden={activeTab !== "projection"}
+            >
+              {projection}
+            </div>
+            <div
+              role="tabpanel"
+              id="detail-panel-settings"
+              aria-labelledby="detail-tab-settings"
+              className="detail__panel"
+              hidden={activeTab !== "settings"}
+            >
+              <div data-testid="settings-tab">
+                <SettingsTab
+                  settings={settingsVm(vm.settings)}
+                  version={version}
+                  onPatch={onSettingsPatch}
+                  onSaveAsCopy={resolveSaveAsCopy}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {aiOff && (
         <section data-testid="narrative-disabled" className="narrative narrative--disabled">

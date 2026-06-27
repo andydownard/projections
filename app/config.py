@@ -6,10 +6,11 @@ Dev/test are permissive so the AI-opt-out path stays testable with no keys set.
 
 Required in prod (SECURITY.md §4.1):
   DB_BACKEND, DB_PATH (sqlite) / DATABASE_URL (postgres),
-  GOOGLE_PLACES_API_KEY, CENSUS_API_KEY, and at-least-one AI provider
+  GOOGLE_PLACES_API_KEY, and at-least-one AI provider
   (ANTHROPIC_API_KEY OR OPENAI_API_KEY).
-Optional / graceful-degrade: OPENAI_API_KEY, GITHUB_TOKEN+GITHUB_REPO,
-  CRM_API_KEY, LITESTREAM_* (health-checked live), SENTRY_DSN.
+Optional / graceful-degrade: OPENAI_API_KEY, CENSUS_API_KEY (the Census API
+  works keyless for low volume; a key only raises rate limits), GITHUB_TOKEN+
+  GITHUB_REPO, CRM_API_KEY, LITESTREAM_* (health-checked live), SENTRY_DSN.
 """
 from __future__ import annotations
 
@@ -51,8 +52,8 @@ def _missing_required(env: Mapping[str, str]) -> list[str]:
 
     if not env.get("GOOGLE_PLACES_API_KEY"):
         missing.append("GOOGLE_PLACES_API_KEY")
-    if not env.get("CENSUS_API_KEY"):
-        missing.append("CENSUS_API_KEY")
+    # CENSUS_API_KEY is optional: the Census API serves low-volume requests
+    # keyless; a key only raises rate limits, so it must not block boot.
 
     # At least one AI provider.
     if not (env.get("ANTHROPIC_API_KEY") or env.get("OPENAI_API_KEY")):

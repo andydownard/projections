@@ -14,20 +14,6 @@ const RECO_LABEL: Record<RecoTag, string> = {
   do_not_proceed: "Do not proceed",
 };
 
-// Per-tag status glyph so the verdict survives in grayscale / colorblind / print
-// (a11y / DoD: meaning carries an ICON + TEXT, never color alone). The glyph is
-// purely decorative — aria-hidden — because the aria-label already speaks the
-// verdict. proceed → check, do_not_proceed → cross, everything else (the
-// conditional/revise verdicts) → a triangle "caution" mark.
-const RECO_GLYPH: Record<RecoTag, string> = {
-  proceed: "✓", // ✓
-  revise: "△", // △
-  find_cheaper_rent: "△", // △
-  raise_cash: "△", // △
-  delay: "△", // △
-  do_not_proceed: "✕", // ✕
-};
-
 export interface RecoChipProps {
   tag: RecoTag;
 }
@@ -40,12 +26,7 @@ export function RecoChip({ tag }: RecoChipProps) {
       data-tag={tag}
       aria-label={`Recommendation: ${RECO_LABEL[tag]}`}
     >
-      <span className="reco-chip__glyph" data-testid="reco-chip-glyph" aria-hidden="true">
-        {RECO_GLYPH[tag]}
-      </span>
       {RECO_LABEL[tag]}
     </span>
   );
 }
-
-export default RecoChip;

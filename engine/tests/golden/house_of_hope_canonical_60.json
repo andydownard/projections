@@ -1,6 +1,6 @@
 {
   "breakevenMonth": 9,
-  "compute_schema_version": "1.0.0",
+  "compute_schema_version": "1.1.0",
   "evidence": [],
   "flags": {
     "model_upgrade_available": false,
@@ -37,11 +37,20 @@
     },
     {
       "color": "text",
+      "label": "Sales / sq ft",
+      "sub": "Year 1",
+      "value": {
+        "display": "$61",
+        "raw": 60.99110784
+      }
+    },
+    {
+      "color": "text",
       "label": "Capital required",
       "sub": "incl. reserve",
       "value": {
-        "display": "$560,440",
-        "raw": 560439.7347072
+        "display": "$321,940",
+        "raw": 321939.7347072
       }
     },
     {
@@ -64,6 +73,24 @@
     },
     {
       "color": "text",
+      "label": "Occupancy ratio",
+      "sub": "rent / revenue",
+      "value": {
+        "display": "28.1%",
+        "raw": 0.28107141762088617
+      }
+    },
+    {
+      "color": "text",
+      "label": "Labor ratio",
+      "sub": "payroll / revenue",
+      "value": {
+        "display": "60.0%",
+        "raw": 0.6
+      }
+    },
+    {
+      "color": "text",
       "label": "Revenue CAGR",
       "sub": "Y1->Y3",
       "value": {
@@ -78,18 +105,18 @@
       "raw": 9
     },
     "capital": {
-      "display": "$560,440",
-      "raw": 560439.7347072
+      "display": "$321,940",
+      "raw": 321939.7347072
     },
     "cashGap": {
       "display": "($296,940)",
       "raw": -296939.7347072
     },
     "reasonBreakeven": "Break-even is not reached within the first year under base or downside.",
-    "reasonCapital": "One-time startup + worst-case cash trough + reserve.",
+    "reasonCapital": "Worst-case cumulative cash trough (already includes one-time startup) plus reserve.",
     "reasonGap": "Most-negative cumulative cash across the first year."
   },
-  "model_version": "2.0.0",
+  "model_version": "2.1.0",
   "monthly": [
     {
       "cumulativeCash": {
@@ -761,5 +788,5 @@
     "suppliesPct": 0.05
   },
   "staleNodes": [],
-  "version": "2.0.0"
+  "version": "2.1.0"
 }

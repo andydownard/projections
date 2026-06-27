@@ -70,4 +70,3 @@ def assert_migrations_additive(migrations: Iterable[tuple[str, str]]) -> None:
             "non-additive migration statement(s) detected (CLAUDE.md DB discipline):\n  "
             + "\n  ".join(problems)
         )
-    return None

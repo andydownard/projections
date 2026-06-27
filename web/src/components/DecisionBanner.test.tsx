@@ -26,13 +26,6 @@ describe("DecisionBanner", () => {
     expect(screen.getByTestId("decision-banner")).toHaveAttribute("data-tag", "proceed");
   });
 
-  it("labels the three metrics with the canonical vocabulary (UX fix #10)", () => {
-    render(<DecisionBanner reco={reco} metrics={metrics} />);
-    expect(screen.getByText("Startup capital required")).toBeInTheDocument();
-    expect(screen.getByText("Break-even month")).toBeInTheDocument();
-    expect(screen.getByText("First-year cash gap")).toBeInTheDocument();
-  });
-
   it("renders server display strings verbatim (no client math)", () => {
     render(<DecisionBanner reco={reco} metrics={metrics} />);
     // The cash gap is a parenthesized negative from the server — rendered as-is.

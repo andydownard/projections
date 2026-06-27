@@ -10,12 +10,12 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import config
 from app.middleware import SecurityHeadersMiddleware
-from app.routers import feedback, health, intent, projections, roles
+from app.routers import feedback, health, intent, places, projections, roles
 from app.store import build_store
 
 logger = logging.getLogger("app")
@@ -64,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(roles.router)
     app.include_router(feedback.router)
     app.include_router(intent.router)
+    app.include_router(places.router)
 
     @app.get("/robots.txt", include_in_schema=False)
     def robots() -> Response:
@@ -83,14 +84,40 @@ def create_app() -> FastAPI:
             return {"status": "reseeded"}
 
     # Serve the built SPA (web/dist) when present (the production Docker image).
-    # Mounted LAST so /api/* and /robots.txt match first; html=True gives the
-    # single-page-app fallback to index.html for client routes. No-op locally/in
+    # Registered LAST so /api/*, /robots.txt, etc. match first. No-op locally/in
     # tests (web/dist absent there) so the app stays API-only and tests are unchanged.
+    #
+    # StaticFiles(html=True) only serves index.html at "/" and for directories, so a
+    # deep client route (/wizard, /p/<slug>) 404s on hard-reload or direct nav. We
+    # instead serve real files when they exist and fall back to index.html for every
+    # other non-API GET, so client-side routing, deep links, and browser back/forward
+    # all work. Unknown /api/* still returns a JSON 404 (never index.html).
     spa_dir = os.environ.get("SPA_DIR", "web/dist")
     if os.path.isdir(spa_dir):
+        from fastapi.responses import FileResponse
         from fastapi.staticfiles import StaticFiles
 
-        app.mount("/", StaticFiles(directory=spa_dir, html=True), name="spa")
+        spa_root = os.path.abspath(spa_dir)
+        index_file = os.path.join(spa_root, "index.html")
+        assets_dir = os.path.join(spa_root, "assets")
+        if os.path.isdir(assets_dir):
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+        # index.html must NEVER be cached: it references content-hashed asset
+        # filenames, so a stale cached index.html points at old (404) bundles and
+        # silently pins returning users to a previous deploy. Assets are immutable
+        # (hashed names) and stay cacheable via the /assets mount.
+        no_cache = {"Cache-Control": "no-cache, must-revalidate"}
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        def spa_fallback(full_path: str) -> Response:
+            if full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail={"error": "not_found"})
+            # Serve a real static file (favicon.svg, etc.) if it resolves inside spa_dir.
+            candidate = os.path.normpath(os.path.join(spa_root, full_path))
+            if candidate.startswith(spa_root + os.sep) and os.path.isfile(candidate):
+                return FileResponse(candidate)
+            return FileResponse(index_file, headers=no_cache)  # SPA client route
 
     return app
 

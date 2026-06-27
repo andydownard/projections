@@ -36,12 +36,12 @@ def test_prod_refuses_on_missing_places_key():
     assert "GOOGLE_PLACES_API_KEY" in str(exc.value)
 
 
-def test_prod_refuses_on_missing_census_key():
+def test_prod_tolerates_missing_census_key():
+    # Census API is keyless-capable for low volume; the key is optional and must
+    # NOT block boot (a missing key boots fine; a key only raises rate limits).
     env = dict(PROD_FULL)
     del env["CENSUS_API_KEY"]
-    with pytest.raises(ConfigError) as exc:
-        validate_required(env)
-    assert "CENSUS_API_KEY" in str(exc.value)
+    validate_required(env)  # no raise
 
 
 def test_prod_refuses_when_no_ai_provider():
@@ -92,7 +92,7 @@ def test_no_fallback_chain_each_missing_named():
     with pytest.raises(ConfigError) as exc:
         validate_required(env)
     msg = str(exc.value)
-    for name in ("DB_PATH", "GOOGLE_PLACES_API_KEY", "CENSUS_API_KEY"):
+    for name in ("DB_PATH", "GOOGLE_PLACES_API_KEY"):
         assert name in msg
 
 

@@ -39,6 +39,8 @@ export interface ProjectionListItem {
   status: string;
   version: number;
   updated_at: string;
+  /** lat/lng for the row mini-map; null/undefined when no address was resolved. */
+  coords?: { lat: number; lng: number } | null;
 }
 
 export interface ProjectionListResponse {

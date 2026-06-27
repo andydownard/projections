@@ -9,9 +9,11 @@ const M2_READY = process.env.E2E_M2_READY === "1";
 test.describe("override + 409 optimistic-concurrency", () => {
   test.skip(!M2_READY, "M4 override UI / M2 conflict modal not built yet — scaffold pins the flow");
 
-  // This flow MUTATES the seeded `example` projection (labor, name, version). The
-  // three viewport projects share one in-memory DB, so reset to the canonical
-  // fixture before each test to keep the gate order-independent (E2E-only route).
+  // This flow MUTATES the seeded `example` projection (labor, name, version) and
+  // reseeds per test. The whole suite already runs workers:1 (one shared in-memory
+  // DB — playwright.config.ts); this serial guard is belt-and-suspenders.
+  test.describe.configure({ mode: "serial" });
+
   test.beforeEach(async ({ request }) => {
     await request.post("/api/_test/reseed");
   });
@@ -20,10 +22,17 @@ test.describe("override + 409 optimistic-concurrency", () => {
     await page.goto("/p/example/edit#edit-secret");
     // Fragment secret is scrubbed from the URL after read (SECURITY.md §2.5).
     await expect(page).not.toHaveURL(/#edit-secret/);
-    await page.getByLabel(/labor %/i).fill("40");
-    await expect(page.getByTestId("save-label")).toHaveText(/all changes saved/i);
-    // 40% labor flips House of Hope to a healthier margin server-side.
-    await expect(page.getByTestId("metric-capital")).toBeVisible();
+    const capitalBefore = await page.getByTestId("metric-capital").textContent();
+    // Settings controls live behind the Settings tab; the pct field is 0-1.
+    await page.getByRole("tab", { name: /settings/i }).click();
+    await page.getByLabel(/labor %/i).fill("0.5"); // change from the seed's 40%
+    // Back on Projection: the Settings panel is truly hidden, and the SERVER
+    // recompute (no client math) shows — the Labor-ratio KPI is 50% AND a
+    // downstream figure (capital) changed; neither was computed on the client.
+    await page.getByRole("tab", { name: /projection/i }).click();
+    await expect(page.getByTestId("settings-tab")).toBeHidden();
+    await expect(page.getByTestId("kpi-Labor ratio")).toContainText("50.0%");
+    await expect(page.getByTestId("metric-capital")).not.toHaveText(capitalBefore ?? "");
   });
 
   test("a stale PATCH surfaces the 409 save-conflict modal", async ({ page, context }) => {

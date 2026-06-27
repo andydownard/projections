@@ -6,11 +6,11 @@
 // utilitarian (heading + Create + start-from-example; no marketing illustration).
 import type { ProjectionListItem } from "../api/projections";
 import { RecoChip } from "./RecoChip";
+import { TradeAreaMap } from "./TradeAreaMap";
 
 export interface ProjectionsListProps {
   projections: ProjectionListItem[];
   onCreate: () => void;
-  onStartExample: () => void;
   onOpen: (viewSlug: string) => void;
 }
 
@@ -19,30 +19,19 @@ function formatUpdated(iso: string): string {
   return iso.slice(0, 10);
 }
 
-export function ProjectionsList({
-  projections,
-  onCreate,
-  onStartExample,
-  onOpen,
-}: ProjectionsListProps) {
+export function ProjectionsList({ projections, onCreate, onOpen }: ProjectionsListProps) {
   if (projections.length === 0) {
     return (
       <section className="list-empty" aria-labelledby="empty-heading">
-        <div className="list-empty__card">
-          <h1 id="empty-heading">No projections yet</h1>
-          <p>
-            See whether your store can launch, how much startup cash you'll need, and when it
-            breaks even — then share a board-ready packet. Start from a finished example, or build
-            your own.
-          </p>
-          <div className="list-empty__actions">
-            <button type="button" className="btn btn--primary" onClick={onCreate}>
-              Create projection
-            </button>
-            <button type="button" className="btn" onClick={onStartExample}>
-              Start from example
-            </button>
-          </div>
+        <h1 id="empty-heading">No projections yet</h1>
+        <p>Build a board-ready 3-year projection from a few inputs.</p>
+        <div className="list-empty__actions">
+          <button type="button" className="btn btn--primary" onClick={onCreate}>
+            Create projection
+          </button>
+          <button type="button" className="btn" onClick={onCreate}>
+            Start from example
+          </button>
         </div>
       </section>
     );
@@ -62,13 +51,13 @@ export function ProjectionsList({
             <th scope="col">Projection</th>
             <th scope="col">Updated</th>
             <th scope="col" className="num">
-              Year 1 revenue
+              Y1 revenue
             </th>
             <th scope="col" className="num">
-              Year 1 net
+              Y1 net
             </th>
             <th scope="col" className="num">
-              Startup capital required
+              Capital required
             </th>
             <th scope="col">Recommendation</th>
           </tr>
@@ -77,17 +66,30 @@ export function ProjectionsList({
           {projections.map((p) => (
             <tr key={p.view_slug} data-testid={`projection-row-${p.view_slug}`}>
               <td>
-                <button
-                  type="button"
-                  className="list__open"
-                  aria-label={`Open ${p.name}`}
-                  onClick={() => onOpen(p.view_slug)}
-                >
-                  {p.name}
-                </button>
-                <span className="list__sub">
-                  {p.location} · {p.basis}
-                </span>
+                <div className="list__cell">
+                  <TradeAreaMap
+                    slug={p.view_slug}
+                    location={
+                      p.coords
+                        ? { lat: p.coords.lat, lng: p.coords.lng, formatted_address: p.location }
+                        : null
+                    }
+                    size="thumb"
+                  />
+                  <div>
+                    <button
+                      type="button"
+                      className="list__open"
+                      aria-label={`Open ${p.name}`}
+                      onClick={() => onOpen(p.view_slug)}
+                    >
+                      {p.name}
+                    </button>
+                    <span className="list__sub">
+                      {p.location} · {p.basis}
+                    </span>
+                  </div>
+                </div>
               </td>
               <td>{formatUpdated(p.updated_at)}</td>
               <td className="num">{p.y1_revenue.display}</td>
@@ -103,5 +105,3 @@ export function ProjectionsList({
     </section>
   );
 }
-
-export default ProjectionsList;

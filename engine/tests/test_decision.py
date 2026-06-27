@@ -15,11 +15,26 @@ def test_first_year_cash_gap_is_most_negative_cumulative(canonical_result):
     assert D(str(dec.first_year_cash_gap)) <= 0
 
 
-def test_capital_required_includes_reserve_buffer(canonical_result):
+def test_capital_required_is_peak_shortfall_plus_reserve(canonical_result):
+    # The monthly trough already embeds the M0 startup outflow, so capital required
+    # = |peak cash shortfall| + reserve buffer — startup is NOT added a second time
+    # (regression guard for the §6.1 double-count). startup_total must NOT appear.
     dec = canonical_result.decision
     peak_shortfall = abs(min(Decimal("0"), D(str(dec.first_year_cash_gap))))
-    expected = D(str(canonical_result.startup_total)) + peak_shortfall + Decimal("25000")
-    assert D(str(dec.startup_capital_required)) == expected
+    assert D(str(dec.startup_capital_required)) == peak_shortfall + Decimal("25000")
+    # And the doubled value is strictly larger — prove we are not emitting it.
+    doubled = D(str(canonical_result.startup_total)) + peak_shortfall + Decimal("25000")
+    assert D(str(dec.startup_capital_required)) < doubled
+
+
+def test_design_parity_capital_matches_appendix_d_headline(design_parity_result):
+    # Contract anchor (ENGINE_CONTRACT §6.1 / DESIGN_PROMPT): the 40% design-parity
+    # case is the prototype headline — reco "proceed" and capital ≈ $278k (the board
+    # screenshots show ~$277,990; the monthly model lands a touch higher). A range,
+    # not a to-the-dollar match, since the prototype used a different calc.
+    cap = D(str(design_parity_result.decision.startup_capital_required))
+    assert Decimal("275000") <= cap <= Decimal("282000")
+    assert design_parity_result.decision.reco_tag == "proceed"
 
 
 def test_payback_null_when_y1_net_not_positive(canonical_result):
@@ -61,9 +76,54 @@ def test_sensitivity_three_scenarios(canonical_result):
     assert D(str(dec.sensitivity["upside"]["net"])) > D(str(dec.sensitivity["base"]["net"]))
 
 
+def test_sensitivity_capital_has_no_startup_double_count(canonical_result):
+    # Guards the _scenario_net capital path (decision.py) against re-introducing the
+    # startup double-count — the base scenario IS the headline run, so its capital
+    # must equal startup_capital_required, and downside is the worst case.
+    dec = canonical_result.decision
+    base_cap = D(str(dec.sensitivity["base"]["capital"]))
+    assert base_cap == D(str(dec.startup_capital_required))
+    assert D(str(dec.sensitivity["downside"]["capital"])) >= base_cap
+    # And it is strictly less than the doubled (startup + trough + reserve) value.
+    peak = abs(min(Decimal("0"), D(str(dec.first_year_cash_gap))))
+    doubled = D(str(canonical_result.startup_total)) + peak + Decimal("25000")
+    assert base_cap < doubled
+
+
 def test_reco_tag_is_semantic_enum(canonical_result):
     valid = {"proceed", "revise", "find_cheaper_rent", "raise_cash", "delay", "do_not_proceed"}
     assert canonical_result.decision.reco_tag in valid
+
+
+def test_efficiency_ratio_kpis_present_and_guarded(design_parity_result):
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(design_parity_result)
+    labels = {k["label"]: k for k in vm["kpis"]}
+    # The three contract KPIs are emitted (sales/sqft ~ $61 design headline).
+    assert labels["Sales / sq ft"]["value"]["raw"] > 0
+    assert "$" in labels["Sales / sq ft"]["value"]["display"]
+    # Ratios are percents in (0, 1) for a viable case.
+    assert 0 < labels["Occupancy ratio"]["value"]["raw"] < 1
+    assert 0 < labels["Labor ratio"]["value"]["raw"] < 1
+
+
+def test_efficiency_kpis_are_na_when_revenue_is_zero():
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    from engine.viewmodel import to_view_model
+    # 0% share -> 0 donations -> 0 revenue: the ratio KPIs must be explicit N/A,
+    # never $0 / 0% masquerading as a value (ENGINE_CONTRACT §12.4; trap #2).
+    inputs = Inputs(
+        org_name="Zero", city="x", opening_status="pre_launch",
+        share_y1="0", share_y2="0", share_y3="0", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    labels = {k["label"]: k for k in to_view_model(res)["kpis"]}
+    for lbl in ("Sales / sq ft", "Occupancy ratio", "Labor ratio"):
+        assert labels[lbl]["value"]["raw"] is None, lbl
+        assert labels[lbl]["value"]["display"] == "N/A", lbl
 
 
 def test_canonical_60_labor_is_not_proceed(canonical_result):

@@ -3,16 +3,10 @@
 // A stale PATCH (the other editor saved first) surfaces this modal (API_SPEC §1.4,
 // PRD §19.4). The client tracked the server `version` and never blind-overwrites:
 // the user chooses Reload latest / Overwrite / Save as copy.
-import { useRef } from "react";
-
-import { useModalDialog } from "./useModalDialog";
-
 export interface SaveConflictModalProps {
   onReload: () => void;
   onOverwrite: () => void;
   onSaveAsCopy: () => void;
-  /** Optional Escape-to-close handler (e.g. dismiss the conflict overlay). */
-  onClose?: () => void;
   message?: string;
 }
 
@@ -20,17 +14,10 @@ export function SaveConflictModal({
   onReload,
   onOverwrite,
   onSaveAsCopy,
-  onClose,
   message,
 }: SaveConflictModalProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const primaryRef = useRef<HTMLButtonElement>(null);
-
-  useModalDialog({ containerRef, initialFocusRef: primaryRef, onEscape: onClose });
-
   return (
     <div
-      ref={containerRef}
       className="conflict-modal"
       data-testid="save-conflict-modal"
       role="alertdialog"
@@ -44,18 +31,13 @@ export function SaveConflictModal({
             "Someone else saved a newer version. Choose how to resolve your unsaved changes."}
         </p>
         <div className="conflict-modal__actions">
-          <button
-            ref={primaryRef}
-            type="button"
-            className="btn btn--primary"
-            onClick={onReload}
-          >
+          <button type="button" onClick={onReload}>
             Reload latest
           </button>
-          <button type="button" className="btn" onClick={onOverwrite}>
+          <button type="button" onClick={onOverwrite}>
             Overwrite
           </button>
-          <button type="button" className="btn" onClick={onSaveAsCopy}>
+          <button type="button" onClick={onSaveAsCopy}>
             Save as copy
           </button>
         </div>
@@ -63,5 +45,3 @@ export function SaveConflictModal({
     </div>
   );
 }
-
-export default SaveConflictModal;
