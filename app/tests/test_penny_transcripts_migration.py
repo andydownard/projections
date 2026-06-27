@@ -30,9 +30,12 @@ def test_m0006_is_registered():
     assert _NAME in names
 
 
-def test_m0006_is_appended_last():
-    # Append-only discipline (migrations are an ordered, append-only list).
-    assert MIGRATIONS[-1][0] == _NAME
+def test_m0006_is_appended_in_order():
+    # Append-only discipline (migrations are an ordered, append-only list): m0006
+    # sits immediately after m0005. Later migrations (e.g. m0007) append AFTER it —
+    # assert relative order, not a frozen tail position.
+    names = [name for name, _ in MIGRATIONS]
+    assert names.index(_NAME) == names.index("0005_cost_schedule") + 1
 
 
 def test_m0006_has_nonempty_sql():

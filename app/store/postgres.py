@@ -44,6 +44,11 @@ class PostgresStore:
     ) -> int:
         self._stub("update_with_version_check")
 
+    def update_with_version_check_and_revision(
+        self, id: str, expected_version: int, patch: dict[str, Any], revision: dict
+    ) -> int:
+        self._stub("update_with_version_check_and_revision")
+
     def rotate_tokens(
         self, id: str, expected_version: int, new_hashes: dict[str, Any]
     ) -> int:
