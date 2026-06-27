@@ -23,6 +23,14 @@ export interface PennyTranscriptProps {
   turns?: PennyTurn[];
   /** Empty-state copy shown before the first turn. */
   emptyHint?: string;
+  /**
+   * While Penny's turn is in flight, render a working indicator at the foot of the
+   * log (announced by the polite live region). It is a STATUS, never a number: the
+   * client never streams a figure — decision-metric deltas land only once the
+   * engine recomputes and the page refetches the view-model (spec §5.1). The text
+   * carries the meaning, so it is legible without color (a11y).
+   */
+  pending?: boolean;
 }
 
 const ROLE_LABEL: Record<PennyRole, string> = {
@@ -34,6 +42,7 @@ const ROLE_LABEL: Record<PennyRole, string> = {
 export function PennyTranscript({
   turns = [],
   emptyHint = "Ask Penny anything about this projection — she explains the numbers and can make changes you can undo.",
+  pending = false,
 }: PennyTranscriptProps) {
   return (
     <div
@@ -50,39 +59,62 @@ export function PennyTranscript({
         gap: "0.625rem",
       }}
     >
-      {turns.length === 0 ? (
+      {turns.length === 0 && !pending && (
         <p
           data-testid="penny-transcript-empty"
           style={{ color: "var(--text-muted)", fontSize: "0.875rem", margin: 0 }}
         >
           {emptyHint}
         </p>
-      ) : (
-        turns.map((turn) => (
-          <div
-            key={turn.id}
-            data-testid="penny-turn"
-            data-role={turn.role}
+      )}
+
+      {turns.map((turn) => (
+        <div
+          key={turn.id}
+          data-testid="penny-turn"
+          data-role={turn.role}
+          style={{
+            alignSelf: turn.role === "user" ? "flex-end" : "flex-start",
+            maxWidth: "85%",
+          }}
+        >
+          {/* Role is carried by text, never by color alone (a11y). */}
+          <span
             style={{
-              alignSelf: turn.role === "user" ? "flex-end" : "flex-start",
-              maxWidth: "85%",
+              display: "block",
+              fontSize: "0.6875rem",
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+              color: "var(--text-muted)",
             }}
           >
-            {/* Role is carried by text, never by color alone (a11y). */}
-            <span
-              style={{
-                display: "block",
-                fontSize: "0.6875rem",
-                textTransform: "uppercase",
-                letterSpacing: "0.04em",
-                color: "var(--text-muted)",
-              }}
-            >
-              {ROLE_LABEL[turn.role]}
-            </span>
-            <div style={{ fontSize: "0.875rem" }}>{turn.content}</div>
-          </div>
-        ))
+            {ROLE_LABEL[turn.role]}
+          </span>
+          <div style={{ fontSize: "0.875rem" }}>{turn.content}</div>
+        </div>
+      ))}
+
+      {/* In-flight working indicator — a STATUS, not a figure. The polite live
+          region announces it; the text (not color) carries the meaning. */}
+      {pending && (
+        <div
+          data-testid="penny-pending"
+          data-role="assistant"
+          style={{ alignSelf: "flex-start", maxWidth: "85%" }}
+        >
+          <span
+            style={{
+              display: "block",
+              fontSize: "0.6875rem",
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+              color: "var(--text-muted)",
+            }}
+          >
+            {ROLE_LABEL.assistant}
+          </span>
+          <div style={{ fontSize: "0.875rem", color: "var(--text-muted)" }}>Penny is working…</div>
+        </div>
       )}
     </div>
   );
