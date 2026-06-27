@@ -23,6 +23,27 @@ export interface Metrics {
   reasonBreakeven?: string;
 }
 
+/**
+ * A timeline milestone as the server's {raw, display} (DATA_MODEL §4, issue #117).
+ * `raw` is the project month the milestone lands on, or `null` when it is never
+ * reached within the horizon — in which case `display` is "N/A" and `reason`
+ * carries the engine's N/A-with-reason flag (never a misleading 0). `payback`
+ * additionally carries a plain-language `duration` ("25 months") when reached.
+ * The server is the sole formatting authority; the client renders these verbatim.
+ */
+export interface Milestone {
+  raw: number | null;
+  display: string;
+  duration?: string;
+  reason?: string;
+}
+
+export interface Milestones {
+  grandOpening: Milestone;
+  breakEven: Milestone;
+  payback: Milestone;
+}
+
 export interface Kpi {
   label: string;
   value: ServerValue;
@@ -85,6 +106,9 @@ export interface EvidenceItem {
 export interface ViewModel {
   reco: Reco;
   metrics: Metrics;
+  /** Three detail-page milestones (compute_schema_version ≥ 1.2.0). Optional so
+   *  older stored snapshots that predate the field still render. */
+  milestones?: Milestones;
   kpis: Kpi[];
   monthly: MonthlyPoint[];
   breakevenMonth: number | null;
