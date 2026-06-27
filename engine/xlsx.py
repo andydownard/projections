@@ -41,7 +41,14 @@ def _f(value):
     return float(D(str(value)))
 
 
-def build_xlsx(result, path):
+def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
+    """Build the formula-driven workbook.
+
+    ``terms_version`` / ``terms_accepted_at`` stamp the "Notes & Disclaimer" block
+    (#192) so the exported sheet a board reads carries the same planning-estimates
+    caveat the in-app terms gate protects. ``terms_version`` defaults to the engine's
+    canonical ``TERMS_VERSION`` so app and export copy never drift.
+    """
     wb = Workbook()
     ws = wb.active
     ws.title = "Projection"
@@ -231,11 +238,44 @@ def build_xlsx(result, path):
     # values, not divisions — no formula error surface to guard.
     _build_milestones_block(ws, result, row)
 
+    # ---------- NOTES & DISCLAIMER (#192) ----------------------------------
+    # The "planning estimates, not advice" caveat the terms gate protects, carried
+    # into the artifact a board reads detached from the app. Pure text, no formulas.
+    _build_disclaimer_block(ws, terms_version, terms_accepted_at)
+
     # ---------- MONTHLY tab -------------------------------------------------
     _build_monthly_tab(monthly_ws, result)
 
     ws.column_dimensions["A"].width = 34
     wb.save(path)
+
+
+def _build_disclaimer_block(ws, terms_version, terms_accepted_at):
+    """Server-formatted 'Notes & Disclaimer' block (#192).
+
+    The planning-estimates disclaimer + the terms version/date, placed below the
+    last written row of the Projection sheet. Pure text — there are NO formulas here,
+    so the block can never introduce a recalc error onto the three-way golden gate.
+    ``terms_version`` defaults to the engine's canonical ``TERMS_VERSION``.
+    """
+    from engine.model import EXPORT_DISCLAIMER, TERMS_VERSION
+
+    version = terms_version or TERMS_VERSION
+    row = ws.max_row + 2
+    ws[f"A{row}"] = "NOTES & DISCLAIMER"
+    ws[f"A{row}"].font = BOLD
+    row += 1
+    body = ws[f"A{row}"]
+    body.value = EXPORT_DISCLAIMER
+    body.font = BLACK
+    body.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    row += 1
+    terms_line = f"Terms v{version}"
+    if terms_accepted_at:
+        terms_line += f" accepted {terms_accepted_at}"
+    tc = ws[f"A{row}"]
+    tc.value = terms_line
+    tc.font = BLACK
 
 
 def _expense_formula(label, col, tr, sh, rowmap):

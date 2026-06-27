@@ -135,3 +135,66 @@ def test_render_packet_md_is_grounded_and_escapes_role_text():
     assert "House of Hope" in md
     assert "$277,990" in md
     assert "Proceed." in md
+
+
+# ------------------------------------------------ #192 export disclaimer + AI disclosure
+from app.packet import render_packet_docx  # noqa: E402
+from app.terms import TERMS_VERSION  # noqa: E402
+from engine.model import AI_NARRATIVE_DISCLOSURE, EXPORT_DISCLAIMER  # noqa: E402
+
+
+def _docx_text(data: bytes) -> str:
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        return zf.read("word/document.xml").decode("utf-8")
+
+
+def test_packet_has_disclaimer_section_with_terms_version():
+    # #192: the "planning estimates, not advice" caveat the terms gate exists to
+    # protect must be a structured, server-owned section of the packet.
+    pkt = build_packet(VM, role="board", terms_accepted_at="2026-06-27T12:00:00Z")
+    d = pkt["sections"]["disclaimer"]
+    assert d["body"] == EXPORT_DISCLAIMER
+    assert d["terms_version"] == TERMS_VERSION
+    assert d["terms_accepted_at"] == "2026-06-27T12:00:00Z"
+
+
+def test_render_md_always_carries_planning_estimates_disclaimer():
+    # The footer is present whether or not AI is enabled / a date is known.
+    md = render_packet_md(build_packet(VM, role="board"))
+    assert EXPORT_DISCLAIMER in md
+    assert f"Terms v{TERMS_VERSION}" in md
+
+
+def test_render_md_stamps_terms_accepted_date_when_known():
+    pkt = build_packet(VM, role="board", terms_accepted_at="2026-06-27T12:00:00Z")
+    md = render_packet_md(pkt)
+    assert "2026-06-27" in md
+
+
+def test_render_md_discloses_ai_when_narrative_present():
+    # #192: when AI prose is injected, the packet must disclose it was AI-drafted.
+    body = "The store needs $277,990 in capital and breaks even at Month 5."
+    md = render_packet_md(build_packet(VM, role="board", narrative_md=body))
+    assert AI_NARRATIVE_DISCLOSURE in md
+    assert body in md  # the prose itself still travels
+
+
+def test_render_md_omits_ai_disclosure_when_no_narrative():
+    # No AI prose -> no AI-disclosure line (it would be misleading), but the
+    # planning-estimates disclaimer is still present.
+    md = render_packet_md(build_packet(VM, role="board", narrative_md=None))
+    assert AI_NARRATIVE_DISCLOSURE not in md
+    assert EXPORT_DISCLAIMER in md
+
+
+def test_render_docx_carries_disclaimer_and_ai_disclosure():
+    # The .docx reuses the markdown line source, so the same caveats travel into the
+    # document a board actually opens (#192).
+    pkt = build_packet(VM, role="board", narrative_md="Capital is $277,990.",
+                       terms_accepted_at="2026-06-27T12:00:00Z")
+    text = _docx_text(render_packet_docx(pkt))
+    assert EXPORT_DISCLAIMER in text
+    assert f"Terms v{TERMS_VERSION}" in text
+    assert AI_NARRATIVE_DISCLOSURE in text

@@ -1,7 +1,7 @@
 # ENGINE_CONTRACT.md — The Math Authority
 
 > **Status:** Build spec (ready-to-build, not yet built) · **Repo:** `rallytasks/projections` · **Owner:** Andy Downard
-> **Model version this contract defines:** `model_version = "2.2.0"` · `compute_schema_version = "1.2.0"` (2.2.0: multi-month pre-opening timeline + scheduled costs + 3 milestones; schema 1.2.0: view-model `milestones` block + Payback-period KPI, monthly `scheduledCosts`)
+> **Model version this contract defines:** `model_version = "2.3.0"` · `compute_schema_version = "1.2.0"` (2.3.0: downside sensitivity rent stress applied to the **resolved** occupancy — `rent_per_sqft` and `nnn` opex are stressed too, not just `occupancy_annual` (#181); 2.2.0: multi-month pre-opening timeline + scheduled costs + 3 milestones; schema 1.2.0: view-model `milestones` block + Payback-period KPI, monthly `scheduledCosts`)
 > **Source of truth for requirements:** [`PRD.md`](reference/PRD.md) (cited inline as §) and [`methodology.md`](reference/thrift-store-projections-skill/reference/methodology.md).
 > **Sibling docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [BUILD_PLAN.md](BUILD_PLAN.md) · [DATA_MODEL.md](DATA_MODEL.md) · [API_SPEC.md](API_SPEC.md) · [SECURITY.md](SECURITY.md) · [OPS_RUNBOOK.md](OPS_RUNBOOK.md) · [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CLAUDE.md](CLAUDE.md) · [AGENTS.md](AGENTS.md) · [IDEA_FAB.md](IDEA_FAB.md)
 
@@ -263,6 +263,8 @@ Each driver has an advisory benchmark band. Exceeding it sets a `flags` entry **
 
 **Sensitivity:** base / downside / upside at `±SENSITIVITY_DELTA` (25%) on **rent** and **donations**, showing the effect on net profit, break-even month, and capital required. Each scenario is a full re-run of the core. Downside scenarios are **fixtured** (§13.6) so a sign/compounding error cannot ship behind a passing happy path.
 
+> **Rent stress is encoding-independent (#181).** "Rent" for the stress is the **resolved annual occupancy** the model actually charges — whether it was entered as an explicit `occupancy_annual`, derived from `rent_per_sqft × building_sqft`, or carries an `nnn` opex add-on. The scenario resolves occupancy to a single quantity and multiplies it by the rent factor, so the `±25%` shock lands identically no matter how rent was encoded. (Pre-2.3.0 the multiplier was applied only to `occupancy_annual` and never to `nnn` opex, so a `rent_per_sqft`/`nnn` projection silently skipped the +25% downside rent shock — making the downside artificially rosier and **flipping the go/no-go verdict** on identical economics. Golden-asserted across all four encodings.)
+
 ### 6.3 Recommendation (rules-based, explainable, §12.3)
 
 The core emits a semantic **`reco.tag`** enum; the **client** maps enum → color/token (the API never hard-codes hex — see §9.3). Resolution order (first match wins), each with the reasons shown:
@@ -484,8 +486,13 @@ Every divided cell uses the guard pattern so LibreOffice recalc never yields `#D
 Applied to: net margin (`=net/totrev`, was line 257), simple payback (`=startup/Y1net`, was line 284), customers (`=retail/basket`), and every per-unit KPI. A `null` from the core renders as a **blank cell + comment** describing the N/A (§8).
 
 ### 11.6 Tabs
-- **`Projection`** — inputs (blue), 3-year P&L (formulas), startup costs, KPIs, decision metrics.
+- **`Projection`** — inputs (blue), 3-year P&L (formulas), startup costs, KPIs, decision metrics, and a **Notes & Disclaimer** block (§11.7).
 - **`Monthly Cash Flow`** — M0–M12 rows; the Year-1 P&L column on the `Projection` tab references these cells (§18, §10.3).
+
+### 11.7 Notes & Disclaimer block (#192)
+The exported `.xlsx` and the Board Packet (`app/packet.py`) both carry a server-owned **"planning estimates, not advice"** disclaimer — the same defensibility caveat the in-app terms gate protects, so it is never stripped from the artifact a board reads detached from the app. The wording is a single source in `engine.model` (`EXPORT_DISCLAIMER`, `AI_NARRATIVE_DISCLOSURE`, `TERMS_VERSION`; `app.terms` re-exports `TERMS_VERSION`):
+- **`.xlsx`** — a `NOTES & DISCLAIMER` text block on the `Projection` sheet with the disclaimer + `Terms v{TERMS_VERSION}` (+ acceptance date when known). **Pure text, no formulas** — it adds no recalc-error surface to the three-way golden gate.
+- **Packet** — a footer with the same disclaimer + terms version/date; when an AI narrative is present, an **AI-narrative disclosure** ("Narrative drafted with AI assistance; every figure is grounded in the model.") is prepended to the prose. Server-formatted only; no client math.
 
 ---
 

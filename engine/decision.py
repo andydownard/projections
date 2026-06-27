@@ -36,21 +36,40 @@ class Decision:
 
 
 def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, donation_mult):
-    """Full re-run of the core with perturbed rent & donations -> (net, breakeven, capital)."""
-    from engine.compute import Inputs, compute_annual, startup_outflows_by_month
+    """Full re-run of the core with perturbed rent & donations -> (net, breakeven, capital).
+
+    The rent stress (``rent_mult``) is applied to the **resolved** occupancy — the
+    full annual rent the model actually charges, whether it was entered as an
+    explicit ``occupancy_annual``, derived from ``rent_per_sqft × building_sqft``, or
+    carries an ``nnn`` opex add-on. Pre-#181 the multiplier was applied ONLY to
+    ``occupancy_annual`` (and never to ``nnn_opex``), so a ``rent_per_sqft``/``nnn``
+    projection silently skipped the +25% rent shock — making the downside artificially
+    rosier and flipping the go/no-go verdict on identical economics. Resolving to one
+    quantity here makes the stress encoding-independent by construction (§6.2).
+    """
+    from engine.compute import (
+        Inputs,
+        _occupancy_y1,
+        compute_annual,
+        startup_outflows_by_month,
+    )
     from engine.monthly import build_monthly
 
-    # perturb shares (proxy for donations) and occupancy.
+    # Resolve the full annual rent (incl. nnn opex), stress it, then collapse it back
+    # into a single explicit ``occupancy_annual`` so compute() can't re-diverge by
+    # encoding: clear rent_per_sqft and zero the (now folded-in) nnn opex.
+    stressed_occ = _occupancy_y1(inputs) * D(str(rent_mult))
+    # perturb shares (proxy for donations) and the resolved rent.
     new_inputs = Inputs(
         **{**inputs.__dict__,
            "share_y1": str(D(inputs.share_y1) * D(str(donation_mult))),
            "share_y2": str(D(inputs.share_y2) * D(str(donation_mult))),
-           "share_y3": str(D(inputs.share_y3) * D(str(donation_mult)))}
+           "share_y3": str(D(inputs.share_y3) * D(str(donation_mult))),
+           "occupancy_annual": str(stressed_occ),
+           "rent_per_sqft": None,
+           "lease_type": "gross",
+           "nnn_opex_annual": "0"}
     )
-    occ = inputs.occupancy_annual
-    if occ is not None:
-        new_inputs = Inputs(**{**new_inputs.__dict__,
-                               "occupancy_annual": str(D(occ) * D(str(rent_mult)))})
     years, startup, startup_total, occupancy = compute_annual(
         new_inputs, assumptions, demand, trade, overrides)
     startup_by_month = startup_outflows_by_month(new_inputs, assumptions, occupancy[1])
