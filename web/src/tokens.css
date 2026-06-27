@@ -1039,6 +1039,21 @@ body {
   color: var(--text-muted);
 }
 
+/* Negative (loss) figures — #148. The error color is PAIRED with the server's
+   parentheses (the non-color cue, e.g. "($44,433)") so a loss never relies on
+   color alone. The `data-negative` hook is set only from the server `raw` sign
+   (presentation, not client math). Placed AFTER the cell-state + aria-disabled
+   rules so a negative computed/overridden cell reads as a loss, not muted/neutral.
+   Covers the 3-year table cells, the KPI strip, the decision tiles, and the
+   owner-list money columns. NOTE: verify AA contrast of --error on the band
+   backgrounds (#eef6f0/#efe7df/#fdf6e7) at 1440/375 in a browser. */
+.cell[data-negative],
+.kpi__value[data-negative],
+.decision-tile__value[data-negative],
+.num[data-negative] {
+  color: var(--error);
+}
+
 /* --- KPI strip (shared with the detail page) --- */
 .kpis {
   display: grid;

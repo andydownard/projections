@@ -134,6 +134,54 @@ describe("ProjectionTab", () => {
   });
 });
 
+describe("ProjectionTab — negative (loss) treatment [#148]", () => {
+  it("flags a negative table cell with data-negative while keeping the server parentheses (non-color cue)", () => {
+    const m = vm({
+      rows: [
+        {
+          label: "Net profit",
+          group: "expenses",
+          y1: { raw: -44433, display: "($44,433)" },
+          y2: { raw: 10000, display: "$10,000" },
+          y3: { raw: 20000, display: "$20,000" },
+          class: "computed",
+          editable: false,
+        },
+      ],
+    });
+    render(<ProjectionTab vm={m} />);
+    const neg = screen.getByTestId("cell-Net profit-y1");
+    // Color cue (CSS [data-negative]) is PAIRED with the server's parentheses,
+    // which remain the non-color cue — meaning is never carried by color alone.
+    expect(neg).toHaveAttribute("data-negative", "true");
+    expect(neg).toHaveTextContent("($44,433)");
+    // A positive sibling cell carries no negative hook.
+    expect(screen.getByTestId("cell-Net profit-y2")).not.toHaveAttribute("data-negative");
+  });
+
+  it("flags the negative cash-gap decision tile value but not the positive capital tile", () => {
+    render(<ProjectionTab vm={vm()} />);
+    const gapValue = screen.getByTestId("tile-cashgap").querySelector(".decision-tile__value")!;
+    expect(gapValue).toHaveAttribute("data-negative", "true");
+    expect(gapValue).toHaveTextContent("($219,990)");
+    const capValue = screen.getByTestId("tile-capital").querySelector(".decision-tile__value")!;
+    expect(capValue).not.toHaveAttribute("data-negative");
+  });
+
+  it("flags a negative KPI value but not a positive one", () => {
+    const m = vm({
+      kpis: [
+        { label: "Total revenue", value: { raw: 426911, display: "$426,911" }, sub: "Year 1" },
+        { label: "Net profit", value: { raw: -44433, display: "($44,433)" }, sub: "Year 1" },
+      ],
+    });
+    render(<ProjectionTab vm={m} />);
+    const strip = screen.getByTestId("kpi-strip");
+    expect(within(strip).getByText("($44,433)")).toHaveAttribute("data-negative", "true");
+    expect(within(strip).getByText("$426,911")).not.toHaveAttribute("data-negative");
+  });
+});
+
 describe("ProjectionTab a11y", () => {
   it("exposes a recompute live-region for autosave/recompute status", () => {
     render(<ProjectionTab vm={vm()} recomputeStatus="Updated" />);

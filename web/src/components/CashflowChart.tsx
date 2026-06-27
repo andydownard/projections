@@ -7,6 +7,8 @@
 // and the chart's accessible text alternative. No chart library; positioning is
 // pure layout geometry, not a projection figure (PRD §13) — every shown number is
 // the server's { display } string.
+import { isNegative } from "./displayLabels";
+import type { ServerValue } from "../api/client";
 import type { Milestone, Milestones, MonthlyPoint } from "../api/viewModel";
 
 export interface CashflowChartProps {
@@ -33,7 +35,7 @@ const MILESTONE_META: Array<{
   { key: "payback", testid: "payback-marker", label: "Payback", icon: "★" },
 ];
 
-const ROWS: Array<{ label: string; pick: (m: MonthlyPoint) => { display: string } }> = [
+const ROWS: Array<{ label: string; pick: (m: MonthlyPoint) => ServerValue }> = [
   { label: "Revenue", pick: (m) => m.revenue },
   { label: "Expenses", pick: (m) => m.expenses },
   { label: "Net", pick: (m) => m.net },
@@ -274,11 +276,20 @@ export function CashflowChart({
                 <th scope="row" className="cashflow-table__label">
                   {r.label}
                 </th>
-                {monthly.map((m) => (
-                  <td key={m.month} className="num">
-                    {r.pick(m).display}
-                  </td>
-                ))}
+                {monthly.map((m) => {
+                  const cell = r.pick(m);
+                  // #148: a loss reads as a loss — error color PAIRED with the
+                  // server's parentheses (the non-color cue), never color alone.
+                  return (
+                    <td
+                      key={m.month}
+                      className="num"
+                      data-negative={isNegative(cell) ? "true" : undefined}
+                    >
+                      {cell.display}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>

@@ -7,6 +7,7 @@
 import type { ProjectionListItem } from "../api/projections";
 import { RecoChip } from "./RecoChip";
 import { TradeAreaMap } from "./TradeAreaMap";
+import { basisLabel, formatListDate, isNegative } from "./displayLabels";
 
 export interface ProjectionsListProps {
   projections: ProjectionListItem[];
@@ -17,11 +18,6 @@ export interface ProjectionsListProps {
    *  owner; the owner token in localStorage authorizes the PATCH (no secret in the
    *  URL). Omitted ⇒ no Edit affordance renders. */
   onEdit?: (viewSlug: string) => void;
-}
-
-function formatUpdated(iso: string): string {
-  // Display-only date; not a projection figure. Render server timestamp shortened.
-  return iso.slice(0, 10);
 }
 
 export function ProjectionsList({
@@ -96,7 +92,9 @@ export function ProjectionsList({
                       {p.name}
                     </button>
                     <span className="list__sub">
-                      {p.location} · {p.basis}
+                      {/* #151: render a human basis label, never the raw enum
+                          code (e.g. "city" → "City"). */}
+                      {p.location} · {basisLabel(p.basis)}
                     </span>
                     {onEdit && (
                       <button
@@ -125,10 +123,19 @@ export function ProjectionsList({
                   </div>
                 </div>
               </td>
-              <td>{formatUpdated(p.updated_at)}</td>
-              <td className="num">{p.y1_revenue.display}</td>
-              <td className="num">{p.y1_net.display}</td>
-              <td className="num">{p.capital_required.display}</td>
+              {/* #151: friendly, locale-stable date — not a raw ISO slice. */}
+              <td>{formatListDate(p.updated_at)}</td>
+              {/* #148: losses get the error color PAIRED with the server's
+                  parentheses (the non-color cue); positives are unflagged. */}
+              <td className="num" data-negative={isNegative(p.y1_revenue) ? "true" : undefined}>
+                {p.y1_revenue.display}
+              </td>
+              <td className="num" data-negative={isNegative(p.y1_net) ? "true" : undefined}>
+                {p.y1_net.display}
+              </td>
+              <td className="num" data-negative={isNegative(p.capital_required) ? "true" : undefined}>
+                {p.capital_required.display}
+              </td>
               <td>
                 <RecoChip tag={p.reco_tag} />
               </td>
