@@ -12,7 +12,11 @@ from fastapi import HTTPException
 
 from app.store import get_store
 
-TERMS_VERSION = "1.0"  # versioned + timestamped per projection (BACKLOG M0.6)
+# Single source of the terms version: the engine owns it so the exported artifacts
+# (Board Packet + .xlsx, built in the engine/format layer) and this app-side gate
+# can never drift (#192). Re-exported here so existing `from app.terms import
+# TERMS_VERSION` callers keep working.
+from engine.model import TERMS_VERSION  # noqa: F401  (re-exported)
 
 
 def require_terms_accepted(projection_id: str) -> None:

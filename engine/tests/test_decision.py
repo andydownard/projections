@@ -377,6 +377,90 @@ def test_do_not_proceed_message_differs_between_base_fail_and_downside_fail():
     assert "reaches break-even" not in base_failed
 
 
+# ---------------------------------- downside rent stress is encoding-independent (#181)
+def _econ_120k_encodings():
+    """The SAME economics (occupancy_y1 == $120,000) encoded four equivalent ways.
+
+    The downside scenario stresses **rent**; pre-#181 the +25% rent shock was applied
+    ONLY when ``occupancy_annual`` was set (and never to ``nnn_opex``), so the
+    ``rent_per_sqft`` / ``nnn`` encodings silently skipped it — making the downside
+    artificially rosier and FLIPPING the go/no-go verdict on identical numbers.
+    """
+    common = dict(
+        org_name="HoH", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70",
+        # Funds high enough that capital is never the binding constraint, so the
+        # verdict is driven purely by the (rent-stressed) downside break-even.
+        source_of_funds="900000",
+    )
+    return {
+        "occupancy_annual_gross": Inputs(
+            occupancy_annual="120000", lease_type="gross", **common),
+        "rent_per_sqft_gross": Inputs(
+            rent_per_sqft="12.0", lease_type="gross", **common),  # 10000 * 12 = 120000
+        "occupancy_annual_nnn": Inputs(
+            occupancy_annual="90000", nnn_opex_annual="30000", lease_type="nnn",
+            **common),  # 90000 + 30000 = 120000
+        "rent_per_sqft_nnn": Inputs(
+            rent_per_sqft="9.0", nnn_opex_annual="30000", lease_type="nnn",
+            **common),  # 9*10000 + 30000 = 120000
+    }
+
+
+def test_downside_rent_stress_is_identical_across_rent_encodings():
+    # #181 RED: identical economics encoded as occupancy_annual / rent_per_sqft /
+    # nnn must produce a BYTE-identical downside scenario (the +25% rent stress lands
+    # the same way regardless of encoding) and therefore an identical verdict.
+    a = Assumptions(labor_pct="0.60")
+    demand = DemandDrivers()
+    trade = TradeArea(basis="city", households="31798")
+    decisions = {
+        name: compute(inp, a, demand, trade, overrides={}).decision
+        for name, inp in _econ_120k_encodings().items()
+    }
+    baseline = decisions["occupancy_annual_gross"]
+    for name, dec in decisions.items():
+        for scen in ("base", "downside", "upside"):
+            got = dec.sensitivity[scen]
+            want = baseline.sensitivity[scen]
+            assert got["breakeven"] == want["breakeven"], f"{name} {scen} breakeven"
+            assert D(str(got["net"])) == D(str(want["net"])), f"{name} {scen} net"
+            assert D(str(got["capital"])) == D(str(want["capital"])), f"{name} {scen} capital"
+        # The verdict cannot flip between two encodings of the same economics.
+        assert dec.reco_tag == baseline.reco_tag, f"{name} verdict flipped"
+
+
+def test_downside_actually_stresses_rent_for_every_encoding():
+    # #181 RED: prove the rent stress *bites* — the full downside (rent +25% AND
+    # donations -25%) must be strictly worse than a donations-only downside (rent
+    # held flat) for EVERY encoding, including nnn (the opex must be stressed too).
+    # Pre-fix the rent_per_sqft/nnn paths dropped the rent multiplier, so the two
+    # were equal and this fails.
+    from engine.decision import _scenario_net
+    a = Assumptions(labor_pct="0.60")
+    demand = DemandDrivers()
+    trade = TradeArea(basis="city", households="31798")
+    for name, inp in _econ_120k_encodings().items():
+        donations_only = _scenario_net(inp, a, demand, trade, {}, "1.0", "0.75")
+        full_downside = _scenario_net(inp, a, demand, trade, {}, "1.25", "0.75")
+        assert D(str(full_downside[0])) < D(str(donations_only[0])), \
+            f"{name}: rent +25% did not lower net (rent stress was skipped)"
+
+
+def test_downside_verdict_is_do_not_proceed_for_all_encodings():
+    # #181: the canonical 60%-labor economics legitimately fail the downside (rent
+    # +25%/donations -25% never breaks even) -> do_not_proceed. That correct verdict
+    # must hold for every encoding, never silently flip to proceed/raise_cash.
+    a = Assumptions(labor_pct="0.60")
+    demand = DemandDrivers()
+    trade = TradeArea(basis="city", households="31798")
+    for name, inp in _econ_120k_encodings().items():
+        dec = compute(inp, a, demand, trade, overrides={}).decision
+        assert dec.sensitivity["downside"]["breakeven"] is None, name
+        assert dec.reco_tag == "do_not_proceed", name
+
+
 def test_breakeven_consistency_invariant_holds_across_a_scenario_sweep():
     # A broad regression net: across a sweep of labor / share / opening-month
     # configurations, the reco text and the break-even metric must NEVER disagree —

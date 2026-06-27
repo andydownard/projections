@@ -171,3 +171,45 @@ def test_golden_gate_loss_case_recalcs_clean(tmp_path):
     )
     assert res.annual[1].net < 0, "fixture must be a loss case"
     assert _reconcile(res, tmp_path) >= 30
+
+
+def test_concurrent_recalc_calls_are_hermetic(
+        canonical_result, design_parity_result, tmp_path):
+    # #199 regression: two recalc() calls running CONCURRENTLY on distinct workbooks
+    # must BOTH succeed. Each gets its own throwaway LibreOffice profile (a unique
+    # -env:UserInstallation), so they never contend for the single shared profile.
+    # Pre-fix, the second call would forward its document to the already-running
+    # instance and return 0 WITHOUT recalculating -> empty cached cells (the flaky
+    # "empty cell after recalc" red). This proves the harness is now hermetic, so the
+    # slowest CI job can be parallelised (pytest-xdist) without flaking.
+    import concurrent.futures
+
+    import recalc as recalc_harness
+
+    xa = tmp_path / "a.xlsx"
+    xb = tmp_path / "b.xlsx"
+    build_xlsx(canonical_result, str(xa))
+    build_xlsx(design_parity_result, str(xb))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        fa = ex.submit(recalc_harness.recalc, str(xa), 90)
+        fb = ex.submit(recalc_harness.recalc, str(xb), 90)
+        reports = [fa.result(), fb.result()]
+
+    for r in reports:
+        assert "error" not in r, r
+        assert r["status"] == "success", r
+        assert r["total_errors"] == 0, r
+
+    # Both workbooks must carry actual recalculated values (not empty cached cells):
+    # the Total Revenue Y1 cell is a live formula that must resolve to a number.
+    for x in (xa, xb):
+        wb = load_workbook(str(x), data_only=True)
+        ws = wb["Projection"]
+        vals = [
+            ws.cell(row=r, column=2).value
+            for r in range(1, ws.max_row + 1)
+            if ws.cell(row=r, column=1).value == "Total Revenue"
+        ]
+        assert vals and isinstance(vals[0], (int, float)), vals
+        wb.close()

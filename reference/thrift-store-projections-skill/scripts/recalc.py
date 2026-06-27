@@ -6,8 +6,10 @@ Recalculates all formulas in an Excel file using LibreOffice
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from office.soffice import get_soffice_env
@@ -28,6 +30,33 @@ RECALCULATE_MACRO = """<?xml version="1.0" encoding="UTF-8"?>
     End Sub
 </script:module>"""
 
+# Registers Module1 in the Basic "Standard" library so the macro resolves via
+# location=application even on a freshly-created per-invocation profile (#199).
+SCRIPT_XLB = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE library:library PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "library.dtd">
+<library:library xmlns:library="http://openoffice.org/2000/library" \
+library:name="Standard" library:readonly="false" library:passwordprotected="false">
+ <library:element library:name="Module1"/>
+</library:library>"""
+
+
+def _user_installation_arg(user_installation):
+    """The ``-env:UserInstallation`` switch pointing soffice at an isolated profile."""
+    return f"-env:UserInstallation={Path(user_installation).absolute().as_uri()}"
+
+
+def _profile_macro_dir(user_installation):
+    """The Basic ``Standard`` library dir for a profile.
+
+    With ``user_installation`` set, it lives inside that throwaway profile; with
+    ``None`` it is the shared host profile (legacy / direct-CLI behaviour).
+    """
+    if user_installation is None:
+        return os.path.expanduser(
+            MACRO_DIR_MACOS if platform.system() == "Darwin" else MACRO_DIR_LINUX
+        )
+    return os.path.join(user_installation, "user", "basic", "Standard")
+
 
 def has_gtimeout():
     try:
@@ -39,10 +68,14 @@ def has_gtimeout():
         return False
 
 
-def setup_libreoffice_macro():
-    macro_dir = os.path.expanduser(
-        MACRO_DIR_MACOS if platform.system() == "Darwin" else MACRO_DIR_LINUX
-    )
+def setup_libreoffice_macro(user_installation=None):
+    """Install the recalc macro into a profile's Basic ``Standard`` library.
+
+    With ``user_installation`` set, the macro is installed into that throwaway,
+    per-invocation profile (hermetic, never touches the developer's real profile);
+    with ``None`` it falls back to the shared host profile (legacy behaviour). (#199)
+    """
+    macro_dir = _profile_macro_dir(user_installation)
     macro_file = os.path.join(macro_dir, MACRO_FILENAME)
 
     if (
@@ -52,43 +85,73 @@ def setup_libreoffice_macro():
         return True
 
     if not os.path.exists(macro_dir):
+        init_cmd = ["soffice", "--headless", "--terminate_after_init"]
+        if user_installation is not None:
+            # Initialise THIS profile (creates the Standard library scaffolding) so
+            # the recalc that follows reuses it instead of the shared default.
+            init_cmd.insert(1, _user_installation_arg(user_installation))
         subprocess.run(
-            ["soffice", "--headless", "--terminate_after_init"],
+            init_cmd,
             capture_output=True,
-            timeout=10,
+            timeout=30,
             env=get_soffice_env(),
         )
         os.makedirs(macro_dir, exist_ok=True)
 
     try:
         Path(macro_file).write_text(RECALCULATE_MACRO)
+        # Ensure the Standard library registers Module1 even on a hand-built profile.
+        Path(os.path.join(macro_dir, "script.xlb")).write_text(SCRIPT_XLB)
         return True
     except Exception:
         return False
 
 
-def recalc(filename, timeout=30):
+def recalc(filename, timeout=30, user_installation=None):
+    """Recalculate ``filename`` in LibreOffice and report formula errors.
+
+    Each call runs in its OWN throwaway LibreOffice profile (a unique
+    ``-env:UserInstallation``) unless ``user_installation`` is supplied. LibreOffice
+    is single-instance *per profile*: without isolation a concurrent call forwards
+    the document to the already-running instance and the launcher returns 0 WITHOUT
+    recalculating — yielding empty cached cells and a flaky red on the golden gate.
+    A per-invocation profile makes recalc hermetic (safe under pytest-xdist) and
+    stops polluting the developer's real profile. (#199)
+    """
     if not Path(filename).exists():
         return {"error": f"File {filename} does not exist"}
 
     abs_path = str(Path(filename).absolute())
 
-    if not setup_libreoffice_macro():
-        return {"error": "Failed to setup LibreOffice macro"}
+    own_profile = user_installation is None
+    if own_profile:
+        user_installation = tempfile.mkdtemp(prefix="lo_recalc_profile_")
 
-    cmd = [
-        "soffice",
-        "--headless",
-        "--norestore",
-        "vnd.sun.star.script:Standard.Module1.RecalculateAndSave?language=Basic&location=application",
-        abs_path,
-    ]
+    try:
+        if not setup_libreoffice_macro(user_installation):
+            return {"error": "Failed to setup LibreOffice macro"}
 
-    if platform.system() == "Linux":
-        cmd = ["timeout", str(timeout)] + cmd
-    elif platform.system() == "Darwin" and has_gtimeout():
-        cmd = ["gtimeout", str(timeout)] + cmd
+        cmd = [
+            "soffice",
+            _user_installation_arg(user_installation),
+            "--headless",
+            "--norestore",
+            "vnd.sun.star.script:Standard.Module1.RecalculateAndSave?language=Basic&location=application",
+            abs_path,
+        ]
 
+        if platform.system() == "Linux":
+            cmd = ["timeout", str(timeout)] + cmd
+        elif platform.system() == "Darwin" and has_gtimeout():
+            cmd = ["gtimeout", str(timeout)] + cmd
+
+        return _run_recalc(cmd, filename)
+    finally:
+        if own_profile:
+            shutil.rmtree(user_installation, ignore_errors=True)
+
+
+def _run_recalc(cmd, filename):
     result = subprocess.run(cmd, capture_output=True, text=True, env=get_soffice_env())
 
     if result.returncode == 124:

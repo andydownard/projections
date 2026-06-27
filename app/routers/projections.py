@@ -839,7 +839,9 @@ def export_xlsx(
 
     fd, path = tempfile.mkstemp(suffix=".xlsx", prefix="projection-")
     os.close(fd)
-    build_xlsx(result, path)
+    # Stamp the export with the terms version + acceptance date (#192): the
+    # "planning estimates, not advice" caveat travels into the workbook itself.
+    build_xlsx(result, path, terms_accepted_at=row.get("terms_accepted_at"))
 
     stem = _safe_filename_stem(row.get("name") or "")
     filename = f"{stem} 3-Year Projection.xlsx"
@@ -1117,7 +1119,8 @@ def export_packet(
         nar = store.get_narrative(row["id"]) or {}
         narrative_md = (nar.get("body_md") or "") or None
 
-    pkt = build_packet(live_vm, role=role or "board", narrative_md=narrative_md)
+    pkt = build_packet(live_vm, role=role or "board", narrative_md=narrative_md,
+                       terms_accepted_at=row.get("terms_accepted_at"))
 
     stem = _safe_filename_stem(row.get("name") or "")
     if (format or "md").lower() == "docx":

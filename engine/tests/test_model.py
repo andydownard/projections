@@ -5,7 +5,9 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    assert model.MODEL_VERSION == "2.2.0"
+    # 2.3.0: downside sensitivity rent stress applied to the RESOLVED occupancy
+    # (rent_per_sqft + nnn opex stressed too, not just occupancy_annual) — #181.
+    assert model.MODEL_VERSION == "2.3.0"
     # 1.2.0: view-model gained the milestones block + payback-period KPI (shape only).
     assert model.COMPUTE_SCHEMA_VERSION == "1.2.0"
 

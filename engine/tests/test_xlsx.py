@@ -100,6 +100,54 @@ def _projection_label_map(ws):
     }
 
 
+def _all_text(ws):
+    return " ".join(
+        str(c.value) for row in ws.iter_rows() for c in row
+        if isinstance(c.value, str)
+    )
+
+
+# ----------------------------------------------- #192 export disclaimer in the .xlsx
+def test_projection_sheet_has_notes_and_disclaimer_block(tmp_path):
+    # #192: the workbook a board reads detached from the app must carry the
+    # "planning estimates, not advice" caveat — server-formatted text, no client math.
+    from engine.model import EXPORT_DISCLAIMER
+    _res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    assert "NOTES & DISCLAIMER" in labels
+    assert EXPORT_DISCLAIMER in _all_text(ws)
+
+
+def test_xlsx_disclaimer_is_text_only_no_formula(tmp_path):
+    # The disclaimer block is pure server-formatted text: no formulas (so it can
+    # never introduce a recalc error onto the correctness spine).
+    _res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    start = labels["NOTES & DISCLAIMER"]
+    for r in range(start, ws.max_row + 1):
+        for col in range(1, 4):
+            v = ws.cell(row=r, column=col).value
+            assert not (isinstance(v, str) and v.startswith("=")), f"formula at row {r}"
+
+
+def test_xlsx_disclaimer_stamps_terms_version_and_accepted_date(tmp_path):
+    # When the caller knows the terms version + acceptance date they are stamped, so
+    # the artifact records WHICH terms the operator accepted and WHEN (#192).
+    from engine.model import TERMS_VERSION
+    res = compute(_inputs(), Assumptions(), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"))
+    path = tmp_path / "stamped.xlsx"
+    build_xlsx(res, str(path), terms_accepted_at="2026-06-27T12:00:00Z")
+    wb = openpyxl.load_workbook(path)
+    text = _all_text(wb["Projection"])
+    assert f"Terms v{TERMS_VERSION}" in text
+    assert "2026-06-27" in text
+
+
 def test_projection_sheet_has_milestones_block(tmp_path):
     # The workbook reflects the three milestones (§8 / #117) consistently with the
     # view-model: grand opening = G, break-even, payback — each as its server display.
