@@ -103,6 +103,12 @@ def create_app() -> FastAPI:
         if os.path.isdir(assets_dir):
             app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
+        # index.html must NEVER be cached: it references content-hashed asset
+        # filenames, so a stale cached index.html points at old (404) bundles and
+        # silently pins returning users to a previous deploy. Assets are immutable
+        # (hashed names) and stay cacheable via the /assets mount.
+        no_cache = {"Cache-Control": "no-cache, must-revalidate"}
+
         @app.get("/{full_path:path}", include_in_schema=False)
         def spa_fallback(full_path: str) -> Response:
             if full_path.startswith("api/"):
@@ -111,7 +117,7 @@ def create_app() -> FastAPI:
             candidate = os.path.normpath(os.path.join(spa_root, full_path))
             if candidate.startswith(spa_root + os.sep) and os.path.isfile(candidate):
                 return FileResponse(candidate)
-            return FileResponse(index_file)  # SPA client route
+            return FileResponse(index_file, headers=no_cache)  # SPA client route
 
     return app
 
