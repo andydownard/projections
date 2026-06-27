@@ -1302,6 +1302,9 @@ def restore_revision(
         "overrides_json": json.dumps(overrides_d),
         "computed_json": json.dumps(vm),
         "model_version": vm.get("model_version", ""),
+        # keep the denormalized schedule/anchor columns consistent with the
+        # restored inputs_json (the canonical copy).
+        **_schedule_columns(inputs_d),
     }
     affected = store.update_with_version_check(row["id"], if_match, patch)
     if affected == 0:
