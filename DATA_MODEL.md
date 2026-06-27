@@ -293,7 +293,7 @@ CREATE INDEX IF NOT EXISTS idx_penny_transcripts_projection ON penny_transcripts
 
 Added in migration `0006_penny_transcripts`. One persisted transcript per **saved** projection; the **edit/detail-page** conversation. `projection_id` is a **NULLable** FK by design: a Penny **wizard-draft** conversation has no projection yet, lives only in client state, and is **never written** (Spec B §7) — the Store seam (`create_transcript` / `append_transcript_turn`) **fails closed** (`ValueError`) on a missing/NULL `projection_id` so an ephemeral draft can never be persisted. Owner scoping is enforced at the router: `GET /api/projections/{view_slug}/penny/transcript` resolves the slug under the owner/edit Bearer, then keys on the resolved `projection_id` (no cross-owner read). `turns_json` is opaque `TEXT` ((de)serialized by the app — no JSON1 above the Store interface). **Retention/size cap** (Spec B §7) is applied above the interface on every append (`app/store/penny_retention.py`): keep the most-recent `MAX_TURNS` (200) turns, and truncate the heavy machine payload (`tool_args`, `tool_result_ref`) of `tool` turns older than the most-recent `TOOL_PAYLOAD_RETENTION` (40) window while keeping each turn's human-readable `content` summary. No financial leakage beyond what the projection already holds for that owner.
 
-The **POST tool-use loop** (`POST …/penny`) that appends turns and drives mutations through the normal `PATCH`/`If-Match` path is a later slice (PE5); v1 of this table ships the data model + owner-scoped read seam only.
+The **seven-tool surface** (`app/penny/tools.py`, PE4) that drives mutations is registered into the bounded tool-use loop: every mutate tool converges on the shared `apply_projection_patch` service (the same PATCH/`If-Match` write path the manual UI uses), so each applied Penny edit bumps `version` and writes **one revision tagged `actor='penny'`** (§3.2). The **POST endpoint** (`POST …/penny`) that wires the loop to HTTP and appends transcript turns is a later slice (PE5); v1 of this table ships the data model + owner-scoped read seam only.
 
 ---
 
@@ -325,10 +325,18 @@ These are the contracts for the opaque `TEXT` JSON columns. The DB treats them a
   "lease_type": "nnn",
   "donation_value": 74,
   "demand": { "mode": "market_share", "share_y1": 0.06, "share_y2": 0.08, "share_y3": 0.10 },
-  "source_of_funds": { "cash": 150000, "grant": 50000, "loan": 0, "campaign": 0 }
+  "source_of_funds": { "cash": 150000, "grant": 50000, "loan": 0, "campaign": 0 },
+  "opening_month_number": 5,
+  "cost_schedule": [
+    { "category": "Build-out / Renovations", "month": 2, "amount": 50000,
+      "provenance": { "source": "ai", "turn_id": "pt_…#7", "created_at": "2026-06-27T00:00:00Z" } },
+    { "category": "Equipment & Fixtures", "month": 4, "amount": 45000 }
+  ]
 }
 ```
 **`share_y1`, `share_y2`, `share_y3` are three explicit inputs (PRD §7.1).** The legacy engine's Year-2 = midpoint rule (`generate_projection.py:65`, `methodology.md` lines 17–18) is **superseded** — there is no derived midpoint anywhere in v1. The wizard's "even ramp" helper may *pre-fill* `share_y2` but all three persist as explicit values. `mode` may also be `donations_per_week` (the app converts to share).
+
+**Timed cost schedule + opening anchor (Spec A §5; added in migration `0005`).** `opening_month_number` (`≥ 1`) is the project month grand opening lands on; `cost_schedule` is the list of timed startup rows `{category, month (≥ 1), amount (≥ 0)}`. The canonical copy lives here in `inputs_json`; first-class columns (`cost_schedule_json`, `opening_month_number`, `target_opening_date`) mirror it for queryability. A row MAY carry an optional **`provenance`** object attributing how it was created: Penny stamps `{ "source": "ai", "turn_id", "created_at" }` on each row she builds from a consultant proposal (Spec B §6.2/§9 `edit_cost_schedule`). `provenance` is **opaque audit/UI metadata** — it never feeds the engine (`cost_schedule` is filtered out of the engine args) and is validated as `{ source, … }` (an object) alongside the `{category, month, amount}` shape; manually-created rows simply omit it. Server validation (`month ≥ 1`, `amount ≥ 0`, `opening_month_number ≥ 1`) is enforced on every create/PATCH so the client never relies on client math.
 
 ### 4.4 `demand_drivers_json`
 ```json
