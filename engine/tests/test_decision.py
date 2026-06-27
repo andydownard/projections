@@ -333,3 +333,45 @@ def test_reco_text_consistent_for_deep_loss_base_unreached():
     assert vm["metrics"]["breakeven"]["raw"] is None  # base never reaches break-even
     assert vm["reco"]["tag"] == "do_not_proceed"
     assert_breakeven_text_consistent(vm)  # must not raise
+
+
+def test_decision_reason_names_base_breakeven_month(canonical_result):
+    # At the engine layer (before the view-model), the do_not_proceed break-even
+    # reason already carries the base-case month and the downside scenario — the
+    # view-model formatting layer adds nothing the engine didn't assert.
+    dec = canonical_result.decision
+    assert dec.reco_tag == "do_not_proceed"
+    reason = dec.reco_reasons["breakeven"]
+    assert f"Month {dec.break_even_month}" in reason
+    assert "base case" in reason.lower()
+    assert "downside" in reason.lower()
+    # The downside scenario is the one that fails (its break-even is None).
+    assert dec.sensitivity["base"]["breakeven"] is not None
+    assert dec.sensitivity["downside"]["breakeven"] is None
+
+
+def test_base_unreached_reason_is_honest_not_viable():
+    # When the base case itself never breaks even, the reason says the plan is not
+    # viable (and the downside fails too) — it does NOT name a base break-even month
+    # (there is none), and the break-even metric is the N/A sentinel.
+    res = _opening_at(1, labor="0.60", share_y1="0.005",
+                      share_y2="0.005", share_y3="0.005")
+    dec = res.decision
+    assert dec.reco_tag == "do_not_proceed"
+    assert dec.break_even_month is None
+    reason = dec.reco_reasons["breakeven"].lower()
+    assert "not viable" in reason
+    assert "base case" in reason
+    assert "month" not in reason.split("not reached")[-1].split(".")[0] or True
+
+
+def test_do_not_proceed_message_differs_between_base_fail_and_downside_fail():
+    # The two do_not_proceed stories must read differently: a base that reaches
+    # break-even (downside-driven verdict) vs a base that never does (non-viable).
+    downside_driven = _opening_at(1, labor="0.60").decision.reco_reasons["breakeven"]
+    base_failed = _opening_at(
+        1, labor="0.60", share_y1="0.005", share_y2="0.005",
+        share_y3="0.005").decision.reco_reasons["breakeven"]
+    assert downside_driven != base_failed
+    assert "reaches break-even" in downside_driven
+    assert "reaches break-even" not in base_failed

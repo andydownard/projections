@@ -257,3 +257,83 @@ def test_compute_populates_view_model_natively(canonical_result):
     assert canonical_result.view_model
     assert canonical_result.view_model["reco"]["tag"] in {
         "proceed", "revise", "find_cheaper_rent", "raise_cash", "delay", "do_not_proceed"}
+
+
+# --------------------------------- decision-text <-> break-even consistency (#142/#145)
+def _do_not_proceed_base_reaches_downside_fails(opening_month_number=1):
+    """A do_not_proceed result whose BASE case reaches break-even but whose DOWNSIDE
+    does not — the canonical 60%-labor economics, parameterizable on opening month so
+    the consistency holds when the timeline is shifted, not just at month 1."""
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+        opening_month_number=opening_month_number,
+    )
+    return compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                   TradeArea(basis="city", households="31798"))
+
+
+def test_do_not_proceed_sub_is_engine_reason_not_static_fallback(canonical_result):
+    # The verdict sub for do_not_proceed must be the engine's precise break-even
+    # reason (single source of truth) — NOT the static _RECO_HEADLINES fallback —
+    # so reco.sub can never drift from the metric's reason text (#142).
+    from engine.viewmodel import _RECO_HEADLINES, to_view_model
+    vm = to_view_model(canonical_result)
+    assert vm["reco"]["tag"] == "do_not_proceed"
+    static_sub = _RECO_HEADLINES["do_not_proceed"][1]
+    assert vm["reco"]["sub"] != static_sub
+    assert vm["reco"]["sub"] == canonical_result.decision.reco_reasons["breakeven"]
+
+
+def test_do_not_proceed_sub_equals_reason_breakeven(canonical_result):
+    # The banner sub and the break-even tile's reason are the SAME server string,
+    # so the two surfaces can never tell a board member different stories (#145).
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(canonical_result)
+    assert vm["reco"]["sub"] == vm["metrics"]["reasonBreakeven"]
+
+
+def test_do_not_proceed_reason_month_matches_breakeven_metric(canonical_result):
+    # The Month-N named in the reason text is exactly the base-case break-even month
+    # rendered in metrics.breakeven — they are derived from the same value, so the
+    # words and the number can never disagree.
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(canonical_result)
+    be = vm["metrics"]["breakeven"]
+    assert be["raw"] is not None
+    assert f"Month {be['raw']}" in vm["reco"]["sub"]
+    assert be["display"] in vm["reco"]["sub"]
+
+
+def test_breakeven_consistency_holds_when_timeline_shifts():
+    # Shifting grand opening still yields a base-reaches / downside-fails verdict
+    # whose text names both scenarios and never contradicts the (shifted) metric.
+    from engine.tests.test_decision import assert_breakeven_text_consistent
+    from engine.viewmodel import to_view_model
+    for g in (1, 3, 6):
+        res = _do_not_proceed_base_reaches_downside_fails(opening_month_number=g)
+        if res.decision.reco_tag != "do_not_proceed":
+            continue
+        vm = to_view_model(res)
+        if vm["metrics"]["breakeven"]["raw"] is None:
+            continue  # base unreached at this offset — covered elsewhere
+        assert_breakeven_text_consistent(vm)
+        assert "downside" in vm["reco"]["sub"].lower()
+
+
+def test_proceed_case_keeps_default_breakeven_reason_and_is_consistent(design_parity_result):
+    # A non-do_not_proceed verdict (the design-parity 40% proceed case) is untouched:
+    # reasonBreakeven falls back to the plain definition, reco.sub is the proceed
+    # sub, and the consistency invariant still holds (break-even reached, no "not
+    # reached" claim anywhere).
+    from engine.tests.test_decision import assert_breakeven_text_consistent
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(design_parity_result)
+    assert vm["reco"]["tag"] == "proceed"
+    assert vm["metrics"]["reasonBreakeven"] == (
+        "First month operating net turns and stays non-negative.")
+    assert "downside" not in vm["reco"]["sub"].lower()
+    assert_breakeven_text_consistent(vm)
