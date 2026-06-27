@@ -19,6 +19,7 @@ from app.main import create_app
 from app.ratelimit import reset_rate_limits
 from app.store import get_store
 from app.store.sqlite import SqliteStore
+from engine.model import MODEL_VERSION
 
 
 @pytest.fixture()
@@ -82,6 +83,101 @@ def test_github_payload_leaks_nothing(client, captured):
 def test_github_issue_url_not_returned_to_client(client, captured):
     r = client.post("/api/feedback", json=LEAKY)
     assert "github_issue_url" not in r.json()
+
+
+# --- #201: the redactor bypass via client-controlled context fields ---------
+# `context.model_version` and `type` reach BOTH the outbound GitHub payload AND
+# the persisted row WITHOUT passing through the redactor. A caller can stuff a
+# slug/token/URL/financial/markdown into either field. The server must IGNORE
+# client model_version (stamp its own) and normalize `type` to a closed enum, so
+# nothing client-supplied here survives in either sink.
+
+# Each value is a single field stuffed with one leak from every class.
+_STUFFED_MODEL_VERSION = (
+    "https://projections.thriftly.com/p/p_201SECRETslug/edit"
+    "#edit-9LpQ2vR7sT4uW6yA1bC3dE5fG0hJ2kL "
+    "Bearer tok_8x9LpQ2vR7sT4uW6yA1bC3dE5fG0hJ2kL "
+    "REC-8x9LpQ2vR7sT4uW capital $277,990 margin 6.0% "
+    "<script>steal()</script>"
+)
+_STUFFED_TYPE = "https://evil.example/p/p_201SECRETslug $999,999 <b>x</b> 11.0%"
+
+# The planted, attacker-supplied leaks — none may survive in EITHER sink. (The
+# persisted `github_issue_url` column legitimately holds a github.com issue URL
+# and is never returned to the client, so we match the planted hosts explicitly
+# rather than a bare "https://".)
+_STUFFED_FORBIDDEN = [
+    "p_201SECRETslug",
+    "9LpQ2vR7sT4uW6yA1bC3dE5fG0hJ2kL",
+    "REC-8x9LpQ2vR7sT4uW",
+    "$277,990",
+    "$999,999",
+    "6.0%",
+    "11.0%",
+    "projections.thriftly.com",
+    "evil.example",
+    "Bearer",
+    "<script>",
+    "<b>",
+]
+
+
+def test_stuffed_context_model_version_and_type_do_not_leak(client, captured):
+    """#201: client-controlled context.model_version + type are scrubbed/dropped.
+
+    Asserts NEITHER the GitHub-bound payload NOR the persisted feedback row
+    carries any planted leak, that only the server-allowlisted context survives
+    (with the SERVER model_version and an enum-normalized type), and that the
+    support_id is present.
+    """
+    r = client.post(
+        "/api/feedback",
+        json={
+            "type": _STUFFED_TYPE,
+            "title": "benign title",
+            "description": "benign body",
+            "route": "/p/p_201SECRETslug/edit",
+            "context": {
+                "model_version": _STUFFED_MODEL_VERSION,
+                "view_slug": "p_201SECRETslug",
+            },
+        },
+    )
+    assert r.status_code == 201, r.text
+    sid = r.json()["support_id"]
+    assert sid.startswith("SUP-")
+
+    # The outbound GitHub-bound payload (the exact dict the filer would send).
+    assert len(captured) == 1, "GitHub filer must be invoked once"
+    outbound_blob = json.dumps(captured[0])
+
+    # The persisted row (every column, mirrors the GitHub payload + email).
+    store = list(client.app.dependency_overrides.values())[0]()
+    row = store._conn.execute(
+        "SELECT * FROM feedback WHERE support_id = ?", (sid,)
+    ).fetchone()
+    persisted_blob = " ".join(str(v) for v in dict(row).values())
+
+    for sink_name, blob in (("outbound", outbound_blob), ("persisted", persisted_blob)):
+        for leak in _STUFFED_FORBIDDEN:
+            assert leak not in blob, f"{leak!r} leaked into the {sink_name} sink"
+
+    # The OUTBOUND GitHub payload additionally carries NO resolvable link at all
+    # (the only stored URL — github_issue_url — never rides the payload).
+    assert "http://" not in outbound_blob and "https://" not in outbound_blob
+
+    # Only the 5 server-allowlisted context keys survive, with SERVER values.
+    ctx = captured[0]["context"]
+    assert set(ctx) == {"route", "app_version", "model_version", "type", "ts"}
+    assert ctx["model_version"] == MODEL_VERSION  # server-stamped, not client
+    assert ctx["type"] in {"bug", "idea", "other"}  # enum-normalized
+    assert ctx["route"] == "/p/:slug/edit"  # slug + fragment stripped
+    # The top-level type is normalized too (it also rides the GitHub payload).
+    assert captured[0]["type"] in {"bug", "idea", "other"}
+    # The persisted type column is the normalized enum, never client free-text.
+    assert row["type"] in {"bug", "idea", "other"}
+    # The only surviving identifier resolves to nothing.
+    assert sid in outbound_blob
 
 
 def test_honeypot_silently_drops(client, captured):
