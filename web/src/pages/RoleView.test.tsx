@@ -41,6 +41,15 @@ describe("RoleView — read-only share", () => {
     expect(notice).toHaveTextContent(/read-only/i);
   });
 
+  // #203 — the read-only share link a board member/funder opens had ZERO headings
+  // of any level. AT users need an h1 naming the projection to orient + navigate.
+  it("renders an h1 heading naming the projection (WCAG 1.3.1 / 2.4.6)", async () => {
+    vi.mocked(fetchRoleView).mockResolvedValueOnce({ ...(VM as ViewModel), name: "House of Hope" });
+    render(<RoleView slug="board-slug" />);
+    const h1 = await screen.findByRole("heading", { level: 1 });
+    expect(h1).toHaveTextContent(/House of Hope/i);
+  });
+
   it("still shows the verdict verbatim alongside the notice", async () => {
     render(<RoleView slug="board-slug" />);
     await waitFor(() => {

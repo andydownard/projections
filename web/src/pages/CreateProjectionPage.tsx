@@ -9,7 +9,7 @@
 // returns the Appendix-D view-model, which renders the decision banner + KPI
 // strip + monthly cash-flow. NO client math — every figure is the server's
 // { display } string (PRD §13 / CLAUDE.md hard rule).
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { PennyDraftApplied, PennyDraftState } from "../api/penny";
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
@@ -101,6 +101,17 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
   const [busy, setBusy] = useState(false);
   // One ephemeral Bearer for the whole wizard session's /penny/draft calls.
   const draftToken = useRef<string>(makeWizardDraftToken());
+
+  // #203 — on Generate the form (incl. the focused Generate button) unmounts and
+  // the result view mounts. Move focus to the result heading so a keyboard user
+  // isn't dropped to <body>/top-of-document, and announce the busy→ready transition
+  // via the polite live region below so a screen-reader user hears the projection
+  // was produced (WCAG 2.4.3 / 4.1.3).
+  const resultHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    if (vm) resultHeadingRef.current?.focus();
+  }, [vm]);
+  const generateStatus = vm ? "Projection ready." : busy ? "Generating your projection…" : "";
 
   // --- Penny (DRAFT mode) ↔ wizard bridge (Spec §5.2) ------------------------
   // She fills/refines any wizard field and builds the cost schedule by mutating the
@@ -243,11 +254,48 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
     }
   }
 
+  // A polite live region kept at the SAME fragment position in BOTH the form and
+  // result trees, so it stays mounted across the Generate swap and a screen reader
+  // hears the text change (busy→ready) rather than a fresh, silent subtree (#203).
+  const liveRegion = (
+    <div
+      data-testid="generate-status"
+      aria-live="polite"
+      aria-atomic="true"
+      style={{
+        position: "absolute",
+        width: 1,
+        height: 1,
+        padding: 0,
+        margin: -1,
+        overflow: "hidden",
+        clip: "rect(0 0 0 0)",
+        whiteSpace: "nowrap",
+        border: 0,
+      }}
+    >
+      {generateStatus}
+    </div>
+  );
+
   if (vm) {
     return (
-      <div className="wizard">
-        <div className="wizard__result">
-          <DecisionBanner reco={vm.reco} metrics={vm.metrics} milestones={vm.milestones} />
+      <>
+        {liveRegion}
+        <div className="wizard">
+          <div className="wizard__result">
+            {/* #203 — the result view used to start with the DecisionBanner (a
+                <section> whose headline is a <p>), so there was no heading to land
+                on and focus reverted to <body>. A focusable result h1 (tabindex=-1)
+                receives focus on mount and names the projection. */}
+            <h1
+              ref={resultHeadingRef}
+              tabIndex={-1}
+              style={{ outline: "none", margin: "0 0 1rem", fontSize: "1.5rem", lineHeight: 1.25 }}
+            >
+              {vm.name?.trim() ? `${vm.name} — projection ready` : "Your projection is ready"}
+            </h1>
+            <DecisionBanner reco={vm.reco} metrics={vm.metrics} milestones={vm.milestones} />
 
           <div className="kpis" data-testid="kpi-strip">
             {vm.kpis.map((k) => (
@@ -277,13 +325,16 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
           >
             Download .xlsx
           </a>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
   return (
-    <div className="wizard wizard--full">
+    <>
+      {liveRegion}
+      <div className="wizard wizard--full">
       <header className="wizard__intro">
         <h1>Create Projection</h1>
       </header>
@@ -411,7 +462,8 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
           labelField={labelDraftField}
         />
       </SidePanelProvider>
-    </div>
+      </div>
+    </>
   );
 }
 
