@@ -114,7 +114,7 @@
       "display": "($296,940)",
       "raw": -296939.7347072
     },
-    "reasonBreakeven": "Break-even is not reached within the first year under base or downside.",
+    "reasonBreakeven": "Base case reaches break-even at Month 9, but the downside scenario (rent +25% / donations -25%) never does \u2014 the plan is not robust to a tougher market.",
     "reasonCapital": "Worst-case cumulative cash trough (already includes one-time startup) plus reserve.",
     "reasonGap": "Most-negative cumulative cash across the first year."
   },
@@ -415,7 +415,7 @@
   "overrides": [],
   "reco": {
     "headline": "Do not proceed.",
-    "sub": "Break-even is not reached within the horizon under base or downside.",
+    "sub": "Base case reaches break-even at Month 9, but the downside scenario (rent +25% / donations -25%) never does \u2014 the plan is not robust to a tougher market.",
     "tag": "do_not_proceed"
   },
   "rows": [

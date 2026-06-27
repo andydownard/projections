@@ -276,6 +276,25 @@ The core emits a semantic **`reco.tag`** enum; the **client** maps enum → colo
 | `revise` | outcome hinges on out-of-band inputs (flagged) |
 | `proceed` | positive Year-1 cash trajectory, capital need ≤ stated funds, ratios in band |
 
+**`do_not_proceed` messaging must distinguish base vs downside (#142/#145).** The
+trigger above fires when **either** the base **or** the downside scenario fails to
+reach break-even, but those are very different stories and the reason text must say
+which — it can never read as a flat "break-even is never reached" when the headline
+`metrics.breakeven` shows a real Month-N for the base case (a self-contradiction on
+one screen). The engine emits the precise reason in `reco_reasons["breakeven"]`, and
+the view-model uses that same string as **both** `reco.sub` and
+`metrics.reasonBreakeven` (single source of truth, no second surface):
+
+- **Base never breaks even:** "Break-even is not reached within the horizon under the base case (and the downside scenario fails as well) — the plan is not viable as configured." (Here `metrics.breakeven` is the N/A sentinel, so there is no contradiction.)
+- **Base breaks even but the downside does not** (the canonical 60%-labor default, break-even Month 9): "Base case reaches break-even at Month N, but the downside scenario (rent +25% / donations -25%) never does — the plan is not robust to a tougher market." This surfaces the downside as the driver of the verdict so a non-finance ED isn't confused by "Do not proceed" sitting next to a "Month 9" break-even.
+
+> **Consistency invariant (golden-asserted):** when `metrics.breakeven.raw` is a real
+> month, neither `reco.sub` nor `metrics.reasonBreakeven` may claim break-even is
+> "not reached" without scoping that to the downside scenario and naming the
+> base-case break-even. Enforced by `assert_breakeven_text_consistent` over both the
+> live view-model and the frozen `house_of_hope_canonical_60` golden. The verdict
+> threshold/guardrail logic is unchanged — this is messaging/transparency only.
+
 ### 6.4 KPIs (§11)
 Per period, recomputed live (subject to §12.4 guards): Total revenue · Net profit · Net margin · **Sales per sales-floor sq ft** · Sales per total sq ft · Revenue per donation · Revenue per customer · Annual donations · Customers · Occupancy cost ratio · Labor ratio · Donations per sq ft · **Break-even month** · **Startup capital required** · **First-year cash gap** · **Payback period** (the precise `payback_month`, §6.6) · Revenue CAGR (Y1→Y3).
 

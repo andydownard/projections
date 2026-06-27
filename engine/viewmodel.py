@@ -30,7 +30,10 @@ _RECO_HEADLINES = {
     "delay": ("Delay.", "The chosen opening month is cash-infeasible given the ramp."),
     "do_not_proceed": (
         "Do not proceed.",
-        "Break-even is not reached within the horizon under base or downside.",
+        # Fallback only — for do_not_proceed the sub is replaced by the engine's
+        # precise break-even reason (base vs downside), so it never contradicts the
+        # break-even metric on the same screen (#142). See to_view_model().
+        "Break-even is not robust across the base and downside scenarios.",
     ),
 }
 
@@ -91,6 +94,12 @@ def to_view_model(result):
 
     # ---- reco
     headline, sub = _RECO_HEADLINES.get(dec.reco_tag, ("", ""))
+    # For do_not_proceed the verdict sub must name WHICH scenario fails (the base
+    # case vs only the downside) so it can never contradict the break-even metric
+    # shown alongside it (#142) and surfaces the downside driver to a non-finance
+    # reader (#145). The engine's break-even reason is the single source of truth.
+    if dec.reco_tag == "do_not_proceed":
+        sub = dec.reco_reasons.get("breakeven", sub)
     reco = {"tag": dec.reco_tag, "headline": headline, "sub": sub}
 
     # ---- three milestones (§8 / #117): grand opening, break-even, payback — each

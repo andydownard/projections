@@ -259,3 +259,77 @@ def test_aggressive_share_guardrail_fires_at_canonical_labor():
                   TradeArea(basis="city", households="31798"), overrides={})
     assert res.flags.get("share_y1_out_of_band") is not None
     assert res.decision.reco_tag == "revise"
+
+
+# --------------------------------------- decision text <-> metric consistency (#142/#145)
+def _claims_breakeven_unreached(text: str) -> bool:
+    """True when a string flatly asserts break-even was never reached."""
+    low = text.lower()
+    return any(p in low for p in
+               ("not reached", "never reach", "never does", "isn't reached",
+                "is not reached"))
+
+
+def _scopes_failure_to_downside(text: str) -> bool:
+    """True when the 'unreached' claim is correctly scoped to the DOWNSIDE scenario
+    AND acknowledges the base case reaches break-even (so it cannot read as a flat
+    'break-even is never reached')."""
+    low = text.lower()
+    return "downside" in low and "base case" in low
+
+
+def assert_breakeven_text_consistent(vm) -> None:
+    """The core invariant for #142: the reco/break-even reason text and the
+    ``metrics.breakeven`` metric MUST NOT disagree about whether break-even is
+    reached. When ``metrics.breakeven`` is a real (base-case) month, no decision
+    string (``reco.sub`` / ``metrics.reasonBreakeven``) may claim break-even is
+    'not reached' without scoping that failure to the downside scenario and naming
+    the base-case break-even."""
+    be = vm["metrics"]["breakeven"]
+    if be.get("raw") is None:
+        return  # genuinely unreached in the base case -> any "not reached" is honest
+    fields = {
+        "reco.sub": vm["reco"].get("sub", ""),
+        "metrics.reasonBreakeven": vm["metrics"].get("reasonBreakeven", ""),
+    }
+    for name, text in fields.items():
+        if _claims_breakeven_unreached(text):
+            assert _scopes_failure_to_downside(text), (
+                f"{name} claims break-even is unreached while metrics.breakeven="
+                f"{be['display']!r} (reached in the base case): {text!r}")
+
+
+def test_reco_text_and_breakeven_metric_cannot_disagree_canonical(canonical_result):
+    # #142 RED: the canonical default reaches operating break-even at month 9 in the
+    # BASE case (metrics.breakeven = Month 9), yet is do_not_proceed because the
+    # DOWNSIDE never breaks even. The reco text must say *that*, not flatly claim
+    # "break-even is not reached" — which contradicts the Month-9 metric on screen.
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(canonical_result)
+    assert vm["reco"]["tag"] == "do_not_proceed"
+    assert vm["metrics"]["breakeven"]["raw"] == 9
+    assert_breakeven_text_consistent(vm)
+
+
+def test_reco_text_names_base_and_downside_when_base_breaks_even(canonical_result):
+    # #142/#145 RED: the honest, consistent message surfaces WHY the verdict is
+    # do_not_proceed — the base case reaches break-even (Month 9) but the downside
+    # scenario (rent +25% / donations -25%) does not, so the plan is not robust.
+    from engine.viewmodel import to_view_model
+    vm = to_view_model(canonical_result)
+    for text in (vm["reco"]["sub"].lower(), vm["metrics"]["reasonBreakeven"].lower()):
+        assert "base case" in text, text
+        assert "downside" in text, text
+        assert "month 9" in text, text
+
+
+def test_reco_text_consistent_for_deep_loss_base_unreached():
+    # When the BASE case genuinely never breaks even, an honest "not reached"
+    # message is allowed (metrics.breakeven is N/A, so there is no contradiction).
+    from engine.viewmodel import to_view_model
+    res = _opening_at(1, labor="0.60", share_y1="0.005",
+                      share_y2="0.005", share_y3="0.005")
+    vm = to_view_model(res)
+    assert vm["metrics"]["breakeven"]["raw"] is None  # base never reaches break-even
+    assert vm["reco"]["tag"] == "do_not_proceed"
+    assert_breakeven_text_consistent(vm)  # must not raise
