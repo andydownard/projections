@@ -132,7 +132,7 @@
       "reason": "N/A \u2014 startup costs are not recovered within the projection horizon"
     }
   },
-  "model_version": "2.3.0",
+  "model_version": "2.4.0",
   "monthly": [
     {
       "cumulativeCash": {
@@ -833,5 +833,5 @@
     "suppliesPct": 0.05
   },
   "staleNodes": [],
-  "version": "2.3.0"
+  "version": "2.4.0"
 }

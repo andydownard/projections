@@ -3,6 +3,9 @@
 All computed in the core and asserted here (not merely rendered).
 """
 from decimal import Decimal
+from types import SimpleNamespace
+
+import pytest
 
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.money import D
@@ -45,12 +48,15 @@ def test_payback_null_when_y1_net_not_positive(canonical_result):
 
 
 def test_payback_present_when_y1_net_positive(design_parity_result):
+    # #200: the design-parity (40% labor) fixture IS a profit case. Assert that
+    # UNCONDITIONALLY so a future fixture flip (net <= 0) can never make this test
+    # pass vacuously — the prior `if net > 0:` guard hid the only assertions.
     dec = design_parity_result.decision
-    if design_parity_result.annual[1].net > 0:
-        assert dec.simple_payback_years is not None
-        expected = (D(str(design_parity_result.startup_total))
-                    / D(str(design_parity_result.annual[1].net)))
-        assert abs(D(str(dec.simple_payback_years)) - expected) < Decimal("0.001")
+    assert design_parity_result.annual[1].net > 0
+    assert dec.simple_payback_years is not None
+    expected = (D(str(design_parity_result.startup_total))
+                / D(str(design_parity_result.annual[1].net)))
+    assert abs(D(str(dec.simple_payback_years)) - expected) < Decimal("0.001")
 
 
 def test_revenue_cagr(canonical_result):
@@ -61,12 +67,56 @@ def test_revenue_cagr(canonical_result):
     assert abs(D(str(dec.revenue_cagr)) - expected) < Decimal("0.0001")
 
 
-def test_cash_runway_months_or_none(canonical_result):
+def test_cash_runway_helper_semantics():
+    # #184: cash_runway_months = the count of non-negative cumulative-cash months
+    # from the first month with cash activity up to (not incl.) the first month cash
+    # goes negative; leading zero-cost pre-opening months are dead time and DO NOT
+    # count; None when cash never goes negative within the horizon.
+    from engine.decision import _cash_runway
+
+    def rows(cums, start=1):
+        return [SimpleNamespace(index=start + i, cumulative_cash=Decimal(str(c)))
+                for i, c in enumerate(cums)]
+
+    assert _cash_runway(rows([0, 5, 10, 12])) is None          # never negative -> N/A
+    assert _cash_runway(rows([0, 0, 0, -100, -50])) == 0       # leading zeros, then dip
+    assert _cash_runway(rows([0, 0, 5, 8, 3, -2, -10])) == 3   # 3 non-neg months pre-dip
+    assert _cash_runway(rows([0, -1, -2])) == 0                # negative from 1st activity
+    assert _cash_runway([]) is None                            # empty timeline -> N/A
+
+
+def test_cash_runway_ignores_leading_preopening_zero_months():
+    # #184 regression: on a pre-opening timeline the leading zero-cost months must
+    # NOT inflate runway to a trivially-positive "1". Opening at month 6 with the
+    # whole lump at month 6: cash plunges negative the moment money is spent, so
+    # runway is 0 (no operating runway), never 1.
+    res = _opening_at(6, cost_schedule=(
+        {"category": "lump", "month": 6, "amount": "500000"},))
+    assert res.decision.cash_runway_months == 0
+    assert min(D(str(m.cumulative_cash)) for m in res.monthly) < 0  # really plunges
+
+
+def test_cash_runway_months_meaningful(canonical_result):
+    # The canonical default spends its whole startup lump at the opening month (G=1),
+    # so cash goes negative immediately -> 0 months of runway (a meaningful value,
+    # re-derived from the monthly cumulative cash).
     dec = canonical_result.decision
-    # runway = first month cumulative cash >= 0, else None.
-    months = canonical_result.monthly
-    first_nonneg = next((m.index for m in months if D(str(m.cumulative_cash)) >= 0), None)
-    assert dec.cash_runway_months == first_nonneg
+    cum = [(m.index, D(str(m.cumulative_cash))) for m in canonical_result.monthly]
+    first_neg = next((i for i, c in cum if c < 0), None)
+    assert first_neg is not None  # canonical does go cash-negative
+    first_active = next((i for i, c in cum if c != 0), first_neg)
+    assert dec.cash_runway_months == max(0, first_neg - first_active)
+    assert dec.cash_runway_months == 0
+
+
+def test_opening_month_below_one_raises_valueerror_not_indexerror():
+    # #184: opening_month <= 0 must be a clean ValueError (-> 422 invalid_inputs at the
+    # API), never an unguarded IndexError (-> 500). A loss case is used so the pre-fix
+    # break-even loop runs all the way to op_nets[11] and crashes.
+    with pytest.raises(ValueError):
+        _opening_at(0, labor="0.60")
+    with pytest.raises(ValueError):
+        _opening_at(-3, labor="0.60")
 
 
 def test_sensitivity_three_scenarios(canonical_result):
@@ -242,9 +292,31 @@ def test_capital_accumulates_from_pre_opening_costs():
 
 
 def test_first_year_cash_gap_is_over_operating_window():
+    # Strictly the operating Year-1 window G..G+11 — NOT "every operating-kind month"
+    # (which would also include post-window extension months, #182).
     res = _opening_at(6)
-    ops = [D(str(m.cumulative_cash)) for m in res.monthly if m.kind == "operating"]
-    assert D(str(res.decision.first_year_cash_gap)) == min(ops)
+    g = res.decision.grand_opening_month
+    window = [D(str(m.cumulative_cash)) for m in res.monthly if g <= m.index <= g + 11]
+    assert D(str(res.decision.first_year_cash_gap)) == min(window)
+
+
+def test_first_year_cash_gap_excludes_costs_beyond_year1_window():
+    # #182 RED: a cost scheduled BEYOND the 12-month operating window (here a $500k
+    # cost at month 30, opening at month 1 -> window is months 1..12) must NOT leak
+    # into the first-year cash-gap headline. Pre-fix the `kind == "operating"` filter
+    # had no upper bound, so this Year-3 cost pulled its deeper trough into the
+    # FIRST-year number.
+    res = _opening_at(1, labor="0.40", cost_schedule=(
+        {"category": "late", "month": 30, "amount": "500000"},))
+    g = res.decision.grand_opening_month  # == 1
+    year1_window = [D(str(m.cumulative_cash)) for m in res.monthly if g <= m.index <= g + 11]
+    all_months = [D(str(m.cumulative_cash)) for m in res.monthly]
+    gap = D(str(res.decision.first_year_cash_gap))
+    assert gap == min(year1_window)
+    # The month-30 cost really does dig a deeper trough in the raw timeline ...
+    assert min(all_months) < min(year1_window)
+    # ... but it is excluded from the first-year headline metric.
+    assert gap != min(all_months)
 
 
 def test_aggressive_share_guardrail_fires_at_canonical_labor():

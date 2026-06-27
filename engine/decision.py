@@ -83,6 +83,24 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
     return years[1].net, be, capital
 
 
+def _cash_runway(monthly):
+    """Months of non-negative cumulative cash before it first goes negative (§6.1).
+
+    Counts from the first month with any cash activity (cumulative != 0) up to — but
+    not including — the first month cumulative cash goes negative. Leading zero-cost
+    pre-opening months carry ``cumulative_cash == 0``; they are dead time, not runway,
+    so they DO NOT count (pre-#184 they made runway trivially ``1`` on any pre-opening
+    timeline even as cash later plunged deeply negative). Returns ``None`` (N/A) when
+    cash never goes negative within the horizon — there is no runway constraint then.
+    """
+    cum = [(m.index, D(str(m.cumulative_cash))) for m in monthly]
+    first_negative = next((i for i, c in cum if c < 0), None)
+    if first_negative is None:
+        return None
+    first_active = next((i for i, c in cum if c != 0), first_negative)
+    return max(0, first_negative - first_active)
+
+
 def build_decision(result, inputs, assumptions, demand, trade, overrides, flags):
     annual = result.annual
     monthly = result.monthly
@@ -98,12 +116,15 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
     capital = peak_shortfall + D(assumptions.reserve_buffer)
 
     # First-year cash gap: the most-negative cumulative cash over the operating
-    # Year-1 window (G..G+11). The opening month's cumulative has already absorbed
-    # every pre-opening outflow, so this captures the worst operating-window position.
-    op_cumulative = [D(str(m.cumulative_cash)) for m in monthly if m.kind == "operating"]
+    # Year-1 window (strictly G..G+11). The opening month's cumulative has already
+    # absorbed every pre-opening outflow, so this captures the worst operating-window
+    # position. Scope it by month INDEX, not by ``kind == "operating"`` — the latter
+    # also tags post-window extension months (a scheduled cost beyond G+11), letting a
+    # later-year cost leak its deeper trough into the FIRST-year headline (#182).
+    op_cumulative = [D(str(m.cumulative_cash)) for m in monthly if g <= m.index <= g + 11]
     cash_gap = min(op_cumulative) if op_cumulative else Decimal("0")
 
-    runway = next((m.index for m in monthly if D(str(m.cumulative_cash)) >= 0), None)
+    runway = _cash_runway(monthly)
     break_even_month = result.monthly_breakeven
     if break_even_month is None:
         flags.setdefault(

@@ -5,10 +5,14 @@ constant here. Money/percent literals are kept as strings or exact Decimals at
 the point of use; these module constants name the *default* assumption values.
 """
 
-MODEL_VERSION = "2.3.0"          # math/shape change => bump (2.3.0: downside
-# sensitivity rent stress is applied to the RESOLVED occupancy — rent_per_sqft and
-# nnn opex are now stressed too, not just occupancy_annual (#181); 2.2.0: multi-month
-# pre-opening timeline + scheduled costs + recomputed metrics + 3 milestones)
+MODEL_VERSION = "2.4.0"          # math/shape change => bump (2.4.0: first_year_cash_gap
+# is scoped STRICTLY to the operating Year-1 window G..G+11, so a scheduled cost beyond
+# G+11 no longer leaks its deeper trough into the first-year headline (#182); cash_runway_
+# months ignores leading zero-cost pre-opening months instead of trivially reporting 1
+# (#184); 2.3.0: downside sensitivity rent stress is applied to the RESOLVED occupancy —
+# rent_per_sqft and nnn opex are now stressed too, not just occupancy_annual (#181);
+# 2.2.0: multi-month pre-opening timeline + scheduled costs + recomputed metrics + 3
+# milestones)
 # view-model shape changes => bump (1.1.0: +sales/sqft, occupancy & labor ratio
 # KPIs; 1.2.0: +milestones{grandOpening,breakEven,payback} {raw,display}, payback-
 # period KPI replaces simple-payback-years, monthly[]+scheduledCosts)
