@@ -32,6 +32,8 @@ import { SaveConflictModal } from "../components/SaveConflictModal";
 import { SettingsTab } from "../components/SettingsTab";
 import { DegradedState } from "../components/DegradedState";
 import { PennyAssistant } from "../components/PennyDrawer";
+import { OverrideInspector, type InspectorOverride } from "../components/OverrideInspector";
+import { SidePanelProvider } from "../components/sidePanels";
 import type { SaveState } from "../components/TopBar";
 import type { ConflictBody } from "../state/autosaveReducer";
 import { clearDetailHeader, setDetailHeader } from "../state/detailHeader";
@@ -109,6 +111,26 @@ function shareCells(vm: ViewModel): TrackedCell[] {
       raw: cell.raw,
       patchKey: `share_y${year}`,
     });
+  }
+  return out;
+}
+
+/** Derive the Override Inspector's audit list from the view-model — the SERVER
+ *  display string of every overridden cell, rendered VERBATIM (no client math, no
+ *  re-classification: a cell is "overridden" only because the engine said so via
+ *  `row.class`). The inspector is the forensic RIGHT partner to Penny (Spec B §10);
+ *  resetting a pin is a future host-owned forward edit, so no reset seam is wired
+ *  here yet (read-only audit). */
+function inspectorOverrides(vm: ViewModel): InspectorOverride[] {
+  const out: InspectorOverride[] = [];
+  for (const row of vm.rows) {
+    if (row.class !== "overridden") continue;
+    const node = row.node ?? row.label;
+    for (const year of [1, 2, 3] as const) {
+      const cell = row[`y${year}` as "y1" | "y2" | "y3"];
+      if (!cell) continue;
+      out.push({ node, year, label: `${row.label}, Year ${year}`, value: cell.display });
+    }
   }
   return out;
 }
@@ -505,14 +527,23 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           dead-end). Her applied edits flow back through onApplied → refreshViewModel,
           which the PE7 diff (above) surfaces as the per-field "recent change / was X
           / undo" affordance on the share cells. */}
+      {/* Coexistence (Spec B §10, issue #129): Penny LEFT + the Override Inspector
+          RIGHT share ONE coordinator so they obey the spatial grammar — ≥1180px
+          both non-modal (center stays interactive, no double-dim, opening Penny
+          never steals the Inspector's focus); <1180px modal full-screen sheets that
+          are mutually exclusive (opening one closes + politely announces the other).
+          Both are edit-only (Penny's mutate path + pin resets need the token). */}
       {edit && (
-        <PennyAssistant
-          viewSlug={slug}
-          token={token.current ?? ""}
-          aiEnabled={!aiOff}
-          settingsHref={`/p/${encodeURIComponent(slug)}/edit`}
-          onApplied={() => refreshViewModel()}
-        />
+        <SidePanelProvider>
+          <PennyAssistant
+            viewSlug={slug}
+            token={token.current ?? ""}
+            aiEnabled={!aiOff}
+            settingsHref={`/p/${encodeURIComponent(slug)}/edit`}
+            onApplied={() => refreshViewModel()}
+          />
+          <OverrideInspector overrides={inspectorOverrides(vm)} />
+        </SidePanelProvider>
       )}
     </div>
   );

@@ -14,6 +14,7 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 
 import { useDialog } from "./useDialog";
+import { Z } from "./sidePanels";
 
 export interface FeedbackModalProps {
   /** Submit handler -> returns the server support_id (SUP-…). */
@@ -46,6 +47,10 @@ export function FeedbackModal({ onSubmit, onClose }: FeedbackModalProps) {
       role="dialog"
       aria-modal="true"
       aria-labelledby="feedback-modal-title"
+      // Spec B §10 / issue #129: the feedback modal layers ABOVE both side panels
+      // (Penny 52 / Override Inspector 51). Inline so it overrides the shared
+      // tokens.css base without a cross-agent stylesheet edit (the PE1 pattern).
+      style={{ zIndex: Z.feedbackScrim }}
       // Click on the scrim (outside the panel) dismisses; Escape does too.
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
