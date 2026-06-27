@@ -396,6 +396,92 @@ def test_stale_version_surfaces_409_for_retry(store, projection):
     assert store.get_projection_by_slug(projection["view_slug"])["version"] == 1
 
 
+def test_mutate_with_unset_version_fails_closed_no_self_match(client, store, projection):
+    """RED #165: an unset ``ctx.version`` (the merged PE5 default) must NOT be back-
+    filled from a fresh read (the old ``else int(row['version'])`` self-match), which
+    would let Penny blind-overwrite a concurrent edit. With no grounded version the
+    write is refused with the SAME 428 the manual PATCH raises (deps.parse_if_match):
+    Penny hits the identical optimistic-concurrency wall as the UI, no privileged path.
+    """
+    slug, owner = projection["view_slug"], projection["owner_token"]
+    # a concurrent human edit moves the version behind Penny's back (1 -> 2).
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"assumptions": {"labor_pct": "0.42"}},
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+    )
+    assert r.status_code == 200, r.text
+    assert store.get_projection_by_slug(slug)["version"] == 2
+
+    ctx = _ctx(projection, version=None)  # PE5 didn't thread a request If-Match
+    res = _run(store, ctx, "set_assumption", {"name": "labor_pct", "value": "0.50"})
+    # fail closed — never a silent self-matched apply.
+    assert res.get("applied") is not True
+    assert res.get("status") == 428
+    assert res.get("error") == "if_match_required"
+    # the concurrent human edit survives untouched.
+    row = store.get_projection_by_slug(slug)
+    assert row["version"] == 2
+    assert json.loads(row["assumptions_json"])["labor_pct"] == "0.42"
+
+
+def test_penny_loop_threads_grounded_version_no_lost_update(client, store, projection):
+    """RED #165: Penny grounds on the version it read at the start of the turn; the
+    loop threads that version into ``ToolContext.version`` so every mutate carries it
+    as ``If-Match``. A concurrent external edit that moves the version makes Penny's
+    stale write a real 409 (surfaced for re-read/retry) instead of silently clobbering
+    the human's edit — the lost-update Regression #9 / Mutation-Safety item 3 for AI.
+    """
+    slug, owner = projection["view_slug"], projection["owner_token"]
+
+    # Penny grounds on what it read at the start of the turn: version 1, labor 0.60.
+    grounding = _run(store, _ctx(projection, version=1), "read_projection", {})
+    assert grounding["version"] == 1
+
+    # A concurrent human edit lands BEFORE Penny's tool fires (1 -> 2, labor 0.42).
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"assumptions": {"labor_pct": "0.42"}},
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+    )
+    assert r.status_code == 200, r.text
+    assert store.get_projection_by_slug(slug)["version"] == 2
+
+    # Penny (grounded on v1) tries to set labor to 0.50. ctx.version is the merged
+    # default (None); the loop must thread the grounded v1 so this stale write 409s.
+    tool_call = ProviderResponse(
+        provider="anthropic",
+        tool_calls=[ToolCall(id="tu_1", name="set_assumption",
+                             arguments={"name": "labor_pct", "value": "0.50"})],
+        stop_reason="tool_use",
+        usage=Usage(1, 1),
+    )
+    done = ProviderResponse(provider="anthropic",
+                            text="I hit a conflict — let me re-read the latest numbers.",
+                            usage=Usage(1, 1))
+    chain = _ScriptedChain(tool_call, done)
+    ctx = ToolContext(view_slug=slug, bearer_token=owner, can_mutate=True, version=None)
+    res = run_turn(
+        user_message="set labor to 0.50",
+        chain=chain,
+        registry=_reg(store),
+        context=ctx,
+        grounding_context=grounding,
+    )
+
+    inv = res.tool_invocations[0]
+    assert inv.name == "set_assumption"
+    assert inv.result.get("error") == "version_conflict"  # surfaced, not applied
+    assert inv.result.get("status") == 409
+    assert inv.result.get("applied") is not True
+    # the loop grounded the context to the version it actually read.
+    assert ctx.version == 1
+    # the concurrent human edit SURVIVES — Penny did not clobber labor 0.42.
+    row = store.get_projection_by_slug(slug)
+    assert row["version"] == 2
+    assert json.loads(row["assumptions_json"])["labor_pct"] == "0.42"
+
+
 # ----------------------------------------------------------------- parse_proposal
 def test_parse_proposal_is_extract_only_and_untrusted(store, projection):
     ctx = _ctx(projection)

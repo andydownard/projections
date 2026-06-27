@@ -321,6 +321,17 @@ def run_turn(
     if grounding:
         full_system = f"{full_system}\n\n{grounding}"
 
+    # Ground the optimistic-concurrency version to what we READ at the start of the
+    # turn (issue #165). Every Penny mutate carries this exact value as ``If-Match``,
+    # so a concurrent external edit that moves the version yields a real 409 the loop
+    # surfaces to Penny (re-read/retry, or relay) — never a silent self-matched
+    # overwrite. An explicit caller version (PE5 threading the request's If-Match)
+    # always wins; this only fills the unset default from the grounded read.
+    if context.version is None and grounding_context:
+        grounded_version = grounding_context.get("version")
+        if isinstance(grounded_version, int):
+            context.version = grounded_version
+
     messages: list[dict] = list(transcript or [])
     content_blocks: list[dict] = [
         {"type": "text", "text": frame_untrusted("user_message", user_message, events)}

@@ -168,16 +168,33 @@ def _apply(
 ) -> dict:
     """Route a built patch through the existing mutation service as ``actor:penny``.
 
-    Reads the pre-edit snapshot for the diff, uses the caller's known version as
-    ``If-Match`` (a moved version surfaces a 409 for re-read/retry), and advances
-    ``ctx.version`` on success so multiple edits in one turn stay consistent.
+    Reads the pre-edit snapshot for the diff, uses the version Penny GROUNDED on at
+    the start of the turn (``ctx.version``, threaded by the loop from what it read)
+    as the ``If-Match``, and advances ``ctx.version`` on success so multiple edits in
+    one turn stay consistent.
+
+    Fail-closed (issue #165): a missing ``ctx.version`` is NOT back-filled from a
+    fresh read of the row — doing so manufactures a guaranteed-fresh ``If-Match`` that
+    always matches and silently clobbers a concurrent human/edit-token change (a lost
+    update). With no grounded version the write is refused with the SAME ``428
+    if_match_required`` the manual PATCH raises (:func:`app.deps.parse_if_match`):
+    Penny hits the identical optimistic-concurrency wall as the manual UI, no
+    privileged path. A grounded-but-stale version writes 0 rows -> a real 409 the loop
+    surfaces to Penny for a re-read/retry (or to relay to the user).
     """
     if row is None:
         row = store.get_projection_by_slug(ctx.view_slug or "")
     if row is None:
         return {"error": "not_found", "status": 404}
+    if ctx.version is None:
+        return {
+            "error": "if_match_required",
+            "status": 428,
+            "message": ("I need to re-read the latest numbers before I can apply "
+                        "that edit — let me reload and try again."),
+        }
     before_vm = _load_json(row, "computed_json")
-    if_match = ctx.version if ctx.version is not None else int(row["version"])
+    if_match = ctx.version
     try:
         vm, new_version, _name = apply_projection_patch(
             row=row, body=body, store=store, token=ctx.bearer_token,
