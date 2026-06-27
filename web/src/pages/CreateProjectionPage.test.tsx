@@ -86,6 +86,28 @@ describe("CreateProjectionPage shell", () => {
   });
 });
 
+describe("CreateProjectionPage — disabled Next/Generate states WHY (#147)", () => {
+  it("announces the blocking reason in a status region tied to the disabled button", async () => {
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+
+    const next = screen.getByRole("button", { name: /^next$/i });
+    expect(next).toBeDisabled();
+    // The reason is surfaced as a status message (announced to AT), not color-only.
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(/store name/i);
+    expect(status).toHaveAttribute("aria-live", "polite");
+    // The disabled button references the reason for assistive tech.
+    expect(next).toHaveAttribute("aria-describedby", status.id);
+
+    // Once the requirement is met, the reason clears and Next enables.
+    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
+    expect(next).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    expect(next).not.toHaveAttribute("aria-describedby");
+  });
+});
+
 describe("CreateProjectionPage — Places predictions render", () => {
   it("shows address predictions in the combobox list", async () => {
     const bodies: Record<string, unknown> = {};

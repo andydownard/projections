@@ -95,6 +95,57 @@ describe("useWizardState — households empty-until-resolved (§4)", () => {
   });
 });
 
+describe("useWizardState — blockReason surfaces WHY Next/Generate is disabled (#147)", () => {
+  it("names the store-name requirement on step 0 and clears it once entered", () => {
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.canProceed).toBe(false);
+    expect(result.current.blockReason).toMatch(/store name/i);
+
+    act(() => result.current.set("name", "House of Hope"));
+    expect(result.current.canProceed).toBe(true);
+    expect(result.current.blockReason).toBeNull();
+  });
+
+  it("names the households requirement on the trade-area step", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.set("name", "X"));
+    act(() => result.current.goNext()); // -> trade-area
+    expect(result.current.stepKey).toBe("trade-area");
+    expect(result.current.blockReason).toMatch(/households/i);
+
+    act(() => result.current.onResolved(RESOLVED));
+    expect(result.current.blockReason).toBeNull();
+  });
+
+  it("names the specific missing donor-market year(s)", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.set("name", "X"));
+    act(() => result.current.onResolved(RESOLVED));
+    act(() => result.current.goNext()); // trade-area
+    act(() => result.current.goNext()); // donor-market
+    expect(result.current.stepKey).toBe("donor-market");
+    expect(result.current.blockReason).toBeNull(); // defaults 6/8/10 are valid
+
+    act(() => result.current.set("shareY2", 0));
+    expect(result.current.blockReason).toMatch(/year 2/i);
+    expect(result.current.blockReason).not.toMatch(/year 1/i);
+  });
+
+  it("on the final step, names the unmet generate gate (terms after households resolve)", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.set("name", "X"));
+    act(() => result.current.onResolved(RESOLVED));
+    act(() => result.current.goTo(4)); // review (last)
+    expect(result.current.isLast).toBe(true);
+    // households resolved, terms still unchecked → reason names terms
+    expect(result.current.blockReason).toMatch(/terms/i);
+
+    act(() => result.current.set("termsAccepted", true));
+    expect(result.current.canGenerate).toBe(true);
+    expect(result.current.blockReason).toBeNull();
+  });
+});
+
 describe("useWizardState — terms acceptance is explicit (#141 / PRD §21)", () => {
   it("defaults termsAccepted to false (the box is NOT pre-checked)", () => {
     const { result } = renderHook(() => useWizardState());
