@@ -236,13 +236,138 @@ def test_both_providers_down_returns_503(client):
 def test_rate_limited_returns_429_with_retry_after(client, monkeypatch):
     p = _create(client)
     chain = _use_chain(client, ScriptedChain(_text("x")))
-    monkeypatch.setattr(penny_router, "_check_rate", lambda ip, token: (False, 30))
+    monkeypatch.setattr(
+        penny_router, "_check_rate", lambda ip, token, projection_id=None: (False, 30))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
                     headers=_auth(p["owner_token"]))
     assert r.status_code == 429
     assert r.json()["detail"]["retry_after_seconds"] == 30
     assert r.headers.get("Retry-After") == "30"
     assert chain.calls == [], "a rate-limit breach must not call a provider"
+
+
+# =================================== #189: per-token / per-projection keying, NOT
+# the shared Railway proxy IP. Every external user sits behind ONE proxy IP, so a
+# per-IP Penny cap is a single GLOBAL bucket: one owner's turns lock out everyone
+# else (collateral lockout), and a token-mint abuser evades the per-token cap while
+# the per-IP brake can't isolate them. The PRIMARY key must be the caller's
+# capability token and/or the projection; the per-IP cap is a coarse safety bound.
+def _xff(tok, ip):
+    return {**_auth(tok), "X-Forwarded-For": f"9.9.9.9, {ip}"}
+
+
+def test_two_different_owners_do_not_share_a_penny_bucket(client, monkeypatch):
+    # Owner A exhausting their budget must NOT 429 owner B. Two distinct clients (two
+    # right-most XFF hops, two tokens, two projections) get INDEPENDENT buckets; the
+    # buggy raw-socket-host keying collapsed them onto the shared proxy IP.
+    monkeypatch.setattr(penny_router, "_PENNY_IP_LIMIT", 2, raising=False)
+    a = _create(client)
+    b = _create(client)
+    _use_chain(client, ScriptedChain(_text("ok")))
+    for _ in range(2):
+        r = client.post(_penny_url(a["view_slug"]), json={"message": "hi"},
+                        headers=_xff(a["owner_token"], "1.1.1.1"))
+        assert r.status_code == 200, r.text
+    # owner A is now capped (their own bucket)...
+    ra = client.post(_penny_url(a["view_slug"]), json={"message": "hi"},
+                     headers=_xff(a["owner_token"], "1.1.1.1"))
+    assert ra.status_code == 429, ra.text
+    # ...but owner B (different token + projection + client IP) is NOT collateral-locked.
+    rb = client.post(_penny_url(b["view_slug"]), json={"message": "hi"},
+                     headers=_xff(b["owner_token"], "2.2.2.2"))
+    assert rb.status_code == 200, rb.text
+
+
+def test_single_owner_projection_is_still_capped_with_retry_after(client, monkeypatch):
+    # The primary per-token brake must still fire: one owner over their cap -> 429 +
+    # retry_after_seconds, BEFORE any provider call (Spec §6.1 / API_SPEC §6.6).
+    monkeypatch.setattr(penny_router, "_PENNY_TOKEN_LIMIT", 3, raising=False)
+    p = _create(client)
+    _use_chain(client, ScriptedChain(_text("ok")))
+    for _ in range(3):
+        r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
+                        headers=_auth(p["owner_token"]))
+        assert r.status_code == 200, r.text
+    r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
+                    headers=_auth(p["owner_token"]))
+    assert r.status_code == 429, r.text
+    assert r.json()["detail"]["error"] == "rate_limited"
+    assert r.json()["detail"]["retry_after_seconds"] >= 1
+    assert int(r.headers["Retry-After"]) >= 1
+
+
+def test_anonymous_penny_is_capped_per_projection_not_globally(client, monkeypatch):
+    # Worst case from #189: an anonymous (view-only, no-token) turn skips the token
+    # scope, so WITHOUT a per-projection key it falls back to the single shared-IP
+    # bucket. Two different projections must NOT share an anonymous bucket.
+    monkeypatch.setattr(penny_router, "_PENNY_PROJECTION_LIMIT", 2, raising=False)
+    a = _create(client)
+    b = _create(client)
+    _use_chain(client, ScriptedChain(_text("ok")))
+    for _ in range(2):  # no Authorization header => view-only / answer-only
+        assert client.post(_penny_url(a["view_slug"]),
+                           json={"message": "hi"}).status_code == 200
+    # projection A's anonymous bucket is capped...
+    ra = client.post(_penny_url(a["view_slug"]), json={"message": "hi"})
+    assert ra.status_code == 429, ra.text
+    # ...projection B is an independent bucket.
+    rb = client.post(_penny_url(b["view_slug"]), json={"message": "hi"})
+    assert rb.status_code == 200, rb.text
+
+
+def test_penny_rate_limit_keys_on_hashed_token_not_raw(client):
+    # The bearer is a capability SECRET: it must never become a limiter key verbatim
+    # (no plaintext token in process memory keys / any future log). Reuse the at-rest
+    # SHA-256 digest (SECURITY §2.3 / §10.1).
+    from app import ratelimit
+    from app.deps import hash_token
+    p = _create(client)
+    _use_chain(client, ScriptedChain(_text("ok")))
+    tok = p["owner_token"]
+    r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
+                    headers=_auth(tok))
+    assert r.status_code == 200, r.text
+    token_keys = [k for (_endpoint, scope, k) in ratelimit._hits if scope == "token"]
+    assert token_keys, "a per-token bucket must exist for an authorized caller"
+    assert tok not in token_keys, "the RAW capability token must never be a limiter key"
+    assert hash_token(tok) in token_keys, "the bucket must key on the SHA-256 token hash"
+
+
+def test_draft_two_different_tokens_do_not_share_a_bucket(client, monkeypatch):
+    # /penny/draft has no projection, so the per-token (hashed) key is the SOLE primary
+    # brake. Two different edit bearers must NOT share a bucket (no shared-IP collapse).
+    monkeypatch.setattr(penny_router, "_PENNY_TOKEN_LIMIT", 2, raising=False)
+    monkeypatch.setattr(penny_router, "_PENNY_IP_LIMIT", 1000, raising=False)
+    _use_chain(client, ScriptedChain(_text("ok")))
+    body = {"message": "tweak", "draft_state": {"inputs": {"city": "Longview, Texas"}}}
+    for _ in range(2):
+        assert client.post("/api/penny/draft", headers=_auth("tok-A"),
+                           json=body).status_code == 200
+    # tok-A has spent its budget...
+    assert client.post("/api/penny/draft", headers=_auth("tok-A"),
+                       json=body).status_code == 429
+    # ...tok-B is an independent bucket.
+    assert client.post("/api/penny/draft", headers=_auth("tok-B"),
+                       json=body).status_code == 200
+
+
+def test_penny_per_ip_coarse_bound_still_caps_a_single_real_ip(client, monkeypatch):
+    # The per-IP cap is DEMOTED to a coarse bound, not removed: a genuine flood from
+    # ONE real client IP (same right-most XFF hop) still trips 429 even as the caller
+    # rotates tokens/projections to dodge the per-token/per-projection brakes (#189).
+    monkeypatch.setattr(penny_router, "_PENNY_IP_LIMIT", 2, raising=False)
+    a = _create(client)
+    b = _create(client)
+    _use_chain(client, ScriptedChain(_text("ok")))
+    # two distinct tokens + projections, but the SAME real client IP
+    assert client.post(_penny_url(a["view_slug"]), json={"message": "hi"},
+                       headers=_xff(a["owner_token"], "5.5.5.5")).status_code == 200
+    assert client.post(_penny_url(b["view_slug"]), json={"message": "hi"},
+                       headers=_xff(b["owner_token"], "5.5.5.5")).status_code == 200
+    # the shared real IP has hit the coarse bound -> 429 despite a fresh token/projection
+    r = client.post(_penny_url(a["view_slug"]), json={"message": "hi"},
+                    headers=_xff(a["owner_token"], "5.5.5.5"))
+    assert r.status_code == 429, r.text
 
 
 # ==================================================================== draft loop
