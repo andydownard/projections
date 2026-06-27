@@ -25,6 +25,10 @@ class Store(Protocol):
     def list_by_owner(
         self, owner_token_hash: str, *, include_trashed: bool = False
     ) -> list[dict]: ...
+    # owner list: small card columns only, never the heavy JSON blobs (#178)
+    def list_card_summaries(
+        self, owner_token_hash: str, *, include_trashed: bool = False
+    ) -> list[dict]: ...
     def create_projection(self, p: dict) -> dict: ...
     def update_with_version_check(
         self, id: str, expected_version: int, patch: dict[str, Any]
@@ -38,7 +42,10 @@ class Store(Protocol):
     def set_status(
         self, id: str, status: str, expected_version: int
     ) -> int: ...  # trash/restore; 0 -> HTTP 409
-    def soft_delete(self, id: str, expected_version: int) -> int: ...  # hard purge marker
+    def soft_delete(self, id: str, expected_version: int) -> int: ...  # recoverable soft-delete
+    def purge_projection(
+        self, id: str, expected_version: int
+    ) -> int: ...  # hard DELETE + cascade to all children (#202); 0 -> HTTP 409
 
     # --- revisions ---
     def insert_revision(self, rev: dict) -> None: ...

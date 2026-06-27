@@ -36,6 +36,11 @@ class PostgresStore:
     def list_by_owner(self, owner_token_hash: str, *, include_trashed: bool = False) -> list[dict]:
         self._stub("list_by_owner")
 
+    def list_card_summaries(
+        self, owner_token_hash: str, *, include_trashed: bool = False
+    ) -> list[dict]:
+        self._stub("list_card_summaries")
+
     def create_projection(self, p: dict) -> dict:
         self._stub("create_projection")
 
@@ -59,6 +64,9 @@ class PostgresStore:
 
     def soft_delete(self, id: str, expected_version: int) -> int:
         self._stub("soft_delete")
+
+    def purge_projection(self, id: str, expected_version: int) -> int:
+        self._stub("purge_projection")
 
     def insert_revision(self, rev: dict) -> None:
         self._stub("insert_revision")

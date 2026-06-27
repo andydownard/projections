@@ -16,6 +16,8 @@ from app.store.migrations import (
     m0005_cost_schedule,
     m0006_penny_transcripts,
     m0007_revision_seq_unique,
+    m0008_card_summary,
+    m0009_role_links,
 )
 
 # Ordered list of (name, ddl) migrations. Append-only.
@@ -27,4 +29,6 @@ MIGRATIONS = [
     ("0005_cost_schedule", m0005_cost_schedule.SQL),
     ("0006_penny_transcripts", m0006_penny_transcripts.SQL),
     ("0007_revision_seq_unique", m0007_revision_seq_unique.SQL),
+    ("0008_card_summary", m0008_card_summary.SQL),
+    ("0009_role_links", m0009_role_links.SQL),
 ]
