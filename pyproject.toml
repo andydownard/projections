@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2",
     "httpx",
     "openpyxl",
+    "bleach",
 ]
 
 [project.optional-dependencies]
