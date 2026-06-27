@@ -17,8 +17,12 @@ WORKDIR /app
 
 # --- Python deps ---
 COPY pyproject.toml ./
+# IMPORTANT: this list MUST cover every runtime dep in pyproject [project.dependencies].
+# It is NOT auto-derived from pyproject, so a new runtime dep added there must be added
+# here too — scripts/test_dockerfile_deps.py is a CI guard that fails if they drift.
+# (bleach was missing here once and crash-looped a prod deploy on `import bleach`.)
 RUN pip install --no-cache-dir \
-    "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl
+    "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl bleach
 
 # --- Frontend build ---
 FROM node:22-slim AS web
