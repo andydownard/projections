@@ -416,8 +416,15 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
     "breakeven":{ "raw": 5, "display": "Month 5" },
     "reasons": { "reasonCapital": "...", "reasonGap": "...", "reasonBreakeven": "..." }
   },
+  "milestones": {
+    "grandOpening": { "raw": 1, "display": "Month 1" },
+    "breakEven":    { "raw": 5, "display": "Month 5" },
+    "payback":      { "raw": null, "display": "N/A",
+                      "reason": "N/A — startup costs are not recovered within the projection horizon" }
+  },
   "kpis": [
-    { "label": "Sales / sq ft", "value": {"raw": 61, "display": "$61"}, "sub": "Year 1", "severity": "ok" }
+    { "label": "Sales / sq ft", "value": {"raw": 61, "display": "$61"}, "sub": "Year 1", "severity": "ok" },
+    { "label": "Payback period", "value": {"raw": null, "display": "N/A"}, "sub": "to recover startup" }
   ],
   "rows": [
     { "label": "Donor market share", "group": "drivers",
@@ -453,6 +460,8 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
 ```
 
 **Contract notes:**
+- `milestones` (`compute_schema_version ≥ 1.2.0`) carries the three detail-page milestones (`grandOpening`, `breakEven`, `payback`), each a `{raw, display}` project-month value with the **server as the formatting authority** ("Month 6"). An unreached milestone is `{raw: null, display: "N/A", reason}` (the N/A-with-reason flag pattern, **never a misleading 0**); `payback` adds a `duration` display ("25 months") when reached. The KPI strip's **Payback period** KPI is sourced from `milestones.payback`; the legacy `simple_payback_years` KPI is retired from the view-model surface (still computed internally). See [`ENGINE_CONTRACT.md`](./ENGINE_CONTRACT.md) §6.6.
+- `monthly[]` covers **all project months `1..N`** (`N = opening_month_number + 11`), x-axis from month 1. Each entry is `{ revenue, expenses, scheduledCosts, net, cumulativeCash }` — the same columns as the `.xlsx` Monthly tab, with `net = revenue − expenses − scheduledCosts`, so a pre-opening month (`1..G-1`) reads as a real monthly loss and `cumulativeCash` accumulates from month 1.
 - `reco.tag ∈ {proceed, revise, find_cheaper_rent, raise_cash, delay, do_not_proceed}` (PRD §12.3). The engine emits the **semantic tag + severity**, never a hex color; the client maps tag→token (frontend lens, brand-vs-semantic token separation). `reco.color/bg/icon` from the prototype are **not** emitted by the API.
 - `flags` is the explicit **null + flags map** required by PRD §12.4: `revenue == 0 → margin/per-unit KPIs null`; `Y1 net ≤ 0 → payback null` (`"N/A — no Year 1 profit"`); `Y1 revenue == 0 → CAGR null`. Negatives carry through as `{raw: <neg>, display: "($X)"}`. The `.xlsx` renders every null as blank + comment, never `#DIV/0!` (PRD §18).
 - `class ∈ {input, computed, overridden, estimated}` (Appendix D `rows[].class`) drives the cell-state UI and the Excel cell-class (blue input / live formula / orange override / N/A).
