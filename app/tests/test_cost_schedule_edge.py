@@ -172,3 +172,36 @@ def test_anchor_independent_of_schedule(client, store):
     assert stored["opening_month_number"] == 8
     assert stored["target_opening_date"] == "2027-03"
     assert stored.get("cost_schedule") is None
+
+
+def test_single_row_schedule_round_trips(client, store):
+    schedule = [{"category": "Sole cost", "month": 1, "amount": 250000}]
+    created = _create(client, cost_schedule=schedule)
+    assert _stored(store, created["view_slug"])["cost_schedule"] == schedule
+
+
+def test_target_opening_date_accepts_full_iso_date(client, store):
+    # the anchor accepts an ISO month OR a full date string (Spec §7).
+    created = _create(client, target_opening_date="2026-09-15")
+    assert _stored(store, created["view_slug"])["target_opening_date"] == "2026-09-15"
+
+
+def test_schedule_with_all_rows_same_month(client, store):
+    schedule = [
+        {"category": "A", "month": 1, "amount": 1000},
+        {"category": "B", "month": 1, "amount": 2000},
+        {"category": "C", "month": 1, "amount": 3000},
+    ]
+    created = _create(client, cost_schedule=schedule)
+    assert _stored(store, created["view_slug"])["cost_schedule"] == schedule
+
+
+def test_patch_anchor_to_one_after_late_opening(client, store):
+    created = _create(client, opening_month_number=9)
+    slug = created["view_slug"]
+    client.patch(
+        f"/api/projections/{slug}",
+        json={"inputs": {"opening_month_number": 1}},
+        headers=_headers(created, 1),
+    )
+    assert store.get_projection_by_slug(slug)["opening_month_number"] == 1
