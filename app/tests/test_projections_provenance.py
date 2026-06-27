@@ -68,6 +68,10 @@ def test_create_emits_location_trade_area_and_evidence(client):
     assert len(ev) == 1 and ev[0]["field"] == "households"
     assert ev[0]["method"] == "census_acs"
     assert "ACS 5-year (2022)" in ev[0]["source"]
+    # Server is the sole formatting authority (PRD §13): it emits display strings
+    # the client renders verbatim (no client-side Intl / number formatting).
+    assert ev[0]["value_display"] == "~31,798 households"
+    assert ev[0]["moe_display"] == "±412 households (MOE)"
     # The provenance did NOT disturb the math (households still drives the chain).
     assert vm["reco"]["tag"] in {
         "proceed", "revise", "find_cheaper_rent", "raise_cash", "delay", "do_not_proceed"}

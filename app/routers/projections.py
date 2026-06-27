@@ -45,7 +45,7 @@ from app.store import Store, get_store
 from engine import dag
 from engine.compute import (
     Assumptions, DemandDrivers, Inputs, TradeArea, compute, compute_annual)
-from engine.money import D
+from engine.money import D, number_view
 from engine.viewmodel import to_view_model
 from engine.xlsx import build_xlsx
 
@@ -264,16 +264,32 @@ def _enrich_view_model(vm: dict, location_d: dict, trade_d: dict) -> None:
     evidence = []
     if ta.get("households_source") == "census_acs":
         vintage = ta.get("acs_vintage") or ""
+        households = ta.get("households")
+        moe = ta.get("moe")
+        # Server is the sole formatting authority (PRD §13): emit display strings
+        # the client renders verbatim — no client-side Intl / number formatting.
+        value_display = (
+            f"~{number_view(households)['display']} households"
+            if households is not None
+            else None
+        )
+        moe_display = (
+            f"±{number_view(moe)['display']} households (MOE)"
+            if moe is not None
+            else None
+        )
         evidence.append({
             "field": "households",
             "label": "Trade-area households",
-            "value": ta.get("households"),
+            "value": households,
+            "value_display": value_display,
             "method": "census_acs",
             "source": f"U.S. Census Bureau, ACS 5-year ({vintage}), table B11001",
             "source_date": vintage,
             "confidence": "estimated",
             "geography": ta.get("geography_name"),
-            "moe": ta.get("moe"),
+            "moe": moe,
+            "moe_display": moe_display,
         })
     vm["evidence"] = evidence
 

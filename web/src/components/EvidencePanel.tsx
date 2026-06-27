@@ -6,14 +6,11 @@
 // visible — the differentiator vs. a spreadsheet. No client math.
 import type { EvidenceItem } from "../api/viewModel";
 
-const fmtInt = (n: number) => new Intl.NumberFormat("en-US").format(n);
-
+// The server is the sole formatting authority (PRD §13): render its display
+// strings VERBATIM — no client-side Intl / number formatting, no client math.
 function evidenceValue(e: EvidenceItem): string {
+  if (e.value_display != null) return e.value_display;
   if (e.value == null) return "—";
-  if (e.field === "households") {
-    const n = Number(e.value);
-    return Number.isFinite(n) ? `~${fmtInt(n)} households` : String(e.value);
-  }
   return String(e.value);
 }
 
@@ -44,7 +41,7 @@ export function EvidencePanel({ evidence }: EvidencePanelProps) {
                 {[
                   e.source,
                   e.geography,
-                  e.moe != null ? `±${fmtInt(e.moe)} households (MOE)` : null,
+                  e.moe_display ?? null,
                 ]
                   .filter(Boolean)
                   .join(" · ")}

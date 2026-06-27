@@ -52,8 +52,6 @@ const SHARES: ReadonlyArray<{ key: ShareKey; label: string }> = [
   { key: "shareY3", label: "Year 3 share (%)" },
 ];
 
-const fmtInt = (n: number) => new Intl.NumberFormat("en-US").format(n);
-
 export interface WizardPageProps {
   aiOff?: boolean;
 }
@@ -273,7 +271,7 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
           />
           {resolved && householdsSource === "census" && (
             <p className="places__provenance">
-              {fmtInt(draft.households)} households · {resolved.trade_area.geography_name} ·
+              {draft.households} households · {resolved.trade_area.geography_name} ·
               U.S. Census ACS {resolved.trade_area.acs_vintage} · estimate
             </p>
           )}

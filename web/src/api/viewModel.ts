@@ -70,12 +70,16 @@ export interface EvidenceItem {
   field: string;
   label: string;
   value: string | number | null;
+  /** Server-rendered display string (sole formatting authority, PRD §13). */
+  value_display?: string | null;
   method: string;
   source: string;
   source_date: string;
   confidence: string;
   geography?: string | null;
   moe?: number | null;
+  /** Server-rendered MOE display string; rendered verbatim. */
+  moe_display?: string | null;
 }
 
 export interface ViewModel {
