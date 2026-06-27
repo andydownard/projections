@@ -28,8 +28,17 @@ import {
   type ReactNode,
 } from "react";
 
+import { FieldChange } from "./FieldChange";
 import { PennyTranscript, type PennyTurn } from "./PennyTranscript";
-import { PennyError, sendPennyMessage, type PennyTurnDTO } from "../api/penny";
+import {
+  PennyError,
+  sendPennyDraftMessage,
+  sendPennyMessage,
+  type PennyDraftApplied,
+  type PennyDraftResponse,
+  type PennyDraftState,
+  type PennyTurnDTO,
+} from "../api/penny";
 
 export type PennyProvider = "anthropic" | "openai";
 
@@ -796,6 +805,11 @@ interface LiveComposerProps {
   onOpenSettings?: () => void;
   onSend: (text: string) => void;
   onStop: () => void;
+  /** Surface-specific suggestion chips (defaults to the detail-page set). */
+  chips?: string[];
+  /** Extra composer affordance rendered beside the chips (e.g. the wizard's
+   *  proposal-upload control, Spec §5.1/§9). Additive — omitted on the detail page. */
+  extraAffordance?: ReactNode;
 }
 
 const SUGGESTION_CHIPS = ["Explain break-even", "Lower the rent", "Build my cost schedule"];
@@ -810,6 +824,8 @@ function LiveComposer({
   onOpenSettings,
   onSend,
   onStop,
+  chips = SUGGESTION_CHIPS,
+  extraAffordance,
 }: LiveComposerProps) {
   const [draft, setDraft] = useState("");
 
@@ -866,8 +882,8 @@ function LiveComposer({
         gap: "0.5rem",
       }}
     >
-      <div style={{ display: "flex", gap: "0.375rem", flexWrap: "wrap" }}>
-        {SUGGESTION_CHIPS.map((chip) => (
+      <div style={{ display: "flex", gap: "0.375rem", flexWrap: "wrap", alignItems: "center" }}>
+        {chips.map((chip) => (
           <button
             key={chip}
             type="button"
@@ -886,6 +902,7 @@ function LiveComposer({
             {chip}
           </button>
         ))}
+        {extraAffordance}
       </div>
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end" }}>
         <textarea
@@ -946,5 +963,356 @@ function LiveComposer({
         )}
       </div>
     </form>
+  );
+}
+
+// ============================================================================
+// PennyDraftAssistant — the WIZARD's DRAFT-mode drawer (PE8, issue #127, Spec B
+// §5.2/§7). The SAME left drawer, but every edit acts on the in-memory wizard
+// draft via POST /api/penny/draft and PERSISTS NOTHING (no projection, no
+// revision, no transcript row). She fills/refines any wizard field + builds the
+// cost schedule; she narrates each edit; the mutated draft flows back into the
+// wizard through `onApplyDraft`; and every applied field gets a per-field
+// FieldChange affordance (recent change + "was X" + per-field undo, PE7). On
+// Generate the HOST persists the draft (incl. any Penny-built schedule with
+// provenance) and discards this ephemeral transcript. AI-disabled → the muted
+// FAB (never a dead-end); the manual wizard stays fully intact. The component
+// computes NOTHING — the returned draft is mapped/rendered verbatim (PRD §13).
+// ============================================================================
+
+/** Wizard-flavoured suggestion chips (the detail page keeps its own set). */
+const WIZARD_CHIPS = ["Name my store", "Set my donor shares", "Build my cost schedule"];
+
+export interface PennyDraftAssistantProps {
+  /** Ephemeral session Bearer for /penny/draft (a rate-limit id only — there is no
+   *  projection yet and NOTHING is persisted; never the URL/log). */
+  token: string;
+  /** Snapshot the current wizard draft as the server `draft_state` to send. */
+  buildDraftState: () => PennyDraftState;
+  /** Map Penny's mutated draft back into the wizard (the HOST owns the field mapping
+   *  so this drawer stays wizard-agnostic). `applied` names exactly what changed. */
+  onApplyDraft: (next: PennyDraftState, applied: PennyDraftApplied[]) => void;
+  /** Revert ONE field to a previous value — a FORWARD draft edit (never history
+   *  erasure); the host maps the server field key → the wizard setter. */
+  onRevertField: (field: string, previousValue: unknown) => void;
+  /** Human label for a server `changed[]` field key (e.g. "share_y1" → "Year-1 share"). */
+  labelField?: (field: string) => string;
+  /** AI opt-out / no key → muted FAB + Settings deep-link (never a dead-end). */
+  aiEnabled?: boolean;
+  provider?: PennyProvider;
+  settingsHref?: string;
+  onOpenSettings?: () => void;
+  /** Proposal-upload seam — PE9 wires the actual parse_proposal flow (Spec §9). */
+  onProposalSelected?: (file: File) => void;
+  avatarSrc?: string;
+}
+
+/** One per-field change Penny applied to the draft, for the FieldChange affordance.
+ *  `*Raw` carry the values needed to apply the change/undo back onto the wizard;
+ *  `current`/`previous` are display strings rendered VERBATIM (no client formatting). */
+interface DraftChange {
+  key: string;
+  field: string;
+  label: string;
+  current: string;
+  previous: string;
+  currentRaw: unknown;
+  previousRaw: unknown;
+  reverted: boolean;
+}
+
+/** Render an applied value verbatim; an absent/empty previous reads as an em dash. */
+function changeText(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  return String(v);
+}
+
+export function PennyDraftAssistant({
+  token,
+  buildDraftState,
+  onApplyDraft,
+  onRevertField,
+  labelField = (f) => f,
+  aiEnabled = true,
+  provider: initialProvider,
+  settingsHref = "/?settings=ai",
+  onOpenSettings,
+  onProposalSelected,
+  avatarSrc,
+}: PennyDraftAssistantProps) {
+  const [turns, setTurns] = useState<PennyTurn[]>([]);
+  const [provider, setProvider] = useState<PennyProvider | undefined>(initialProvider);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<PennyErrorView | null>(null);
+  // `muted` = Penny got turned off mid-session (409 ai_disabled): the composer
+  // degrades to a Settings note, distinct from the up-front muted FAB.
+  const [muted, setMuted] = useState(false);
+  const [changes, setChanges] = useState<DraftChange[]>([]);
+
+  const abortRef = useRef<AbortController | null>(null);
+  const idRef = useRef(0);
+  const localId = useCallback(() => `penny-draft-${(idRef.current += 1)}`, []);
+
+  const send = useCallback(
+    async (text: string) => {
+      const message = text.trim();
+      if (!message || pending || muted) return;
+
+      // Snapshot the draft we send so a cost-schedule build stays undoable to the
+      // exact prior schedule (the per-field undo's "previous value", Spec §3).
+      const sent = buildDraftState();
+      const sentSchedule = (sent as { cost_schedule?: unknown }).cost_schedule;
+
+      setTurns((prev) => [...prev, { id: localId(), role: "user", content: message }]);
+      setError(null);
+      setPending(true);
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const res: PennyDraftResponse = await sendPennyDraftMessage({
+          token,
+          message,
+          draftState: sent,
+          signal: controller.signal,
+        });
+        setProvider(res.provider);
+        // Map the mutated draft back into the wizard (host owns the field mapping).
+        onApplyDraft(res.draft, res.applied);
+
+        // Build the per-field change affordances from exactly what Penny applied.
+        const applied = res.applied ?? [];
+        const nextChanges: DraftChange[] = [];
+        let scheduleTouched = false;
+        for (const entry of applied) {
+          if (entry.tool === "edit_cost_schedule") scheduleTouched = true;
+          for (const c of entry.changed ?? []) {
+            nextChanges.push({
+              key: c.field,
+              field: c.field,
+              label: labelField(c.field),
+              current: changeText(c.now),
+              previous: changeText(c.was),
+              currentRaw: c.now,
+              previousRaw: c.was,
+              reverted: false,
+            });
+          }
+        }
+        if (scheduleTouched) {
+          // The schedule has no single server display string; undo restores the
+          // whole prior schedule (PE9 refines to per-row affordances).
+          nextChanges.push({
+            key: "cost_schedule",
+            field: "cost_schedule",
+            label: labelField("cost_schedule"),
+            current: "Penny's schedule",
+            previous: "your previous schedule",
+            currentRaw: (res.draft as { cost_schedule?: unknown }).cost_schedule,
+            previousRaw: sentSchedule,
+            reverted: false,
+          });
+        }
+        if (nextChanges.length > 0) {
+          setChanges((prev) => {
+            const byKey = new Map(prev.map((c) => [c.key, c]));
+            for (const c of nextChanges) byKey.set(c.key, c);
+            return Array.from(byKey.values());
+          });
+        }
+
+        // Narrate the result (rendered VERBATIM — never a client-computed figure).
+        if (res.narration) {
+          setTurns((prev) => [
+            ...prev,
+            { id: localId(), role: "assistant", content: res.narration },
+          ]);
+        }
+      } catch (e) {
+        if (isAbortError(e)) {
+          // Stop pressed — silently return to idle.
+        } else if (e instanceof PennyError && e.kind === "ai_disabled") {
+          setMuted(true);
+        } else if (e instanceof PennyError && e.kind === "rejected") {
+          // Penny relays the server's plain-language rejection as her own turn.
+          setTurns((prev) => [
+            ...prev,
+            {
+              id: localId(),
+              role: "assistant",
+              content: e.serverMessage ?? "Penny couldn't make that change.",
+            },
+          ]);
+        } else if (e instanceof PennyError) {
+          setError(errorView(e));
+        } else {
+          setError({
+            message:
+              "Something went wrong reaching Penny — your numbers and manual editing are unaffected.",
+          });
+        }
+      } finally {
+        setPending(false);
+        abortRef.current = null;
+      }
+    },
+    [token, pending, muted, buildDraftState, onApplyDraft, labelField, localId],
+  );
+
+  const stop = useCallback(() => abortRef.current?.abort(), []);
+  const newChat = useCallback(() => {
+    setTurns([]);
+    setChanges([]);
+    setError(null);
+  }, []);
+
+  const undo = useCallback(
+    (change: DraftChange) => {
+      // Per-field undo is a FORWARD draft edit: set the field back to its prior
+      // value (never erase history). The change re-renders as reverted + re-undoable.
+      onRevertField(change.field, change.previousRaw);
+      setChanges((prev) =>
+        prev.map((c) =>
+          c.key === change.key
+            ? {
+                ...c,
+                current: c.previous,
+                previous: c.current,
+                currentRaw: c.previousRaw,
+                previousRaw: c.currentRaw,
+                reverted: !c.reverted,
+              }
+            : c,
+        ),
+      );
+    },
+    [onRevertField],
+  );
+
+  const body = (
+    <>
+      <PennyTranscript turns={turns} pending={pending} />
+
+      {changes.length > 0 && (
+        <div
+          data-testid="penny-draft-changes"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.5rem",
+            padding: "0 1rem 0.5rem",
+          }}
+        >
+          {changes.map((c) => (
+            <div
+              key={c.key}
+              style={{ display: "flex", flexDirection: "column", gap: "0.15rem" }}
+            >
+              <span
+                style={{
+                  fontSize: "0.6875rem",
+                  fontWeight: 600,
+                  color: "var(--text-muted, #666)",
+                }}
+              >
+                {c.label}
+              </span>
+              <FieldChange
+                label={c.label}
+                current={c.current}
+                previous={c.previous}
+                by="penny"
+                reverted={c.reverted}
+                onUndo={() => undo(c)}
+                busy={pending}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <div
+          data-testid="penny-error"
+          role="alert"
+          style={{
+            margin: "0 1rem 0.5rem",
+            padding: "0.5rem 0.625rem",
+            borderRadius: "8px",
+            border: "1px solid var(--line, #e2e2e2)",
+            background: "var(--surface-alt, #f7f7f5)",
+            color: "var(--text, #1a1a1a)",
+            fontSize: "0.8125rem",
+          }}
+        >
+          <span aria-hidden="true">⚠ </span>
+          {error.message}
+        </div>
+      )}
+    </>
+  );
+
+  // The proposal-upload affordance (Spec §5.1/§9). PE8 only wires the SEAM —
+  // selecting a PDF hands the File to the host; PE9 fills the parse_proposal flow.
+  const uploadAffordance = (
+    <label
+      data-testid="penny-proposal-upload"
+      style={{
+        fontSize: "0.75rem",
+        padding: "0.2rem 0.55rem",
+        border: "1px dashed var(--line, #b9b9b9)",
+        borderRadius: "999px",
+        background: "var(--surface, #fff)",
+        color: "var(--brand-deep, #1d4733)",
+        cursor: "pointer",
+      }}
+    >
+      Upload proposal (PDF)
+      <input
+        data-testid="penny-proposal-input"
+        type="file"
+        accept="application/pdf,.pdf"
+        style={{
+          position: "absolute",
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: "hidden",
+          clip: "rect(0 0 0 0)",
+          border: 0,
+        }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onProposalSelected?.(file);
+          e.target.value = "";
+        }}
+      />
+    </label>
+  );
+
+  return (
+    <PennyDrawer
+      aiEnabled={aiEnabled}
+      provider={provider}
+      settingsHref={settingsHref}
+      onOpenSettings={onOpenSettings}
+      avatarSrc={avatarSrc}
+      onNewChat={newChat}
+      composer={
+        <LiveComposer
+          pending={pending}
+          muted={muted}
+          settingsHref={settingsHref}
+          onOpenSettings={onOpenSettings}
+          onSend={send}
+          onStop={stop}
+          chips={WIZARD_CHIPS}
+          extraAffordance={uploadAffordance}
+        />
+      }
+    >
+      {body}
+    </PennyDrawer>
   );
 }

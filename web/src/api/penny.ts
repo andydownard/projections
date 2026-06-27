@@ -53,6 +53,46 @@ export interface SendPennyArgs {
   signal?: AbortSignal;
 }
 
+/** The opaque in-memory wizard draft state Penny reads + mutates (Spec §5.2/§12).
+ *  The server defines its keys (`name`, `inputs`, `assumptions`, `trade_area`,
+ *  `cost_schedule`); the client only round-trips it — it computes NOTHING. */
+export type PennyDraftState = Record<string, unknown>;
+
+/** One change Penny applied to the draft inside the loop. Scalar edits
+ *  (`set_input` / `set_assumption`) carry the `{field, was, now}` the per-field
+ *  undo affordance renders; `edit_cost_schedule` reports its tool name with an
+ *  empty `changed[]` (the new schedule is on the returned draft). */
+export interface PennyDraftApplied {
+  tool: string;
+  /** Always null for a wizard draft (no version/revision until Generate). */
+  version: number | null;
+  actor: string;
+  changed: Array<{ field: string; was: unknown; now: unknown }>;
+}
+
+/** The POST /api/penny/draft response (API_SPEC §12). Nothing is persisted: the
+ *  mutated `draft` is mapped back onto the wizard, the transcript stays ephemeral. */
+export interface PennyDraftResponse {
+  draft: PennyDraftState;
+  /** The final assistant message, rendered verbatim. */
+  narration: string;
+  /** The ACTUAL provider used this turn; flips to openai on fallback (§8). */
+  provider: PennyProvider;
+  applied: PennyDraftApplied[];
+}
+
+export interface SendPennyDraftArgs {
+  /** An ephemeral session Bearer (rate-limit id only; no projection exists yet). */
+  token: string;
+  message: string;
+  /** The current in-memory wizard draft Penny acts on; returned mutated, persisted nowhere. */
+  draftState: PennyDraftState;
+  /** Optional uploaded-proposal handle for parse_proposal (§9). */
+  proposalRef?: string;
+  /** Aborts the in-flight turn (the composer Stop control). */
+  signal?: AbortSignal;
+}
+
 export type PennyErrorKind =
   | "ai_disabled" // 409 — AI opt-out / no provider key; mute Penny
   | "ai_unavailable" // 503 — both providers failed
@@ -136,4 +176,47 @@ export async function sendPennyMessage({
   }
 
   return (await resp.json()) as PennyResponse;
+}
+
+/**
+ * Send one user message to Penny on the WIZARD draft (Spec §5.2/§12).
+ *
+ * Runs the same bounded tool-use loop server-side, but acts only on the supplied
+ * `draftState` (there is no projection yet) and persists NOTHING. Resolves with the
+ * mutated draft + narration + provider + the applied changes (for the per-field
+ * undo affordance). Rejects with the SAME typed {@link PennyError} taxonomy so the
+ * wizard surfaces plain copy and Penny is never the only path — the manual wizard
+ * stays fully intact (CLAUDE.md "AI opt-out must work end-to-end").
+ */
+export async function sendPennyDraftMessage({
+  token,
+  message,
+  draftState,
+  proposalRef,
+  signal,
+}: SendPennyDraftArgs): Promise<PennyDraftResponse> {
+  const body: Record<string, unknown> = { message, draft_state: draftState };
+  if (proposalRef) body.proposal_ref = proposalRef;
+
+  const resp = await fetch(`${BASE}/penny/draft`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const data = await readBody(resp);
+    const kind = STATUS_KIND[resp.status] ?? "unknown";
+    const retryRaw = data.retry_after_seconds;
+    throw new PennyError(kind, resp.status, {
+      serverMessage: typeof data.message === "string" ? data.message : undefined,
+      retryAfterSeconds: typeof retryRaw === "number" ? retryRaw : undefined,
+    });
+  }
+
+  return (await resp.json()) as PennyDraftResponse;
 }
