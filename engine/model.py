@@ -42,6 +42,28 @@ STARTUP = {
     "Legal, Permits, Insurance Setup, Signage": 13500,
 }
 
+# --- timed cost schedule + opening anchor (Spec §5/§7; epic:wizard W1)
+# The opening anchor: the project month (>=1) grand opening lands on. The default
+# anchor (and the legacy/seeded backfill) is month 1 — grand opening at month 1
+# with the whole startup lump on month 1 means no pre-opening months, reproducing
+# today's numbers exactly (NOT a special engine mode, just where the rows land).
+DEFAULT_OPENING_MONTH_NUMBER = 1
+
+
+def default_cost_schedule() -> list[dict]:
+    """The legacy/migration-default timed cost schedule, derived from ``STARTUP``.
+
+    Places every fixed ``STARTUP`` line at month 1 — a single lump at opening. This
+    is the backfill for projections without a schedule (legacy rows + the seeded
+    example) and reproduces today's numbers exactly (Spec §7). Derived from
+    ``STARTUP`` so the migration backfill and the engine default never drift.
+    """
+    return [
+        {"category": category, "month": DEFAULT_OPENING_MONTH_NUMBER, "amount": amount}
+        for category, amount in STARTUP.items()
+    ]
+
+
 # --- capital & cash
 CASH_RESERVE_BUFFER = 25000          # §7.3 / §12.1
 SENSITIVITY_DELTA = "0.25"           # §12.2 ±25% on rent & donations
