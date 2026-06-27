@@ -19,7 +19,15 @@ export default defineConfig({
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: [["list"], ["html", { open: "never" }]],
+  // The JSON report feeds the CI fail-on-empty guard (scripts/assert_e2e_ran.mjs):
+  // Playwright has no built-in "fail if zero tests ran", so a suite that silently
+  // skips 100% (the #198 false-green) would otherwise still report green. The guard
+  // parses this report and fails the build unless real tests executed.
+  reporter: [
+    ["list"],
+    ["html", { open: "never" }],
+    ["json", { outputFile: "playwright-report/results.json" }],
+  ],
   use: {
     baseURL: BASE_URL,
     screenshot: "only-on-failure",

@@ -4,11 +4,12 @@ import { expect, test } from "@playwright/test";
 // Two editors race; the stale writer gets the Save-conflict modal (Reload latest /
 // Overwrite / Save as copy). The client tracks the server `version` and never blind-
 // overwrites (PRD §19.4 / SECURITY.md §6.1).
-const M2_READY = process.env.E2E_M2_READY === "1";
-
+//
+// #198: no longer gated behind an env flag CI never sets — the edit/Settings tab,
+// the server recompute, and the 409 conflict modal shipped, so this runs for real
+// against the booted app. It is the one stateful flow (it mutates the seeded
+// `example`), so it reseeds before each test via the E2E-only /api/_test/reseed.
 test.describe("override + 409 optimistic-concurrency", () => {
-  test.skip(!M2_READY, "M4 override UI / M2 conflict modal not built yet — scaffold pins the flow");
-
   // This flow MUTATES the seeded `example` projection (labor, name, version) and
   // reseeds per test. The whole suite already runs workers:1 (one shared in-memory
   // DB — playwright.config.ts); this serial guard is belt-and-suspenders.

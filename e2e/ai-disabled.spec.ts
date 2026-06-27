@@ -1,21 +1,22 @@
 import { expect, test } from "@playwright/test";
 
-// E2E flow 5 — AI-disabled path (DoD / rule 6, PRD §21). The full create -> compute
-// -> save -> .xlsx export flow works with ALL AI keys unset: manual rent, no
-// narrative. Compute is server-authoritative and AI-independent. The narrative
-// surface degrades gracefully (disabled, not crashed).
-const AI_DISABLED_READY = process.env.E2E_AI_DISABLED_READY === "1";
-
+// E2E flow 5 — AI-disabled path (DoD / rule 6, PRD §21). The full compute -> save ->
+// .xlsx export flow works with ALL AI keys unset: manual rent, no narrative. Compute
+// is server-authoritative and AI-independent; the narrative surface degrades
+// gracefully (disabled, not crashed).
+//
+// #198: no longer gated behind an env flag CI never sets — the M2 export + the ai-off
+// read surface shipped, so this runs for real against the booted app.
 test.describe("AI opt-out works end-to-end", () => {
-  test.skip(!AI_DISABLED_READY, "M2 export + M3/M5 AI surfaces not built yet — scaffold pins the flow");
-
   test("compute + save + xlsx export succeed with AI disabled", async ({ page }) => {
     await page.goto("/wizard?ai=off");
     await page.getByRole("button", { name: /start from example/i }).click();
+    // "Start from example" opens the seeded projection at its view_slug (ai=off kept).
+    await expect(page).toHaveURL(/\/p\/example\?ai=off/);
     await expect(page.getByTestId("decision-banner")).toBeVisible();
 
-    // Manual rent path is shown (no automated research). Target the manual rent
-    // INPUT specifically (the 3-year table also has "Rent, Year N" cells).
+    // Manual rent path is shown (no automated research): a single aria-labelled
+    // "Rent" input in the ai-off narrative-disabled section.
     await expect(page.getByRole("textbox", { name: "Rent" })).toBeVisible();
 
     // Export still works without any AI call.

@@ -1,59 +1,52 @@
 import { expect, test } from "@playwright/test";
 
-// E2E flow 1 — the "M2 IS the product" happy path (QA-7 / BUILD_PLAN M2):
-// wizard -> Generate -> assert decision banner + monthly cash-flow + recommendation
-// from the SERVER view-model -> autosave -> reopen by view_slug (same numbers) ->
-// export .xlsx -> recalc.py total_errors==0.
+import { createProjectionViaWizard, mockPlaces } from "./helpers";
+
+// E2E flow 1 — the "M2 IS the product" happy path (QA-7 / BUILD_PLAN M2, #58):
+// wizard -> Generate -> the SERVER decision banner + milestones + monthly cash-flow
+// -> export a real .xlsx (the #141 regression) -> reopen by view_slug (identical
+// server numbers, no client math).
 //
-// M0 scaffold: the UI it drives lands in M2. These specs are skipped until the app
-// shell exposes the wizard, so the flow contract is pinned now and the gate turns
-// green automatically when M2 ships. They are NOT silently passing — `test.skip`
-// records the explicit reason in the report.
-const M2_READY = process.env.E2E_M2_READY === "1";
-
-test.describe("happy path: create -> decision -> save -> reopen -> export", () => {
-  test.skip(!M2_READY, "M2 UI (wizard/banner/export) not built yet — scaffold pins the flow");
-
-  test("shell renders and is no-indexed", async ({ page }) => {
+// This runs for real against the booted app (FastAPI + engine + Vite). It is NOT
+// gated behind a per-spec env flag any more (#198): the M2/M6 UI shipped, so the
+// gate runs every time and actually asserts the create->decision->export contract.
+// The only thing stubbed is the external Google Places + Census proxy (CI has no
+// key) — every projection number, and the .xlsx, comes from the real backend.
+test.describe("happy path: create -> decision -> milestones -> export -> reopen", () => {
+  test("app shell renders and the page is no-indexed", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("banner")).toBeVisible();
-    await expect(page.getByText(/Thrift Store Projection/i)).toBeVisible();
+    await expect(page.getByText("Store Projections")).toBeVisible();
+    // No-index is a real assertion (the shared shell ships robots: noindex).
+    await expect(page).toHaveTitle(/Thrift Store Projection/i);
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/i);
   });
 
-  test("wizard generates a projection and shows the decision banner", async ({ page }) => {
-    await page.goto("/wizard");
-    await page.getByLabel(/households/i).fill("31798");
-    await page.getByLabel(/year 1 share/i).fill("6");
-    await page.getByLabel(/year 2 share/i).fill("8");
-    await page.getByLabel(/year 3 share/i).fill("10");
-    // #141 / PRD §21: terms acceptance is explicit (the box is NOT pre-checked) and
-    // gates Generate; the operator must actively accept before the projection runs.
-    await page.getByRole("checkbox", { name: /planning estimates/i }).check();
-    await page.getByRole("button", { name: /generate/i }).click();
+  test("wizard generates a fresh projection: decision banner + milestones + .xlsx", async ({
+    page,
+  }) => {
+    await mockPlaces(page);
+    await createProjectionViaWizard(page, "Happy Path Store");
 
-    // Decision artifact ships together (banner + capital + break-even + cash gap).
+    // The decision artifact ships together (PRD §12): a verdict banner + the
+    // decision metric tiles, all rendered from the server view-model.
     await expect(page.getByTestId("decision-banner")).toBeVisible();
     await expect(page.getByTestId("metric-capital")).toBeVisible();
     await expect(page.getByTestId("metric-breakeven")).toBeVisible();
     await expect(page.getByTestId("metric-cashgap")).toBeVisible();
+    // The milestone tile (issue #117) — present only when the server emits the
+    // milestones block, so it proves milestones rendered, not a legacy snapshot.
+    await expect(page.getByTestId("metric-payback")).toBeVisible();
+
+    // Server KPIs + the monthly cash-flow chart render from `computed_json`.
+    await expect(page.getByTestId("kpi-revenue")).toBeVisible();
     await expect(page.getByTestId("cashflow-chart")).toBeVisible();
-  });
 
-  test("a freshly-created projection (not the seeded example) downloads the .xlsx", async ({ page }) => {
-    // #141 regression: exports 403'd for EVERY real projection because the wizard's
-    // terms_accepted:true was dropped server-side. This drives a FRESH projection
-    // (not the seeded `example`, which sets terms_accepted_at in app/seed.py) all the
-    // way to a real .xlsx download — a 403 would surface as a JSON blob, never a
-    // download event, so waitForEvent("download") firing is the proof.
-    await page.goto("/wizard");
-    await page.getByLabel(/households/i).fill("31798");
-    await page.getByLabel(/year 1 share/i).fill("6");
-    await page.getByLabel(/year 2 share/i).fill("8");
-    await page.getByLabel(/year 3 share/i).fill("10");
-    await page.getByRole("checkbox", { name: /planning estimates/i }).check();
-    await page.getByRole("button", { name: /generate/i }).click();
-    await expect(page.getByTestId("decision-banner")).toBeVisible();
-
+    // #141 regression: exports 403'd for EVERY freshly-created projection because
+    // the wizard's terms_accepted:true was dropped server-side. This drives a FRESH
+    // projection (not the seeded `example`, which already has terms_accepted_at) all
+    // the way to a real .xlsx download — a 403 surfaces as a JSON blob and never a
+    // download event, so waitForEvent("download") firing is the proof of the fix.
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       page.getByRole("button", { name: /download \.xlsx/i }).click(),
@@ -61,13 +54,19 @@ test.describe("happy path: create -> decision -> save -> reopen -> export", () =
     expect(download.suggestedFilename()).toMatch(/\.xlsx$/);
   });
 
-  test("reopen by view_slug shows identical server numbers", async ({ page }) => {
+  test("reopen by view_slug shows identical server numbers (no client math)", async ({ page }) => {
+    // "Start from example" opens the seeded projection at its view_slug route.
     await page.goto("/wizard");
     await page.getByRole("button", { name: /start from example/i }).click();
-    const before = await page.getByTestId("kpi-revenue").innerText();
-    const dollar = (before.match(/\$[\d,]+/) || ["$0"])[0]; // the server-rendered value
+    await expect(page).toHaveURL(/\/p\/example/);
+
+    const revenue = page.getByTestId("kpi-revenue");
+    await expect(revenue).toBeVisible();
+    const before = ((await revenue.innerText()).match(/\$[\d,]+/) ?? ["$0"])[0];
+    expect(before).toMatch(/^\$[\d,]+$/);
+
     const url = page.url();
     await page.goto(url); // reopen by view_slug
-    await expect(page.getByTestId("kpi-revenue")).toContainText(dollar);
+    await expect(page.getByTestId("kpi-revenue")).toContainText(before);
   });
 });

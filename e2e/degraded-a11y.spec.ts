@@ -4,13 +4,11 @@ import { expect, test } from "@playwright/test";
 // screenshots at 1440 / 768 / 375 on the seeded stress fixture (ENGINEERING_HANDOFF
 // I2 + §QA). Runs across the three viewport projects in playwright.config.ts; each
 // state must be DESIGNED + HANDLED — labelled, announced, color-independent, and
-// non-overflowing at every width. Gated on the seeded surfaces being live (like the
-// other specs) so CI without servers stays green.
-const READY = process.env.E2E_DEGRADED_READY === "1";
-
+// non-overflowing at every width. Runs across the three viewport projects.
+//
+// #198: no longer gated behind an env flag CI never sets — the M5 read-only + the
+// ai-off surfaces shipped, so this runs for real against the booted app.
 test.describe("M7 degraded states + a11y sweep", () => {
-  test.skip(!READY, "M2/M5 read-only + ai-off surfaces — scaffold pins the flow");
-
   test("read-only share notice is announced politely and color-independent", async ({ page }, info) => {
     await page.goto("/r/board-slug");
     const notice = page.getByTestId("degraded-read-only");
