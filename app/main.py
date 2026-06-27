@@ -34,6 +34,14 @@ ROBOTS_TXT = "User-agent: *\nDisallow: /\n"
 
 
 def create_app() -> FastAPI:
+    # 0) observability first (#190): structured JSON logging with deploy context +
+    # secret scrubbing, then the opt-in Sentry hook (no-op when SENTRY_DSN unset or
+    # sentry_sdk absent), so boot-config failures below are captured durably.
+    from app.observability import configure_logging, init_sentry
+
+    configure_logging()
+    init_sentry()
+
     # 1) migrate (build_store runs migrations for sqlite).
     try:
         build_store()
