@@ -43,6 +43,73 @@ describe("buildCreatePayload (maps wizard draft → POST /api/projections body)"
     expect(payload.inputs.source_of_funds).toEqual({ cash: 150000, grant: 50000, loan: 0 });
     expect(payload.terms_accepted).toBe(true);
   });
+
+  it("defaults the opening anchor + cost schedule to a month-1 lump when unset", () => {
+    const payload = buildCreatePayload({
+      name: "Legacy default",
+      city: "Longview",
+      state: "TX",
+      basis: "city",
+      households: 31800,
+      buildingSqft: 10000,
+      salesfloorPct: 70,
+      leaseType: "nnn",
+      donationValue: 74,
+      basket: 17.08,
+      donationsPerHh: 3,
+      shareY1: 6,
+      shareY2: 8,
+      shareY3: 10,
+      occupancyAnnual: 90000,
+      cash: 150000,
+      grant: 50000,
+      loan: 0,
+      termsAccepted: true,
+    });
+    // Defaults reproduce today's numbers: every startup line at month 1, opening
+    // month 1 (no pre-opening months) — Spec §7 migration default.
+    expect(payload.inputs.opening_month_number).toBe(1);
+    expect(payload.inputs.target_opening_date).toBeNull();
+    const schedule = payload.inputs.cost_schedule ?? [];
+    expect(schedule.every((r) => r.month === 1)).toBe(true);
+    expect(schedule.length).toBeGreaterThan(0);
+  });
+
+  it("forwards an explicit opening anchor + timed cost schedule", () => {
+    const payload = buildCreatePayload({
+      name: "Timed schedule",
+      city: "Longview",
+      state: "TX",
+      basis: "city",
+      households: 31800,
+      buildingSqft: 10000,
+      salesfloorPct: 70,
+      leaseType: "nnn",
+      donationValue: 74,
+      basket: 17.08,
+      donationsPerHh: 3,
+      shareY1: 6,
+      shareY2: 8,
+      shareY3: 10,
+      occupancyAnnual: 90000,
+      cash: 150000,
+      grant: 50000,
+      loan: 0,
+      termsAccepted: true,
+      targetOpeningDate: "2026-09",
+      openingMonthNumber: 4,
+      costSchedule: [
+        { category: "Consultant", month: 1, amount: 50000 },
+        { category: "Build-out", month: 3, amount: 60000 },
+      ],
+    });
+    expect(payload.inputs.target_opening_date).toBe("2026-09");
+    expect(payload.inputs.opening_month_number).toBe(4);
+    expect(payload.inputs.cost_schedule).toEqual([
+      { category: "Consultant", month: 1, amount: 50000 },
+      { category: "Build-out", month: 3, amount: 60000 },
+    ]);
+  });
 });
 
 describe("toServerCreateBody (nested wizard payload → flat backend body)", () => {
@@ -79,5 +146,13 @@ describe("toServerCreateBody (nested wizard payload → flat backend body)", () 
     expect(body.inputs.source_of_funds).toBe("200000");
     expect(body.inputs.city).toBe("Longview, TX");
     expect(body.trade_area).toEqual({ basis: "city", households: "31798" });
+  });
+
+  it("forwards the opening anchor + cost schedule to the flat backend body", () => {
+    const body = toServerCreateBody(payload);
+    expect(body.inputs.opening_month_number).toBe(1);
+    expect(body.inputs.target_opening_date).toBeNull();
+    expect(Array.isArray(body.inputs.cost_schedule)).toBe(true);
+    expect(body.inputs.cost_schedule[0]).toMatchObject({ month: 1 });
   });
 });

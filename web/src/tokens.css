@@ -1496,3 +1496,164 @@ body {
     animation: none !important;
   }
 }
+
+/* ============================================================================
+ * W2 — full-page Create-Projection wizard shell (step indicator + steps +
+ * basic cost-schedule rows). The express form's .wizard / .wizard__field /
+ * .btn / .kpi / .places__* rules are reused; these add the step-by-step shell.
+ * ========================================================================== */
+
+/* The full-page variant is wider than the express form so the step indicator
+ * and the cost-schedule rows have room to breathe. */
+.wizard--full {
+  max-width: 44rem;
+}
+
+/* Step progress indicator: a horizontal ordered list of the five steps. */
+.wizard-steps {
+  margin-bottom: 1.5rem;
+}
+.wizard-steps__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: none;
+}
+.wizard-steps__btn,
+.wizard-steps__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.wizard-steps__btn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  color: var(--brand-primary);
+}
+.wizard-steps__item--current .wizard-steps__label,
+.wizard-steps__item--current .wizard-steps__btn {
+  color: var(--text);
+}
+.wizard-steps__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  border: 1px solid var(--line);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.wizard-steps__item--current .wizard-steps__num {
+  background: var(--brand-primary);
+  border-color: var(--brand-primary);
+  color: #fff;
+}
+.wizard-steps__item--done .wizard-steps__num {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+
+/* One step's content block: a heading, an explanatory lede, then fields. */
+.wizard-step {
+  display: flex;
+  flex-direction: column;
+  gap: 1.125rem;
+}
+.wizard-step__heading {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.wizard-step__lede {
+  margin: 0;
+  max-width: 52ch;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.wizard-step__note {
+  margin: 0;
+  max-width: 52ch;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  padding: 0.625rem 0.75rem;
+  border-left: 3px solid var(--line);
+  background: var(--surface-alt);
+  border-radius: 0 6px 6px 0;
+}
+
+/* Basic cost-schedule rows (the editor ticket enriches this). */
+.wizard__cost-schedule {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.875rem;
+  margin: 0;
+}
+.wizard__cost-schedule > legend {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+  padding: 0 0.375rem;
+}
+.wizard__cost-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+.wizard__cost-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.625rem;
+}
+
+/* Review step: a definition list reading back the collected inputs. */
+.wizard-review {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.wizard-review__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.875rem;
+}
+.wizard-review__row > dt {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.wizard-review__row > dd {
+  margin: 0;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A low-emphasis ghost button (remove a cost row). */
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+  padding-inline: 0.5rem;
+}

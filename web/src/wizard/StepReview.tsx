@@ -1,0 +1,65 @@
+// web/src/wizard/StepReview.tsx — wizard step 5: review → Generate.
+//
+// A read-back of the collected inputs before Generate. It shows NO computed
+// projection numbers (those come from the server compute on Generate, PRD §13)
+// — only the raw inputs the operator entered, plus the terms acceptance gate.
+import type { WizardState } from "./useWizardState";
+
+export function StepReview({ state }: { state: WizardState }) {
+  const { draft, householdsValue, householdsSource } = state;
+
+  return (
+    <section className="wizard-step" aria-labelledby="step-review-heading">
+      <h2 id="step-review-heading" className="wizard-step__heading">
+        Review
+      </h2>
+      <p className="wizard-step__lede">
+        Confirm the inputs below, then generate the projection. The numbers are
+        computed on the server and shown on the next screen.
+      </p>
+
+      <dl className="wizard-review">
+        <div className="wizard-review__row">
+          <dt>Store</dt>
+          <dd>{draft.name || "—"}</dd>
+        </div>
+        <div className="wizard-review__row">
+          <dt>Location</dt>
+          <dd>{draft.city || "—"}</dd>
+        </div>
+        <div className="wizard-review__row">
+          <dt>Households ({draft.basis})</dt>
+          <dd>
+            {householdsValue ?? "—"}
+            {householdsSource ? ` (${householdsSource})` : ""}
+          </dd>
+        </div>
+        <div className="wizard-review__row">
+          <dt>Donor-market share (Y1 / Y2 / Y3)</dt>
+          <dd>
+            {draft.shareY1}% / {draft.shareY2}% / {draft.shareY3}%
+          </dd>
+        </div>
+        <div className="wizard-review__row">
+          <dt>Grand-opening month #</dt>
+          <dd>{draft.openingMonthNumber ?? 1}</dd>
+        </div>
+        <div className="wizard-review__row">
+          <dt>Cost schedule rows</dt>
+          <dd>{state.costSchedule.length}</dd>
+        </div>
+      </dl>
+
+      <label className="wizard__field wizard__terms">
+        <input
+          type="checkbox"
+          checked={draft.termsAccepted}
+          onChange={(e) => state.set("termsAccepted", e.target.checked)}
+        />
+        I understand these are planning estimates, not financial advice.
+      </label>
+    </section>
+  );
+}
+
+export default StepReview;
