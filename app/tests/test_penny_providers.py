@@ -120,6 +120,48 @@ def test_openai_only_env_makes_openai_primary():
     assert [p.name for p in chain.providers] == ["openai"]
 
 
+# ----------------------------------- AI_DISABLED kill switch ("ship Penny dark")
+# The deployment-wide opt-out: with AI_DISABLED truthy the chain is built EMPTY
+# even when provider keys are present, so config boot (which still requires a key)
+# is unaffected while Penny makes ZERO provider calls (-> loop/endpoint 409).
+@pytest.mark.parametrize("truthy", ["1", "true", "TRUE", "True", "yes", "YES", " yes "])
+def test_ai_disabled_flag_forces_empty_chain_even_with_keys_present(truthy):
+    chain = P.build_provider_chain(
+        env={"ANTHROPIC_API_KEY": "sk-a", "OPENAI_API_KEY": "sk-o", "AI_DISABLED": truthy}
+    )
+    # Keys are present, yet the chain is empty -> AI is off for this deployment.
+    assert chain.providers == []
+
+
+@pytest.mark.parametrize("falsey", ["", "0", "false", "no", "off", "disabled"])
+def test_ai_disabled_falsey_or_unset_leaves_chain_normal(falsey):
+    # An explicit falsey/unrecognized value does NOT disable: a present key -> chain.
+    chain = P.build_provider_chain(env={"ANTHROPIC_API_KEY": "sk-a", "AI_DISABLED": falsey})
+    assert [p.name for p in chain.providers] == ["anthropic"]
+    # And unset behaves identically (control).
+    unset = P.build_provider_chain(env={"ANTHROPIC_API_KEY": "sk-a"})
+    assert [p.name for p in unset.providers] == ["anthropic"]
+
+
+def test_ai_disabled_flag_makes_zero_provider_calls_with_keys_present():
+    """Keys present + AI_DISABLED=true -> empty chain -> NOT one provider call.
+
+    Proves the "ship dark" guarantee at the transport seam: the stub transport is
+    never invoked because the chain holds no providers (no api.anthropic.com /
+    api.openai.com POST ever happens)."""
+    t = StubTransport((200, _anthropic_body(text="must never be returned")))
+    chain = P.build_provider_chain(
+        env={"ANTHROPIC_API_KEY": "sk-a", "OPENAI_API_KEY": "sk-o", "AI_DISABLED": "true"},
+        transport=t,
+    )
+    assert chain.providers == []
+    # An empty chain raises AIUnavailable if anyone calls it...
+    with pytest.raises(P.AIUnavailableError):
+        chain.complete(_request())
+    # ...but crucially the transport (the only network seam) was NEVER touched.
+    assert t.calls == []
+
+
 # ---------------------------------------------------------- anthropic parsing
 def test_anthropic_provider_parses_text_response():
     t = StubTransport((200, _anthropic_body(text="Hello there")))
