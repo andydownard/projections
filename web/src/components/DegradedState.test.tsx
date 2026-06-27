@@ -25,6 +25,7 @@ const ALL_KINDS: DegradedKind[] = [
   "stale",
   "read-only",
   "ai-opt-out",
+  "load-failed",
 ];
 
 describe("DegradedState — I2 coverage", () => {
@@ -32,7 +33,7 @@ describe("DegradedState — I2 coverage", () => {
     for (const kind of ALL_KINDS) {
       expect(DEGRADED_STATES[kind]).toBeDefined();
     }
-    // no orphan/extra states beyond the eight designed ones
+    // no orphan/extra states beyond the designed ones
     expect(Object.keys(DEGRADED_STATES).sort()).toEqual([...ALL_KINDS].sort());
   });
 
@@ -48,7 +49,7 @@ describe("DegradedState — I2 coverage", () => {
 
   it("uses role=alert for hard errors and role=status for informational notices", () => {
     // hard errors -> assertive
-    for (const kind of ["rent-failed", "location-not-found", "conflict-409", "offline"] as const) {
+    for (const kind of ["rent-failed", "location-not-found", "conflict-409", "offline", "load-failed"] as const) {
       const { unmount } = render(<DegradedState kind={kind} />);
       expect(screen.getByTestId(`degraded-${kind}`)).toHaveAttribute("role", "alert");
       unmount();

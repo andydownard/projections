@@ -79,4 +79,28 @@ describe("ProjectionsList — populated", () => {
     render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
     expect(screen.getByRole("button", { name: /new projection/i })).toBeInTheDocument();
   });
+
+  // #143 — an explicit Edit affordance routes an owned projection to the EDITABLE
+  // detail (Settings/sliders/overrides/autosave). The list is owner-scoped, so
+  // every listed row is owner-editable.
+  it("offers an Edit action per row that routes to the editable detail by view_slug", () => {
+    let edited = "";
+    render(
+      <ProjectionsList
+        projections={[item]}
+        onCreate={() => {}}
+        onOpen={() => {}}
+        onEdit={(s) => (edited = s)}
+      />,
+    );
+    const row = screen.getByTestId("projection-row-p_8x");
+    within(row).getByRole("button", { name: /edit house of hope/i }).click();
+    expect(edited).toBe("p_8x");
+  });
+
+  it("omits the Edit action when no onEdit handler is provided", () => {
+    render(<ProjectionsList projections={[item]} onCreate={() => {}} onOpen={() => {}} />);
+    const row = screen.getByTestId("projection-row-p_8x");
+    expect(within(row).queryByRole("button", { name: /edit house of hope/i })).toBeNull();
+  });
 });
