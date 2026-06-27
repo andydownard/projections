@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field
 
 from app import ratelimit
 from app.aisafety import is_computed_figure_token
-from app.deps import token_matches
+from app.deps import hash_token, token_matches
 from app.penny import proposal as proposal_intake
 from app.penny.loop import AIDisabledError as LoopAIDisabledError
 from app.penny.loop import (
@@ -110,14 +110,21 @@ def get_penny_transcript(
 
 
 # ============================================================ PE5: loop endpoints
-# Rate-limit budgets (per IP + per token, 1h window): tokens are free to mint, so
-# both axes are capped (SECURITY §10.1). The loop spends provider tokens, so it is
-# capped tighter than read; the upload holds bytes, so it is capped too.
-_PENNY_IP_LIMIT = 60
-_PENNY_TOKEN_LIMIT = 120
+# Rate-limit budgets (1h window; SECURITY §10.1, issue #189). The PRIMARY keys are
+# the caller's capability TOKEN and the PROJECTION — NOT the client IP. Every external
+# user sits behind Railway's single shared proxy IP, so a per-IP cap is one GLOBAL
+# bucket: one owner's turns would lock out everyone else (collateral lockout) and a
+# token-mint abuser would evade the per-token cap unchecked. Token (hashed) and
+# projection isolate legitimate concurrent owners; the per-IP cap is demoted to a
+# COARSE safety bound that only catches a genuine single-real-IP flood. Tokens are
+# free to mint, so the loop (provider spend) is capped tighter than read; the upload
+# holds bytes, so it is capped too.
+_PENNY_TOKEN_LIMIT = 120  # primary: per owner/edit bearer (hashed)
+_PENNY_PROJECTION_LIMIT = 240  # primary: per projection (isolates anonymous/view-only)
+_PENNY_IP_LIMIT = 600  # coarse safety bound on the real client IP (XFF, never global)
 _PENNY_WINDOW_SECONDS = 3600
-_UPLOAD_IP_LIMIT = 30
-_UPLOAD_TOKEN_LIMIT = 60
+_UPLOAD_TOKEN_LIMIT = 60  # primary: per bearer (upload requires a token)
+_UPLOAD_IP_LIMIT = 120  # coarse safety bound (upload always carries a token)
 
 
 class PennyTurnIn(BaseModel):
@@ -136,7 +143,20 @@ class PennyDraftIn(BaseModel):
 
 
 def _client_ip(request: Optional[Request]) -> Optional[str]:
-    if request is None or request.client is None:
+    """Right-most untrusted X-Forwarded-For hop, else the socket peer (SECURITY §10.1).
+
+    Railway terminates TLS at a single proxy that APPENDS the real client IP as the
+    LAST X-Forwarded-For entry, so the right-most hop is the only one a client cannot
+    spoof. Using the raw socket peer (``request.client.host``) would collapse every
+    external caller onto the proxy's shared internal IP — a single global bucket
+    (issue #189). Mirrors ``app/routers/projections._client_ip``.
+    """
+    if request is None:
+        return None
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip() or None
+    if request.client is None:
         return None
     return request.client.host
 
@@ -180,11 +200,26 @@ def _ai_disabled(chain: Any, row: Optional[dict] = None) -> bool:
     return not getattr(chain, "providers", None)
 
 
-def _check_rate(ip: Optional[str], token: Optional[str]) -> tuple[bool, int]:
-    """Loop rate-limit (per IP + per token). Module-level so tests can monkeypatch."""
+def _check_rate(
+    ip: Optional[str], token: Optional[str], projection_id: Optional[str] = None
+) -> tuple[bool, int]:
+    """Penny loop rate-limit (SECURITY §10.1; issue #189). Module-level for monkeypatch.
+
+    PRIMARY keys are the caller's capability token and the projection — NOT the shared
+    proxy IP. The token (the owner/edit bearer) is HASHED with the same SHA-256 digest
+    used at rest (``app.deps.hash_token``) before it becomes a bucket key, so the
+    plaintext secret is never used, logged, or exposed. The projection key isolates
+    anonymous/view-only callers (which present no token) per projection. The per-IP cap
+    stays as a coarse safety bound only.
+    """
+    token_key = hash_token(token) if token else None
+    extra: list[tuple[str, Optional[str], Optional[int]]] = []
+    if projection_id:
+        extra.append(("projection", projection_id, _PENNY_PROJECTION_LIMIT))
     return ratelimit.check(
-        "penny", ip=ip, token=token, ip_limit=_PENNY_IP_LIMIT,
-        token_limit=_PENNY_TOKEN_LIMIT, window_seconds=_PENNY_WINDOW_SECONDS)
+        "penny", ip=ip, token=token_key, ip_limit=_PENNY_IP_LIMIT,
+        token_limit=_PENNY_TOKEN_LIMIT, window_seconds=_PENNY_WINDOW_SECONDS,
+        extra_scopes=tuple(extra))
 
 
 def _rate_limited(retry_after: int) -> HTTPException:
@@ -267,7 +302,8 @@ def penny_turn(
     if _ai_disabled(chain, row):
         raise HTTPException(status_code=409, detail={"error": "ai_disabled"})
 
-    allowed, retry_after = _check_rate(_client_ip(request), token)
+    allowed, retry_after = _check_rate(
+        _client_ip(request), token, projection_id=row["id"])
     if not allowed:
         raise _rate_limited(retry_after)
 
@@ -388,8 +424,10 @@ async def penny_proposal(
     if token is None:
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
 
+    # Upload always carries a token (403 above): the per-token cap is the primary
+    # brake, keyed on the hashed bearer (never the raw secret); IP stays coarse (#189).
     allowed, retry_after = ratelimit.check(
-        "penny_proposal", ip=_client_ip(request), token=token,
+        "penny_proposal", ip=_client_ip(request), token=hash_token(token),
         ip_limit=_UPLOAD_IP_LIMIT, token_limit=_UPLOAD_TOKEN_LIMIT,
         window_seconds=_PENNY_WINDOW_SECONDS)
     if not allowed:

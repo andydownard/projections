@@ -119,11 +119,15 @@ Limits apply **per IP and per token** (PRD §20/§27), 429 on breach with `Retry
 | `POST /api/intent` | 5 / hour | — | CRM spam. |
 | `POST /api/projections` (create) | 20 / hour | — | Projection-creation flood. |
 | `POST …/evidence` (file upload) | 30 / hour | 60 / hour / projection | Upload abuse. |
+| `POST …/penny`, `POST /api/penny/draft` | 600 / hour (coarse) | **120 / hour / token, 240 / hour / projection** | Bounded provider tool-use loop — **keyed on token/projection, not the shared proxy IP** (§6.6, issue #189). |
+| `POST /api/penny/proposal` | 120 / hour (coarse) | 60 / hour / token | Upload intake (token-hashed key). |
 | `PATCH …` (autosave) | 600 / 5 min | 600 / 5 min / projection | High by design (debounced autosave); serialized server-side. Client debounces ~300–400 ms. |
 | `GET …/xlsx`, `GET …/packet` | 60 / hour | — | Export cost (LibreOffice/render). |
 | All other `GET` | 600 / 5 min | — | General read. |
 
 `429` body: `{ "error": "rate_limited", "retry_after_seconds": <int>, "scope": "ip" | "token" }`.
+
+The Penny endpoints **key the rate limit primarily on the caller's capability token (SHA-256-hashed) and the `projection_id`, not the client IP** — behind Railway's single shared proxy IP a per-IP cap is one global bucket that lets one owner lock out all others (issue #189). The per-IP cap is a coarse safety bound only. See SECURITY.md §10.1.
 
 ---
 
@@ -500,7 +504,7 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 ```
 
   `applied_revisions[].changed` is the engine's recomputed view-model diff (`was→now`), so Penny narrates the effect without inventing a figure. `provider` reflects the **actual** provider used.
-- **Errors:** `409 ai_disabled` (per-projection opt-out, deployment kill switch, or no provider key — **zero** provider calls); `503 ai_unavailable` (both providers down); `429 rate_limited` with `{ "retry_after_seconds": N }` + a `Retry-After` header (surfaced **before** any provider call); `422` relays a rejected edit to the model (e.g. `node_not_pinnable`, `invalid_inputs`) and `input_too_large` when the assembled prompt exceeds the input-token cap; `404 not_found`.
+- **Errors:** `409 ai_disabled` (per-projection opt-out, deployment kill switch, or no provider key — **zero** provider calls); `503 ai_unavailable` (both providers down); `429 rate_limited` with `{ "retry_after_seconds": N }` + a `Retry-After` header (surfaced **before** any provider call — **keyed on the caller's hashed token and the `projection_id`, not the shared proxy IP**, so one owner cannot lock out others, §2.3/SECURITY §10.1, issue #189); `422` relays a rejected edit to the model (e.g. `node_not_pinnable`, `invalid_inputs`) and `input_too_large` when the assembled prompt exceeds the input-token cap; `404 not_found`.
 
 ### 6.7 `POST /api/penny/draft` — wizard-draft loop (PE5)
 
