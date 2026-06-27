@@ -1,9 +1,10 @@
 """Places -> Census trade-area derivation API (app/routers/places.py).
 
-The single network seam (app.geo.client._get_json) is stubbed, so these exercise
-the real autocomplete/resolve/derivation logic — FIPS mapping, ACS parsing,
-basis selection, degraded fallbacks, the per-IP rate-limit, and the hard rule
-that the provider key NEVER reaches the client — without touching the network.
+The network seams (Places API New v1 via app.geo.client._places_request; Census via
+app.geo.client._get_json) are stubbed, so these exercise the real
+autocomplete/resolve/derivation logic — FIPS mapping, ACS parsing, basis selection,
+degraded fallbacks, the per-IP rate-limit, and the hard rule that the provider key
+NEVER reaches the client — without touching the network.
 """
 import httpx
 import pytest
@@ -14,17 +15,27 @@ from app.geo import client as geo_client
 from app.routers import places
 
 # --- canned upstream payloads (Longview, TX -> Gregg County) ------------------
+# Places API (New) v1 shapes: autocomplete -> suggestions[].placePrediction;
+# details -> the Place resource directly (location.latitude/longitude).
 _AUTOCOMPLETE = {
-    "predictions": [
-        {"description": "Longview, TX, USA", "place_id": "PID_LONGVIEW"},
-        {"description": "Longview, WA, USA", "place_id": "PID_LONGVIEW_WA"},
+    "suggestions": [
+        {
+            "placePrediction": {
+                "placeId": "PID_LONGVIEW",
+                "text": {"text": "Longview, TX, USA"},
+            }
+        },
+        {
+            "placePrediction": {
+                "placeId": "PID_LONGVIEW_WA",
+                "text": {"text": "Longview, WA, USA"},
+            }
+        },
     ]
 }
 _DETAILS = {
-    "result": {
-        "geometry": {"location": {"lat": 32.5007, "lng": -94.7405}},
-        "formatted_address": "Longview, TX, USA",
-    }
+    "formattedAddress": "Longview, TX, USA",
+    "location": {"latitude": 32.5007, "longitude": -94.7405},
 }
 _GEOGRAPHIES = {
     "result": {
@@ -48,11 +59,16 @@ _ACS_COUNTY = [
 SECRET_KEY = "PLACES_KEY_DO_NOT_LEAK_123"
 
 
-def _fake_get_json(url, params):
-    if "autocomplete/json" in url:
+def _fake_places_request(method, url, *, params=None, json_body=None, field_mask=None):
+    # Key must travel in the header, never the URL/query (CLAUDE.md hard rule 7).
+    if url.endswith("places:autocomplete"):
         return _AUTOCOMPLETE
-    if "details/json" in url:
+    if "/v1/places/" in url:
         return _DETAILS
+    raise AssertionError(f"unexpected places url: {url}")
+
+
+def _fake_get_json(url, params):
     if "geocoder/geographies" in url:
         return _GEOGRAPHIES
     if "/acs/acs5" in url:
@@ -69,6 +85,7 @@ def client(monkeypatch):
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("GOOGLE_PLACES_API_KEY", SECRET_KEY)
     monkeypatch.setattr(geo_client, "_get_json", _fake_get_json)
+    monkeypatch.setattr(geo_client, "_places_request", _fake_places_request)
     ratelimit.reset_rate_limits()
     from app.main import create_app
 
@@ -123,12 +140,14 @@ def test_resolve_county_basis_returns_county_count(client):
 
 
 def test_resolve_location_not_found_is_422(client, monkeypatch):
-    def no_place(url, params):
-        if "details/json" in url:
-            return {"result": None}
-        return _fake_get_json(url, params)
+    def no_place(method, url, *, params=None, json_body=None, field_mask=None):
+        if "/v1/places/" in url:
+            return {}  # New API: empty Place resource -> unresolvable
+        return _fake_places_request(
+            method, url, params=params, json_body=json_body, field_mask=field_mask
+        )
 
-    monkeypatch.setattr(geo_client, "_get_json", no_place)
+    monkeypatch.setattr(geo_client, "_places_request", no_place)
     resp = client.post("/api/places/resolve", json={"place_id": "PID_BOGUS"})
     assert resp.status_code == 422
     assert resp.json()["error"] == "location_not_found"
