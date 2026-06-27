@@ -29,7 +29,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import re
 import secrets
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -119,10 +118,6 @@ _PENNY_TOKEN_LIMIT = 120
 _PENNY_WINDOW_SECONDS = 3600
 _UPLOAD_IP_LIMIT = 30
 _UPLOAD_TOKEN_LIMIT = 60
-
-# Extract-only money matcher for the wizard-draft parse_proposal stub (figures must
-# come from the document; nothing invented). Mirrors the detail tool's behaviour.
-_PROPOSAL_MONEY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?")
 
 
 class PennyTurnIn(BaseModel):
@@ -486,11 +481,19 @@ def build_draft_registry(draft: dict) -> ToolRegistry:
                 "cost_schedule": draft.get("cost_schedule")}
 
     def parse_proposal(args: dict, ctx: ToolContext) -> dict:
+        # Same extract-only parser as the detail-page tool (PE9): line-items,
+        # tiers/packages, and phase->month inference, all traceable to the document.
         text = str(args.get("proposal_text") or "")
-        candidates = [{"amount_text": m.group(0),
-                       "snippet": text[max(0, m.start() - 24): m.end() + 24].strip()}
-                      for m in _PROPOSAL_MONEY_RE.finditer(text)]
-        return {"extract_only": True, "untrusted": True, "candidates": candidates}
+        if not text:
+            ref = args.get("proposal_ref") or (
+                ctx.extra.get("proposal_ref") if isinstance(ctx.extra, dict) else None)
+            if ref:
+                held = proposal_intake.get_proposal(str(ref))
+                if held is None:
+                    return {"error": "proposal_not_found", "status": 404,
+                            "message": "I couldn't find that uploaded proposal — re-attach it."}
+                text = proposal_intake.extract_pdf_text(held.get("data") or b"")
+        return proposal_intake.parse_proposal_text(text)
 
     def set_input(args: dict, ctx: ToolContext) -> dict:
         if not ctx.can_mutate:

@@ -527,6 +527,56 @@ def test_parse_proposal_invents_no_numbers_when_absent(store, projection):
     assert res["candidates"] == []
 
 
+def test_parse_proposal_resolves_an_uploaded_ref_to_pdf_text(store, projection):
+    """PE9: the tool reads the held PDF bytes (by ref) and extracts text from them."""
+    from app.penny import proposal as P
+    pdf = (
+        b"%PDF-1.4\n4 0 obj<</Length 44>>\n"
+        b"stream\nBT (Phase 1 build-out $50,000) Tj ET\nendstream\nendobj\n%%EOF"
+    )
+    ref = P.store_proposal(pdf, filename="proposal.pdf", content_type="application/pdf")
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "parse_proposal", {"proposal_ref": ref})
+    figures = {c["amount_text"] for c in res["candidates"]}
+    assert "$50,000" in figures
+
+
+def test_parse_proposal_reads_ref_threaded_on_the_context(store, projection):
+    """The router threads proposal_ref onto ctx.extra; the tool picks it up there."""
+    from app.penny import proposal as P
+    pdf = b"%PDF-1.4\n4 0 obj<</Length 1>>\nstream\nBT ($12,000) Tj ET\nendstream\nendobj"
+    ref = P.store_proposal(pdf, content_type="application/pdf")
+    ctx = _ctx(projection, proposal_ref=ref)  # threaded via ctx.extra, no args
+    res = _run(store, ctx, "parse_proposal", {})
+    assert {c["amount_text"] for c in res["candidates"]} == {"$12,000"}
+
+
+def test_parse_proposal_unknown_ref_is_reported_not_invented(store, projection):
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "parse_proposal", {"proposal_ref": "prop_does_not_exist"})
+    assert res["error"] == "proposal_not_found"
+    assert res["status"] == 404
+
+
+def test_parse_proposal_multiple_tiers_flag_disambiguation(store, projection):
+    ctx = _ctx(projection)
+    text = "Standard build-out $80,000. Premium build-out $120,000."
+    res = _run(store, ctx, "parse_proposal", {"proposal_text": text})
+    assert res["needs_tier_choice"] is True
+    assert set(res["tiers"]) == {"Standard", "Premium"}
+
+
+def test_parse_proposal_surfaces_phase_month_map_for_confirmation(store, projection):
+    ctx = _ctx(projection)
+    text = ("Phase 1: design (2 months) $20,000. Phase 2: build-out (1 month) $90,000. "
+            "Grand opening.")
+    res = _run(store, ctx, "parse_proposal", {"proposal_text": text})
+    months = {p["phase"]: p["month"] for p in res["phase_month_map"]}
+    assert months["Phase 1"] == 1 and months["Phase 2"] == 3
+    assert res["opening_month"] == 3 + 1  # month after the last phase
+    assert res["needs_month_confirm"] is True
+
+
 # ----------------------------------------------- end-to-end via the PE3 loop
 class _ScriptedChain:
     def __init__(self, *responses, providers=("anthropic",)):
