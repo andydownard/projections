@@ -95,10 +95,23 @@ export interface WizardState {
   removeCostRow: (i: number) => void;
 
   canGenerate: boolean;
+
+  // #147: a concise, human-readable reason the ACTIVE gate (Next, or Generate on
+  // the last step) is blocked — null when satisfiable. Surfaced in the UI next to
+  // the disabled button + announced to assistive tech so a greyed control is never
+  // a silent dead end (WCAG status-message guidance).
+  blockReason: string | null;
 }
 
 function hasValue(n: number | null): n is number {
   return n !== null && Number.isFinite(n) && n > 0;
+}
+
+/** Join labels into a readable English list ("Year 1 and Year 2"; "a, b, and c"). */
+function formatList(items: readonly string[]): string {
+  if (items.length <= 1) return items.join("");
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }
 
 export function useWizardState(initial?: Partial<WizardDraft>): WizardState {
@@ -232,6 +245,49 @@ export function useWizardState(initial?: Partial<WizardDraft>): WizardState {
   // Generate is blocked until households has a value (§4) + terms accepted.
   const canGenerate = hasValue(householdsValue) && draft.termsAccepted;
 
+  // #147: derive the reason the active gate is unmet so the disabled Next/Generate
+  // button can state WHY (and AT can announce it). Mirrors the validators above +
+  // canGenerate on the last step, so the message always tracks the real gate.
+  const blockReason = useMemo<string | null>(() => {
+    if (isLast) {
+      // The final gate is canGenerate (households + terms), not just the review
+      // validator — households can be missing even when terms are checked.
+      if (!hasValue(householdsValue))
+        return "Trade-area households are required — go back to the Trade area step to look them up or enter them.";
+      if (!draft.termsAccepted)
+        return "Accept the planning-estimates terms below to generate the projection.";
+      return null;
+    }
+    switch (stepKey) {
+      case "store":
+        return draft.name.trim().length > 0 ? null : "Enter a store name to continue.";
+      case "trade-area":
+        return hasValue(householdsValue)
+          ? null
+          : "Look up an address or enter the trade-area households to continue.";
+      case "donor-market": {
+        const missing = (
+          [
+            [draft.shareY1, "Year 1"],
+            [draft.shareY2, "Year 2"],
+            [draft.shareY3, "Year 3"],
+          ] as const
+        )
+          .filter(([v]) => !(v > 0))
+          .map(([, label]) => label);
+        return missing.length === 0
+          ? null
+          : `Enter a donor-market share above 0 for ${formatList(missing)} to continue.`;
+      }
+      case "cost":
+        return validators.cost()
+          ? null
+          : "Give every cost row a category, a month (1 or later), and an amount (0 or more) to continue.";
+      default:
+        return null;
+    }
+  }, [isLast, stepKey, draft, householdsValue, validators]);
+
   return {
     draft,
     set,
@@ -259,5 +315,6 @@ export function useWizardState(initial?: Partial<WizardDraft>): WizardState {
     updateCostRow,
     removeCostRow,
     canGenerate,
+    blockReason,
   };
 }

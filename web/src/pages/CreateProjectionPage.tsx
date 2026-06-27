@@ -138,6 +138,12 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
 
       <form
         className="wizard__form"
+        // #149: the express form caps at 20rem (.wizard__form) which leaves the
+        // full-page wizard's step content cramped in a ~320px column inside the
+        // 44rem panel. Override component-locally (not the shared token, which the
+        // express WizardPage still relies on) so cost rows lay out 3-up and the
+        // review list uses the panel width — reading as a real full-page wizard.
+        style={{ maxWidth: "44rem" }}
         onSubmit={(e) => {
           e.preventDefault();
           if (wiz.isLast) {
@@ -168,6 +174,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
               type="submit"
               className="btn btn--primary"
               disabled={busy || !wiz.canGenerate}
+              aria-describedby={wiz.blockReason ? "wizard-block-reason" : undefined}
             >
               Generate
             </button>
@@ -176,6 +183,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
               type="submit"
               className="btn btn--primary"
               disabled={busy || !wiz.canProceed}
+              aria-describedby={wiz.blockReason ? "wizard-block-reason" : undefined}
             >
               Next
             </button>
@@ -190,6 +198,43 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
             Start from example
           </button>
         </div>
+
+        {/* #147: state WHY the Next/Generate button is disabled, right beside it.
+            role=status + aria-live=polite announces the reason to assistive tech
+            when it changes; the submit button references this via aria-describedby.
+            Always rendered (empty when the step is satisfiable) so the live region
+            is stable, and the cue is TEXT (with a non-color icon), never color-only. */}
+        <p
+          id="wizard-block-reason"
+          role="status"
+          aria-live="polite"
+          style={
+            wiz.blockReason
+              ? {
+                  display: "flex",
+                  gap: "0.5rem",
+                  alignItems: "flex-start",
+                  margin: "0.75rem 0 0",
+                  maxWidth: "52ch",
+                  fontSize: "0.8125rem",
+                  lineHeight: 1.45,
+                  color: "var(--text-muted)",
+                }
+              : { margin: 0 }
+          }
+        >
+          {wiz.blockReason && (
+            <>
+              <span
+                aria-hidden="true"
+                style={{ flex: "0 0 auto", fontWeight: 700, color: "var(--brand-primary)" }}
+              >
+                ⓘ
+              </span>
+              <span>{wiz.blockReason}</span>
+            </>
+          )}
+        </p>
       </form>
     </div>
   );
