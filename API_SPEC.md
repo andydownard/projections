@@ -461,6 +461,25 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 - **Response `200`:** `application/pdf` or the `.docx` content type; `Content-Disposition: attachment`.
 - **Errors:** `403 terms_required`; `404`; `429`.
 
+### 6.5 `GET /api/projections/{view_slug}/penny/transcript` — Penny conversation (read seam)
+
+- **Auth:** owner/edit Bearer. **Capability:** owner OR this projection's edit token (Spec B §7/§12). A view-only caller (no/invalid token) or a different owner's token → `403 forbidden`; unknown slug → `404`.
+- **Behavior:** returns the persisted per-project Penny transcript verbatim (the server is the one shape authority; the client renders turns as-is). Wizard-draft conversations have no projection and are **never persisted** (Spec B §7), so there is nothing to read for them. No cross-owner leakage (the read keys on the slug-resolved `projection_id`).
+- **Response `200`:**
+
+```json
+{ "view_slug":"…", "transcript_id":"pt_…", "created_at":"…", "updated_at":"…",
+  "turns":[
+    {"role":"user","content":"Set Year-1 share to 8%.","ts":"…"},
+    {"role":"assistant","content":"Done — now 8%.","provider":"anthropic","ts":"…"}
+  ] }
+```
+
+  An absent transcript returns `200` with `"transcript_id": null` and `"turns": []`. Turn shape + the retention cap are normative in [`DATA_MODEL.md`](./DATA_MODEL.md) §3.9/§4.9.
+- **Errors:** `403 forbidden`; `404 not_found`.
+
+> The mutating `POST …/penny` tool-use loop (which appends turns and applies edits through the normal `PATCH`/`If-Match` path → `version++` → an `actor:penny` revision), plus `POST /api/penny/draft` and `POST /api/penny/proposal`, are a later slice (PE5). This slice ships the data model + owner-scoped read only.
+
 ---
 
 ## 7. Research & external-data proxies
@@ -605,6 +624,7 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `POST …/{slug}/narrative:regenerate` | owner/edit | **yes** | yes | regenerate |
 | `POST …/{slug}/evidence` | owner/edit | **yes** | yes | upload |
 | `GET …/{slug}/xlsx` · `…/packet` | owner/edit/view | — | no | export |
+| `GET …/{slug}/penny/transcript` | owner/edit | — | no | read |
 | `GET/POST …/{slug}/actuals` | owner/edit(/view GET) | POST: **yes** | POST yes | read |
 | `POST /api/research` | (none) | no | no | research |
 | `GET /api/places/autocomplete` | (none) | — | no | read |

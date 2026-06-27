@@ -89,7 +89,9 @@ def test_default_opening_month_is_one():
 def test_m0005_registered_in_order():
     names = [name for name, _ in MIGRATIONS]
     assert "0005_cost_schedule" in names
-    assert names[-1] == "0005_cost_schedule"  # append-only discipline
+    # append-only discipline: m0005 follows its predecessor m0004; later
+    # migrations append after it, never before (so assert order, not a tail).
+    assert names.index("0005_cost_schedule") == names.index("0004_narrative_edit_origin") + 1
 
 
 def test_m0005_is_additive_only():

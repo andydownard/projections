@@ -7,6 +7,8 @@ Postgres path will use. WAL PRAGMAs are SqliteStore internals, applied on connec
 """
 from __future__ import annotations
 
+import json
+import secrets
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -14,10 +16,16 @@ from typing import Any
 
 from app.store.migration_safety import assert_migrations_additive
 from app.store.migrations import MIGRATIONS
+from app.store.penny_retention import apply_retention
 
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _new_transcript_id() -> str:
+    # App-generated, time-ordered string PK (no DB autoincrement; Postgres-portable).
+    return "pt_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + secrets.token_hex(6)
 
 
 class SqliteStore:
@@ -243,6 +251,99 @@ class SqliteStore:
             )
             self._conn.commit()
         return intent
+
+    # --- penny transcripts (§7) ---
+    def create_transcript(self, t: dict) -> dict:
+        """Insert a new per-project transcript row.
+
+        Fails closed on a missing/NULL ``projection_id``: ephemeral wizard-draft
+        transcripts are NEVER persisted (Spec §7).
+        """
+        if not t.get("projection_id"):
+            raise ValueError(
+                "penny transcript requires a projection_id; wizard-draft "
+                "transcripts are never persisted (Spec §7)"
+            )
+        cols = list(t.keys())
+        placeholders = ", ".join("?" for _ in cols)
+        with self._write_lock:
+            self._conn.execute(
+                f"INSERT INTO penny_transcripts ({', '.join(cols)}) "
+                f"VALUES ({placeholders})",
+                [t[c] for c in cols],
+            )
+            self._conn.commit()
+        return t
+
+    def get_transcript_by_projection(self, projection_id: str) -> dict | None:
+        """Owner-scoped read by (already owner-resolved) projection id.
+
+        Deserializes ``turns_json`` -> ``turns`` (no JSON1 above the interface).
+        """
+        row = self._conn.execute(
+            "SELECT * FROM penny_transcripts WHERE projection_id = ?",
+            (projection_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        try:
+            d["turns"] = json.loads(d.get("turns_json") or "[]")
+        except json.JSONDecodeError:
+            d["turns"] = []
+        return d
+
+    def append_transcript_turn(self, projection_id: str, turn: dict) -> dict:
+        """Append one turn to a projection's transcript (creating it on demand).
+
+        Applies the §7 retention cap before persisting; returns the full
+        transcript dict with parsed ``turns``. Portable SELECT-then-INSERT/UPDATE
+        upsert (never the SQLite-only replace idiom). NULL/empty projection_id is
+        rejected (wizard drafts are never persisted, Spec §7).
+        """
+        if not projection_id:
+            raise ValueError(
+                "penny transcript requires a projection_id; wizard-draft "
+                "transcripts are never persisted (Spec §7)"
+            )
+        now = _utcnow()
+        with self._write_lock:
+            row = self._conn.execute(
+                "SELECT * FROM penny_transcripts WHERE projection_id = ?",
+                (projection_id,),
+            ).fetchone()
+            if row is None:
+                turns = apply_retention([turn])
+                tid = _new_transcript_id()
+                created_at = now
+                self._conn.execute(
+                    "INSERT INTO penny_transcripts "
+                    "(id, projection_id, turns_json, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (tid, projection_id, json.dumps(turns), now, now),
+                )
+            else:
+                d = dict(row)
+                tid = d["id"]
+                created_at = d.get("created_at", now)
+                try:
+                    existing = json.loads(d.get("turns_json") or "[]")
+                except json.JSONDecodeError:
+                    existing = []
+                turns = apply_retention([*existing, turn])
+                self._conn.execute(
+                    "UPDATE penny_transcripts SET turns_json = ?, updated_at = ? "
+                    "WHERE id = ?",
+                    (json.dumps(turns), now, tid),
+                )
+            self._conn.commit()
+        return {
+            "id": tid,
+            "projection_id": projection_id,
+            "turns": turns,
+            "created_at": created_at,
+            "updated_at": now,
+        }
 
     # --- terms gate ---
     def get_terms_accepted_at(self, id: str) -> str | None:
