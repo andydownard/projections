@@ -124,3 +124,40 @@ def test_default_schedule_is_json_round_trippable():
 
     schedule = default_cost_schedule()
     assert json.loads(json.dumps(schedule)) == schedule
+
+
+def test_default_schedule_has_no_extra_keys_anywhere():
+    for row in default_cost_schedule():
+        assert "month" in row and "amount" in row and "category" in row
+        assert len(row) == 3
+
+
+def test_default_schedule_months_all_equal_default_opening():
+    # The lump sits on the same month as the default grand-opening milestone, so
+    # there are no pre-opening months in the default state.
+    for row in default_cost_schedule():
+        assert row["month"] == DEFAULT_OPENING_MONTH_NUMBER
+
+
+def test_default_schedule_amounts_are_whole_dollars():
+    # STARTUP is expressed in whole dollars; the derived schedule keeps that.
+    for row in default_cost_schedule():
+        assert float(row["amount"]).is_integer()
+
+
+def test_default_schedule_total_is_positive():
+    assert sum(row["amount"] for row in default_cost_schedule()) > 0
+
+
+def test_default_schedule_consultant_is_the_largest_line():
+    by_category = {r["category"]: r["amount"] for r in default_cost_schedule()}
+    assert by_category["Thrift Store Consultant"] == max(by_category.values())
+
+
+def test_default_schedule_length_is_stable_across_calls():
+    assert len({len(default_cost_schedule()) for _ in range(5)}) == 1
+
+
+def test_default_schedule_equal_value_across_calls():
+    runs = [default_cost_schedule() for _ in range(3)]
+    assert runs[0] == runs[1] == runs[2]
