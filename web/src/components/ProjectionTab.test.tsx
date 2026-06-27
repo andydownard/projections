@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ProjectionTab } from "./ProjectionTab";
-import type { ViewModel } from "../api/viewModel";
+import type { Milestones, ViewModel } from "../api/viewModel";
 
 // SLICE 3 — the Projection tab. It renders the Appendix-D view-model VERBATIM:
 // decision banner (reco chip carrying icon + TEXT, never color alone), the three
@@ -262,5 +262,78 @@ describe("ProjectionTab — per-field change affordance (PE7, #126)", () => {
       />,
     );
     expect(screen.queryByTestId("field-change-undo")).not.toBeInTheDocument();
+  });
+});
+
+describe("ProjectionTab — break-even / payback are NOT conflated [#193]", () => {
+  const milestones: Milestones = {
+    grandOpening: { raw: 3, display: "Month 3" },
+    breakEven: { raw: 5, display: "Month 5" },
+    payback: { raw: 25, display: "Month 25", duration: "25 months" },
+  };
+
+  it("labels the break-even tile 'Break-even' — never 'Break-even (payback)'", () => {
+    render(<ProjectionTab vm={vm()} />);
+    const be = screen.getByTestId("tile-breakeven");
+    expect(be).toHaveTextContent(/break-even/i);
+    // The conflated label is gone — break-even must not claim it is payback.
+    expect(be).not.toHaveTextContent(/payback/i);
+  });
+
+  it("renders a SEPARATE Payback tile from milestones.payback (distinct month)", () => {
+    render(<ProjectionTab vm={vm({ milestones })} />);
+    const be = screen.getByTestId("tile-breakeven");
+    expect(be).toHaveTextContent("Month 5");
+    const payback = screen.getByTestId("tile-payback");
+    expect(within(payback).getByText(/payback/i)).toBeInTheDocument();
+    // The recovered-investment month is its own number, not the break-even month.
+    expect(payback).toHaveTextContent("Month 25");
+    // Back-compat metric hook mirrors the DecisionBanner.
+    expect(within(payback).getByTestId("metric-payback")).toBeInTheDocument();
+  });
+
+  it("omits the Payback tile for legacy snapshots without milestones", () => {
+    render(<ProjectionTab vm={vm()} />);
+    expect(screen.queryByTestId("tile-payback")).not.toBeInTheDocument();
+  });
+
+  it("renders an unreached payback as N/A with reason, never a misleading 0", () => {
+    const naMilestones: Milestones = {
+      grandOpening: { raw: 3, display: "Month 3" },
+      breakEven: { raw: 5, display: "Month 5" },
+      payback: { raw: null, display: "N/A", reason: "N/A — startup costs not recovered in Year 1" },
+    };
+    render(<ProjectionTab vm={vm({ milestones: naMilestones })} />);
+    const payback = screen.getByTestId("tile-payback");
+    expect(payback).toHaveTextContent("N/A");
+    expect(payback).not.toHaveTextContent("$0");
+    expect(payback).toHaveTextContent(/not recovered in Year 1/i);
+  });
+});
+
+describe("ProjectionTab — cash-gap label is sign-aware [#194]", () => {
+  it("labels a negative trough 'First-year cash gap' (a real shortfall)", () => {
+    render(<ProjectionTab vm={vm()} />);
+    const gap = screen.getByTestId("tile-cashgap");
+    expect(gap).toHaveTextContent(/First-year cash gap/i);
+    expect(gap).toHaveTextContent("($219,990)");
+  });
+
+  it("labels a positive trough 'Lowest first-year cash balance' — a cushion, not a gap", () => {
+    const m = vm({
+      metrics: {
+        capital: { raw: 277990, display: "$277,990" },
+        cashGap: { raw: 40000, display: "$40,000" },
+        breakeven: { raw: 5, display: "Month 5" },
+        reasonGap: "Most-negative cumulative cash across the first year.",
+      },
+    });
+    render(<ProjectionTab vm={m} />);
+    const gap = screen.getByTestId("tile-cashgap");
+    expect(gap).toHaveTextContent(/Lowest first-year cash balance/i);
+    expect(gap).not.toHaveTextContent(/cash gap/i);
+    // Server display verbatim; a positive cushion carries no negative color cue.
+    expect(gap).toHaveTextContent("$40,000");
+    expect(gap.querySelector(".decision-tile__value")).not.toHaveAttribute("data-negative");
   });
 });

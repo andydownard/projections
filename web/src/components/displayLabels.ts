@@ -20,6 +20,17 @@ export function isNegative(v: ServerValue | null | undefined): boolean {
   return !!v && v.raw < 0;
 }
 
+/** Sign-aware label for the first-year cash trough (#194). The engine emits this
+ *  metric as the MIN cumulative cash across the operating window — a true funding
+ *  *gap* only when it dips below zero. When the trough stays >= 0 the figure is the
+ *  lowest still-positive balance (a cushion), so calling it a "gap" implies a
+ *  shortfall that does not exist. Presentation only: we read the SIGN of the server
+ *  `raw` to pick the label; the displayed value is always the server's `display`
+ *  (no client math, no re-derivation). */
+export function cashGapLabel(v: ServerValue | null | undefined): string {
+  return v && v.raw < 0 ? "First-year cash gap" : "Lowest first-year cash balance";
+}
+
 // Known trade-area `basis` codes → human labels. The server emits no display
 // variant for `basis` yet (see PR note); until then this map keeps the raw enum
 // off the screen. Unknown codes fall through to a title-cased form so a future

@@ -110,10 +110,26 @@ body {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  /* #195: wrap rather than clip on phones. Without this the row overflows 375px
+     and slices the Idea Fab (the right-most item) off the right edge. Wrapping
+     lets the chips + Idea Fab fall to a second row — always fully on-screen and
+     tappable — instead of being clipped. */
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
   max-width: var(--frame);
   margin: 0 auto;
   padding: 0.625rem 1.25rem;
   min-height: 56px;
+}
+
+/* #195: below ~480px claw back horizontal space (tighter padding + gap) so the
+   brand and Idea Fab stay on one comfortable row before anything needs to wrap. */
+@media (max-width: 480px) {
+  .topbar__inner {
+    column-gap: 0.5rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
 }
 
 .topbar__home {
@@ -154,6 +170,9 @@ body {
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--text-muted);
+  /* #195: a pill is an atomic label — never let "All changes saved" / "model 2.2.0"
+     wrap mid-word into a ragged 2–3 line stack when space is tight. */
+  white-space: nowrap;
 }
 
 /* --- buttons (brand layer; semantic meaning never depends on brand) --- */
@@ -904,6 +923,25 @@ body {
   cursor: pointer;
 }
 
+/* #197: below 560px the decision tiles stack under the verdict and must use the
+   full width — mirroring the .decision-banner__metrics cleanup. This block lives
+   AFTER the base `.decision-tile { max-width: 14rem }` so it wins on source order
+   (the earlier `.metric { max-width:none }` rule was dead here because the equal-
+   specificity `.decision-tile` cap came later and re-capped the tile to 224px).
+   We also drop the container border-left and per-tile border-right so a stacked
+   strip has no stray vertical rule mid-card. */
+@media (max-width: 560px) {
+  .decision-tiles {
+    border-left: none;
+    border-top: 1px solid var(--line);
+    width: 100%;
+  }
+  .decision-tile {
+    max-width: none;
+    border-right: none;
+  }
+}
+
 /* --- 3-year table --- */
 .projection-tab__rows-head {
   display: flex;
@@ -1172,6 +1210,14 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+/* #196: the SVG follows its viewBox aspect (660:240) instead of a pinned 240px
+   height. On a narrow phone column the box scales down proportionally — no
+   ~55% letterboxed empty band above/below the cumulative-cash trajectory. */
+.cashflow-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 .cashflow-chart__area {
   fill: var(--brand-primary);
