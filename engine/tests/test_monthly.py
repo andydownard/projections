@@ -1,22 +1,73 @@
-"""RED first: monthly M0-M12 cash-flow (§5) + the penny-exact roll-up (§4.2/§13.4).
+"""RED first: monthly pre-opening timeline (§5/§6) + the penny-exact roll-up.
 
-Year-1 annual P&L == sum of the 12 operating months, to the penny, for every line.
-Cumulative cash, trough, and break-even month are derived from the monthly series.
+The timeline is project months 1..N (N = G + 11). Months 1..G-1 are first-class
+pre-opening P&L months; G..N are the 12 operating months. Year-1 annual P&L == sum
+of the 12 operating months, to the penny, for every line. Cumulative cash, trough,
+and break-even month are derived from the monthly series.
 """
 from decimal import Decimal
 
+from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.money import D
+
+
+def _opening_at(opening_month_number, cost_schedule=()):
+    inputs = Inputs(
+        org_name="HoH", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+        opening_month_number=opening_month_number, cost_schedule=cost_schedule,
+    )
+    return compute(inputs, Assumptions(), DemandDrivers(),
+                   TradeArea(basis="city", households="31798"), overrides={})
 
 
 def test_twelve_operating_months(canonical_result):
     ops = [m for m in canonical_result.monthly if m.kind == "operating"]
     assert len(ops) == 12
+    # Default opening month is 1, so operating project months are 1..12.
     assert [m.index for m in ops] == list(range(1, 13))
 
 
-def test_pre_open_month_present_when_pre_launch(canonical_result):
-    # opening_status == "pre_launch" -> an M0 pre-open month exists.
-    assert any(m.kind == "pre_open" for m in canonical_result.monthly)
+def test_no_pre_open_months_when_opening_at_month_one(canonical_result):
+    # G == 1 => the pre-opening range 1..G-1 is empty (single lump at opening,
+    # reproducing today's behavior — NOT a separate M0 row).
+    assert all(m.kind == "operating" for m in canonical_result.monthly)
+    assert len(canonical_result.monthly) == 12
+
+
+def test_pre_opening_months_are_first_class_pl_months():
+    # Opening at month 4 with a cost on each pre-opening month: months 1..3 are
+    # real P&L months whose net = -(scheduled cost), not excluded, not merged.
+    schedule = (
+        {"category": "Consultant", "month": 1, "amount": 10000},
+        {"category": "Build-out", "month": 2, "amount": 20000},
+        {"category": "Equipment", "month": 3, "amount": 5000},
+    )
+    res = _opening_at(4, schedule)
+    rows = {m.index: m for m in res.monthly}
+    # N = G + 11 = 15 project months; months 1..3 pre-opening, 4..15 operating.
+    assert len(res.monthly) == 15
+    assert [r.kind for r in res.monthly[:3]] == ["pre_open", "pre_open", "pre_open"]
+    assert all(m.kind == "operating" for m in res.monthly[3:])
+    # Pre-opening months carry no operating revenue/expense; their loss is the cost.
+    assert rows[1].revenue == 0 and rows[1].expenses == 0
+    assert D(str(rows[1].net)) == Decimal("0")
+    assert D(str(rows[1].startup_outflow)) == Decimal("10000")
+    assert D(str(rows[1].cash_net)) == Decimal("-10000")
+    assert D(str(rows[2].cash_net)) == Decimal("-20000")
+    # Cumulative cash accumulates the pre-opening losses before opening.
+    assert D(str(rows[3].cumulative_cash)) == Decimal("-35000")
+
+
+def test_n_equals_g_plus_eleven():
+    for g in (1, 2, 6, 12):
+        res = _opening_at(g)
+        assert max(m.index for m in res.monthly) == g + 11
+        ops = [m for m in res.monthly if m.kind == "operating"]
+        assert len(ops) == 12
+        assert [m.index for m in ops] == list(range(g, g + 12))
 
 
 def test_revenue_rolls_up_to_annual_to_the_penny(canonical_result):

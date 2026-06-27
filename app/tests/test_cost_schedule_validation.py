@@ -225,11 +225,13 @@ def test_build_engine_args_filters_schedule_and_anchor():
         "opening_month_number": 6,
         "target_opening_date": "2026-09",
     }
-    # must not raise even though the engine Inputs dataclass has no such fields
+    # The engine Inputs now models the schedule/anchor, but this app-level builder
+    # still filters the keys out, so the engine falls back to its defaults (the
+    # month-1 lump / opening month 1) rather than the user's stored values here.
     inputs, _assump, _demand, _trade = _build_engine_args_from_dicts(
         inputs_d, {"labor_pct": "0.60"}, {}, TRADE)
-    assert not hasattr(inputs, "cost_schedule")
-    assert not hasattr(inputs, "opening_month_number")
+    assert inputs.cost_schedule == ()
+    assert inputs.opening_month_number == 1
     assert inputs.city == "Longview, Texas"
 
 

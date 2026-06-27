@@ -150,6 +150,103 @@ def test_aggressive_fixture_triggers_margin_guardrail():
     assert res.decision.reco_tag == "revise"
 
 
+def _opening_at(opening_month_number, cost_schedule=(), labor="0.60", **kw):
+    base = dict(
+        org_name="HoH", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="900000",
+        opening_month_number=opening_month_number, cost_schedule=cost_schedule,
+    )
+    base.update(kw)
+    return compute(Inputs(**base), Assumptions(labor_pct=labor), DemandDrivers(),
+                   TradeArea(basis="city", households="31798"), overrides={})
+
+
+# ----------------------------------------------------- three milestones (§8)
+def test_grand_opening_milestone_is_the_input_g():
+    for g in (1, 3, 6):
+        res = _opening_at(g)
+        assert res.decision.grand_opening_month == g
+
+
+def test_break_even_milestone_is_first_sustained_operating_net():
+    # Break-even is a project month >= G (operating-anchored). For the design-parity
+    # labor (40%) opening at month 4, ops run 4..15 and break-even is offset by G.
+    res = _opening_at(4, labor="0.40")
+    be = res.decision.break_even_month
+    assert be is not None and be >= 4
+    ops = [m for m in res.monthly if m.kind == "operating"]
+    target = next(m for m in ops if m.index == be)
+    assert D(str(target.net)) >= 0
+    assert all(D(str(m.net)) >= 0 for m in ops if m.index >= be)
+
+
+def test_break_even_offsets_with_opening_month():
+    # Same economics, later opening -> break-even shifts by the same offset.
+    early = _opening_at(1, labor="0.40").decision.break_even_month
+    late = _opening_at(5, labor="0.40").decision.break_even_month
+    assert early is not None and late is not None
+    assert late - 5 == early - 1
+
+
+def test_payback_milestone_when_recovered_within_horizon():
+    # A strongly profitable case recovers startup within the 12 operating months.
+    res = _opening_at(1, labor="0.40", share_y1="0.15", share_y2="0.20", share_y3="0.25")
+    pm = res.decision.payback_month
+    assert pm is not None
+    # payback_month == first operating month whose cumulative net since opening
+    # >= total startup costs.
+    ops = [m for m in res.monthly if m.kind == "operating"]
+    startup_total = D(str(res.startup_total))
+    running = Decimal("0")
+    expected = None
+    for m in ops:
+        running += D(str(m.net))
+        if running >= startup_total:
+            expected = m.index
+            break
+    assert pm == expected
+
+
+def test_payback_na_with_reason_when_unreached():
+    # Canonical (loss) never recovers startup -> explicit N/A with reason, never 0.
+    res = _opening_at(1, labor="0.60")
+    assert res.decision.payback_month is None
+    assert "payback_month" in res.flags
+    assert res.flags["payback_month"].startswith("N/A")
+
+
+def test_break_even_na_with_reason_when_unreached():
+    # A deep loss case never turns net positive -> break-even N/A with reason.
+    res = _opening_at(1, labor="0.60", share_y1="0.005",
+                      share_y2="0.005", share_y3="0.005")
+    assert res.decision.break_even_month is None
+    assert res.flags.get("break_even_month", "").startswith("N/A")
+
+
+# --------------------------------------------- metrics from the pre-opening curve
+def test_capital_accumulates_from_pre_opening_costs():
+    # Opening at month 6 with a cost on each pre-opening month: the cumulative
+    # deficit begins accumulating before opening, so capital includes them.
+    schedule = tuple(
+        {"category": f"Pre {m}", "month": m, "amount": 40000} for m in range(1, 6)
+    )
+    res = _opening_at(6, cost_schedule=schedule)
+    # Trough is at least the sum of the five pre-opening outflows plus the opening
+    # lease deposit (all spent before any operating revenue offsets them).
+    trough = min(D(str(m.cumulative_cash)) for m in res.monthly)
+    assert trough <= Decimal("-200000")
+    peak = abs(min(Decimal("0"), trough))
+    assert D(str(res.decision.startup_capital_required)) == peak + Decimal("25000")
+
+
+def test_first_year_cash_gap_is_over_operating_window():
+    res = _opening_at(6)
+    ops = [D(str(m.cumulative_cash)) for m in res.monthly if m.kind == "operating"]
+    assert D(str(res.decision.first_year_cash_gap)) == min(ops)
+
+
 def test_aggressive_share_guardrail_fires_at_canonical_labor():
     # Independent of labor, the 15% Y1 share is out of the <=8% advisory band.
     inputs = Inputs(

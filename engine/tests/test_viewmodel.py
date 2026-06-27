@@ -120,7 +120,7 @@ def test_view_model_is_json_serializable(canonical_result):
 
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
-    assert vm["model_version"] == "2.1.0"
+    assert vm["model_version"] == "2.2.0"
     assert vm["compute_schema_version"] == "1.1.0"
 
 

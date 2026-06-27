@@ -102,3 +102,65 @@ def test_startup_total_includes_computed_lease_deposit(canonical_result):
     # Lease deposit = occupancy_y1 / 12 * 3 (uses rent_y1, NOT escalated).
     assert D(str(su["Lease Deposit + First Month Rent"])) == Decimal("120000") / 12 * 3
     assert D(str(canonical_result.startup_total)) == sum(D(str(v)) for v in su.values())
+
+
+def _hoh(cost_schedule=(), opening_month_number=1):
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+        cost_schedule=cost_schedule, opening_month_number=opening_month_number,
+    )
+    return compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                   TradeArea(basis="city", households="31798"), overrides={})
+
+
+def test_cost_schedule_supersedes_startup_lump():
+    # A user schedule replaces the fixed STARTUP lump (Spec §5). Total startup =
+    # sum(schedule) + the computed lease deposit (always added on top).
+    schedule = (
+        {"category": "Consultant", "month": 1, "amount": 60000},
+        {"category": "Build-out", "month": 2, "amount": 40000},
+    )
+    res = _hoh(cost_schedule=schedule, opening_month_number=3)
+    lease = Decimal("120000") / 12 * 3
+    assert D(str(res.startup["Consultant"])) == Decimal("60000")
+    assert D(str(res.startup["Build-out"])) == Decimal("40000")
+    assert D(str(res.startup_total)) == Decimal("100000") + lease
+    # The legacy STARTUP labels are gone when a schedule is supplied.
+    assert "Thrift Store Consultant" not in res.startup
+
+
+def test_month1_lump_opening_month_1_reproduces_legacy_numbers():
+    # Parity (Spec §6/§7): placing the legacy STARTUP amounts at month 1 with
+    # opening_month_number=1 reproduces the no-schedule default exactly.
+    legacy = _hoh()  # no schedule -> month-1 lump default
+    schedule = tuple(
+        {"category": cat, "month": 1, "amount": amt}
+        for cat, amt in model.STARTUP.items()
+    )
+    explicit = _hoh(cost_schedule=schedule, opening_month_number=1)
+    assert D(str(explicit.startup_total)) == D(str(legacy.startup_total))
+    assert (D(str(explicit.decision.startup_capital_required))
+            == D(str(legacy.decision.startup_capital_required)))
+    assert (D(str(explicit.decision.first_year_cash_gap))
+            == D(str(legacy.decision.first_year_cash_gap)))
+    # Monthly cash curve is identical month-for-month.
+    assert [D(str(m.cumulative_cash)) for m in explicit.monthly] == \
+        [D(str(m.cumulative_cash)) for m in legacy.monthly]
+
+
+def test_schedule_total_equals_sum_of_outflow_map():
+    # The per-month outflow map sums to startup_total (no double count, none dropped).
+    from engine.compute import Assumptions, startup_outflows_by_month
+    schedule = (
+        {"category": "A", "month": 1, "amount": 10000},
+        {"category": "A", "month": 5, "amount": 5000},
+        {"category": "B", "month": 14, "amount": 8000},
+    )
+    res = _hoh(cost_schedule=schedule, opening_month_number=4)
+    by_month = startup_outflows_by_month(res.inputs, Assumptions(labor_pct="0.60"),
+                                         Decimal("120000"))
+    assert sum(by_month.values(), Decimal("0")) == D(str(res.startup_total))

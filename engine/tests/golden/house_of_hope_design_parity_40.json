@@ -4,6 +4,7 @@
   "evidence": [],
   "flags": {
     "model_upgrade_available": false,
+    "payback_month": "N/A \u2014 startup costs are not recovered within the projection horizon",
     "ramp_low_confidence": true
   },
   "kpis": [
@@ -115,27 +116,8 @@
     "reasonCapital": "Worst-case cumulative cash trough (already includes one-time startup) plus reserve.",
     "reasonGap": "Most-negative cumulative cash across the first year."
   },
-  "model_version": "2.1.0",
+  "model_version": "2.2.0",
   "monthly": [
-    {
-      "cumulativeCash": {
-        "display": "($238,500)",
-        "raw": -238500.0
-      },
-      "expenses": {
-        "display": "$0",
-        "raw": 0.0
-      },
-      "month": 0,
-      "net": {
-        "display": "$0",
-        "raw": 0.0
-      },
-      "revenue": {
-        "display": "$0",
-        "raw": 0.0
-      }
-    },
     {
       "cumulativeCash": {
         "display": "($246,340)",
@@ -787,5 +769,5 @@
     "suppliesPct": 0.05
   },
   "staleNodes": [],
-  "version": "2.1.0"
+  "version": "2.2.0"
 }

@@ -29,7 +29,7 @@ ROLE_NAME = "board"
 
 # Design-parity (40% labor) House of Hope — the Appendix-D headline the prototype
 # screenshots use (reco=proceed, capital ~ $278k, break-even ~month 5).
-_INPUTS = dict(
+_INPUTS: dict[str, Any] = dict(
     org_name="House of Hope",
     city="Longview, Texas",
     opening_status="pre_launch",
