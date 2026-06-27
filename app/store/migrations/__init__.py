@@ -10,6 +10,7 @@ from app.store.migrations import (
     m0003_intent,
     m0004_narrative_edit_origin,
     m0005_cost_schedule,
+    m0006_penny_transcripts,
 )
 
 # Ordered list of (name, ddl) migrations. Append-only.
@@ -19,4 +20,5 @@ MIGRATIONS = [
     ("0003_intent", m0003_intent.SQL),
     ("0004_narrative_edit_origin", m0004_narrative_edit_origin.SQL),
     ("0005_cost_schedule", m0005_cost_schedule.SQL),
+    ("0006_penny_transcripts", m0006_penny_transcripts.SQL),
 ]

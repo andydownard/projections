@@ -33,8 +33,11 @@ def test_m0005_is_registered():
 
 
 def test_m0005_is_appended_last():
-    # Append-only discipline (migrations are an ordered, append-only list).
-    assert MIGRATIONS[-1][0] == _NAME
+    # Append-only discipline (migrations are an ordered, append-only list): m0005
+    # sits immediately after its predecessor m0004. Later migrations (e.g. m0006)
+    # append AFTER it, never before — so assert order, not a frozen tail position.
+    names = [name for name, _ in MIGRATIONS]
+    assert names.index(_NAME) == names.index("0004_narrative_edit_origin") + 1
 
 
 def test_m0005_has_nonempty_sql():

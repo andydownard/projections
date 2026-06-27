@@ -79,5 +79,15 @@ class PostgresStore:
     def create_intent(self, intent: dict) -> dict:
         self._stub("create_intent")
 
+    # --- penny transcripts (§7) ---
+    def create_transcript(self, t: dict) -> dict:
+        self._stub("create_transcript")
+
+    def append_transcript_turn(self, projection_id: str, turn: dict) -> dict:
+        self._stub("append_transcript_turn")
+
+    def get_transcript_by_projection(self, projection_id: str) -> dict | None:
+        self._stub("get_transcript_by_projection")
+
     def get_terms_accepted_at(self, id: str) -> str | None:
         self._stub("get_terms_accepted_at")

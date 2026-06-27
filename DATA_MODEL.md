@@ -30,6 +30,7 @@ This document is the canonical schema and data-access contract for the projectio
 | `research_cache` | global (not owner-scoped) | TTL'd Census + rent-research results keyed by normalized location+size. | §16, §24 |
 | `feedback` | global | Redacted bug reports → GitHub issue; **no projection link, no financial fields.** | §22, §24 |
 | `actuals` | many per projection | **Post-launch (M7), schema only in v1.** Monthly forecast-vs-actual + opt-in benchmarks. | §6.3, §24 |
+| `penny_transcripts` | 0..1 per projection | Persisted per-project Penny conversation (Spec B §7). Wizard-draft transcripts (no projection) are **never** persisted. | Spec B §7 |
 | `schema_migrations` | global | Applied-migration ledger (timpager pattern). | §26 |
 
 ```
@@ -37,6 +38,7 @@ projections ──1:N── revisions
             ──1:N── evidence
             ──1:1── narratives
             ──1:N── actuals        (post-launch)
+            ──1:1── penny_transcripts  (NULL projection_id => never persisted)
 research_cache  (independent, global, TTL)
 feedback        (independent, global, no FK to projections)
 schema_migrations (global)
@@ -137,13 +139,14 @@ CREATE TABLE IF NOT EXISTS revisions (
   computed_json    TEXT NOT NULL,
   model_version    TEXT NOT NULL,
   actor_token_hash TEXT,                        -- which token made the change (forensics)
+  actor            TEXT NOT NULL DEFAULT 'user', -- author class: user|penny|penny_undo|user_undo (Spec B §3/§4)
   change_summary   TEXT NOT NULL DEFAULT '',    -- e.g. "edited labor %", "pinned Payroll#2"
   created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_revisions_projection ON revisions(projection_id, seq DESC);
 ```
 
-A full snapshot is written **per autosave settle** and per explicit save / model upgrade / restore (PRD §19.3, §24). `actor_token_hash` records which capability token authored the change (audit/forensics, PRD §20). Restore (`POST …/revisions/{id}/restore`) writes a **new** revision rather than rewinding in place. `model_version` is captured so a restored snapshot is never silently recomputed.
+A full snapshot is written **per autosave settle** and per explicit save / model upgrade / restore (PRD §19.3, §24). `actor_token_hash` records which capability token authored the change (audit/forensics, PRD §20). The **`actor` enum** (`user | penny | penny_undo | user_undo`, added in migration `0006`, default `'user'`) attributes each revision to its author class so the audit trail distinguishes a Penny edit, a per-field undo, and a manual edit (Spec B §3/§4); it is app-enforced (SQLite has no native enum) and carries to Postgres as the same column. Restore (`POST …/revisions/{id}/restore`) writes a **new** revision rather than rewinding in place. `model_version` is captured so a restored snapshot is never silently recomputed.
 
 > **Retention (ops concern, see [`OPS_RUNBOOK.md`](./OPS_RUNBOOK.md)):** autosave can produce heavy append volume on a single projection. v1 keeps all revisions but a compaction/retention policy (e.g. keep all from the last 30 days + daily milestones beyond that) is a documented backlog item; growth must be bounded before high write rates (backend-lens risk).
 
@@ -274,6 +277,23 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 ```
 
 Mirrors timpager's applied-migration ledger (timpager `SCHEMA.md`). Migrations run **before** any other statement on boot (§10).
+
+### 3.9 `penny_transcripts` (per-project Penny conversation — Spec B §7)
+
+```sql
+CREATE TABLE IF NOT EXISTS penny_transcripts (
+  id            TEXT PRIMARY KEY,                          -- ULID
+  projection_id TEXT REFERENCES projections(id),           -- NULLable: wizard drafts are NEVER persisted
+  turns_json    TEXT NOT NULL DEFAULT '[]',                -- ordered list of turn objects (§4.9)
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_penny_transcripts_projection ON penny_transcripts(projection_id);
+```
+
+Added in migration `0006_penny_transcripts`. One persisted transcript per **saved** projection; the **edit/detail-page** conversation. `projection_id` is a **NULLable** FK by design: a Penny **wizard-draft** conversation has no projection yet, lives only in client state, and is **never written** (Spec B §7) — the Store seam (`create_transcript` / `append_transcript_turn`) **fails closed** (`ValueError`) on a missing/NULL `projection_id` so an ephemeral draft can never be persisted. Owner scoping is enforced at the router: `GET /api/projections/{view_slug}/penny/transcript` resolves the slug under the owner/edit Bearer, then keys on the resolved `projection_id` (no cross-owner read). `turns_json` is opaque `TEXT` ((de)serialized by the app — no JSON1 above the Store interface). **Retention/size cap** (Spec B §7) is applied above the interface on every append (`app/store/penny_retention.py`): keep the most-recent `MAX_TURNS` (200) turns, and truncate the heavy machine payload (`tool_args`, `tool_result_ref`) of `tool` turns older than the most-recent `TOOL_PAYLOAD_RETENTION` (40) window while keeping each turn's human-readable `content` summary. No financial leakage beyond what the projection already holds for that owner.
+
+The **POST tool-use loop** (`POST …/penny`) that appends turns and drives mutations through the normal `PATCH`/`If-Match` path is a later slice (PE5); v1 of this table ships the data model + owner-scoped read seam only.
 
 ---
 
@@ -468,6 +488,36 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
 - `stale_upstream` lists nodes that no longer drive any pinned downstream value (the no-back-solve rule, PRD §14).
 - Every figure here is what the narrative grounding validator checks against (PRD §17).
 
+### 4.9 `penny_transcripts.turns_json` (Penny conversation turns — Spec B §7)
+```json
+[
+  {
+    "role": "user",
+    "content": "Set the Year-1 donor share to 8%.",
+    "ts": "2026-06-27T17:03:11Z"
+  },
+  {
+    "role": "assistant",
+    "content": "Done — Year-1 share is now 8%. Break-even moved to month 6.",
+    "provider": "anthropic",
+    "ts": "2026-06-27T17:03:14Z"
+  },
+  {
+    "role": "tool",
+    "content": "set_assumption(share_y1=0.08) applied",
+    "tool_name": "set_assumption",
+    "tool_args": {"node": "share_y1", "value": "0.08"},
+    "tool_result_ref": "ref_…",
+    "revision_id": "01J…",
+    "ts": "2026-06-27T17:03:13Z"
+  }
+]
+```
+- `role ∈ {user, assistant, tool}`. `content` is the human-readable line shown in the transcript (and the summary kept when an old tool payload is truncated).
+- `tool_name` / `tool_args` / `tool_result_ref` appear on `tool` turns (the §6 tool surface). `revision_id` links a turn that mutated to the revision it produced — the provenance side of the §4 audit trail (revisions carry the matching `actor` enum).
+- `provider ∈ {anthropic, openai}` records which provider actually produced an assistant turn (Spec B §8). `ts` is ISO-8601 UTC.
+- **Retention** (Spec B §7) bounds the list: the oldest turns fall off past `MAX_TURNS`; older `tool` turns keep `content` but have `tool_args`/`tool_result_ref` nulled (marked `"truncated": true`). The cap is applied above the Store interface (`app/store/penny_retention.py`) so both backends behave identically.
+
 ---
 
 ## 5. Cross-cutting data rules
@@ -588,6 +638,11 @@ class Store(Protocol):
     # --- actuals (post-launch) ---
     def upsert_actual(self, a: Actual) -> None: ...
     def list_actuals(self, projection_id: str) -> list[Actual]: ...
+
+    # --- penny transcripts (Spec B §7) ---
+    def create_transcript(self, t: Transcript) -> Transcript: ...            # rejects NULL projection_id (wizard drafts never persisted)
+    def append_transcript_turn(self, projection_id: str, turn: Turn) -> Transcript: ...  # create-on-demand + retention cap
+    def get_transcript_by_projection(self, projection_id: str) -> Transcript | None: ...  # owner-scoped (projection_id pre-resolved)
 ```
 
 **Portability rules enforced by a conformance suite run against BOTH backends:**
@@ -643,6 +698,7 @@ Single-writer SQLite serializes all writes; high autosave write-amplification ac
 | `actuals` | `UNIQUE(projection_id, month)`, `(projection_id, month)` | Forecast-vs-actual. |
 | `narratives` | PK `(projection_id)` | 1:1 lookup. |
 | `feedback` | PK `(support_id)` | Support-ID resolution (staff). |
+| `penny_transcripts` | PK `(id)`, `(projection_id)` | Per-project transcript read by projection. |
 
 ---
 
@@ -699,6 +755,7 @@ CREATE TABLE IF NOT EXISTS revisions (
   computed_json TEXT NOT NULL,
   model_version TEXT NOT NULL,
   actor_token_hash TEXT,
+  actor TEXT NOT NULL DEFAULT 'user',            -- 0006: user|penny|penny_undo|user_undo (Spec B §3/§4)
   change_summary TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
@@ -775,6 +832,15 @@ CREATE TABLE IF NOT EXISTS actuals (
   UNIQUE(projection_id, month)
 );
 CREATE INDEX IF NOT EXISTS idx_actuals_projection ON actuals(projection_id, month);
+
+CREATE TABLE IF NOT EXISTS penny_transcripts (
+  id TEXT PRIMARY KEY,
+  projection_id TEXT REFERENCES projections(id),   -- NULLable: wizard drafts are NEVER persisted
+  turns_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_penny_transcripts_projection ON penny_transcripts(projection_id);
 ```
 
 ---
