@@ -359,6 +359,41 @@ class SqliteStore:
         sql += " ORDER BY updated_at DESC"
         return [dict(r) for r in self._read_conn().execute(sql, (owner_token_hash,))]
 
+    def list_by_clerk_owner(
+        self, clerk_user_id: str, *, include_trashed: bool = False
+    ) -> list[dict]:
+        """Clerk-owner-scoped list, NEVER global (Override TENANT / PRD §20).
+
+        Mirrors ``list_by_owner`` but keys on the verified Clerk identity. An empty
+        ``clerk_user_id`` matches nothing (the NULL token-owned rows must never leak),
+        so a misconfigured caller can never list across owners.
+        """
+        if not clerk_user_id:
+            return []
+        sql = (
+            "SELECT * FROM projections "
+            "WHERE owner_clerk_user_id = ? AND deleted_at IS NULL"
+        )
+        if not include_trashed:
+            sql += " AND status = 'active'"
+        sql += " ORDER BY updated_at DESC"
+        return [dict(r) for r in self._read_conn().execute(sql, (clerk_user_id,))]
+
+    def list_card_summaries_by_clerk_owner(
+        self, clerk_user_id: str, *, include_trashed: bool = False
+    ) -> list[dict]:
+        """Clerk-owner-scoped card list (small columns only — the #178 fast path)."""
+        if not clerk_user_id:
+            return []
+        sql = (
+            "SELECT view_slug, name, status, version, updated_at, summary_json "
+            "FROM projections WHERE owner_clerk_user_id = ? AND deleted_at IS NULL"
+        )
+        if not include_trashed:
+            sql += " AND status = 'active'"
+        sql += " ORDER BY updated_at DESC"
+        return [dict(r) for r in self._read_conn().execute(sql, (clerk_user_id,))]
+
     def list_card_summaries(
         self, owner_token_hash: str, *, include_trashed: bool = False
     ) -> list[dict]:

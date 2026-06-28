@@ -22,7 +22,8 @@ COPY pyproject.toml ./
 # here too — scripts/test_dockerfile_deps.py is a CI guard that fails if they drift.
 # (bleach was missing here once and crash-looped a prod deploy on `import bleach`.)
 RUN pip install --no-cache-dir \
-    "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl bleach
+    "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl bleach \
+    "pyjwt[crypto]>=2.8"
 
 # --- Frontend build ---
 FROM node:22-slim AS web

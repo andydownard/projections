@@ -29,6 +29,14 @@ class Store(Protocol):
     def list_card_summaries(
         self, owner_token_hash: str, *, include_trashed: bool = False
     ) -> list[dict]: ...
+    # Clerk-owner-scoped variants (satellite auth): key on the verified Clerk
+    # identity instead of the hashed capability token. NEVER global (PRD §20).
+    def list_by_clerk_owner(
+        self, clerk_user_id: str, *, include_trashed: bool = False
+    ) -> list[dict]: ...
+    def list_card_summaries_by_clerk_owner(
+        self, clerk_user_id: str, *, include_trashed: bool = False
+    ) -> list[dict]: ...
     def create_projection(self, p: dict) -> dict: ...
     def update_with_version_check(
         self, id: str, expected_version: int, patch: dict[str, Any]
