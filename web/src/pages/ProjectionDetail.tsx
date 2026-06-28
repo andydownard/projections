@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
+import { getOwnerToken } from "../api/projections";
 import { patchProjection, PatchConflictError } from "../api/patch";
 import { submitFeedback } from "../api/feedback";
 import { ProjectionTab, fieldChangeKey, type FieldChangeInfo } from "../components/ProjectionTab";
@@ -188,10 +189,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   // hash. Fall back to the owner token. Then scrub the fragment from the URL so
   // the secret never lands in history/logs (SECURITY.md §2.5).
   const token = useRef<string | null>(
-    edit
-      ? readFragmentSecret(window.location.hash) ??
-          localStorage.getItem("projections.owner_token")
-      : null,
+    edit ? readFragmentSecret(window.location.hash) ?? getOwnerToken() : null,
   );
   useEffect(() => {
     if (edit && window.location.hash) {
