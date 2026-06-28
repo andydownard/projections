@@ -23,12 +23,15 @@ export type Basis = "city" | "county";
 export const STEPS = ["store", "trade-area", "donor-market", "cost", "review"] as const;
 export type StepKey = (typeof STEPS)[number];
 
+// Each label is an imperative VERB phrase (not a bare noun) so a non-finance ED
+// reads the indicator as an action to take — "Name your store", not "Store".
+// The step headings in each Step*.tsx mirror these exactly.
 export const STEP_LABELS: Record<StepKey, string> = {
-  store: "Store",
-  "trade-area": "Trade area",
-  "donor-market": "Donor market",
-  cost: "Cost schedule",
-  review: "Review",
+  store: "Name your store",
+  "trade-area": "Find your trade area",
+  "donor-market": "Set donor shares",
+  cost: "Plan your costs",
+  review: "Review & generate",
 };
 
 // The wizard seeds the non-collected engine inputs with House of Hope design
@@ -250,16 +253,23 @@ export function useWizardState(initial?: Partial<WizardDraft>): WizardState {
   // canGenerate on the last step, so the message always tracks the real gate.
   const blockReason = useMemo<string | null>(() => {
     if (isLast) {
-      // The final gate is canGenerate (households + terms), not just the review
-      // validator — households can be missing even when terms are checked.
+      // The final gate is canGenerate (households + terms). List EVERY unmet
+      // requirement — both can block at once, so never stop at the first.
+      const missing: string[] = [];
       if (!hasValue(householdsValue))
-        return "Trade-area households are required — go back to the Trade area step to look them up or enter them.";
-      if (!draft.termsAccepted)
-        return "Accept the planning-estimates terms below to generate the projection.";
-      return null;
+        missing.push(
+          "look up your trade-area households (go back to the Find your trade area step)",
+        );
+      if (!draft.termsAccepted) missing.push("accept the planning-estimates terms below");
+      return missing.length === 0
+        ? null
+        : `To generate the projection, ${formatList(missing)}.`;
     }
     switch (stepKey) {
       case "store":
+        // Next on the store step is gated on the name alone (the address is
+        // collected here but gates households on the Find-your-trade-area step,
+        // not this button), so name it — and only it — to stay accurate.
         return draft.name.trim().length > 0 ? null : "Enter a store name to continue.";
       case "trade-area":
         return hasValue(householdsValue)
@@ -279,14 +289,26 @@ export function useWizardState(initial?: Partial<WizardDraft>): WizardState {
           ? null
           : `Enter a donor-market share above 0 for ${formatList(missing)} to continue.`;
       }
-      case "cost":
-        return validators.cost()
-          ? null
-          : "Give every cost row a category, a month (1 or later), and an amount (0 or more) to continue.";
+      case "cost": {
+        // List the SPECIFIC unmet cost-step requirements (the opening month
+        // and/or the per-row fields) rather than a generic catch-all, so the
+        // operator fixes exactly what's blocking. Mirrors validators.cost().
+        const rows = draft.costSchedule ?? [];
+        const missing: string[] = [];
+        if (!((draft.openingMonthNumber ?? 1) >= 1))
+          missing.push("set the opening month to 1 or later");
+        if (rows.some((r) => r.category.trim().length === 0))
+          missing.push("name every cost row");
+        if (rows.some((r) => !(r.month >= 1)))
+          missing.push("put every cost row on month 1 or later");
+        if (rows.some((r) => !(r.amount >= 0)))
+          missing.push("give every cost row an amount of 0 or more");
+        return missing.length === 0 ? null : `To continue, ${formatList(missing)}.`;
+      }
       default:
         return null;
     }
-  }, [isLast, stepKey, draft, householdsValue, validators]);
+  }, [isLast, stepKey, draft, householdsValue]);
 
   return {
     draft,

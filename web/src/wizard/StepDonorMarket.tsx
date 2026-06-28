@@ -16,7 +16,7 @@ export function StepDonorMarket({ state }: { state: WizardState }) {
   return (
     <section className="wizard-step" aria-labelledby="step-donor-heading">
       <h2 id="step-donor-heading" className="wizard-step__heading">
-        Donor market
+        Set donor shares
       </h2>
       <p className="wizard-step__lede">
         What share of trade-area households donate each year? Set three explicit

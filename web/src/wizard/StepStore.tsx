@@ -10,7 +10,7 @@ export function StepStore({ state }: { state: WizardState }) {
   return (
     <section className="wizard-step" aria-labelledby="step-store-heading">
       <h2 id="step-store-heading" className="wizard-step__heading">
-        Store
+        Name your store
       </h2>
       <p className="wizard-step__lede">
         Name the store and find its address — we pull the trade-area households

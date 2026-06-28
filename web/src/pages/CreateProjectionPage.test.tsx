@@ -202,14 +202,14 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
     // 3. Donor market (shares pre-seeded; Back/Next works)
-    expect(screen.getByRole("heading", { name: /donor market/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /set donor shares/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^back$/i }));
     expect(screen.getByRole("heading", { name: /trade area/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
     // 4. Cost schedule
-    expect(screen.getByRole("heading", { name: /cost schedule/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /plan your costs/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
     // 5. Review -> accept terms (explicit, #141/PRD §21) -> Generate
