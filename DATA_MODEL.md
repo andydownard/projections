@@ -505,7 +505,8 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
   ],
   "settings": {
     "laborPct": 0.40, "marketingPct": 0.0375, "suppliesPct": 0.05, "cardPct": 0.02,
-    "payrollTaxPct": 0.075, "salvagePct": 0.008, "escalator": 0.03, "basket": 17.08,
+    "payrollTaxPct": 0.075, "salvagePct": 0.008, "escalator": 0.03,
+    "utilitiesPerSqft": 2.23, "rentPerSqft": null, "basket": 17.08,
     "donationsPerHh": 3, "shareY1": 0.06, "shareY2": 0.08, "shareY3": 0.10,
     "occupancyAnnual": 90000, "leaseType": "nnn", "salesfloorSqft": 7000, "reserveBuffer": 25000
   },
@@ -522,6 +523,7 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
 ```
 
 **Contract notes:**
+- `settings.utilitiesPerSqft` + `settings.rentPerSqft` (`compute_schema_version ≥ 1.3.0`, #245) are additive raw scalars. `utilitiesPerSqft` is the rate the **Utilities/trash service** line is now derived from (`building_sqft × utilitiesPerSqft`, default `$2.23`); `rentPerSqft` echoes the input `rent_per_sqft` when occupancy was entered that way (else `null` — occupancy was entered as a flat annual `$`). Both are display-only context for the wizard/inspector; the engine remains the math authority.
 - `milestones` (`compute_schema_version ≥ 1.2.0`) carries the three detail-page milestones (`grandOpening`, `breakEven`, `payback`), each a `{raw, display}` project-month value with the **server as the formatting authority** ("Month 6"). An unreached milestone is `{raw: null, display: "N/A", reason}` (the N/A-with-reason flag pattern, **never a misleading 0**); `payback` adds a `duration` display ("25 months") when reached. The KPI strip's **Payback period** KPI is sourced from `milestones.payback`; the legacy `simple_payback_years` KPI is retired from the view-model surface (still computed internally). See [`ENGINE_CONTRACT.md`](./ENGINE_CONTRACT.md) §6.6.
 - `monthly[]` covers **all project months `1..N`** (`N = opening_month_number + 11`), x-axis from month 1. Each entry is `{ revenue, expenses, scheduledCosts, net, cumulativeCash }` — the same columns as the `.xlsx` Monthly tab, with `net = revenue − expenses − scheduledCosts`, so a pre-opening month (`1..G-1`) reads as a real monthly loss and `cumulativeCash` accumulates from month 1.
 - `reco.tag ∈ {proceed, revise, find_cheaper_rent, raise_cash, delay, do_not_proceed}` (PRD §12.3). The engine emits the **semantic tag + severity**, never a hex color; the client maps tag→token (frontend lens, brand-vs-semantic token separation). `reco.color/bg/icon` from the prototype are **not** emitted by the API.

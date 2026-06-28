@@ -87,6 +87,10 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
         ("supplies_pct", _f(a.supplies_pct), PCT),
         ("occupancy_y1", _f(result.occupancy[1]), USD),
         ("escalator", _f(a.escalator), PCT),
+        # Utilities/trash service is now DERIVED as building_sqft × utilities_per_sqft
+        # (feature #245); both are blue inputs so the utilities row is a live formula.
+        ("building_sqft", _f(inputs.building_sqft), NUM),
+        ("utilities_per_sqft", _f(a.utilities_per_sqft), USD),
     ]
     for name, value, fmt in input_specs:
         ws[f"A{row}"] = name
@@ -295,6 +299,10 @@ def _expense_formula(label, col, tr, sh, rowmap):
         # occupancy_y1 * (1+escalator)^(year-1); year derived from column.
         yexp = {"B": 0, "C": 1, "D": 2}[col]
         return f"{sh['occupancy_y1']}*(1+{sh['escalator']})^{yexp}"
+    if label == "Utilities/trash service":
+        # Sq-ft-derived (feature #245): building_sqft × utilities_per_sqft. Flat across
+        # years (sq ft drives it, not the rent escalator) — same value every column.
+        return f"{sh['building_sqft']}*{sh['utilities_per_sqft']}"
     # fixed annual line
     return f"{sh[label]}"
 

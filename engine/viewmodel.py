@@ -242,6 +242,11 @@ def to_view_model(result):
         "payrollTaxPct": float(D(a.payroll_tax_pct)),
         "salvagePct": float(D(a.salvage_pct)),
         "escalator": float(D(a.escalator)),
+        "utilitiesPerSqft": float(D(a.utilities_per_sqft)),
+        "rentPerSqft": (
+            float(D(result.inputs.rent_per_sqft))
+            if result.inputs.rent_per_sqft is not None else None
+        ),
         "basket": float(D(a.basket)),
         "donationsPerHh": a.donations_per_hh,
         "shareY1": float(D(result.inputs.share_y1)),

@@ -4,19 +4,25 @@ No formula in the engine may hard-code a literal; it must reference a named
 constant here. Money/percent literals are kept as strings or exact Decimals at
 the point of use; these module constants name the *default* assumption values.
 """
+from __future__ import annotations
 
-MODEL_VERSION = "2.4.0"          # math/shape change => bump (2.4.0: first_year_cash_gap
-# is scoped STRICTLY to the operating Year-1 window G..G+11, so a scheduled cost beyond
-# G+11 no longer leaks its deeper trough into the first-year headline (#182); cash_runway_
-# months ignores leading zero-cost pre-opening months instead of trivially reporting 1
-# (#184); 2.3.0: downside sensitivity rent stress is applied to the RESOLVED occupancy —
-# rent_per_sqft and nnn opex are now stressed too, not just occupancy_annual (#181);
-# 2.2.0: multi-month pre-opening timeline + scheduled costs + recomputed metrics + 3
-# milestones)
+MODEL_VERSION = "2.5.0"          # math/shape change => bump (2.5.0: the Utilities/
+# trash service line stops being a flat fixed-$ and is DERIVED as UTILITIES_PER_SQFT ×
+# building_sqft (feature #245) — same existing pinnable line/slot, now sq-ft-scaled;
+# the default cost-schedule seed scales Equipment & Fixtures + Build-out per sq ft.
+# Both are ANCHORED so 10,000 sq ft reproduces today's literals byte-for-byte;
+# 2.4.0: first_year_cash_gap is scoped STRICTLY to the operating Year-1 window G..G+11,
+# so a scheduled cost beyond G+11 no longer leaks its deeper trough into the first-year
+# headline (#182); cash_runway_months ignores leading zero-cost pre-opening months
+# instead of trivially reporting 1 (#184); 2.3.0: downside sensitivity rent stress is
+# applied to the RESOLVED occupancy — rent_per_sqft and nnn opex are now stressed too,
+# not just occupancy_annual (#181); 2.2.0: multi-month pre-opening timeline + scheduled
+# costs + recomputed metrics + 3 milestones)
 # view-model shape changes => bump (1.1.0: +sales/sqft, occupancy & labor ratio
 # KPIs; 1.2.0: +milestones{grandOpening,breakEven,payback} {raw,display}, payback-
-# period KPI replaces simple-payback-years, monthly[]+scheduledCosts)
-COMPUTE_SCHEMA_VERSION = "1.2.0"
+# period KPI replaces simple-payback-years, monthly[]+scheduledCosts; 1.3.0:
+# +settings.utilitiesPerSqft + settings.rentPerSqft (additive scalars, feature #245))
+COMPUTE_SCHEMA_VERSION = "1.3.0"
 
 # --- export trust copy (#192). Single source for the "planning estimates, not
 # advice" disclaimer + AI-narrative disclosure that the terms gate exists to
@@ -48,17 +54,32 @@ PAYROLL_TAX_PCT_OF_PAYROLL = "0.075"  # §7.3
 # --- occupancy
 RENT_ESCALATOR = "0.03"              # §7.3 — compound, Y2–Y3 (resolved §1)
 
-# --- fixed annual operating $ (not %-based); "Store/office supplies" REMOVED.
+# --- sq-ft scaling basis (feature #245). The example store is 10,000 sq ft; the
+# per-sq-ft constants below are the example's literal dollar figures divided by it,
+# so each one × EXAMPLE_BUILDING_SQFT reproduces today's literal EXACTLY (the anchor
+# invariant that keeps every 10k golden byte-identical). No engine formula hard-codes
+# the literal; it references these named constants.
+EXAMPLE_BUILDING_SQFT = 10000        # reference/.../house_of_hope.json sqft
+UTILITIES_PER_SQFT = "2.23"          # 22,300 / 10,000  (utilities/trash, $/sqft/yr)
+FIXTURES_PER_SQFT = "4.50"           # 45,000 / 10,000  (Equipment & Fixtures, $/sqft)
+BUILDOUT_PER_SQFT = "5.00"           # 50,000 / 10,000  (Build-out / Renovations / TI)
+DEFAULT_RENT_PER_SQFT = "12.00"      # AI-off manual default — 120,000 / 10,000 (golden parity)
+
+# --- fixed annual operating $ (not %-based); "Store/office supplies" REMOVED, and
+# "Utilities/trash service" is NO LONGER here — it is derived from UTILITIES_PER_SQFT
+# × building_sqft in compute (feature #245), keeping its same pinnable line + slot.
 FIXED_ANNUAL = {
     "Insurance liability": 2000,
     "Internet, Phones": 3000,
     "Pest control": 300,
     "Repairs/maintenance": 1600,
     "Security system": 900,
-    "Utilities/trash service": 22300,
 }
 
-# --- one-time startup (Year 0). Lease deposit is computed, not a literal.
+# --- one-time startup (Year 0). Lease deposit is computed, not a literal. Equipment
+# & Fixtures / Build-out are the per-sq-ft anchor source: at EXAMPLE_BUILDING_SQFT they
+# equal FIXTURES_PER_SQFT/BUILDOUT_PER_SQFT × sqft (the default cost-schedule seed scales
+# them; this no-schedule lump stays at the example basis).
 STARTUP = {
     "Thrift Store Consultant": 100000,
     "Equipment & Fixtures": 45000,
@@ -74,17 +95,40 @@ STARTUP = {
 DEFAULT_OPENING_MONTH_NUMBER = 1
 
 
-def default_cost_schedule() -> list[dict]:
-    """The legacy/migration-default timed cost schedule, derived from ``STARTUP``.
+def _scaled_dollars(per_sqft: str, building_sqft) -> int | float:
+    """``per_sqft × building_sqft`` as a whole-dollar int when integral, else float.
 
-    Places every fixed ``STARTUP`` line at month 1 — a single lump at opening. This
-    is the backfill for projections without a schedule (legacy rows + the seeded
-    example) and reproduces today's numbers exactly (Spec §7). Derived from
-    ``STARTUP`` so the migration backfill and the engine default never drift.
+    Whole-dollar seeds stay ``int`` so the no-arg (10,000 sq ft) default is
+    byte-identical to the frozen migration literal (``"amount": 45000``, not
+    ``45000.0``) and ``json.dumps`` of the default matches it.
     """
+    from decimal import Decimal
+
+    amt = Decimal(str(per_sqft)) * Decimal(str(building_sqft))
+    return int(amt) if amt == amt.to_integral_value() else float(amt)
+
+
+def default_cost_schedule(building_sqft=EXAMPLE_BUILDING_SQFT) -> list[dict]:
+    """The legacy/migration-default timed cost schedule (feature #245).
+
+    Places every line at month 1 — a single lump at opening — the backfill for
+    projections without a schedule (legacy rows + the seeded example). Equipment &
+    Fixtures and Build-out scale with ``building_sqft`` (``FIXTURES_PER_SQFT`` /
+    ``BUILDOUT_PER_SQFT`` × sqft); the Consultant + Legal lines stay flat. The
+    default ``building_sqft`` is the example's 10,000 sq ft so a no-arg call (the
+    legacy/migration backfill) reproduces today's literals EXACTLY and never drifts.
+    """
+    amounts = {
+        "Thrift Store Consultant": STARTUP["Thrift Store Consultant"],
+        "Equipment & Fixtures": _scaled_dollars(FIXTURES_PER_SQFT, building_sqft),
+        "Build-out / Renovations / Tenant Improvements": _scaled_dollars(
+            BUILDOUT_PER_SQFT, building_sqft),
+        "Legal, Permits, Insurance Setup, Signage": STARTUP[
+            "Legal, Permits, Insurance Setup, Signage"],
+    }
     return [
         {"category": category, "month": DEFAULT_OPENING_MONTH_NUMBER, "amount": amount}
-        for category, amount in STARTUP.items()
+        for category, amount in amounts.items()
     ]
 
 

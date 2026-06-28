@@ -5,12 +5,12 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    # 2.4.0: first_year_cash_gap scoped strictly to the Year-1 window G..G+11 (a cost
-    # beyond G+11 no longer leaks into the headline, #182) + cash_runway_months ignores
-    # leading zero-cost pre-opening months (#184).
-    assert model.MODEL_VERSION == "2.4.0"
-    # 1.2.0: view-model gained the milestones block + payback-period KPI (shape only).
-    assert model.COMPUTE_SCHEMA_VERSION == "1.2.0"
+    # 2.5.0: Utilities/trash service is derived from UTILITIES_PER_SQFT × building_sqft
+    # (was a flat fixed-$); the default cost-schedule seed scales fixtures/build-out by
+    # sq ft. Both anchored so 10k reproduces today's literals (feature #245).
+    assert model.MODEL_VERSION == "2.5.0"
+    # 1.3.0: view-model settings gained utilitiesPerSqft + rentPerSqft (additive).
+    assert model.COMPUTE_SCHEMA_VERSION == "1.3.0"
 
 
 def test_demand_constants():
@@ -34,12 +34,22 @@ def test_occupancy_and_capital_constants():
     assert Decimal(str(model.SENSITIVITY_DELTA)) == Decimal("0.25")
 
 
-def test_fixed_annual_excludes_supplies():
-    # Supplies became a %-line; the fixed $3,700 supplies entry is REMOVED.
+def test_fixed_annual_excludes_supplies_and_utilities():
+    # Supplies became a %-line (REMOVED); utilities became a sq-ft-derived line so it
+    # is no longer a flat fixed-$ entry either (feature #245).
     assert "Store/office supplies" not in model.FIXED_ANNUAL
+    assert "Utilities/trash service" not in model.FIXED_ANNUAL
     assert model.FIXED_ANNUAL["Insurance liability"] == 2000
-    assert model.FIXED_ANNUAL["Utilities/trash service"] == 22300
-    assert sum(model.FIXED_ANNUAL.values()) == 2000 + 3000 + 300 + 1600 + 900 + 22300
+    assert sum(model.FIXED_ANNUAL.values()) == 2000 + 3000 + 300 + 1600 + 900
+
+
+def test_per_sqft_constants_present_and_anchored():
+    from decimal import Decimal
+    sqft = Decimal(str(model.EXAMPLE_BUILDING_SQFT))
+    assert Decimal(model.UTILITIES_PER_SQFT) * sqft == Decimal("22300")
+    assert Decimal(model.FIXTURES_PER_SQFT) * sqft == Decimal("45000")
+    assert Decimal(model.BUILDOUT_PER_SQFT) * sqft == Decimal("50000")
+    assert Decimal(model.DEFAULT_RENT_PER_SQFT) == Decimal("12.00")
 
 
 def test_startup_lines():

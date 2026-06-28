@@ -76,6 +76,7 @@ class Assumptions:
     payroll_tax_pct: str = model.PAYROLL_TAX_PCT_OF_PAYROLL
     salvage_pct: str = model.SALVAGE_PCT_OF_RETAIL
     escalator: str = model.RENT_ESCALATOR
+    utilities_per_sqft: str = model.UTILITIES_PER_SQFT
     basket: str = model.AVG_BASKET_VALUE
     donations_per_hh: int = model.DONATIONS_PER_HH_PER_YEAR
     reserve_buffer: int = model.CASH_RESERVE_BUFFER
@@ -197,6 +198,12 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
         exp["Supplies & processing"] = _resolve_get(
             overrides, "Supplies & processing", y, total_rev * D(assumptions.supplies_pct))
         exp["Rent"] = _resolve_get(overrides, "Rent", y, occupancy[y])
+        # Utilities/trash service is the SAME pinnable component line + slot as before,
+        # now DERIVED as UTILITIES_PER_SQFT × building_sqft (feature #245). Anchored so
+        # 10,000 sq ft == today's $22,300. Not a new DAG node / xlsx row.
+        exp["Utilities/trash service"] = _resolve_get(
+            overrides, "Utilities/trash service", y,
+            D(inputs.building_sqft) * D(assumptions.utilities_per_sqft))
         for label, val in assumptions.fixed_annual.items():
             exp[label] = _resolve_get(overrides, label, y, D(val))
 
