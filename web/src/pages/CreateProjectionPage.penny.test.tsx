@@ -182,7 +182,8 @@ describe("CreateProjectionPage — Generate persists a Penny-built schedule with
     // 2. → Trade area (households resolved)
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await waitFor(() => expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"));
-    // 3. → Donor market, 4. → Cost, 5. → Review
+    // 3. → Space & rent, 4. → Donor market, 5. → Cost, 6. → Review
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));

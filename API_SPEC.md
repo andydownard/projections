@@ -248,16 +248,17 @@ Notes:
   "inputs": {
     "opening":"2027-03", "opening_status":"pre_launch",
     "building_sqft":10000, "salesfloor_pct":0.70, "lease_type":"nnn",
-    "donation_value":74,
+    "donation_value":74, "rent_per_sqft":12,
     "demand": { "mode":"market_share", "share_y1":0.06, "share_y2":0.08, "share_y3":0.10 },
     "source_of_funds": { "cash":150000, "grant":50000 }
   },
   "demand_drivers": { "competition":"low", "pickup_service":true },
-  "assumptions": { "labor_pct":0.40 },
+  "assumptions": { "labor_pct":0.40, "utilities_per_sqft":"2.23" },
   "terms_accepted": true
 }
 ```
 
+- **Occupancy driver (#245):** the wizard ships **`inputs.rent_per_sqft`** (and leaves `occupancy_annual` null) so the engine resolves occupancy = `building_sqft × rent_per_sqft`; a flat `inputs.occupancy_annual` is still accepted for back-compat and **takes precedence when present**. `assumptions.utilities_per_sqft` (default `"2.23"`) scales the Utilities/trash line (`building_sqft × utilities_per_sqft`); the Equipment & Fixtures / Build-out cost-schedule rows are seeded from `FIXTURES_PER_SQFT`/`BUILDOUT_PER_SQFT × building_sqft` (anchored so 10,000 sq ft reproduces today's literals).
 - **Validation:** `share_y1/y2/y3` are **three explicit values** — no auto-midpoint (PRD §7.1; supersedes `methodology.md` line 17). `salesfloor_pct ∈ (0,1]`; `building_sqft > 0` (0 sq ft blocked, §12.4); `terms_accepted` must be `true` before any export/share is later allowed (§21) — create may proceed without it, but exports are gated (see §6/§7).
 - **Behavior:** computes server-side (the only math authority), persists `inputs/assumptions/trade_area/computed_json/monthly_json/flags`, stamps `model_version`, sets `version=1`, mints owner + edit + view tokens. When `terms_accepted: true` is sent, the server **stamps `terms_accepted_at` = now** so the later `.xlsx`/packet exports (§6/§7) are reachable; when it is absent/`false`, `terms_accepted_at` stays unset and exports `403 terms_required`. `terms_accepted` defaults to `false` — an unchecked box must never silently accept.
 - **Response `201`:** the full view-model (§3) **plus** the one-time secrets, returned **only here** (never stored in retrievable plaintext on the server beyond `view_slug`):

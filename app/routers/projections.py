@@ -279,6 +279,10 @@ class AssumptionsIn(BaseModel):
     payroll_tax_pct: Optional[str] = None
     salvage_pct: Optional[str] = None
     escalator: Optional[str] = None
+    # Sq-ft-scaled utilities (#245): the engine derives the Utilities/trash line as
+    # building_sqft × utilities_per_sqft. Optional + None-default so existing callers
+    # (and the golden fixtures) keep the model default ($2.23/sq ft) untouched.
+    utilities_per_sqft: Optional[str] = None
     basket: Optional[str] = None
 
 

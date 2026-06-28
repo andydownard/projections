@@ -49,13 +49,27 @@ function jsonResponse(b: unknown) {
   );
 }
 
-/** Wire fetch so autocomplete/resolve/create all answer; capture POST bodies. */
+// A representative server rent-research result (#245). The wizard pre-fills the
+// Space & rent step's rent from this, with a verified-vs-estimated badge + sources.
+const RESEARCH = {
+  rent_per_sqft: 18, estimate: 18, low: 15, high: 22,
+  rent_type: "nnn", opex: 3, basis: "$/sq ft/yr",
+  confidence: "high", verified: true, provenance: "verified",
+  sources: [{ url: "https://broker.example", title: "Longview retail lease", source_date: "2026-05" }],
+  ai_enabled: true, cached: false,
+};
+
+/** Wire fetch so autocomplete/resolve/research/create all answer; capture POST bodies. */
 function wireFetch(bodies: Record<string, unknown>) {
   return vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const url = String(input);
     if (url.includes("/api/places/autocomplete"))
       return jsonResponse({ predictions: [{ description: "Dallas, TX, USA", place_id: "PID_DAL" }] });
     if (url.includes("/api/places/resolve")) return jsonResponse(RESOLVED);
+    if (url.includes("/api/research")) {
+      bodies[url] = JSON.parse(String(init?.body));
+      return jsonResponse(RESEARCH);
+    }
     bodies[url] = JSON.parse(String(init?.body));
     return jsonResponse({ ...VM, owner_token: "tok" });
   });
@@ -185,7 +199,7 @@ describe("CreateProjectionPage — households empty-until-resolved (§4)", () =>
 });
 
 describe("CreateProjectionPage — full flow to Generate", () => {
-  it("steps through all five steps and POSTs the create body with the new inputs", async () => {
+  it("steps through all steps and POSTs the create body with the new inputs", async () => {
     const bodies: Record<string, unknown> = {};
     wireFetch(bodies);
     const user = userEvent.setup();
@@ -201,18 +215,26 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     await waitFor(() => expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 3. Donor market (shares pre-seeded; Back/Next works)
+    // 3. Space & rent — rent pre-fills from /api/research (verified badge + sources)
+    expect(screen.getByRole("heading", { name: /size .* rent your space/i })).toBeInTheDocument();
+    await waitFor(() =>
+      expect((screen.getByLabelText(/rent \(\$\/sq ft/i) as HTMLInputElement).value).toBe("18"),
+    );
+    expect(screen.getByTestId("rent-badge")).toHaveAttribute("data-verified", "true");
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+
+    // 4. Donor market (shares pre-seeded; Back/Next works)
     expect(screen.getByRole("heading", { name: /set donor shares/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^back$/i }));
-    expect(screen.getByRole("heading", { name: /trade area/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /size .* rent your space/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 4. Cost schedule
+    // 5. Cost schedule
     expect(screen.getByRole("heading", { name: /plan your costs/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 5. Review -> accept terms (explicit, #141/PRD §21) -> Generate
+    // 6. Review -> accept terms (explicit, #141/PRD §21) -> Generate
     expect(screen.getByRole("heading", { name: /review/i })).toBeInTheDocument();
     // Generate is gated until the operator actively accepts terms (not pre-checked).
     expect(screen.getByRole("button", { name: /generate/i })).toBeDisabled();
@@ -221,12 +243,23 @@ describe("CreateProjectionPage — full flow to Generate", () => {
 
     await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
     const body = bodies["/api/projections"] as {
-      inputs: { opening_month_number: number; cost_schedule: unknown[]; target_opening_date: string | null };
+      inputs: {
+        opening_month_number: number;
+        cost_schedule: unknown[];
+        target_opening_date: string | null;
+        rent_per_sqft: string;
+        occupancy_annual: string | null;
+      };
+      assumptions: { utilities_per_sqft: string };
       trade_area: { households_source: string };
       terms_accepted: boolean;
     };
     expect(body.inputs.opening_month_number).toBe(1);
     expect(Array.isArray(body.inputs.cost_schedule)).toBe(true);
+    // #245: occupancy is driven by sq ft × rent — the research pre-fill ($18) flows.
+    expect(body.inputs.rent_per_sqft).toBe("18");
+    expect(body.inputs.occupancy_annual).toBeNull();
+    expect(body.assumptions.utilities_per_sqft).toBe("2.23");
     expect(body.trade_area.households_source).toBe("census_acs");
     // #141: the operator's acceptance travels in the create body so the server can
     // persist terms_accepted_at and the .xlsx / packet exports are reachable.
@@ -250,6 +283,7 @@ describe("CreateProjectionPage — open full projection link (refine loop)", () 
     await waitFor(() =>
       expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"),
     );
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> space & rent
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> cost schedule
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> review
@@ -288,6 +322,7 @@ describe("CreateProjectionPage — create-result focus + announce (a11y #203)", 
     await waitFor(() =>
       expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"),
     );
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> space & rent
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> cost schedule
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> review
