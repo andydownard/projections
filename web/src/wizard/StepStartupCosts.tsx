@@ -1,15 +1,27 @@
 // web/src/wizard/StepStartupCosts.tsx — wizard step 5 (last): set startup costs.
 //
 // The home for RENT (owner Decision 10): the #245 research-prefilled, editable
-// $/sq ft rate with its verified-vs-estimated badge + sources sits ABOVE today's
-// timed cost editor. Utilities & fixtures auto-seed the cost rows behind the scenes
-// (set on the square-footage step), so only rent is surfaced here. The opening DATE
-// field is gone (owner Decision 13 — `targetOpeningDate` dropped); the grand-opening
-// month stays. The editor only COLLECTS rows; totals are derived SERVER-side — no
-// client math (PRD §13 / Spec §5). The last-step primary button ("Generate
-// projections") lives in CreateProjectionPage.
+// $/sq ft rate with its verified-vs-estimated badge + sources sits ABOVE the cost
+// grid. Utilities & fixtures auto-seed the cost rows behind the scenes (set on the
+// square-footage step), so only rent is surfaced here. The opening DATE field is gone
+// (owner Decision 13 — `targetOpeningDate` dropped); the grand-opening MONTH is set on
+// the grid's draggable column (#34).
+//
+// The cost editor is the ROWS × MONTHS grid (Epic D #263, decision #31): line-items as
+// rows, months 1–12 as columns, a Total column. The schema stays flat — the grid is a
+// frontend pivot. Totals come from POST /api/cost-schedule/preview as `{raw, display}`
+// (decision #15) — NO client math (the client renders, never sums).
+//
+// #32: a contextual "Upload consultant proposal" affordance hands the PDF to Penny,
+// who reads it and sets the consultant pay schedule + grand-opening month (server-side
+// parse_proposal + edit_cost_schedule). A descriptive spinner runs while she reads.
+// The manual grid + drag stay fully working if AI is unavailable (graceful degradation).
+import { useEffect, useRef, useState } from "react";
+
+import { previewCostSchedule, type CostSchedulePreview } from "../api/costSchedule";
 import { CostScheduleEditor } from "../components/CostScheduleEditor";
 import { assumptionSourceLabel } from "../components/displayLabels";
+import { DEFAULT_OPENING_MONTH_NUMBER, type CostScheduleRow } from "./shareHelper";
 import type { AssumptionSource, WizardState } from "./useWizardState";
 
 /** A short "what would change this" hint shown under the rent estimate. */
@@ -36,11 +48,105 @@ function provenanceText(source: AssumptionSource): string {
   return assumptionSourceLabel(source);
 }
 
-export function StepStartupCosts({ state }: { state: WizardState }) {
+export interface StepStartupCostsProps {
+  state: WizardState;
+  /** Hand a chosen proposal PDF to Penny (upload → parse_proposal → edit_cost_schedule).
+   *  Omitted when AI is off — the manual grid stays the path. */
+  onUploadProposal?: (file: File) => void | Promise<void>;
+  /** True while Penny is reading the proposal (drives the descriptive spinner). */
+  proposalBusy?: boolean;
+  /** A plain-language message if the proposal couldn't be read (never a crash). */
+  proposalError?: string | null;
+}
+
+/** The contextual proposal affordance (#32): pick a PDF → Penny lays out the schedule.
+ *  Shown only when AI is available (onUploadProposal present). */
+function ProposalAffordance({
+  onUploadProposal,
+  busy,
+  error,
+}: {
+  onUploadProposal: (file: File) => void | Promise<void>;
+  busy: boolean;
+  error?: string | null;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  return (
+    <div className="cost-proposal" data-testid="proposal-affordance">
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        data-testid="proposal-file-input"
+        aria-label="Upload consultant proposal PDF"
+        style={{ display: "none" }}
+        disabled={busy}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void onUploadProposal(file);
+          if (inputRef.current) inputRef.current.value = "";
+        }}
+      />
+      <button
+        type="button"
+        className="cost-proposal__btn"
+        disabled={busy}
+        onClick={() => inputRef.current?.click()}
+        data-testid="proposal-upload-btn"
+      >
+        <span aria-hidden="true">📄</span> Upload consultant proposal
+      </button>
+      <span className="cost-proposal__caption">
+        Penny reads it and lays out the consultant schedule + grand-opening month.
+      </span>
+      {busy && (
+        <p className="cost-proposal__spinner" role="status" data-testid="proposal-spinner">
+          <span className="wizard-spinner__dot" aria-hidden="true" /> Penny is reading your
+          proposal…
+        </p>
+      )}
+      {error && !busy && (
+        <p className="cost-proposal__error" role="alert" data-testid="proposal-error">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function StepStartupCosts({
+  state,
+  onUploadProposal,
+  proposalBusy = false,
+  proposalError = null,
+}: StepStartupCostsProps) {
   const { draft, rentSource, rentResearch, rentResearchLoading, rentResearchError } = state;
 
   const lowConfidence = rentSource === "research" && rentResearch?.confidence === "low";
   const showManualNote = rentResearchError || rentResearch?.ai_enabled === false;
+
+  // Server totals for the grid (decision #15): the client never sums. Debounced + abort
+  // so rapid cell edits coalesce; a failure keeps the last good totals (presentation,
+  // never a gate). Keyed on a stable serialization of the rows + the sqft fallback.
+  const [totals, setTotals] = useState<CostSchedulePreview | null>(null);
+  const rows = state.costSchedule;
+  const rowsKey = JSON.stringify(rows);
+  const buildingSqft = draft.buildingSqft;
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      previewCostSchedule({ rows, buildingSqft, signal: controller.signal })
+        .then(setTotals)
+        .catch(() => {
+          /* keep prior totals — totals are presentation, never a gate */
+        });
+    }, 200);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowsKey, buildingSqft]);
 
   return (
     <section className="wizard-step" aria-labelledby="step-cost-heading">
@@ -123,12 +229,20 @@ export function StepStartupCosts({ state }: { state: WizardState }) {
         <p className="assumption__hint">{WHAT_CHANGES_RENT}</p>
       </div>
 
+      {/* #32 — contextual "Upload consultant proposal" → Penny (graceful when AI off). */}
+      {onUploadProposal && (
+        <ProposalAffordance
+          onUploadProposal={onUploadProposal}
+          busy={proposalBusy}
+          error={proposalError}
+        />
+      )}
+
       <CostScheduleEditor
-        rows={state.costSchedule}
-        openingMonthNumber={state.draft.openingMonthNumber ?? 1}
-        onAddRow={state.addCostRow}
-        onUpdateRow={state.updateCostRow}
-        onRemoveRow={state.removeCostRow}
+        rows={rows}
+        openingMonthNumber={draft.openingMonthNumber ?? DEFAULT_OPENING_MONTH_NUMBER}
+        totals={totals}
+        onChangeRows={(next: CostScheduleRow[]) => state.set("costSchedule", next)}
         onChangeOpeningMonth={(v) => state.set("openingMonthNumber", v)}
       />
     </section>

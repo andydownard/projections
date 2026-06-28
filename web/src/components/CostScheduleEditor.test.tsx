@@ -3,198 +3,201 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { CostScheduleEditor } from "./CostScheduleEditor";
+import type { CostSchedulePreview } from "../api/costSchedule";
 import type { CostScheduleRow } from "../wizard/shareHelper";
 
 function setup(overrides?: {
   rows?: CostScheduleRow[];
   openingMonthNumber?: number;
-  targetOpeningDate?: string;
+  monthCount?: number;
+  totals?: CostSchedulePreview | null;
 }) {
   const handlers = {
-    onAddRow: vi.fn(),
-    onUpdateRow: vi.fn(),
-    onRemoveRow: vi.fn(),
+    onChangeRows: vi.fn(),
     onChangeOpeningMonth: vi.fn(),
-    onChangeTargetDate: vi.fn(),
   };
-  const rows = overrides?.rows ?? [{ category: "Consultant", month: 1, amount: 100000 }];
+  const rows = overrides?.rows ?? [
+    { category: "Consultant", month: 1, amount: 100000 },
+    { category: "Equipment", month: 1, amount: 45000 },
+  ];
   render(
     <CostScheduleEditor
       rows={rows}
       openingMonthNumber={overrides?.openingMonthNumber ?? 1}
-      targetOpeningDate={overrides?.targetOpeningDate ?? "2026-06"}
+      monthCount={overrides?.monthCount ?? 12}
+      totals={overrides?.totals ?? null}
       {...handlers}
     />,
   );
-  return handlers;
+  return { ...handlers, rows };
 }
 
-describe("CostScheduleEditor", () => {
-  it("renders the opening anchor (target date + opening month #) editable", () => {
+describe("CostScheduleEditor — rows × months grid (#31)", () => {
+  it("renders months 1–12 as column headers plus a Total column", () => {
     setup();
-    expect(screen.getByTestId("opening-date")).toHaveValue("2026-06");
-    expect(screen.getByTestId("opening-month")).toHaveValue(1);
+    for (let m = 1; m <= 12; m++) {
+      expect(screen.getByTestId(`cost-col-${m}`)).toBeInTheDocument();
+    }
+    expect(screen.getByRole("columnheader", { name: /total/i })).toBeInTheDocument();
   });
 
-  it("edits the opening anchor", () => {
-    const h = setup();
-    fireEvent.change(screen.getByTestId("opening-month"), { target: { value: "6" } });
-    expect(h.onChangeOpeningMonth).toHaveBeenLastCalledWith(6);
-    fireEvent.change(screen.getByTestId("opening-date"), { target: { value: "2027-01" } });
-    expect(h.onChangeTargetDate).toHaveBeenLastCalledWith("2027-01");
-  });
-
-  it("adds a row", async () => {
-    const user = userEvent.setup();
-    const h = setup();
-    await user.click(screen.getByTestId("add-cost-row"));
-    expect(h.onAddRow).toHaveBeenCalledTimes(1);
-  });
-
-  it("removes a row", async () => {
-    const user = userEvent.setup();
-    const h = setup({
-      rows: [
-        { category: "Consultant", month: 1, amount: 100000 },
-        { category: "Build-out", month: 2, amount: 50000 },
-      ],
-    });
-    await user.click(screen.getByRole("button", { name: "Remove cost row 2" }));
-    expect(h.onRemoveRow).toHaveBeenCalledWith(1);
-  });
-
-  it("updates a row's category/month/amount", () => {
-    const h = setup();
-    fireEvent.change(screen.getByLabelText("Cost row 1 category"), {
-      target: { value: "Renovation" },
-    });
-    expect(h.onUpdateRow).toHaveBeenLastCalledWith(0, { category: "Renovation" });
-
-    fireEvent.change(screen.getByLabelText("Cost row 1 month"), { target: { value: "3" } });
-    expect(h.onUpdateRow).toHaveBeenLastCalledWith(0, { month: 3 });
-
-    fireEvent.change(screen.getByLabelText("Cost row 1 amount"), { target: { value: "5000" } });
-    expect(h.onUpdateRow).toHaveBeenLastCalledWith(0, { amount: 5000 });
-  });
-
-  it("supports month-1 + opening-month-1 (legacy single-lump parity)", () => {
+  it("renders each line-item as a row, pivoting flat entries into month cells", () => {
     setup({
       rows: [
         { category: "Consultant", month: 1, amount: 100000 },
-        { category: "Equipment & Fixtures", month: 1, amount: 45000 },
+        { category: "Consultant", month: 6, amount: 20000 },
       ],
-      openingMonthNumber: 1,
-    });
-    expect(screen.getByTestId("opening-month")).toHaveValue(1);
-    expect(screen.getAllByTestId("cost-row")).toHaveLength(2);
-  });
-
-  it("supports rows before and after the opening month", () => {
-    setup({
-      rows: [
-        { category: "Pre-open build-out", month: 1, amount: 50000 },
-        { category: "Post-open support", month: 8, amount: 10000 },
-      ],
-      openingMonthNumber: 6,
     });
     const rows = screen.getAllByTestId("cost-row");
-    expect(rows).toHaveLength(2);
-    expect(screen.getByDisplayValue("Pre-open build-out")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("Post-open support")).toBeInTheDocument();
+    expect(rows).toHaveLength(1); // both flat entries collapse onto ONE Consultant row
+    // The two entries land in their month columns.
+    expect(screen.getByLabelText("Line item 1 month 1 cost")).toHaveValue(100000);
+    expect(screen.getByLabelText("Line item 1 month 6 cost")).toHaveValue(20000);
+    // A month with no entry is blank.
+    expect(screen.getByLabelText("Line item 1 month 2 cost")).toHaveValue(null);
   });
 
-  it("gates validation: invalid opening month surfaces an inline error", () => {
-    setup({ openingMonthNumber: 0 });
-    expect(screen.getByTestId("opening-month-error")).toBeInTheDocument();
+  it("editing a cell emits the updated flat array (no client sum)", () => {
+    const h = setup();
+    fireEvent.change(screen.getByLabelText("Line item 2 month 1 cost"), {
+      target: { value: "50000" },
+    });
+    expect(h.onChangeRows).toHaveBeenLastCalledWith([
+      { category: "Consultant", month: 1, amount: 100000 },
+      { category: "Equipment", month: 1, amount: 50000 },
+    ]);
   });
 
-  it("gates validation: invalid row month/amount surfaces inline errors", () => {
-    setup({ rows: [{ category: "Bad", month: 0, amount: -5 }] });
-    expect(screen.getByTestId("cost-row-error")).toHaveTextContent("Month must be 1 or greater.");
+  it("filling a previously empty month cell appends a flat entry", () => {
+    const h = setup();
+    fireEvent.change(screen.getByLabelText("Line item 1 month 3 cost"), {
+      target: { value: "7000" },
+    });
+    expect(h.onChangeRows).toHaveBeenLastCalledWith([
+      { category: "Consultant", month: 1, amount: 100000 },
+      { category: "Equipment", month: 1, amount: 45000 },
+      { category: "Consultant", month: 3, amount: 7000 },
+    ]);
   });
 
-  it("does not surface row errors for valid rows", () => {
-    setup({ rows: [{ category: "Good", month: 1, amount: 0 }] });
-    expect(screen.queryByTestId("cost-row-error")).not.toBeInTheDocument();
-  });
-
-  it("shows the empty state when there are no rows", () => {
-    setup({ rows: [] });
-    expect(screen.getByTestId("cost-schedule-empty")).toBeInTheDocument();
-    expect(screen.queryAllByTestId("cost-row")).toHaveLength(0);
-  });
-
-  it("renders server-formatted totals verbatim (no client math)", () => {
-    const handlers = {
-      onAddRow: vi.fn(),
-      onUpdateRow: vi.fn(),
-      onRemoveRow: vi.fn(),
-      onChangeOpeningMonth: vi.fn(),
-      onChangeTargetDate: vi.fn(),
-    };
-    render(
-      <CostScheduleEditor
-        rows={[{ category: "Consultant", month: 1, amount: 100000 }]}
-        openingMonthNumber={1}
-        targetOpeningDate="2026-06"
-        totals={[{ label: "Total startup", value: { raw: 208500, display: "$208,500" } }]}
-        {...handlers}
-      />,
-    );
-    expect(screen.getByTestId("cost-schedule-totals")).toHaveTextContent("$208,500");
+  it("renaming a line-item rewrites the category on its flat entries", () => {
+    const h = setup();
+    fireEvent.change(screen.getByLabelText("Line item 1 name"), {
+      target: { value: "Lead Consultant" },
+    });
+    expect(h.onChangeRows).toHaveBeenLastCalledWith([
+      { category: "Lead Consultant", month: 1, amount: 100000 },
+      { category: "Equipment", month: 1, amount: 45000 },
+    ]);
   });
 });
 
-describe("CostScheduleEditor — per-field change affordance (PE7, #126)", () => {
-  const noopHandlers = () => ({
-    onAddRow: vi.fn(),
-    onUpdateRow: vi.fn(),
-    onRemoveRow: vi.fn(),
-    onChangeOpeningMonth: vi.fn(),
-    onChangeTargetDate: vi.fn(),
-  });
-
-  it("shows the recent-change badge + subtle 'was X' on a row field Penny just changed", () => {
-    render(
-      <CostScheduleEditor
-        rows={[{ category: "Consultant", month: 1, amount: 100000 }]}
-        openingMonthNumber={1}
-        targetOpeningDate="2026-06"
-        changes={{ "0:amount": { previous: "$45,000", by: "penny" } }}
-        {...noopHandlers()}
-      />,
-    );
-    const fc = screen.getByTestId("field-change");
-    expect(within(fc).getByTestId("field-change-badge")).toHaveTextContent(/changed by penny/i);
-    expect(within(fc).getByTestId("field-change-was")).toHaveTextContent("was $45,000");
-  });
-
-  it("per-field undo reverts THAT row field — calls onUndoChange(index, field)", async () => {
+describe("CostScheduleEditor — add row + trash remove (#33)", () => {
+  it('the add control is labelled "Add row" with the add-cost-row testid', async () => {
     const user = userEvent.setup();
-    const onUndoChange = vi.fn();
-    render(
-      <CostScheduleEditor
-        rows={[{ category: "Consultant", month: 1, amount: 100000 }]}
-        openingMonthNumber={1}
-        targetOpeningDate="2026-06"
-        changes={{ "0:amount": { previous: "$45,000", by: "penny" } }}
-        onUndoChange={onUndoChange}
-        {...noopHandlers()}
-      />,
-    );
-    await user.click(screen.getByTestId("field-change-undo"));
-    expect(onUndoChange).toHaveBeenCalledWith(0, "amount");
+    const h = setup();
+    const add = screen.getByTestId("add-cost-row");
+    expect(add).toHaveTextContent(/add row/i);
+    await user.click(add);
+    expect(h.onChangeRows).toHaveBeenCalledTimes(1);
+    const next = h.onChangeRows.mock.calls[0][0] as CostScheduleRow[];
+    expect(next).toHaveLength(3); // appended one empty line-item
   });
 
-  it("renders no affordance for fields without a recent change", () => {
-    render(
-      <CostScheduleEditor
-        rows={[{ category: "Consultant", month: 1, amount: 100000 }]}
-        openingMonthNumber={1}
-        targetOpeningDate="2026-06"
-        {...noopHandlers()}
-      />,
+  it("removes a line-item via a trash-can icon button (not a text button)", async () => {
+    const user = userEvent.setup();
+    const h = setup();
+    const remove = screen.getByRole("button", { name: /remove .*consultant/i });
+    // The control is an icon button — no visible text label.
+    expect(remove).toHaveTextContent("");
+    await user.click(remove);
+    expect(h.onChangeRows).toHaveBeenLastCalledWith([
+      { category: "Equipment", month: 1, amount: 45000 },
+    ]);
+  });
+});
+
+describe("CostScheduleEditor — grand-opening column (#34)", () => {
+  it("highlights the opening month column and styles pre-opening months subtly", () => {
+    setup({ openingMonthNumber: 4 });
+    expect(screen.getByTestId("cost-col-4").className).toMatch(/opening/);
+    // Months before opening get a pre-opening modifier.
+    expect(screen.getByTestId("cost-col-1").className).toMatch(/pre/);
+    expect(screen.getByTestId("cost-col-3").className).toMatch(/pre/);
+    // A post-opening month is neither.
+    expect(screen.getByTestId("cost-col-8").className).not.toMatch(/opening|pre/);
+  });
+
+  it('renders a draggable handle labelled "grand opening" on the opening column', () => {
+    setup({ openingMonthNumber: 4 });
+    const handle = screen.getByTestId("grand-opening-handle");
+    expect(handle).toHaveTextContent(/grand opening/i);
+    expect(handle).toHaveAttribute("draggable", "true");
+    expect(within(screen.getByTestId("cost-col-4")).getByTestId("grand-opening-handle")).toBe(
+      handle,
     );
-    expect(screen.queryByTestId("field-change")).not.toBeInTheDocument();
+  });
+
+  it("dropping the handle on another month column sets openingMonthNumber", () => {
+    const h = setup({ openingMonthNumber: 1 });
+    fireEvent.dragStart(screen.getByTestId("grand-opening-handle"));
+    fireEvent.drop(screen.getByTestId("cost-col-7"));
+    expect(h.onChangeOpeningMonth).toHaveBeenCalledWith(7);
+  });
+
+  it("exposes the handle as an accessible slider with the opening month value", () => {
+    setup({ openingMonthNumber: 4 });
+    const handle = screen.getByTestId("grand-opening-handle");
+    expect(handle).toHaveAttribute("role", "slider");
+    expect(handle).toHaveAttribute("aria-valuemin", "1");
+    expect(handle).toHaveAttribute("aria-valuemax", "12");
+    expect(handle).toHaveAttribute("aria-valuenow", "4");
+    expect(handle).toHaveAccessibleName(/grand opening/i);
+  });
+
+  it("keyboard arrows move the focused handle (WCAG equivalent to drag)", async () => {
+    const h = setup({ openingMonthNumber: 4 });
+    const handle = screen.getByTestId("grand-opening-handle");
+    handle.focus();
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(h.onChangeOpeningMonth).toHaveBeenLastCalledWith(5);
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(h.onChangeOpeningMonth).toHaveBeenLastCalledWith(3);
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(h.onChangeOpeningMonth).toHaveBeenLastCalledWith(1);
+    fireEvent.keyDown(handle, { key: "End" });
+    expect(h.onChangeOpeningMonth).toHaveBeenLastCalledWith(12);
+  });
+
+  it("clamps the handle at the ends (no move past month 1 / month 12)", () => {
+    const h = setup({ openingMonthNumber: 1 });
+    fireEvent.keyDown(screen.getByTestId("grand-opening-handle"), { key: "ArrowLeft" });
+    expect(h.onChangeOpeningMonth).not.toHaveBeenCalled();
+  });
+});
+
+describe("CostScheduleEditor — server totals rendered verbatim (#15, no client math)", () => {
+  const totals: CostSchedulePreview = {
+    rowTotals: [
+      { category: "Consultant", total: { raw: 100000, display: "$100,000" } },
+      { category: "Equipment", total: { raw: 45000, display: "$45,000" } },
+    ],
+    columnTotals: [{ month: 1, total: { raw: 145000, display: "$145,000" } }],
+    grandTotal: { raw: 145000, display: "$145,000" },
+    modelVersion: "2.5.0",
+    computeSchemaVersion: "1.3.0",
+  };
+
+  it("renders the server row totals, column totals, and grand total display strings", () => {
+    setup({ totals });
+    expect(screen.getByTestId("row-total-0")).toHaveTextContent("$100,000");
+    expect(screen.getByTestId("row-total-1")).toHaveTextContent("$45,000");
+    expect(screen.getByTestId("col-total-1")).toHaveTextContent("$145,000");
+    expect(screen.getByTestId("cost-grand-total")).toHaveTextContent("$145,000");
+  });
+
+  it("shows a neutral placeholder for totals before the server responds", () => {
+    setup({ totals: null });
+    expect(screen.getByTestId("cost-grand-total")).toHaveTextContent("—");
   });
 });
