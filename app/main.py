@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import config
 from app.middleware import SecurityHeadersMiddleware
 from app.routers import (
+    cost_schedule,
     feedback,
     gate,
     health,
@@ -88,6 +89,9 @@ def create_app() -> FastAPI:
     app.include_router(places.router)
     app.include_router(research.router)  # POST /api/research — grounded market rent (M3.3)
     app.include_router(metrics.router)  # owner-gated GET /api/metrics (M7.7 #95)
+    # POST /api/cost-schedule/preview — server-side {raw,display} startup-grid totals
+    # (decision #15, #263). Dormant: read-only, no client consumer yet.
+    app.include_router(cost_schedule.router)
 
     @app.get("/robots.txt", include_in_schema=False)
     def robots() -> Response:
