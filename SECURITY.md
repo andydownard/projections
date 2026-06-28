@@ -12,7 +12,7 @@ This is a **no-login** web app. Access is governed entirely by **capability toke
 
 - **A leaked token = full access at its scope.** A leaked owner token is total takeover of one projection; a leaked edit token is full write; a leaked `view_slug` is read-only. There is no second factor and no server-side "is this really the owner" check beyond holding the secret.
 - **The bearer token lives in `localStorage`.** Therefore **any stored XSS = token theft = projection takeover**, and the token also authorizes `.xlsx`/packet export. Sanitization and an enforcing CSP are load-bearing, not nice-to-have.
-- **No cookies ⇒ no CSRF for mutations.** This is a deliberate design win (PRD §20); never reintroduce a cookie.
+- **Cookie-blind API ⇒ no CSRF for mutations.** Our FastAPI authenticates from the `Authorization: Bearer` header **only** and **never reads a cookie** — so the browser attaches no ambient credential our API trusts, and a cross-site request cannot forge an authenticated mutation. This is a deliberate design win (PRD §20). **Override SESSION (Clerk satellite, §2.8):** when `CLERK_ENABLED` is on, the optional Clerk owner login means the Clerk `__session` cookie may exist *in the browser* for clerk-js's own session sync, but our API still never reads it — the no-CSRF property is preserved by the **cookie-blind** invariant, not by the absence of cookies. With `CLERK_ENABLED` off (the default), there are no cookies at all, exactly as today.
 - **Anyone can mint tokens for free** (create a projection), so every expensive/abusable endpoint (research, narrative, feedback, intent, create) must be rate-limited per IP **and** per token, or we get cost-amplification and GitHub-issue spam.
 - **The app fetches attacker-influenceable web pages server-side** for rent research → SSRF risk against Railway's private network.
 - **The app sends user data to LLM providers** and renders LLM output into a board packet → prompt-injection and hallucinated-figure risk.
@@ -89,6 +89,8 @@ Every request resolves to one of: `owner`, `edit`, `view`, `role:{board|funder|a
 4. Returns the **highest** scope that matches; otherwise `view` (if a valid `view_slug`) or `anonymous`.
 5. **Mutations require ≥ `edit`.** Rotate/delete/trash require `owner`. Reject otherwise with `403` (never reveal whether the projection exists beyond what the `view_slug` already grants).
 
+**Override SESSION — Clerk owner identity (when `CLERK_ENABLED`).** The `Authorization: Bearer` value is **shape-routed** before the hash compare: a Clerk session JWT (three base64url segments, header `alg: RS256` + `kid`) is verified networklessly against the primary's JWKS (`app/clerk/verify.py`) and resolves the caller to the **Clerk owner** (`owner_clerk_user_id` / `owner_org_id`); an opaque `secrets.token_urlsafe` capability token takes the constant-time owner/edit/role compare above, exactly as today. Resolution is **cookie-blind** (`resolve_bearer_identity` reads only the header — there is no cookies parameter) and **fail-closed**: a JWT-shaped-but-invalid token (wrong `iss`/`exp`/`azp`/signature) falls through to the capability compare and matches nothing → `anonymous`, never a 500. With `CLERK_ENABLED` off, step 1 skips Clerk entirely and a JWT is just an unrecognized bearer — the capability path is byte-for-byte unchanged.
+
 ### 2.5 No secrets in paths, queries, or logs
 
 - **Edit / recovery / role secrets travel only in the URL fragment** (the part after `#`, which browsers never send to the server). The client reads the fragment, moves the secret into the `Authorization` header for API calls, then **scrubs it from the URL** (`history.replaceState` after `location.hash` is consumed) so it does not linger in screenshots, browser history exports, or referrer headers.
@@ -112,6 +114,21 @@ Because there is no login, losing the owner token loses the workspace. The **onl
 - **Recovery secret in the URL fragment** of a recovery link (never a path segment, never sent to the server until the user explicitly redeems it, never logged).
 
 **Documented tradeoff (honest by design):** convenience vs. durability. We deliberately do **not** offer email-based account recovery in v1 because that would require collecting and storing identity (PII) and reintroduce an account system the product is explicitly built to avoid. The cost of this choice is **irrecoverable orphaning** on key loss. Staff tooling can resolve a `support_id` to a projection for *support context* but **cannot grant access** — there is no staff override that hands out a token, because such an override would itself be a takeover backdoor. This limitation is stated to the user at create time so expectations match reality (PRD §21, §29). See [`OPS_RUNBOOK.md`](OPS_RUNBOOK.md) for the support-ID resolution flow.
+
+### 2.8 Clerk satellite owner identity — **Override SESSION** (ship dark behind `CLERK_ENABLED`)
+
+> **This subsection supersedes the documented "No login / no cookies" Hard Rule for the OWNER/editor identity only.** It is the approved override (`docs/plans/2026-06-27-clerk-satellite-auth.md` §0). Capability share-links for viewers are **preserved verbatim** (§2.1–§2.7 stand). The amendment is gated behind `CLERK_ENABLED`: with the flag off (the default) this section is inert and §2 is the whole story.
+
+projections is registered as a **cross-apex Clerk satellite** of the rallytasks.com primary (`thriftly.com ≠ rallytasks.com`). The model is **COEXIST, not replace**:
+
+- **Clerk = the OWNER/editor identity.** When `CLERK_ENABLED`, the person who owns a projection may sign in with their rallytasks.com Clerk account; owner-scope is keyed on the Clerk `userId` (`owner_clerk_user_id`) and, for org sessions, `orgId` (`owner_org_id`). A projection can be **token-owned OR clerk-owned** (additive columns; a token-owner can later *claim* a row into their Clerk identity — a follow-up).
+- **Capability share-links stay for everyone who does NOT log in.** `view_slug` (read), role links, and the fragment-delivered edit token are unchanged. Boards/funders/advisors **never** log in. This is non-negotiable — forcing Clerk on viewers would destroy the core sharing flow (§3, PRD §6.2/§20).
+- **The API is cookie-blind, JWKS-Bearer only — so there is still no CSRF.** Our FastAPI verifies a **short-lived Clerk session JWT** presented in `Authorization: Bearer` (minted client-side via `clerk.session.getToken()`), verified **networklessly against the primary's JWKS** with **no Clerk secret** on projections. It **never** reads the `__session` cookie — not even the first-party one a satellite sets on `thriftly.com`. Because our endpoints carry no ambient browser credential, cross-site requests cannot forge an authenticated mutation → **no CSRF** (Regression #11 preserved; see §6.2).
+- **No Clerk secret on projections (finding C1).** A satellite/daughter holds **no** `CLERK_SECRET_KEY` and **no** `CLERK_WEBHOOK_SIGNING_SECRET` — verification is public-key (JWKS) only. The boot path **refuses to boot** in production if either is set (§4.4).
+
+**JWT verification hardening (`app/clerk/verify.py`, mirrors timpager `lib/clerk-jwt-verify.js`):** **RS256 only** (no algorithm-confusion / `alg: none`), signing key resolved by `kid` from the issuer's JWKS, **`iss` mandatory and fail-closed** (an unset `CLERK_JWT_ISSUER` raises — never accepts), `exp`/`nbf` enforced within a small clock-skew leeway, and an **`azp` (authorized-parties) allowlist** (`CLERK_AUTHORIZED_PARTIES`) that is *stricter* than both pennyai and vibe101 (which omit it) — a cross-apex satellite widens the set of origins that can mint JWKS-valid tokens, so the authorized party is pinned. Tests use a locally-generated RSA keypair + a stub JWKS (no network, no real Clerk call).
+
+**The standing CI invariant (Regression #11 guard):** *a request carrying a valid `__session` cookie but no `Authorization` header resolves to `anonymous`.* `resolve_bearer_identity` takes only the header — there is no place to pass a cookie — so a cookie can never authenticate. The Clerk JWT in `Authorization` is XSS-exfiltratable the same way the owner token is today, but it is **short-lived** (≈60s), strictly better for blast radius than the long-lived owner token; XSS hardening (§5) remains the primary defense and matters *more*.
 
 ---
 
@@ -157,6 +174,22 @@ Because there is no login, losing the owner token loses the workspace. The **onl
 - Generic errors to clients: never echo internal IDs, file paths, stack traces, or key fragments in an API error body.
 - The **browser never holds a provider key.** All Places/Census/Anthropic/OpenAI/GitHub/CRM calls are server-side only (PRD §23). The frontend talks only to our own API.
 
+### 4.4 Clerk satellite auth (**Override SESSION**, required only when `CLERK_ENABLED`)
+
+projections is a Clerk **satellite** that verifies JWKS-Bearer and holds **no Clerk secret** (§2.8, finding C1). Every var below is **optional when `CLERK_ENABLED` is off** (the default — boot is unchanged); when on in production they are **required-to-boot** via the same single-source `validate_required` mechanism (no fallback chains).
+
+| Config | Env var | Required when | Notes |
+|---|---|---|---|
+| Kill switch | `CLERK_ENABLED` | optional (default **off**) | Strict truthy (`1`/`true`/`yes`/`on`), read at call time. Off ⇒ pure capability tokens (ship dark). |
+| Expected issuer | `CLERK_JWT_ISSUER` | **required when on** | The mandatory `iss`; JWKS at `<issuer>/.well-known/jwks.json`. The **primary** (`https://clerk.rallytasks.com`) even on the satellite (issuer ≠ FAPI host). Fail-closed if unset. |
+| Publishable key | `CLERK_PUBLISHABLE_KEY` | **required when on** | `pk_live_…` (same instance as rallytasks.com); shipped to the browser by the discovery endpoint. Not secret, but config-required. |
+| Authorized parties | `CLERK_AUTHORIZED_PARTIES` | **required when on** | CSV `azp` allowlist (e.g. `https://projections.thriftly.com`) — stricter than pennyai/vibe101. |
+| Clock-skew leeway | `CLERK_JWT_LEEWAY_SECONDS` | optional (default `10`) | `exp`/`nbf` leeway. |
+| ~~Clerk secret~~ | `CLERK_SECRET_KEY` | **NEVER set** | Primary-only (finding C1). **Boot refuses** in prod if present. |
+| ~~Webhook secret~~ | `CLERK_WEBHOOK_SIGNING_SECRET` | **NEVER set** | Webhooks are the primary's job. **Boot refuses** in prod if present. |
+
+The last two are an unconditional **boot-refuse guardrail**: a satellite never holds a Clerk secret, so their presence in production fails `validate_required` loudly.
+
 ---
 
 ## 5. XSS & rich-text sanitization
@@ -188,7 +221,7 @@ If-Match: <version>
 
 ### 6.2 No CSRF — keep it that way
 
-Mutations authenticate via the `Authorization: Bearer` header, **not** a cookie. Because no ambient credential is attached by the browser, cross-site requests cannot forge authenticated mutations → **no CSRF**. **Do not introduce a cookie, a session, or any ambient credential.** If you find yourself reaching for `Set-Cookie`, stop — it reintroduces a class of attack the design eliminated (PRD §20).
+Mutations authenticate via the `Authorization: Bearer` header, **not** a cookie. Because no ambient credential **that our API trusts** is attached by the browser, cross-site requests cannot forge authenticated mutations → **no CSRF**. The bearer is either an opaque capability token or — when `CLERK_ENABLED` (§2.8) — a verified Clerk session JWT; **either way it is a header value, never a cookie.** **Do not introduce a cookie, a session, or any ambient credential *that our API reads*.** Our API is **cookie-blind by invariant**: it never reads `request.cookies` — not even the Clerk `__session` cookie a satellite may set in the browser for clerk-js's own session sync (that cookie is inert against our endpoints). If you find yourself reaching for `Set-Cookie` **or** `request.cookies` in an auth path, stop — it reintroduces the CSRF class the design eliminated (PRD §20, Regression #11).
 
 ### 6.3 LLM injection defense & grounding (testable invariants, not prompt wishes)
 
@@ -297,7 +330,8 @@ Content-Security-Policy:
 
 - `Access-Control-Allow-Origin` is the **exact app origin** (the production hostname in the thriftly.com project), not `*`, not a reflected `Origin`.
 - Allow only the methods/headers the API uses (`GET, POST, PATCH, DELETE`; `Authorization`, `If-Match`, `Content-Type`).
-- No `Access-Control-Allow-Credentials` is needed (no cookies). Do not enable it.
+- No `Access-Control-Allow-Credentials` is needed and it **stays off even when `CLERK_ENABLED`** (§2.8): we send **no cookies** to our API — the Clerk JWT travels in the `Authorization` header — so enabling credentialed CORS would only re-add an ambient-credential surface for no benefit. Do not enable it.
+- **Clerk CSP/CORS widening is a separate, later change.** When the satellite frontend ships, `script-src`/`connect-src`/`frame-src`/`img-src` are widened to the Clerk FAPI origins (a named, signed-off tradeoff) **gated on `CLERK_ENABLED`** — with the flag off the strict `'self'`-only baseline above stands. The backend JWKS-Bearer/cookie-blind design in this doc does not depend on it.
 
 ### 8.3 No-index
 
