@@ -105,7 +105,7 @@ describe("ProjectionDetail — Penny mount (PE6, #125)", () => {
     render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
     const fab = await screen.findByTestId("penny-fab");
     expect(fab).toHaveAttribute("data-state", "ai-enabled");
-    expect(fab).toHaveAccessibleName(/ask penny/i);
+    expect(fab).toHaveAccessibleName(/penny ai/i);
   });
 
   it("degrades to the muted Settings FAB when AI is opt-out (?ai=off) — never a dead-end", async () => {
@@ -168,6 +168,54 @@ describe("ProjectionDetail — Penny mount (PE6, #125)", () => {
     await waitFor(() => expect(vi.mocked(fetchProjection)).toHaveBeenCalledTimes(2));
 
     vi.unstubAllGlobals();
+  });
+});
+
+describe("App shell — Penny is openable on every primary route (#264, Epic E #3)", () => {
+  afterEach(() => {
+    localStorage.clear();
+    window.history.pushState({}, "", "/");
+  });
+
+  it("mounts the general-help Penny on a READ-ONLY detail view (the page mounts none of its own)", async () => {
+    // The read-only detail page has no edit token, so it mounts NO Penny of its own
+    // (asserted above). The App shell adds the general-help Penny so Penny is still
+    // openable here — and it never errors with no editable projection loaded.
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    window.history.pushState({}, "", "/p/p_8x"); // view route, NO /edit
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByTestId("decision-banner");
+
+    const fab = screen.getByTestId("penny-fab"); // exactly one (throws if doubled)
+    expect(fab).toHaveAttribute("data-state", "ai-enabled");
+    expect(fab).toHaveAccessibleName(/penny ai/i);
+
+    await user.click(fab);
+    await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(screen.getByTestId("penny-transcript")).toHaveTextContent(/i'm penny/i),
+    );
+  });
+
+  it("does NOT double-mount Penny on the editable detail page (the page mounts its own)", async () => {
+    // Edit mode mounts the live PennyAssistant; the shell must NOT add a second FAB.
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    window.history.pushState({}, "", "/p/p_8x/edit");
+    render(<App />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.getAllByTestId("penny-fab")).toHaveLength(1);
+  });
+
+  it("honors ?ai=off on the read-only view: the shell's Penny degrades to the muted FAB", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    window.history.pushState({}, "", "/p/p_8x?ai=off");
+    render(<App />);
+    await screen.findByTestId("decision-banner");
+    const fab = screen.getByTestId("penny-fab");
+    expect(fab).toHaveAttribute("data-state", "ai-disabled");
+    expect(fab).toHaveAccessibleName(/settings/i);
   });
 });
 
