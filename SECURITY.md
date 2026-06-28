@@ -333,7 +333,25 @@ Content-Security-Policy:
 - `Access-Control-Allow-Origin` is the **exact app origin** (the production hostname in the thriftly.com project), not `*`, not a reflected `Origin`.
 - Allow only the methods/headers the API uses (`GET, POST, PATCH, DELETE`; `Authorization`, `If-Match`, `Content-Type`).
 - No `Access-Control-Allow-Credentials` is needed and it **stays off even when `CLERK_ENABLED`** (§2.8): we send **no cookies** to our API — the Clerk JWT travels in the `Authorization` header — so enabling credentialed CORS would only re-add an ambient-credential surface for no benefit. Do not enable it.
-- **Clerk CSP/CORS widening is a separate, later change.** When the satellite frontend ships, `script-src`/`connect-src`/`frame-src`/`img-src` are widened to the Clerk FAPI origins (a named, signed-off tradeoff) **gated on `CLERK_ENABLED`** — with the flag off the strict `'self'`-only baseline above stands. The backend JWKS-Bearer/cookie-blind design in this doc does not depend on it.
+- **Clerk CSP widening is shipped and gated on `CLERK_ENABLED`** (see below). CORS is **unchanged** by it: still exact-origin, `Allow-Credentials` off.
+
+#### Clerk satellite CSP widening — gated on `CLERK_ENABLED` (shipped)
+
+The Clerk satellite (§2.8) requires clerk-js to load from and talk to the Clerk Frontend API. That is a **named, signed-off relaxation** of the strict baseline in §8.1 and it is **gated on the `CLERK_ENABLED` kill switch**: `app/middleware.build_csp()` returns the strict `'self'`-only CSP **byte-for-byte** when the flag is off (the default), and the widened policy below only when it is on. The switch is read at request time, so flipping it takes effect on the next request with no restart. The backend JWKS-Bearer / cookie-blind design does not depend on this.
+
+The widening (`CLERK_ENABLED` on only) adds exactly these origins/directives; every hardening directive (`default-src 'self'`, `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`, `form-action 'self'`, and **no `'unsafe-inline'`**) is preserved verbatim:
+
+| Directive | Added when Clerk on | Why |
+|---|---|---|
+| `script-src` | `https://clerk.thriftly.com https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com` | clerk-js loads from the satellite FAPI (the `clerk.thriftly.com` CNAME) + the clerk-js host; `*.clerk.accounts.dev` covers dev instances; Turnstile is Clerk's bot-check script |
+| `connect-src` | `https://clerk.thriftly.com https://*.clerk.accounts.dev https://*.clerk.com` | clerk-js XHR/fetch to the satellite FAPI; `'self'` (our own API) is kept |
+| `img-src` | `https://img.clerk.com https://images.clerk.dev` | user/org avatars (current + legacy Clerk image hosts) |
+| `frame-src` *(new directive)* | `'self' https://clerk.thriftly.com https://*.clerk.accounts.dev https://challenges.cloudflare.com` | Clerk's cross-domain session-sync iframe + the Turnstile challenge frame |
+| `worker-src` *(new directive)* | `'self' blob:` | clerk-js spins a `blob:` web worker |
+
+- **jsdelivr is intentionally NOT allowlisted.** `@clerk/clerk-react` v5 is bundled by Vite and loads clerk-js from the **FAPI host**, not a public CDN — so our own JS stays `'self'`. The vanilla `<script src=cdn.jsdelivr.net …>` pattern (the same-apex `vibe101` daughter) does not apply here.
+- **The primary's origins (`rallytasks.com`) are NOT added** to `script`/`connect`/`frame-src`. On a cross-apex satellite, clerk-js only talks to its **own** FAPI (`clerk.thriftly.com`); the session handshake to the primary is a **top-level navigation** (`__clerk_synced` redirect), which CSP subresource directives do not govern. The verify-side issuer (`CLERK_JWT_ISSUER=https://clerk.rallytasks.com`) is a different host from the browser-side FAPI **by design** (§2.8): the issuer is for JWKS verification, the FAPI is for the browser.
+- `style-src` stays `'self'` (no `'unsafe-inline'`): the owner signs in on the **primary** (`rallytasks.com`), so the satellite mounts no heavy Clerk sign-in UI. If a future change mounts Clerk components on the satellite and they require inline styles, widening `style-src` is a **separate, separately-signed-off** follow-up — do not blanket-add `'unsafe-inline'`.
 
 ### 8.3 No-index
 
