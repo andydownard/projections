@@ -71,7 +71,8 @@ export interface WizardDraft {
   termsAccepted: boolean;
   // Timed cost schedule + opening anchor (Spec §5/§7). Optional so existing
   // callers compile; buildCreatePayload supplies the month-1-lump default.
-  targetOpeningDate?: string;
+  // `targetOpeningDate` is DROPPED entirely (owner Decision 13) — the grand-opening
+  // month is set on the cost step; buildCreatePayload always sends a null date.
   openingMonthNumber?: number;
   costSchedule?: CostScheduleRow[];
 }
@@ -221,7 +222,8 @@ export function buildCreatePayload(d: WizardDraft): CreatePayload {
         share_y3: d.shareY3 / 100,
       },
       source_of_funds: { cash: d.cash, grant: d.grant, loan: d.loan },
-      target_opening_date: d.targetOpeningDate ?? null,
+      // Target opening date is dropped (owner Decision 13); always null server-side.
+      target_opening_date: null,
       opening_month_number: d.openingMonthNumber ?? DEFAULT_OPENING_MONTH_NUMBER,
       cost_schedule: d.costSchedule ?? DEFAULT_COST_SCHEDULE.map((r) => ({ ...r })),
     },

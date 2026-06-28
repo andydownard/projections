@@ -15,16 +15,16 @@ test.describe("wizard page-per-step routing: deep-link + browser back/forward (#
     await page.goto("/wizard");
     // The bare /wizard is replaced with the first step's slug so every step has a
     // real, deep-linkable URL (the invalid/bare-slug guard, no junk history entry).
-    await expect(page).toHaveURL(/\/wizard\/store$/);
-    await expect(page.getByLabel("Store name", { exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/\/wizard\/address$/);
+    await expect(page.getByRole("combobox", { name: "Address" })).toBeVisible();
   });
 
   test("a wizard step is deep-linkable straight by its URL", async ({ page }) => {
     await mockPlaces(page);
-    // Land directly on the Space & rent step by slug — its own field renders, not
+    // Land directly on the Square footage step by slug — its own field renders, not
     // the first step (the cursor starts on the deep-linked step, no flicker).
-    await page.goto("/wizard/space");
-    await expect(page).toHaveURL(/\/wizard\/space$/);
+    await page.goto("/wizard/square-footage");
+    await expect(page).toHaveURL(/\/wizard\/square-footage$/);
     await expect(page.getByLabel(/building size/i)).toBeVisible();
   });
 
@@ -33,23 +33,26 @@ test.describe("wizard page-per-step routing: deep-link + browser back/forward (#
   }) => {
     await mockPlaces(page);
     await page.goto("/wizard");
-    await expect(page).toHaveURL(/\/wizard\/store$/);
+    await expect(page).toHaveURL(/\/wizard\/address$/);
 
-    // Type the store name, then advance: Next pushes a NEW /wizard/<slug> entry.
-    await page.getByLabel("Store name", { exact: true }).fill("Routing Store");
+    // Resolve an address (gates Next) + set the optional store name, then advance:
+    // Next pushes a NEW /wizard/<slug> entry.
+    await page.getByRole("combobox", { name: "Address" }).fill("123 Main St");
+    await page.getByRole("option").first().click();
+    await page.getByLabel("Store name (optional)").fill("Routing Store");
     await page.getByRole("button", { name: "Next" }).click();
-    await expect(page).toHaveURL(/\/wizard\/trade-area$/);
-    await expect(page.getByRole("heading", { name: /trade area/i })).toBeVisible();
+    await expect(page).toHaveURL(/\/wizard\/square-footage$/);
+    await expect(page.getByRole("heading", { name: /set square footage/i })).toBeVisible();
 
-    // Browser BACK returns to the store step — and the typed name is still there
-    // (the draft is preserved across the route change; no lost inputs).
+    // Browser BACK returns to the address step — and the typed store name is still
+    // there (the draft is preserved across the route change; no lost inputs).
     await page.goBack();
-    await expect(page).toHaveURL(/\/wizard\/store$/);
-    await expect(page.getByLabel("Store name", { exact: true })).toHaveValue("Routing Store");
+    await expect(page).toHaveURL(/\/wizard\/address$/);
+    await expect(page.getByLabel("Store name (optional)")).toHaveValue("Routing Store");
 
-    // Browser FORWARD returns to the trade-area step.
+    // Browser FORWARD returns to the square-footage step.
     await page.goForward();
-    await expect(page).toHaveURL(/\/wizard\/trade-area$/);
-    await expect(page.getByRole("heading", { name: /trade area/i })).toBeVisible();
+    await expect(page).toHaveURL(/\/wizard\/square-footage$/);
+    await expect(page.getByRole("heading", { name: /set square footage/i })).toBeVisible();
   });
 });

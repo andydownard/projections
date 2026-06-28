@@ -5,11 +5,13 @@ import { STEPS, useWizardState } from "./useWizardState";
 import type { TradeAreaResolved } from "../api/places";
 import type { RentResearch } from "../api/research";
 
-const LAST_STEP = STEPS.length - 1; // review
+const LAST_STEP = STEPS.length - 1; // startup-costs
 
 // The shared wizard-state hook: holds the draft, the step cursor with per-step
 // validation gating Next, and the households-empty-until-resolved lifecycle
-// (§4). No client math — it only collects inputs (PRD §13).
+// (§4). No client math — it only collects inputs (PRD §13). Phase 2 (owner
+// Decision 11): the order is Address → Square footage → Households → Donor market
+// share → Startup costs; there is NO Review step and terms is implicit.
 
 const RESOLVED: TradeAreaResolved = {
   location: { place_id: "PID", lat: 32.78, lng: -96.8, formatted_address: "Dallas, TX, USA" },
@@ -32,24 +34,50 @@ const RESOLVED: TradeAreaResolved = {
   },
 };
 
+describe("useWizardState — step set + order (owner Decision 11)", () => {
+  it("orders Address → Square footage → Households → Donor market share → Startup costs", () => {
+    expect(STEPS).toEqual([
+      "address",
+      "square-footage",
+      "households",
+      "donor-market",
+      "startup-costs",
+    ]);
+  });
+});
+
 describe("useWizardState — step cursor + gating", () => {
-  it("starts at step 0 and blocks Next until the store name is entered", () => {
+  it("starts at step 0 (address) and blocks Next until an address resolves", () => {
     const { result } = renderHook(() => useWizardState());
     expect(result.current.step).toBe(0);
-    expect(result.current.canProceed).toBe(false); // name empty
+    expect(result.current.stepKey).toBe("address");
+    expect(result.current.canProceed).toBe(false); // no address yet
 
     act(() => result.current.goNext());
     expect(result.current.step).toBe(0); // gated — did not advance
 
-    act(() => result.current.set("name", "House of Hope"));
+    act(() => result.current.onResolved(RESOLVED));
     expect(result.current.canProceed).toBe(true);
     act(() => result.current.goNext());
-    expect(result.current.step).toBe(1);
+    expect(result.current.step).toBe(1); // square-footage
+  });
+
+  it("a Places/Census failure (manual fallback) still lets the address step proceed", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.onResolveError("census_unavailable"));
+    expect(result.current.canProceed).toBe(true); // households entered later
+  });
+
+  it("the store name is OPTIONAL — it never gates the address step", () => {
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.draft.name).toBe("");
+    act(() => result.current.onResolved(RESOLVED));
+    expect(result.current.canProceed).toBe(true); // resolved, no name set
   });
 
   it("goBack returns to the previous step", () => {
     const { result } = renderHook(() => useWizardState());
-    act(() => result.current.set("name", "X"));
+    act(() => result.current.onResolved(RESOLVED));
     act(() => result.current.goNext());
     expect(result.current.step).toBe(1);
     act(() => result.current.goBack());
@@ -85,72 +113,24 @@ describe("useWizardState — households empty-until-resolved (§4)", () => {
     expect(result.current.householdsSource).toBe("user_edited");
   });
 
-  it("a Places/Census failure makes the field manually editable", () => {
+  it("a Places/Census failure makes the field manually editable; households gates the confirm step", () => {
     const { result } = renderHook(() => useWizardState());
     act(() => result.current.onResolveError("census_unavailable"));
     expect(result.current.householdsDisabled).toBe(false);
     expect(result.current.householdsSource).toBe("manual");
     expect(result.current.canGenerate).toBe(false); // still no value
+
+    act(() => result.current.goTo(2)); // households step
+    expect(result.current.stepKey).toBe("households");
+    expect(result.current.canProceed).toBe(false);
     act(() => result.current.setHouseholds(25000));
     expect(result.current.householdsSource).toBe("manual");
-    act(() => result.current.set("termsAccepted", true));
-    expect(result.current.canGenerate).toBe(true);
-  });
-});
-
-describe("useWizardState — blockReason surfaces WHY Next/Generate is disabled (#147)", () => {
-  it("names the store-name requirement on step 0 and clears it once entered", () => {
-    const { result } = renderHook(() => useWizardState());
-    expect(result.current.canProceed).toBe(false);
-    expect(result.current.blockReason).toMatch(/store name/i);
-
-    act(() => result.current.set("name", "House of Hope"));
     expect(result.current.canProceed).toBe(true);
-    expect(result.current.blockReason).toBeNull();
-  });
-
-  it("names the households requirement on the trade-area step", () => {
-    const { result } = renderHook(() => useWizardState());
-    act(() => result.current.set("name", "X"));
-    act(() => result.current.goNext()); // -> trade-area
-    expect(result.current.stepKey).toBe("trade-area");
-    expect(result.current.blockReason).toMatch(/households/i);
-
-    act(() => result.current.onResolved(RESOLVED));
-    expect(result.current.blockReason).toBeNull();
-  });
-
-  it("names the specific missing donor-market year(s)", () => {
-    const { result } = renderHook(() => useWizardState());
-    act(() => result.current.set("name", "X"));
-    act(() => result.current.onResolved(RESOLVED));
-    act(() => result.current.goNext()); // trade-area
-    act(() => result.current.goNext()); // space (sq ft / salesfloor / rent default-valid)
-    act(() => result.current.goNext()); // donor-market
-    expect(result.current.stepKey).toBe("donor-market");
-    expect(result.current.blockReason).toBeNull(); // defaults 6/8/10 are valid
-
-    act(() => result.current.set("shareY2", 0));
-    expect(result.current.blockReason).toMatch(/year 2/i);
-    expect(result.current.blockReason).not.toMatch(/year 1/i);
-  });
-
-  it("on the final step, names the unmet generate gate (terms after households resolve)", () => {
-    const { result } = renderHook(() => useWizardState());
-    act(() => result.current.set("name", "X"));
-    act(() => result.current.onResolved(RESOLVED));
-    act(() => result.current.goTo(LAST_STEP)); // review (last)
-    expect(result.current.isLast).toBe(true);
-    // households resolved, terms still unchecked → reason names terms
-    expect(result.current.blockReason).toMatch(/terms/i);
-
-    act(() => result.current.set("termsAccepted", true));
-    expect(result.current.canGenerate).toBe(true);
-    expect(result.current.blockReason).toBeNull();
+    expect(result.current.canGenerate).toBe(true); // terms implicit (true)
   });
 });
 
-describe("useWizardState — Space & rent step (#245)", () => {
+describe("useWizardState — Square footage step (#245, owner Decisions 9/10)", () => {
   const RESEARCH: RentResearch = {
     rent_per_sqft: 18, estimate: 18, low: 15, high: 22,
     rent_type: "nnn", opex: 3, basis: "$/sq ft/yr",
@@ -159,36 +139,39 @@ describe("useWizardState — Space & rent step (#245)", () => {
     ai_enabled: true, cached: false,
   };
 
-  it("inserts the Space & rent step between trade-area and donor-market", () => {
-    expect(STEPS).toEqual([
-      "store", "trade-area", "space", "donor-market", "cost", "review",
-    ]);
+  it("defaults to 12,500 sq ft / 80% sales floor (wizard-side; anchor stays 10k)", () => {
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.draft.buildingSqft).toBe(12500);
+    expect(result.current.draft.salesfloorPct).toBe(80);
   });
 
-  it("seeds the per-sq-ft assumptions at the anchored defaults with provenance 'default'", () => {
+  it("seeds the sq-ft-scaled cost rows for 12,500 sq ft on load", () => {
+    const { result } = renderHook(() => useWizardState());
+    const sched = result.current.draft.costSchedule ?? [];
+    const fixtures = sched.find((r) => r.category === "Equipment & Fixtures");
+    const buildout = sched.find((r) => r.category.startsWith("Build-out"));
+    expect(fixtures?.amount).toBe(56250); // 4.50 × 12,500
+    expect(buildout?.amount).toBe(62500); // 5.00 × 12,500
+  });
+
+  it("seeds the rent assumption at the anchored default with provenance 'default'", () => {
     const { result } = renderHook(() => useWizardState());
     expect(result.current.draft.rentPerSqft).toBe(12);
-    expect(result.current.draft.utilitiesPerSqft).toBe(2.23);
-    expect(result.current.draft.fixturesPerSqft).toBe(4.5);
     expect(result.current.rentSource).toBe("default");
-    expect(result.current.utilitiesSource).toBe("default");
-    expect(result.current.fixturesSource).toBe("default");
   });
 
   it("gates Next until sq ft > 0 and salesfloor is 1–100%", () => {
     const { result } = renderHook(() => useWizardState());
-    act(() => result.current.goTo(2)); // space
-    expect(result.current.stepKey).toBe("space");
+    act(() => result.current.goTo(1)); // square-footage
+    expect(result.current.stepKey).toBe("square-footage");
     expect(result.current.canProceed).toBe(true); // defaults are valid
 
     act(() => result.current.setBuildingSqft(0));
     expect(result.current.canProceed).toBe(false);
-    expect(result.current.blockReason).toMatch(/square feet/i);
 
     act(() => result.current.setBuildingSqft(8000));
     act(() => result.current.setSalesfloorPct(120));
     expect(result.current.canProceed).toBe(false);
-    expect(result.current.blockReason).toMatch(/sales-floor/i);
 
     act(() => result.current.setSalesfloorPct(65));
     expect(result.current.canProceed).toBe(true);
@@ -220,7 +203,6 @@ describe("useWizardState — Space & rent step (#245)", () => {
     act(() => result.current.applyRentResearch(RESEARCH));
     expect(result.current.draft.rentPerSqft).toBe(25); // user value preserved
     expect(result.current.rentSource).toBe("user");
-    // the server badge result is still captured for display
     expect(result.current.rentResearch?.verified).toBe(true);
   });
 
@@ -234,40 +216,34 @@ describe("useWizardState — Space & rent step (#245)", () => {
     expect(result.current.rentSource).toBe("default");
   });
 
-  it("editing utilities/fixtures $/sq ft flips provenance to 'user' and re-seeds scaled cost rows", () => {
+  it("editing the building size re-seeds the scaled cost rows (server seed mirror)", () => {
     const { result } = renderHook(() => useWizardState());
-    act(() => result.current.setUtilitiesPerSqft(3.1));
-    expect(result.current.draft.utilitiesPerSqft).toBe(3.1);
-    expect(result.current.utilitiesSource).toBe("user");
-
-    // building size scales Equipment & Fixtures / Build-out (server seed mirror)
     act(() => result.current.setBuildingSqft(8000));
     const sched = result.current.draft.costSchedule ?? [];
     const fixtures = sched.find((r) => r.category === "Equipment & Fixtures");
     const buildout = sched.find((r) => r.category.startsWith("Build-out"));
     expect(fixtures?.amount).toBe(36000); // 4.50 × 8000
     expect(buildout?.amount).toBe(40000); // 5.00 × 8000
-
-    act(() => result.current.setFixturesPerSqft(6));
-    expect(result.current.fixturesSource).toBe("user");
-    const fx2 = (result.current.draft.costSchedule ?? []).find(
-      (r) => r.category === "Equipment & Fixtures",
-    );
-    expect(fx2?.amount).toBe(48000); // 6 × 8000
   });
 });
 
-describe("useWizardState — terms acceptance is explicit (#141 / PRD §21)", () => {
-  it("defaults termsAccepted to false (the box is NOT pre-checked)", () => {
+describe("useWizardState — terms acceptance is implicit on Generate (owner Decision 5)", () => {
+  it("defaults termsAccepted to true (the checkbox is gone)", () => {
     const { result } = renderHook(() => useWizardState());
-    expect(result.current.draft.termsAccepted).toBe(false);
+    expect(result.current.draft.termsAccepted).toBe(true);
   });
 
-  it("blocks Generate until the operator actively accepts terms", () => {
+  it("the only real Generate gate is a household value", () => {
     const { result } = renderHook(() => useWizardState());
-    act(() => result.current.onResolved(RESOLVED)); // households now has a value
-    expect(result.current.canGenerate).toBe(false); // terms unchecked → blocked
-    act(() => result.current.set("termsAccepted", true));
+    expect(result.current.canGenerate).toBe(false); // no households yet
+    act(() => result.current.onResolved(RESOLVED));
     expect(result.current.canGenerate).toBe(true);
+  });
+
+  it("the last step is startup-costs (no Review step)", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.goTo(LAST_STEP));
+    expect(result.current.stepKey).toBe("startup-costs");
+    expect(result.current.isLast).toBe(true);
   });
 });

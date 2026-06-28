@@ -166,9 +166,8 @@ describe("CreateProjectionPage — Generate persists a Penny-built schedule with
     const user = userEvent.setup();
     render(<CreateProjectionPage />);
 
-    // 1. Store — name + resolve an address (households come from Census).
-    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
-    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
+    // 1. Address — resolve an address (households come from Census); name optional.
+    await user.type(screen.getByRole("combobox", { name: /address/i }), "Dallas");
     await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
 
     // Penny builds the cost schedule on the draft.
@@ -180,18 +179,17 @@ describe("CreateProjectionPage — Generate persists a Penny-built schedule with
     // buttons aren't under the modal scrim
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^next$/i })).toBeEnabled());
 
-    // 2. → Trade area (households resolved)
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
-    await waitFor(() => expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"));
-    // 3. → Space & rent, 4. → Donor market, 5. → Cost, 6. → Review
+    // 2. → Square footage, 3. → Households (resolved static), 4. → Donor market,
+    // 5. → Startup costs (last)
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
+    await waitFor(() => expect(screen.getByTestId("households-confirm")).toHaveTextContent(/512,000 households/i));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
-    expect(screen.getByRole("heading", { name: /review/i })).toBeInTheDocument();
-    await user.click(screen.getByRole("checkbox", { name: /planning estimates/i }));
-    await user.click(screen.getByRole("button", { name: /generate/i }));
+    expect(screen.getByRole("heading", { name: /set startup costs/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /generate projections/i }));
 
     await waitFor(() => expect(bodies["/api/projections"]).toBeDefined());
     const created = bodies["/api/projections"] as {

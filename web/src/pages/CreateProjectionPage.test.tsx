@@ -1,15 +1,16 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CreateProjectionPage } from "./CreateProjectionPage";
 import type { ViewModel } from "../api/viewModel";
 
-// W2 — the full-page Create-Projection wizard shell: one step at a time, a step
-// indicator, validation gating Next, Generate on the final step, a subtle
-// "Back to projections" link, and households empty-until-resolved (§4). NO client
-// math — every figure on the result screen is the server's { display } string
-// (PRD §13).
+// Phase 2 (Epics B/C) — the full-page Create-Projection wizard: one step at a time
+// over a prominent breadcrumb under a subtle "CREATE PROJECTION" eyebrow, the revised
+// order Address → Square footage → Households → Donor market share → Startup costs,
+// terms implicit on "Generate projections", and Generate landing DIRECTLY on
+// /p/<slug>/edit (no in-page result view). NO client math — every figure on the detail
+// page is the server's { display } string (PRD §13).
 
 const VM: ViewModel = {
   reco: { tag: "proceed", headline: "Proceed.", sub: "Capital is within reach." },
@@ -49,8 +50,8 @@ function jsonResponse(b: unknown) {
   );
 }
 
-// A representative server rent-research result (#245). The wizard pre-fills the
-// Space & rent step's rent from this, with a verified-vs-estimated badge + sources.
+// A representative server rent-research result (#245). The wizard pre-fills the rent
+// (shown on the startup-costs step) with a verified-vs-estimated badge + sources.
 const RESEARCH = {
   rent_per_sqft: 18, estimate: 18, low: 15, high: 22,
   rent_type: "nnn", opex: 3, basis: "$/sq ft/yr",
@@ -75,22 +76,28 @@ function wireFetch(bodies: Record<string, unknown>) {
   });
 }
 
+/** Resolve an address on step 1, then advance to the given later step. */
+async function resolveAddress(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(screen.getByRole("combobox", { name: /address/i }), "Dallas");
+  await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /^next$/i })).toBeEnabled(),
+  );
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
-  // The wizard is now route-driven (each step is /wizard/<slug>, Epic B #261) and
-  // derives its initial step from the URL — reset it between tests so each starts
-  // fresh on the first step instead of inheriting the prior test's step path.
+  // The wizard is route-driven (each step is /wizard/<slug>, Epic B #261) — reset it
+  // between tests so each starts fresh on the first step (Address).
   window.history.replaceState(null, "", "/wizard");
 });
 
 describe("CreateProjectionPage shell", () => {
-  it("renders the full-page title + a step indicator (no 'Start from example')", () => {
+  it("renders the subtle CREATE PROJECTION eyebrow + a step breadcrumb", () => {
     render(<CreateProjectionPage />);
     expect(screen.getByRole("heading", { name: /create projection/i })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: /create projection steps/i })).toBeInTheDocument();
-    // The dead-end "Start from example" affordance was removed entirely.
-    expect(screen.queryByRole("button", { name: /start from example/i })).toBeNull();
   });
 
   it("offers a subtle, keyboard-accessible 'Back to projections' link to the list (route '/')", async () => {
@@ -100,44 +107,27 @@ describe("CreateProjectionPage shell", () => {
     const back = screen.getByTestId("back-to-projections");
     expect(back).toHaveAttribute("href", "/");
     expect(back).toHaveAccessibleName(/back to projections/i);
-    // A plain left-click SPA-navigates to the list route (no full reload).
     await user.click(back);
     expect(window.location.pathname).toBe("/");
     window.history.pushState(null, "", "/");
   });
 
-  it("gates Next on the Store step until a name is entered", async () => {
+  it("hides the bottom Back button on the first step (owner Decision 7)", () => {
+    render(<CreateProjectionPage />);
+    expect(screen.queryByRole("button", { name: /^back$/i })).toBeNull();
+  });
+
+  it("gates Next on the address step until an address resolves (name is optional)", async () => {
+    const bodies: Record<string, unknown> = {};
+    wireFetch(bodies);
     const user = userEvent.setup();
     render(<CreateProjectionPage />);
     const next = screen.getByRole("button", { name: /^next$/i });
-    expect(next).toBeDisabled(); // name empty
-    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
+    expect(next).toBeDisabled(); // no address yet
+    await resolveAddress(user);
     expect(next).toBeEnabled();
     await user.click(next);
-    // advanced to Trade area
-    expect(screen.getByRole("heading", { name: /trade area/i })).toBeInTheDocument();
-  });
-});
-
-describe("CreateProjectionPage — disabled Next/Generate states WHY (#147)", () => {
-  it("announces the blocking reason in a status region tied to the disabled button", async () => {
-    const user = userEvent.setup();
-    render(<CreateProjectionPage />);
-
-    const next = screen.getByRole("button", { name: /^next$/i });
-    expect(next).toBeDisabled();
-    // The reason is surfaced as a status message (announced to AT), not color-only.
-    const status = screen.getByRole("status");
-    expect(status).toHaveTextContent(/store name/i);
-    expect(status).toHaveAttribute("aria-live", "polite");
-    // The disabled button references the reason for assistive tech.
-    expect(next).toHaveAttribute("aria-describedby", status.id);
-
-    // Once the requirement is met, the reason clears and Next enables.
-    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
-    expect(next).toBeEnabled();
-    expect(screen.getByRole("status")).toHaveTextContent("");
-    expect(next).not.toHaveAttribute("aria-describedby");
+    expect(screen.getByRole("heading", { name: /set square footage/i })).toBeInTheDocument();
   });
 });
 
@@ -147,34 +137,32 @@ describe("CreateProjectionPage — Places predictions render", () => {
     wireFetch(bodies);
     const user = userEvent.setup();
     render(<CreateProjectionPage />);
-    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
+    await user.type(screen.getByRole("combobox", { name: /address/i }), "Dallas");
     expect(await screen.findByRole("option", { name: /Dallas, TX/ })).toBeInTheDocument();
   });
 });
 
-describe("CreateProjectionPage — households empty-until-resolved (§4)", () => {
-  it("households is disabled until an address resolves, then populates from Census", async () => {
+describe("CreateProjectionPage — confirm # of households (§4, owner Decision 25)", () => {
+  it("shows the resolved count as static text with a pencil edit icon (not an input)", async () => {
     const bodies: Record<string, unknown> = {};
     wireFetch(bodies);
     const user = userEvent.setup();
     render(<CreateProjectionPage />);
 
-    // step to Trade area
-    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
-    // resolve an address from the Store step first
-    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
-    await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
+    await resolveAddress(user);
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> households
 
-    const hh = screen.getByLabelText(/households/i) as HTMLInputElement;
-    await waitFor(() => expect(hh.value).toBe("512000"));
-    expect(hh).toBeEnabled();
-    expect(screen.getByText(/U\.S\. Census ACS 2022/i)).toBeInTheDocument();
+    expect(screen.getByTestId("households-confirm")).toHaveTextContent(/512,000 households/i);
+    // No input on load — the pencil reveals it.
+    expect(screen.queryByLabelText(/^households$/i)).toBeNull();
+    await user.click(screen.getByRole("button", { name: /edit households/i }));
+    expect(screen.getByLabelText(/^households$/i)).toBeInTheDocument();
   });
 
-  it("blocks Generate until households has a value (manual fallback path)", async () => {
+  it("blocks Next until households has a value (manual fallback path)", async () => {
     const bodies: Record<string, unknown> = {};
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
       const url = String(input);
       if (url.includes("/api/places/autocomplete"))
         return jsonResponse({ predictions: [{ description: "Nowhere", place_id: "PID_X" }] });
@@ -186,66 +174,60 @@ describe("CreateProjectionPage — households empty-until-resolved (§4)", () =>
     const user = userEvent.setup();
     render(<CreateProjectionPage />);
 
-    await user.type(screen.getByLabelText(/store name/i), "Manual Co");
-    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Nowhere");
+    await user.type(screen.getByRole("combobox", { name: /address/i }), "Nowhere");
     await user.click(await screen.findByRole("option", { name: /Nowhere/ }));
-    // resolve fails -> manual fallback; advance to Trade area
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
-    const hh = screen.getByLabelText(/households/i) as HTMLInputElement;
+    await waitFor(() => expect(screen.getByRole("button", { name: /^next$/i })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> households
+
+    const hh = screen.getByLabelText(/^households$/i) as HTMLInputElement;
     await waitFor(() => expect(hh).toBeEnabled());
     expect(screen.getByText(/enter households manually/i)).toBeInTheDocument();
-    // Next still blocked (no value yet)
     expect(screen.getByRole("button", { name: /^next$/i })).toBeDisabled();
     await user.type(hh, "25000");
     expect(screen.getByRole("button", { name: /^next$/i })).toBeEnabled();
-    expect(fetchSpy).toHaveBeenCalled();
   });
 });
 
 describe("CreateProjectionPage — full flow to Generate", () => {
-  it("steps through all steps and POSTs the create body with the new inputs", async () => {
+  it("steps through all steps and POSTs the create body, landing on /p/<slug>/edit", async () => {
     const bodies: Record<string, unknown> = {};
     wireFetch(bodies);
     const user = userEvent.setup();
     render(<CreateProjectionPage />);
 
-    // 1. Store
-    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
-    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
-    await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
+    // 1. Address (resolve)
+    await resolveAddress(user);
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 2. Trade area (households resolved)
-    await waitFor(() => expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"));
+    // 2. Square footage — defaults 12,500 / 80%
+    expect(screen.getByRole("heading", { name: /set square footage/i })).toBeInTheDocument();
+    expect((screen.getByLabelText(/building size/i) as HTMLInputElement).value).toBe("12500");
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 3. Space & rent — rent pre-fills from /api/research (verified badge + sources)
-    expect(screen.getByRole("heading", { name: /size .* rent your space/i })).toBeInTheDocument();
+    // 3. Confirm # of households (resolved static)
+    expect(screen.getByTestId("households-confirm")).toHaveTextContent(/512,000 households/i);
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+
+    // 4. Donor market share (shares pre-seeded; Back/Next works)
+    expect(screen.getByRole("heading", { name: /set donor market share/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^back$/i }));
+    expect(screen.getByTestId("households-confirm")).toHaveTextContent(/512,000 households/i);
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+
+    // 5. Startup costs — rent pre-filled from /api/research (verified badge + sources)
+    expect(screen.getByRole("heading", { name: /set startup costs/i })).toBeInTheDocument();
     await waitFor(() =>
       expect((screen.getByLabelText(/rent \(\$\/sq ft/i) as HTMLInputElement).value).toBe("18"),
     );
     expect(screen.getByTestId("rent-badge")).toHaveAttribute("data-verified", "true");
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 4. Donor market (shares pre-seeded; Back/Next works)
-    expect(screen.getByRole("heading", { name: /set donor shares/i })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /^back$/i }));
-    expect(screen.getByRole("heading", { name: /size .* rent your space/i })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
+    // Generate projections — no terms checkbox (implicit acceptance), the disclaimer shows.
+    expect(screen.getByTestId("terms-disclaimer")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /generate projections/i }));
 
-    // 5. Cost schedule
-    expect(screen.getByRole("heading", { name: /plan your costs/i })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
-
-    // 6. Review -> accept terms (explicit, #141/PRD §21) -> Generate
-    expect(screen.getByRole("heading", { name: /review/i })).toBeInTheDocument();
-    // Generate is gated until the operator actively accepts terms (not pre-checked).
-    expect(screen.getByRole("button", { name: /generate/i })).toBeDisabled();
-    await user.click(screen.getByRole("checkbox", { name: /planning estimates/i }));
-    await user.click(screen.getByRole("button", { name: /generate/i }));
-
-    await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
+    await waitFor(() => expect(window.location.pathname).toBe("/p/p_new/edit"));
     const body = bodies["/api/projections"] as {
       inputs: {
         opening_month_number: number;
@@ -260,102 +242,43 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     };
     expect(body.inputs.opening_month_number).toBe(1);
     expect(Array.isArray(body.inputs.cost_schedule)).toBe(true);
+    expect(body.inputs.target_opening_date).toBeNull();
     // #245: occupancy is driven by sq ft × rent — the research pre-fill ($18) flows.
     expect(body.inputs.rent_per_sqft).toBe("18");
     expect(body.inputs.occupancy_annual).toBeNull();
     expect(body.assumptions.utilities_per_sqft).toBe("2.23");
     expect(body.trade_area.households_source).toBe("census_acs");
-    // #141: the operator's acceptance travels in the create body so the server can
-    // persist terms_accepted_at and the .xlsx / packet exports are reachable.
+    // Terms acceptance is implicit-true so the .xlsx / packet exports stay reachable.
     expect(body.terms_accepted).toBe(true);
-    // result screen renders the server display string verbatim (no client math)
-    const kpis = within(screen.getByTestId("kpi-strip"));
-    expect(kpis.getByText("$426,911")).toBeInTheDocument();
   });
 });
 
-// The post-Generate result must offer a way INTO the full editable projection so
-// the create → review → refine loop closes here (act on a "Revise"/"Find cheaper
-// rent" verdict) instead of routing through Home. The link targets the owner-
-// authorized edit surface (/p/<slug>/edit) and SPA-navigates (no full reload).
-describe("CreateProjectionPage — open full projection link (refine loop)", () => {
-  async function stepToResult(user: ReturnType<typeof userEvent.setup>) {
-    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
-    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
-    await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
-    await waitFor(() =>
-      expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"),
-    );
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> space & rent
+describe("CreateProjectionPage — Generate lands on the editable detail (owner Decision 12)", () => {
+  async function stepToLast(user: ReturnType<typeof userEvent.setup>) {
+    await resolveAddress(user);
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> households
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> cost schedule
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> review
-    await user.click(screen.getByRole("checkbox", { name: /planning estimates/i }));
-    await user.click(screen.getByRole("button", { name: /generate/i }));
-    await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> startup costs
   }
 
-  it("links the result to the editable full projection at /p/<slug>/edit", async () => {
+  it("navigates straight to /p/<slug>/edit (no in-page result view, no interstitial)", async () => {
     window.history.pushState(null, "", "/wizard");
     wireFetch({});
     const user = userEvent.setup();
     render(<CreateProjectionPage />);
-    await stepToResult(user);
-
-    const open = screen.getByTestId("open-projection");
-    // The real href is the owner-authorized edit surface (works for new tab / right-click).
-    expect(open).toHaveAttribute("href", "/p/p_new/edit");
-    // A plain left-click SPA-navigates (no full reload) to that route.
-    await user.click(open);
-    expect(window.location.pathname).toBe("/p/p_new/edit");
-    window.history.pushState(null, "", "/");
-  });
-});
-
-// #203 — on Generate, swapping the form for the result must NOT strand focus
-// (the Generate button unmounts → focus reverts to <body>) and must announce
-// completion to AT (no aria-live → a screen-reader user never hears the
-// projection — the entire point of the app — was produced). WCAG 2.4.3 / 4.1.3.
-describe("CreateProjectionPage — create-result focus + announce (a11y #203)", () => {
-  async function stepToResult(user: ReturnType<typeof userEvent.setup>) {
-    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
-    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
-    await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
-    await waitFor(() =>
-      expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"),
-    );
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> space & rent
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> cost schedule
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> review
-    await user.click(screen.getByRole("checkbox", { name: /planning estimates/i }));
-    await user.click(screen.getByRole("button", { name: /generate/i }));
-    await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
-  }
-
-  it("renders a result h1 and moves focus to it (no stranded focus)", async () => {
-    wireFetch({});
-    const user = userEvent.setup();
-    render(<CreateProjectionPage />);
-    await stepToResult(user);
-
-    const h1 = screen.getByRole("heading", { level: 1 });
-    expect(h1).toHaveTextContent(/House of Hope/i);
-    // Focus moved to the result heading (was lost to <body> before the fix).
-    await waitFor(() => expect(h1).toHaveFocus());
-    expect(document.activeElement).not.toBe(document.body);
+    await stepToLast(user);
+    await user.click(screen.getByRole("button", { name: /generate projections/i }));
+    await waitFor(() => expect(window.location.pathname).toBe("/p/p_new/edit"));
+    // No legacy in-page result view.
+    expect(screen.queryByTestId("open-projection")).toBeNull();
+    expect(screen.queryByTestId("kpi-strip")).toBeNull();
   });
 
-  it("announces completion via an aria-live status region", async () => {
+  it("announces the in-progress generation via an aria-live status region (a11y #203)", () => {
     wireFetch({});
-    const user = userEvent.setup();
     render(<CreateProjectionPage />);
-    await stepToResult(user);
-
     const status = screen.getByTestId("generate-status");
     expect(status).toHaveAttribute("aria-live", "polite");
-    expect(status).toHaveTextContent(/projection ready/i);
   });
 });

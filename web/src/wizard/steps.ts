@@ -7,23 +7,33 @@
 //
 // Epic B (#261): each wizard step is its OWN route — /wizard/<step-slug> — so
 // browser Back/Forward navigate between steps and each step is deep-linkable.
+//
+// Phase 2 (Epics B/C, #261/#262, owner Decision 11 — REVISED order): the steps are
+// Address → Square footage → Households → Donor market share → Startup costs.
+// Square footage now PRECEDES households; there is NO Review step — the last step's
+// primary button is "Generate projections".
 
-/** The ordered wizard steps (Spec §3). "space" (Size & rent, feature #245) sits
- * between trade-area and donor-market: it needs the resolved location (for the
- * rent research pre-fill) and feeds occupancy into the donor-driven projection. */
-export const STEPS = ["store", "trade-area", "space", "donor-market", "cost", "review"] as const;
+/** The ordered wizard steps (owner Decision 11, REVISED). The household lookup fires
+ *  on address resolution (step 1), so inserting "square-footage" before the household
+ *  confirm changes only WHERE the number is confirmed, not when it is fetched. */
+export const STEPS = [
+  "address",
+  "square-footage",
+  "households",
+  "donor-market",
+  "startup-costs",
+] as const;
 export type StepKey = (typeof STEPS)[number];
 
-// Each label is an imperative VERB phrase (not a bare noun) so a non-finance ED
-// reads the indicator as an action to take — "Name your store", not "Store".
-// The step headings in each Step*.tsx mirror these exactly.
+// Each label is the imperative action the step asks for; the step headings in each
+// Step*.tsx mirror these. UI copy never says "trade area" (owner Decision 8 — the
+// API/code identifier `trade_area` is unchanged).
 export const STEP_LABELS: Record<StepKey, string> = {
-  store: "Name your store",
-  "trade-area": "Find your trade area",
-  space: "Size & rent your space",
-  "donor-market": "Set donor shares",
-  cost: "Plan your costs",
-  review: "Review & generate",
+  address: "Select address",
+  "square-footage": "Set square footage",
+  households: "Confirm # of households",
+  "donor-market": "Set donor market share",
+  "startup-costs": "Set startup costs",
 };
 
 /** Type guard: is `s` one of the known step slugs? Used by the router to reject an
