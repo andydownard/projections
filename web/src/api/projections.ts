@@ -6,8 +6,8 @@
 // it is never put in a URL path/query and never logged. No client-side math: list
 // rows arrive as { raw, display } and are rendered verbatim. getOwnerToken/
 // setOwnerToken are the single accessor for the localStorage owner-token key — the
-// create pages persist the minted token through setOwnerToken (see WizardPage /
-// CreateProjectionPage), and ProjectionDetail reads it via getOwnerToken.
+// create flow (CreateProjectionPage) persists the minted token through
+// setOwnerToken, and ProjectionDetail reads it via getOwnerToken.
 
 import type { ServerValue } from "./client";
 

@@ -3,7 +3,7 @@
 // Owner-scoped; no global index. Each row: name, location + basis, updated,
 // Year-1 revenue, net profit, capital required, and a recommendation chip. Money
 // is the server { display } rendered VERBATIM (no client math). Empty state is
-// utilitarian (heading + Create + start-from-example; no marketing illustration).
+// utilitarian (heading + a single Create action; no marketing illustration).
 import type { ProjectionListItem } from "../api/projections";
 import { RecoChip } from "./RecoChip";
 import { TradeAreaMap } from "./TradeAreaMap";
@@ -34,9 +34,6 @@ export function ProjectionsList({
         <div className="list-empty__actions">
           <button type="button" className="btn btn--primary" onClick={onCreate}>
             Create projection
-          </button>
-          <button type="button" className="btn" onClick={onCreate}>
-            Start from example
           </button>
         </div>
       </section>

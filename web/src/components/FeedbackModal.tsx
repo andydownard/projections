@@ -1,9 +1,15 @@
 // web/src/components/FeedbackModal.tsx — redacted bug/idea report (PRD §22).
 //
+// One modal, two shapes:
+//   • kind="bug"  (default) — Title + Description, plus a "don't paste financials"
+//     warning. Used by the saved-projection "Feedback" action.
+//   • kind="idea" — the Idea Fab suggestion: just a Description (+ optional email),
+//     NO title and NO warning. An idea is a one-line thought, not a triage ticket.
+//
 // The success surface shows ONLY the server's random support_id (SUP-…). The
 // outbound payload carries NO view_slug / token / financial field — redaction is
-// server-enforced (app/routers/feedback.py); this modal also warns the user not
-// to paste sensitive financial details, and never echoes a resolvable link.
+// server-enforced (app/routers/feedback.py), so the absent warning on the idea
+// form weakens nothing.
 //
 // Rendered through a portal to <body> so it overlays the whole app (and never
 // inflates the sticky <header> that hosts the Idea Fab trigger). a11y lives in
@@ -17,22 +23,37 @@ import { useDialog } from "./useDialog";
 import { Z } from "./sidePanels";
 
 export interface FeedbackModalProps {
+  /** "bug" (default) = Title + Description + warning; "idea" = Description + email. */
+  kind?: "bug" | "idea";
   /** Submit handler -> returns the server support_id (SUP-…). */
-  onSubmit: (input: { title: string; description: string }) => Promise<string>;
+  onSubmit: (input: {
+    title?: string;
+    description: string;
+    email?: string;
+  }) => Promise<string>;
   onClose: () => void;
 }
 
-export function FeedbackModal({ onSubmit, onClose }: FeedbackModalProps) {
+export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModalProps) {
+  const isIdea = kind === "idea";
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [email, setEmail] = useState("");
   const [supportId, setSupportId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const dialogRef = useDialog<HTMLDivElement>(onClose);
 
+  // An idea only needs a description; a bug report needs a title to triage.
+  const canSend = (isIdea ? description : title).trim().length > 0;
+
   async function send() {
     setSubmitting(true);
     try {
-      const id = await onSubmit({ title, description });
+      const id = await onSubmit(
+        isIdea
+          ? { description, email: email.trim() || undefined }
+          : { title, description },
+      );
       setSupportId(id);
     } finally {
       setSubmitting(false);
@@ -81,19 +102,23 @@ export function FeedbackModal({ onSubmit, onClose }: FeedbackModalProps) {
               void send();
             }}
           >
-            <h2 id="feedback-modal-title">Send feedback</h2>
-            <p className="feedback-modal__warning">
-              Please don’t include sensitive financial details — this report does not
-              attach your projection.
-            </p>
-            <label>
-              Title
-              <input
-                aria-label="Title"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-            </label>
+            <h2 id="feedback-modal-title">{isIdea ? "Share an idea" : "Send feedback"}</h2>
+            {!isIdea && (
+              <p className="feedback-modal__warning">
+                Please don’t include sensitive financial details — this report does not
+                attach your projection.
+              </p>
+            )}
+            {!isIdea && (
+              <label>
+                Title
+                <input
+                  aria-label="Title"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                />
+              </label>
+            )}
             <label>
               Description
               <textarea
@@ -102,6 +127,17 @@ export function FeedbackModal({ onSubmit, onClose }: FeedbackModalProps) {
                 onChange={(e) => setDescription(e.target.value)}
               />
             </label>
+            {isIdea && (
+              <label>
+                Email (optional)
+                <input
+                  aria-label="Email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </label>
+            )}
             <div className="feedback-modal__actions">
               <button type="button" className="btn" onClick={onClose}>
                 Cancel
@@ -109,7 +145,7 @@ export function FeedbackModal({ onSubmit, onClose }: FeedbackModalProps) {
               <button
                 type="submit"
                 className="btn btn--primary"
-                disabled={submitting || !title.trim()}
+                disabled={submitting || !canSend}
               >
                 Send
               </button>

@@ -587,6 +587,8 @@ Weak/no sources → `confidence:"low"` or a labeled benchmark fallback; **always
   "context": { "route":"/p_8x…/edit", "app_version":"1.4.0", "model_version":"2.0.0" } }
 ```
 
+- **`title`:** required for a `bug` (it must stay triageable → `422 {"error":"title_required"}` when absent); **optional for an `idea`** — an Idea Fab suggestion is just a description, so the client omits `title` entirely.
+
 - **Redaction guarantee (PRD §22, CI-tested):** the GitHub-issue payload contains **only** non-sensitive context — `route` (with any slug stripped), `app_version`, `model_version`, the random `support_id`, and the timestamp. It **never** contains `view_slug`, any token, any resolvable projection link, or any financial field. A server-side test asserts none of these ever appear in the outbound payload — this is the product's top data-leak risk and must be impossible to regress.
 - **Behavior:** generate a random `support_id`, open a redacted GitHub issue via `GITHUB_TOKEN`/`GITHUB_REPO`, persist to `feedback` (no financial fields, no projection link).
 - **Response `201`:** `{ "support_id":"FB-7K3Q9", "github_issue_url":"https://github.com/…/issues/123" }`. Only the `support_id` is shown to the user; staff-only tooling resolves it server-side.
