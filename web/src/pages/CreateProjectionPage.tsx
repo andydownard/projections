@@ -100,6 +100,10 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
   const wiz = useWizardState();
   const [vm, setVm] = useState<ViewModel | null>(null);
   const [busy, setBusy] = useState(false);
+  // "Start from example" fetches the seeded `example` projection, which may be absent
+  // in some environments (e.g. prod). A failed fetch must never be a silent no-op on a
+  // primary onboarding affordance — surface an inline message so the ED can fall back.
+  const [exampleError, setExampleError] = useState(false);
   // One ephemeral Bearer for the whole wizard session's /penny/draft calls.
   const draftToken = useRef<string>(makeWizardDraftToken());
 
@@ -258,11 +262,16 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
 
   async function startFromExample() {
     setBusy(true);
+    setExampleError(false);
     try {
       await fetchProjection(EXAMPLE_SLUG); // warm the cache / surface fetch errors
       const qs = aiOff ? "?ai=off" : "";
       window.history.pushState(null, "", `/p/${EXAMPLE_SLUG}${qs}`);
       window.dispatchEvent(new PopStateEvent("popstate"));
+    } catch {
+      // The example projection couldn't load (e.g. not seeded): show feedback rather
+      // than silently aborting the navigation, so the click is never a dead end.
+      setExampleError(true);
     } finally {
       setBusy(false);
     }
@@ -430,6 +439,17 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
             Start from example
           </button>
         </div>
+
+        {exampleError && (
+          <p
+            role="alert"
+            className="wizard__note"
+            data-testid="example-error"
+            style={{ color: "var(--error)", margin: "0.75rem 0 0" }}
+          >
+            Couldn’t load the example projection. Please fill in the form to start.
+          </p>
+        )}
 
         {/* #147: state WHY the Next/Generate button is disabled, right beside it.
             role=status + aria-live=polite announces the reason to assistive tech

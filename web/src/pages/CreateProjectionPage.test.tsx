@@ -73,6 +73,22 @@ describe("CreateProjectionPage shell", () => {
     expect(screen.getByRole("button", { name: /start from example/i })).toBeInTheDocument();
   });
 
+  it("surfaces an inline error when 'Start from example' can't load it (no silent dead end)", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      // The seeded `example` is absent in this environment -> the fetch 404s.
+      if (url.includes("/api/projections/example"))
+        return Promise.resolve(new Response("not found", { status: 404 }));
+      return jsonResponse({});
+    });
+    render(<CreateProjectionPage />);
+    await user.click(screen.getByRole("button", { name: /start from example/i }));
+    // Feedback appears instead of the click being a no-op; the wizard stays put.
+    expect(await screen.findByTestId("example-error")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /create projection/i })).toBeInTheDocument();
+  });
+
   it("gates Next on the Store step until a name is entered", async () => {
     const user = userEvent.setup();
     render(<CreateProjectionPage />);

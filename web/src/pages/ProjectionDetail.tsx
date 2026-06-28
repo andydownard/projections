@@ -88,7 +88,7 @@ function sv(v: ServerValue | number | string | undefined): ServerValue {
 // the undo is a normal FORWARD PATCH restoring the prior input value → recompute →
 // version++ → a NEW revision (it never erases the revision that introduced the
 // change). We scope undo to the donor-share inputs because those map cleanly +
-// reversibly to the `inputs.demand.share_y{n}` PATCH key; broader editable rows can
+// reversibly to the `inputs.share_y{n}` PATCH key; broader editable rows can
 // be added as their reversible PATCH mapping is confirmed.
 interface TrackedCell {
   key: string; // fieldChangeKey(node, year)
@@ -146,7 +146,6 @@ function settingsVm(s: ViewModel["settings"]) {
     payrollTaxPct: sv(s.payrollTaxPct),
     salvagePct: sv(s.salvagePct),
     escalator: sv(s.escalator),
-    occupancyAnnual: sv(s.occupancyAnnual ?? s.reserveBuffer),
     shareY1: sv(s.shareY1),
     shareY2: sv(s.shareY2),
     shareY3: sv(s.shareY3),
@@ -271,7 +270,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     if (!revert) return;
     pendingActorRef.current = { by: "user", reverted: true };
     setSaveLabel("Saving…");
-    doPatch({ inputs: { demand: { [revert.patchKey]: revert.raw } } }, version)
+    doPatch({ inputs: { [revert.patchKey]: revert.raw } }, version)
       .then(() => setSaveLabel("All changes saved"))
       .catch((err) => {
         if (err instanceof PatchConflictError) setConflict(err.conflict);
