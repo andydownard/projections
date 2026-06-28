@@ -336,6 +336,19 @@ def test_default_system_prompt_describes_untrusted_markers_and_tools():
     assert "tool" in sp.lower()
 
 
+def test_default_system_prompt_demands_concise_answers():
+    """Penny's replies were too verbose; the prompt must require brevity WITHOUT
+    losing the grounded-numbers / no-fabrication invariant (the engine is the only
+    source of numbers)."""
+    sp = L.default_system_prompt()
+    low = sp.lower()
+    # Explicit brevity directive + a bounded-length cue.
+    assert "concise" in low
+    assert "sentence" in low
+    # No-fabrication invariant survives the rewrite.
+    assert "never" in low and ("figure" in low or "number" in low)
+
+
 # --------------------------------------------------- transcript / message build
 def test_transcript_is_prepended_and_caller_list_not_mutated():
     prior = [{"role": "user", "content": [{"type": "text", "text": "earlier"}]}]
