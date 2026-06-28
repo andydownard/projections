@@ -31,6 +31,7 @@ import { EvidencePanel } from "../components/EvidencePanel";
 import { FeedbackModal } from "../components/FeedbackModal";
 import { SaveConflictModal } from "../components/SaveConflictModal";
 import { SettingsTab } from "../components/SettingsTab";
+import { KpiStrip } from "../components/KpiStrip";
 import { DegradedState } from "../components/DegradedState";
 import { PennyAssistant } from "../components/PennyDrawer";
 import { OverrideInspector, type InspectorOverride } from "../components/OverrideInspector";
@@ -70,9 +71,11 @@ function goHome() {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
+// Epic G (#41): the owner detail page is a Projection | KPIs tablist — Settings is
+// MERGED into the KPIs tab (no standalone Settings page).
 const DETAIL_TABS = [
   { id: "projection", label: "Projection" },
-  { id: "settings", label: "Settings" },
+  { id: "kpis", label: "KPIs" },
 ] as const;
 type DetailTabId = (typeof DETAIL_TABS)[number]["id"];
 
@@ -409,58 +412,63 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
         <span aria-hidden="true">←</span> Back to projections
       </a>
 
-      {/* #203 — a visible top-level page heading naming the projection (the read
-          view previously had none; the first heading was an <h3>, skipping h1/h2).
-          WCAG 1.3.1 (A) / 2.4.6 (AA). Inline styles only — tokens.css is owned
-          elsewhere and these detail screens are not yet in its parity backlog. */}
-      <h1 style={{ margin: "0 0 1rem", fontSize: "1.5rem", lineHeight: 1.25 }}>
-        {(name || vm.name || "").trim() || "Thrift store projection"}
-      </h1>
-
-      {/* The autosave status is now a header chip in the shared TopBar (#150);
-          ProjectionTab keeps its own recompute live-region for SR users. */}
-      {edit && (
-        <label className="detail__name">
-          Store name
-          <input
-            aria-label="Store name"
-            value={name}
-            onChange={(e) => onNameChange(e.target.value)}
+      {/* Page header (#266): the projection name (h1, plus the edit-name input in
+          edit mode) on the LEFT, the trade-area map in the upper-RIGHT as a roughly
+          square box (not a stretched full-width banner). */}
+      <div className="detail__header">
+        <div className="detail__header-main">
+          {/* #203 — a visible top-level page heading naming the projection (WCAG
+              1.3.1 / 2.4.6). Inline style only (tokens.css owned elsewhere). */}
+          <h1 style={{ margin: 0, fontSize: "var(--text-lg)", lineHeight: 1.25 }}>
+            {(name || vm.name || "").trim() || "Thrift store projection"}
+          </h1>
+          {/* The autosave status is a header chip in the shared TopBar (#150);
+              ProjectionTab keeps its own recompute live-region for SR users. */}
+          {edit && (
+            <label className="detail__name">
+              Store name
+              <input
+                aria-label="Store name"
+                value={name}
+                onChange={(e) => onNameChange(e.target.value)}
+              />
+            </label>
+          )}
+        </div>
+        <div className="detail__map" data-testid="detail-map">
+          <TradeAreaMap
+            slug={slug}
+            location={vm.location}
+            basis={vm.trade_area?.basis}
+            geography={vm.trade_area?.geography_name}
+            size="detail"
           />
-        </label>
-      )}
+        </div>
+      </div>
 
-      {/* Projection content: the stored view-model verbatim (decision banner +
-          tiles, KPI strip, cash-flow SVG, 3-year table — no client math), the
-          trade-area map, and the evidence/confidence panel. In edit mode it's the
-          first of a Projection | Settings tablist; read mode shows it directly. */}
+      {/* Detail content (#40/#41). The "Decision & 3-year projection" heading is
+          GONE; the verdict no longer repeats here. The Projection panel = 3-year
+          table (top) → high-level tiles → first-year cash-flow detail. The 2nd tile
+          set (KpiStrip) + the Settings sliders live in the KPIs tab (edit). Read
+          mode shows the projection then the KPIs inline (no Settings to merge). */}
       {(() => {
         const projection = (
-          <>
-            {/* #203 — a section-level h2 so the decision + the existing in-tab
-                h3s ("Monthly launch cash-flow", "3-year projection") nest under
-                the page h1 instead of skipping straight to h3. */}
-            <h2 style={{ margin: "0 0 0.75rem", fontSize: "1.125rem", lineHeight: 1.3 }}>
-              Decision &amp; 3-year projection
-            </h2>
-            <ProjectionTab
-              key={slug}
-              vm={vm}
-              recomputeStatus={edit ? saveLabel : ""}
-              fieldChanges={fieldChanges}
-              onUndoField={edit ? onUndoField : undefined}
-            />
-            <TradeAreaMap
-              slug={slug}
-              location={vm.location}
-              basis={vm.trade_area?.basis}
-              geography={vm.trade_area?.geography_name}
-              size="detail"
-            />
-            <EvidencePanel evidence={vm.evidence ?? []} />
-          </>
+          <ProjectionTab
+            key={slug}
+            vm={vm}
+            recomputeStatus={edit ? saveLabel : ""}
+            fieldChanges={fieldChanges}
+            onUndoField={edit ? onUndoField : undefined}
+          />
         );
-        if (!edit) return projection;
+        if (!edit) {
+          return (
+            <>
+              {projection}
+              <KpiStrip kpis={vm.kpis} />
+            </>
+          );
+        }
         return (
           <div className="detail__tabs">
             <div role="tablist" aria-label="Projection views" className="tabs">
@@ -492,11 +500,14 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
             </div>
             <div
               role="tabpanel"
-              id="detail-panel-settings"
-              aria-labelledby="detail-tab-settings"
+              id="detail-panel-kpis"
+              aria-labelledby="detail-tab-kpis"
               className="detail__panel"
-              hidden={activeTab !== "settings"}
+              hidden={activeTab !== "kpis"}
             >
+              {/* a11y: a section heading so the KPIs panel keeps the h1→h2 chain. */}
+              <h2 className="detail__panel-heading">Key metrics &amp; settings</h2>
+              <KpiStrip kpis={vm.kpis} />
               <div data-testid="settings-tab">
                 <SettingsTab
                   settings={settingsVm(vm.settings)}
@@ -509,6 +520,9 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           </div>
         );
       })()}
+
+      {/* Evidence / confidence — page level so it stays visible in both modes/tabs. */}
+      <EvidencePanel evidence={vm.evidence ?? []} />
 
       {aiOff && (
         <section data-testid="narrative-disabled" className="narrative narrative--disabled">

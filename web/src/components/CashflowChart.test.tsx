@@ -47,11 +47,8 @@ describe("CashflowChart", () => {
   it("does not pin a fixed pixel height — follows the viewBox aspect so phones don't letterbox [#196]", () => {
     const { container } = render(<CashflowChart monthly={monthly} breakevenMonth={3} />);
     const svg = container.querySelector("svg")!;
-    // No fixed `height="240"`: the box follows the viewBox ratio (CSS width:100%/height:auto)
-    // so a narrow mobile column gets a proportional height, not a ~55% empty band.
     expect(svg.getAttribute("height")).not.toBe("240");
     expect(svg).toHaveAttribute("width", "100%");
-    // The drawing geometry still uses the 660x240 coordinate space.
     expect(svg).toHaveAttribute("viewBox", "0 0 660 240");
   });
 
@@ -67,18 +64,53 @@ describe("CashflowChart", () => {
     expect(screen.getByTestId("payback-marker")).toBeInTheDocument();
   });
 
-  it("labels the milestones with the server display strings (no client formatting)", () => {
-    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
-    const legend = screen.getByTestId("chart-milestones");
-    expect(legend).toHaveTextContent("Grand Opening");
-    expect(legend).toHaveTextContent("Month 3");
-    expect(legend).toHaveTextContent("Break-even");
-    expect(legend).toHaveTextContent("Month 5");
-    expect(legend).toHaveTextContent("Payback");
-    expect(legend).toHaveTextContent("Month 7");
+  // Epic G (#40): the milestone names are labeled ON the plotted timeline (server
+  // display strings), and the separate visible legend LIST is removed.
+  it("labels the milestones ON the chart with the server display strings (no client formatting)", () => {
+    const { container } = render(
+      <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
+    );
+    const onChart = Array.from(container.querySelectorAll(".cashflow-chart__milestone-label")).map(
+      (t) => t.textContent,
+    );
+    expect(onChart.some((t) => t?.includes("Grand Opening") && t.includes("Month 3"))).toBe(true);
+    expect(onChart.some((t) => t?.includes("Break-even") && t.includes("Month 5"))).toBe(true);
+    expect(onChart.some((t) => t?.includes("Payback") && t.includes("Month 7"))).toBe(true);
   });
 
-  it("starts the x-axis at month 1", () => {
+  it("removes the separate visible milestone legend LIST (#40)", () => {
+    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
+    expect(screen.queryByTestId("chart-milestones")).not.toBeInTheDocument();
+  });
+
+  it("renders the series legend (Cumulative cash + Net) on the left", () => {
+    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
+    const legend = screen.getByTestId("cashflow-legend");
+    expect(legend).toHaveTextContent("Cumulative cash");
+    expect(legend).toHaveTextContent("Net");
+  });
+
+  it("labels the left y-axis in $ with gridline ticks (server display strings)", () => {
+    const { container } = render(
+      <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
+    );
+    expect(screen.getByTestId("cashflow-axis-label")).toHaveTextContent("$");
+    const ticks = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick")).map(
+      (t) => t.textContent,
+    );
+    // The $0 baseline tick is always present (a constant, not a re-derived figure).
+    expect(ticks).toContain("$0");
+  });
+
+  it("provides an sr-only milestone summary as the keyboard/SR text alternative", () => {
+    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
+    const sr = screen.getByTestId("chart-milestones-sr");
+    expect(sr).toHaveTextContent("Grand Opening");
+    expect(sr).toHaveTextContent("Month 5");
+    expect(sr).toHaveTextContent("Payback");
+  });
+
+  it("starts the x-axis at month 1 and renders a tick per month (table alignment)", () => {
     const { container } = render(
       <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
     );
@@ -86,9 +118,11 @@ describe("CashflowChart", () => {
       (t) => t.textContent,
     );
     expect(ticks[0]).toBe("M1");
+    // one tick per month so each sits under its monthly-table column
+    expect(ticks).toHaveLength(monthlyV3.length);
   });
 
-  it("renders an unreached milestone as N/A with reason, never a 0 marker", () => {
+  it("renders an unreached milestone as N/A with reason in the sr summary, never a 0 marker", () => {
     const naMilestones: Milestones = {
       grandOpening: { raw: 3, display: "Month 3" },
       breakEven: { raw: 5, display: "Month 5" },
@@ -101,9 +135,9 @@ describe("CashflowChart", () => {
     render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={naMilestones} />);
     // No phantom marker drawn at month 0 / position 0.
     expect(screen.queryByTestId("payback-marker")).not.toBeInTheDocument();
-    const legend = screen.getByTestId("chart-milestones");
-    expect(legend).toHaveTextContent("N/A");
-    expect(legend).toHaveTextContent("startup costs are not recovered");
+    const sr = screen.getByTestId("chart-milestones-sr");
+    expect(sr).toHaveTextContent("N/A");
+    expect(sr).toHaveTextContent("startup costs are not recovered");
   });
 
   it("colors negative cells in the monthly data table — loss color paired with the server parentheses [#148]", () => {
@@ -123,11 +157,8 @@ describe("CashflowChart", () => {
     };
     render(<CashflowChart monthly={[loss, gain]} breakevenMonth={1} />);
     const table = screen.getByTestId("cashflow-table");
-    // Negative net / cumulative cells carry the negative hook (CSS error color),
-    // PAIRED with the server's parentheses — never color alone.
     expect(within(table).getByText("($14,793)")).toHaveAttribute("data-negative", "true");
     expect(within(table).getByText("($199,793)")).toHaveAttribute("data-negative", "true");
-    // Positive figures are unflagged.
     expect(within(table).getByText("$20,000")).not.toHaveAttribute("data-negative");
     expect(within(table).getByText("$10,000")).not.toHaveAttribute("data-negative");
   });

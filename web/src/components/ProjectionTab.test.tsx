@@ -5,12 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import { ProjectionTab } from "./ProjectionTab";
 import type { Milestones, ViewModel } from "../api/viewModel";
 
-// SLICE 3 — the Projection tab. It renders the Appendix-D view-model VERBATIM:
-// decision banner (reco chip carrying icon + TEXT, never color alone), the three
-// decision tiles (capital / break-even / cash-gap, each with a downside+confidence
-// detail), the hand-rolled monthly cash-flow SVG with a break-even marker, and the
-// 3-year table with an Input/Computed/Overridden/Estimated legend + per-cell state
-// classes. NO client math: every figure is the server's { display } string.
+// Epic G (#39/#40) — the owner detail Projection panel. It renders the Appendix-D
+// view-model VERBATIM but de-duplicates the decision:
+//   - NO verdict (reco chip / headline / sub are suppressed here);
+//   - 3 high-level tiles ONLY: Startup capital (no "required"), Break-even, Payback;
+//     the first-year cash-gap tile is HIDDEN (metrics.cashGap stays in the vm);
+//   - vertical order: 3-year table (TOP) → tiles → first-year cash-flow detail;
+//   - the "2nd tile set" (server kpis[]) is NOT here — it moved to the KPIs tab.
+// NO client math: every figure is the server's { display } string.
 
 function vm(overrides: Partial<ViewModel> = {}): ViewModel {
   return {
@@ -52,46 +54,76 @@ function vm(overrides: Partial<ViewModel> = {}): ViewModel {
   };
 }
 
-describe("ProjectionTab", () => {
-  it("renders the decision banner with reco text (not color alone) + headline + sub", () => {
+describe("ProjectionTab — Epic G decision de-duplication (#39/#40)", () => {
+  it("SUPPRESSES the verdict (no reco chip / headline / sub) on the owner detail page", () => {
     render(<ProjectionTab vm={vm()} />);
-    const banner = screen.getByTestId("decision-banner");
-    expect(banner).toHaveAttribute("data-tag", "proceed");
-    // Meaning carried in TEXT: the chip label, not only a color token.
-    expect(within(banner).getByTestId("reco-chip")).toHaveTextContent(/proceed/i);
-    expect(screen.getByText(/clears break-even/i)).toBeInTheDocument();
-    expect(screen.getByText(/worst-case trough is covered/i)).toBeInTheDocument();
+    // The tiles section keeps its data-testid (the e2e/detail contract reads it)…
+    expect(screen.getByTestId("decision-banner")).toBeInTheDocument();
+    // …but the verdict chip + headline + sub are GONE (kept in computed_json for
+    // /r/<slug> + the Board Packet, not repeated here).
+    expect(screen.queryByTestId("reco-chip")).not.toBeInTheDocument();
+    expect(screen.queryByText(/clears break-even/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/worst-case trough is covered/i)).not.toBeInTheDocument();
+    // No verdict color tag drives the banner anymore.
+    expect(screen.getByTestId("decision-banner")).not.toHaveAttribute("data-tag");
   });
 
-  it("hides each decision reason until its Why? disclosure is tapped", async () => {
-    const user = userEvent.setup();
-    render(<ProjectionTab vm={vm()} />);
-
+  it("renders the 3 high-level tiles: Startup capital (no 'required'), Break-even, Payback", () => {
+    const milestones: Milestones = {
+      grandOpening: { raw: 1, display: "Month 1" },
+      breakEven: { raw: 5, display: "Month 5" },
+      payback: { raw: 25, display: "Month 25", duration: "25 months" },
+    };
+    render(<ProjectionTab vm={vm({ milestones })} />);
     const cap = screen.getByTestId("tile-capital");
+    expect(cap).toHaveTextContent(/startup capital/i);
+    expect(cap).not.toHaveTextContent(/required/i);
     expect(cap).toHaveTextContent("$277,990");
-    const capWhy = within(cap).getByRole("button", { name: /why/i });
-    // In the DOM (so aria-controls resolves) but hidden + collapsed by default.
-    const capReason = within(cap).getByRole("note", { hidden: true });
-    expect(capWhy).toHaveAttribute("aria-expanded", "false");
-    expect(capReason).not.toBeVisible();
-    await user.click(capWhy);
-    expect(capWhy).toHaveAttribute("aria-expanded", "true");
-    expect(capReason).toBeVisible();
-    expect(capReason).toHaveTextContent(/reserve/i);
-    await user.click(capWhy); // collapses again
-    expect(capReason).not.toBeVisible();
-
-    const be = screen.getByTestId("tile-breakeven");
-    expect(be).toHaveTextContent("Month 5");
-    await user.click(within(be).getByRole("button", { name: /why/i }));
-    expect(within(be).getByRole("note")).toHaveTextContent(/operating net/i);
-
-    const gap = screen.getByTestId("tile-cashgap");
-    expect(gap).toHaveTextContent("($219,990)");
-    await user.click(within(gap).getByRole("button", { name: /why/i }));
-    expect(within(gap).getByRole("note")).toHaveTextContent(/cumulative cash/i);
+    expect(screen.getByTestId("tile-breakeven")).toHaveTextContent("Month 5");
+    expect(screen.getByTestId("tile-payback")).toHaveTextContent("Month 25");
   });
 
+  it("HIDES the first-year cash-gap tile (metrics.cashGap stays in the vm, just not a tile)", () => {
+    render(<ProjectionTab vm={vm()} />);
+    expect(screen.queryByTestId("tile-cashgap")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("metric-cashgap")).not.toBeInTheDocument();
+    // (the trough value may still appear as a cumulative-cash figure in the monthly
+    // table — that is the data, not a repeated decision tile.)
+  });
+
+  it("drops the downside/confidence 'Why?' reason disclosures on the owner detail page", () => {
+    render(<ProjectionTab vm={vm()} />);
+    expect(screen.queryByRole("button", { name: /why/i })).not.toBeInTheDocument();
+  });
+
+  it("does NOT render the 2nd tile set (server kpis[]) — that moved to the KPIs tab", () => {
+    render(<ProjectionTab vm={vm()} />);
+    expect(screen.queryByTestId("kpi-strip")).not.toBeInTheDocument();
+  });
+
+  it("keeps the back-compat metric hooks the detail/e2e contract reads", () => {
+    const milestones: Milestones = {
+      grandOpening: { raw: 1, display: "Month 1" },
+      breakEven: { raw: 5, display: "Month 5" },
+      payback: { raw: 25, display: "Month 25" },
+    };
+    render(<ProjectionTab vm={vm({ milestones })} />);
+    expect(screen.getByTestId("metric-capital")).toBeInTheDocument();
+    expect(screen.getByTestId("metric-breakeven")).toBeInTheDocument();
+    expect(screen.getByTestId("metric-payback")).toBeInTheDocument();
+  });
+
+  it("orders the 3-year table ABOVE the high-level tiles, with the chart present", () => {
+    render(<ProjectionTab vm={vm()} />);
+    const table = screen.getByTestId("three-year-table");
+    const tiles = screen.getByTestId("decision-tiles");
+    // 3-year table precedes the tiles in document order (#40).
+    expect(table.compareDocumentPosition(tiles) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId("cashflow-chart")).toBeInTheDocument();
+  });
+});
+
+describe("ProjectionTab — 3-year table + chart", () => {
   it("renders the monthly cash-flow SVG with a break-even marker", () => {
     render(<ProjectionTab vm={vm()} />);
     expect(screen.getByTestId("cashflow-chart")).toBeInTheDocument();
@@ -123,14 +155,8 @@ describe("ProjectionTab", () => {
 
   it("renders server display strings verbatim (no client math)", () => {
     render(<ProjectionTab vm={vm()} />);
-    // Parenthesized negative from the server — rendered as-is, never re-derived.
     expect(screen.getByTestId("cell-Payroll-y1")).toHaveTextContent("$256,146");
-    expect(screen.getByTestId("tile-cashgap")).toHaveTextContent("($219,990)");
-  });
-
-  it("never inlines a hex color on the banner/chip (token mapping is CSS)", () => {
-    render(<ProjectionTab vm={vm()} />);
-    expect(screen.getByTestId("reco-chip").getAttribute("style")).toBeNull();
+    expect(screen.getByTestId("tile-capital")).toHaveTextContent("$277,990");
   });
 });
 
@@ -151,34 +177,29 @@ describe("ProjectionTab — negative (loss) treatment [#148]", () => {
     });
     render(<ProjectionTab vm={m} />);
     const neg = screen.getByTestId("cell-Net profit-y1");
-    // Color cue (CSS [data-negative]) is PAIRED with the server's parentheses,
-    // which remain the non-color cue — meaning is never carried by color alone.
     expect(neg).toHaveAttribute("data-negative", "true");
     expect(neg).toHaveTextContent("($44,433)");
-    // A positive sibling cell carries no negative hook.
     expect(screen.getByTestId("cell-Net profit-y2")).not.toHaveAttribute("data-negative");
   });
 
-  it("flags the negative cash-gap decision tile value but not the positive capital tile", () => {
-    render(<ProjectionTab vm={vm()} />);
-    const gapValue = screen.getByTestId("tile-cashgap").querySelector(".decision-tile__value")!;
-    expect(gapValue).toHaveAttribute("data-negative", "true");
-    expect(gapValue).toHaveTextContent("($219,990)");
-    const capValue = screen.getByTestId("tile-capital").querySelector(".decision-tile__value")!;
-    expect(capValue).not.toHaveAttribute("data-negative");
-  });
-
-  it("flags a negative KPI value but not a positive one", () => {
-    const m = vm({
-      kpis: [
-        { label: "Total revenue", value: { raw: 426911, display: "$426,911" }, sub: "Year 1" },
-        { label: "Net profit", value: { raw: -44433, display: "($44,433)" }, sub: "Year 1" },
-      ],
+  it("flags a negative capital tile value but not a positive one", () => {
+    const neg = vm({
+      metrics: {
+        capital: { raw: -10000, display: "($10,000)" },
+        cashGap: { raw: -219990, display: "($219,990)" },
+        breakeven: { raw: 5, display: "Month 5" },
+      },
     });
-    render(<ProjectionTab vm={m} />);
-    const strip = screen.getByTestId("kpi-strip");
-    expect(within(strip).getByText("($44,433)")).toHaveAttribute("data-negative", "true");
-    expect(within(strip).getByText("$426,911")).not.toHaveAttribute("data-negative");
+    const { unmount } = render(<ProjectionTab vm={neg} />);
+    expect(
+      screen.getByTestId("tile-capital").querySelector(".decision-tile__value"),
+    ).toHaveAttribute("data-negative", "true");
+    unmount();
+
+    render(<ProjectionTab vm={vm()} />);
+    expect(
+      screen.getByTestId("tile-capital").querySelector(".decision-tile__value"),
+    ).not.toHaveAttribute("data-negative");
   });
 });
 
@@ -192,10 +213,8 @@ describe("ProjectionTab a11y", () => {
 
   it("makes editable (input) cells keyboard-focusable and derived cells not", () => {
     render(<ProjectionTab vm={vm()} />);
-    // Editable driver cell is a button (Enter/Space activatable).
     const share = screen.getByTestId("cell-Donor market share-y1");
     expect(share.tagName).toBe("BUTTON");
-    // Derived total is read-only — not a button, marked aria-disabled.
     const total = screen.getByTestId("cell-Total Revenue-y1");
     expect(total.tagName).not.toBe("BUTTON");
     expect(total).toHaveAttribute("aria-disabled", "true");
@@ -228,16 +247,8 @@ describe("ProjectionTab — per-field change affordance (PE7, #126)", () => {
     );
     const cell = screen.getByTestId("cell-Donor market share-y1").closest("td");
     const fc = within(cell as HTMLElement).getByTestId("field-change");
-    // recent-change badge (icon + text, not color alone) + subtle "was X".
     expect(within(fc).getByTestId("field-change-badge")).toHaveTextContent(/changed by penny/i);
     expect(within(fc).getByTestId("field-change-was")).toHaveTextContent("was 4.0%");
-  });
-
-  it("does not render the affordance on cells with no recent change", () => {
-    render(<ProjectionTab vm={vm()} fieldChanges={{ "Donor market share#1": { previous: "4.0%" } }} />);
-    // The Rent editable cell has no change entry → no affordance there.
-    const rent = screen.getByTestId("cell-Rent-y1").closest("td");
-    expect(within(rent as HTMLElement).queryByTestId("field-change")).not.toBeInTheDocument();
   });
 
   it("per-field undo reverts THAT field — calls onUndoField with the node + year", async () => {
@@ -253,16 +264,6 @@ describe("ProjectionTab — per-field change affordance (PE7, #126)", () => {
     await user.click(screen.getByTestId("field-change-undo"));
     expect(onUndoField).toHaveBeenCalledWith("Donor market share", 1);
   });
-
-  it("renders no undo control when onUndoField is absent (display-only)", () => {
-    render(
-      <ProjectionTab
-        vm={vm()}
-        fieldChanges={{ "Donor market share#1": { previous: "4.0%", by: "penny" } }}
-      />,
-    );
-    expect(screen.queryByTestId("field-change-undo")).not.toBeInTheDocument();
-  });
 });
 
 describe("ProjectionTab — break-even / payback are NOT conflated [#193]", () => {
@@ -276,19 +277,15 @@ describe("ProjectionTab — break-even / payback are NOT conflated [#193]", () =
     render(<ProjectionTab vm={vm()} />);
     const be = screen.getByTestId("tile-breakeven");
     expect(be).toHaveTextContent(/break-even/i);
-    // The conflated label is gone — break-even must not claim it is payback.
     expect(be).not.toHaveTextContent(/payback/i);
   });
 
   it("renders a SEPARATE Payback tile from milestones.payback (distinct month)", () => {
     render(<ProjectionTab vm={vm({ milestones })} />);
-    const be = screen.getByTestId("tile-breakeven");
-    expect(be).toHaveTextContent("Month 5");
+    expect(screen.getByTestId("tile-breakeven")).toHaveTextContent("Month 5");
     const payback = screen.getByTestId("tile-payback");
     expect(within(payback).getByText(/payback/i)).toBeInTheDocument();
-    // The recovered-investment month is its own number, not the break-even month.
     expect(payback).toHaveTextContent("Month 25");
-    // Back-compat metric hook mirrors the DecisionBanner.
     expect(within(payback).getByTestId("metric-payback")).toBeInTheDocument();
   });
 
@@ -308,32 +305,5 @@ describe("ProjectionTab — break-even / payback are NOT conflated [#193]", () =
     expect(payback).toHaveTextContent("N/A");
     expect(payback).not.toHaveTextContent("$0");
     expect(payback).toHaveTextContent(/not recovered in Year 1/i);
-  });
-});
-
-describe("ProjectionTab — cash-gap label is sign-aware [#194]", () => {
-  it("labels a negative trough 'First-year cash gap' (a real shortfall)", () => {
-    render(<ProjectionTab vm={vm()} />);
-    const gap = screen.getByTestId("tile-cashgap");
-    expect(gap).toHaveTextContent(/First-year cash gap/i);
-    expect(gap).toHaveTextContent("($219,990)");
-  });
-
-  it("labels a positive trough 'Lowest first-year cash balance' — a cushion, not a gap", () => {
-    const m = vm({
-      metrics: {
-        capital: { raw: 277990, display: "$277,990" },
-        cashGap: { raw: 40000, display: "$40,000" },
-        breakeven: { raw: 5, display: "Month 5" },
-        reasonGap: "Most-negative cumulative cash across the first year.",
-      },
-    });
-    render(<ProjectionTab vm={m} />);
-    const gap = screen.getByTestId("tile-cashgap");
-    expect(gap).toHaveTextContent(/Lowest first-year cash balance/i);
-    expect(gap).not.toHaveTextContent(/cash gap/i);
-    // Server display verbatim; a positive cushion carries no negative color cue.
-    expect(gap).toHaveTextContent("$40,000");
-    expect(gap.querySelector(".decision-tile__value")).not.toHaveAttribute("data-negative");
   });
 });

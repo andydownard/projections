@@ -351,11 +351,75 @@ describe("ProjectionDetail — heading hierarchy (a11y #203)", () => {
     expect(h1).toHaveTextContent(/House of Hope/i);
   });
 
-  it("inserts an h2 section heading so the existing h3s don't skip levels", async () => {
+  it("keeps h2 section headings so the page never skips h1→h3", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     render(<ProjectionDetail slug="p_8x" edit={false} />);
     await screen.findByRole("heading", { level: 1 });
-    expect(screen.getByRole("heading", { level: 2 })).toBeInTheDocument();
+    // The Projection panel section headings ("3-year projection", "First-year cash
+    // flow") are h2 (Epic G removed the standalone "Decision & 3-year projection").
+    expect(screen.getAllByRole("heading", { level: 2 }).length).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("heading", { name: /decision & 3-year projection/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+// Epic G (#39/#40/#41) — the owner detail page de-duplicates the decision, hides the
+// cash-gap tile, relabels the capital tile, and reflows into a Projection | KPIs IA
+// with Settings merged into the KPIs tab + a trade-area map in the upper-right.
+describe("ProjectionDetail — Epic G reorg", () => {
+  it("SUPPRESSES the verdict on the owner read page (reco headline/sub not repeated)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("reco-chip")).not.toBeInTheDocument();
+    expect(screen.queryByText(/the trough is covered/i)).not.toBeInTheDocument();
+  });
+
+  it("HIDES the first-year cash-gap tile (metric.cashGap stays in the vm)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("metric-cashgap")).not.toBeInTheDocument();
+    // Capital tile drops "required".
+    expect(screen.getByTestId("tile-capital")).toHaveTextContent(/startup capital/i);
+    expect(screen.getByTestId("tile-capital")).not.toHaveTextContent(/required/i);
+  });
+
+  it("renders the 2nd tile set (KPIs) inline on the read page so kpi-revenue is visible", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    expect(await screen.findByTestId("kpi-revenue")).toBeInTheDocument();
+    // No Settings on the read page.
+    expect(screen.queryByTestId("settings-tab")).not.toBeInTheDocument();
+  });
+
+  it("places the trade-area map in the page header (upper-right)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.getByTestId("detail-map")).toBeInTheDocument();
+  });
+
+  it("edit mode shows a Projection | KPIs tablist and merges Settings into the KPIs tab", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+
+    // The tablist is Projection | KPIs (no standalone Settings tab).
+    expect(screen.getByRole("tab", { name: /projection/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /kpis/i })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /^settings$/i })).not.toBeInTheDocument();
+
+    // Settings is hidden under the (inactive) KPIs tab, then revealed on activation.
+    expect(screen.getByTestId("settings-tab")).not.toBeVisible();
+    await user.click(screen.getByRole("tab", { name: /kpis/i }));
+    expect(screen.getByTestId("settings-tab")).toBeVisible();
+    // The KPIs tab also carries the 2nd tile set.
+    expect(screen.getByTestId("kpi-revenue")).toBeVisible();
+    localStorage.clear();
   });
 });
 
