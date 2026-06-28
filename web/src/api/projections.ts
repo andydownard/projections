@@ -9,6 +9,7 @@
 // create flow (CreateProjectionPage) persists the minted token through
 // setOwnerToken, and ProjectionDetail reads it via getOwnerToken.
 
+import { authHeader } from "./authHeader";
 import type { ServerValue } from "./client";
 
 export const OWNER_TOKEN_KEY = "projections.owner_token";
@@ -62,13 +63,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await resp.json()) as T;
 }
 
-/** Owner-scoped list. Without an owner token there is nothing to list (no global index). */
+/**
+ * Owner-scoped list. The owner identity comes from authHeader(): a Clerk session
+ * JWT when the satellite is active + signed in, else the localStorage owner token.
+ * Without any owner identity there is nothing to list (owner-scoped, no global
+ * index, PRD §20) — so we short-circuit to an empty list without hitting the API.
+ */
 export async function listProjections(): Promise<ProjectionListResponse> {
-  const token = getOwnerToken();
-  if (!token) {
+  const headers = await authHeader();
+  if (!headers.Authorization) {
     return { projections: [] };
   }
-  return request<ProjectionListResponse>("/projections", {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  return request<ProjectionListResponse>("/projections", { headers });
 }

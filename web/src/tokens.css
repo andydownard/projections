@@ -198,6 +198,51 @@ body {
   }
 }
 
+/* Owner sign-in affordance — rendered in the top bar ONLY when the Clerk
+   satellite is active (ship dark: absent by default). The sign-in control is a
+   brand-outlined pill matching the Idea Fab; the signed-in Clerk account button
+   (UserButton) brings its own styles. Meaning is carried by the "Sign in" text,
+   never color alone. */
+.owner-auth {
+  display: inline-flex;
+  align-items: center;
+}
+
+.owner-auth__sign-in {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 0.875rem;
+  border: 1px solid var(--brand-primary);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--brand-primary);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.owner-auth__sign-in:hover {
+  background: var(--brand-primary);
+  color: #fff;
+}
+
+.owner-auth__sign-in:active {
+  background: var(--brand-deep);
+  border-color: var(--brand-deep);
+  color: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .owner-auth__sign-in {
+    transition: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .skip-link {
     transition: none;
