@@ -15,11 +15,11 @@ describe("App shell", () => {
     expect(screen.getByText(/Store Projections/i)).toBeInTheDocument();
   });
 
-  it("renders no model version chip until the server provides one", () => {
+  it("never renders a model version chip (#38 — model_version stays on computed_json, not the UI)", () => {
     render(<App />);
-    // The version chip is server-owned: the bare shell (no projection loaded)
-    // shows no chip at all — no client-rendered "model —" placeholder, and no
-    // arithmetic on the client. It appears only when a projection supplies it.
+    // The model version is no longer displayed in the UI. It remains stamped on
+    // computed_json (engine versioning contract + upgrade affordance); the shell
+    // simply never renders it as a chip.
     expect(screen.queryByTestId("version-chip")).not.toBeInTheDocument();
   });
 });

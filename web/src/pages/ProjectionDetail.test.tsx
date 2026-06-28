@@ -1,8 +1,8 @@
 // web/src/pages/ProjectionDetail.test.tsx — detail load-failure + header chips.
 //
 // #146: a 404/failed load renders a load-failed DegradedState, never an infinite
-// "Loading…" spinner. #150: a successful load publishes the server model_version
-// into the shared TopBar header chip (detail-page-only; rendered by App).
+// "Loading…" spinner. #38: the model_version is no longer displayed — even after a
+// successful load, no version chip is rendered (it stays on computed_json).
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -76,13 +76,17 @@ describe("ProjectionDetail — load failure (#146)", () => {
   });
 });
 
-describe("ProjectionDetail — header model-version chip (#150)", () => {
-  it("publishes the server model_version into the shared TopBar on the detail route", async () => {
+describe("ProjectionDetail — no model-version chip (#38)", () => {
+  it("never renders a model-version chip even after the projection loads", async () => {
+    // model_version stays on computed_json (vm.model_version is still "2.1.0"),
+    // but it is no longer displayed anywhere in the UI (#38).
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     window.history.pushState({}, "", "/p/p_8x");
     render(<App />);
-    const chip = await screen.findByTestId("version-chip");
-    expect(chip).toHaveTextContent("model 2.1.0");
+    // Wait for the projection to actually load before asserting the chip's absence.
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("version-chip")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^model\s/i)).not.toBeInTheDocument();
   });
 });
 

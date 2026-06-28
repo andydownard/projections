@@ -3,17 +3,19 @@
 // One consistent header everywhere (home/list, wizard, detail, role view). The
 // left cluster is identical on every route: the Thriftly wordmark (links home),
 // a thin divider, and the brand text "Store Projections". The right cluster
-// carries the Idea Fab lightbulb — a keyboard-accessible docked button that
+// carries the "App suggestion" button — a keyboard-accessible docked button that
 // opens the existing FeedbackModal (Enter/click opens, Esc closes, focus
-// restores to the trigger on close). Model-version / save-state chips remain
-// detail-page-only and are passed in by that page.
+// restores to the trigger on close). The save-state chip remains detail-page-only
+// and is passed in by that page.
 //
-// The bar renders the view-model and computes NOTHING. The version chip text
-// comes verbatim from the server (computed_json.model_version), never derived on
-// the client, and only renders once a projection is loaded (no permanent
-// "model —" placeholder). Feedback redaction is server-enforced; this component
-// opens FeedbackModal in idea mode (a description, no title) and never sends a
-// view_slug/token/financial field (PRD §22).
+// The model_version is NO LONGER DISPLAYED in the UI (#38). It is still stamped on
+// computed_json (the engine versioning contract + the "new model available"
+// upgrade affordance) — only the chip render is gone; no data changed.
+//
+// The bar renders the view-model and computes NOTHING. Feedback redaction is
+// server-enforced; this component opens FeedbackModal in idea mode (a
+// description, no title) and never sends a view_slug/token/financial field
+// (PRD §22).
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { submitFeedback } from "../api/feedback";
@@ -36,7 +38,6 @@ const SAVE_LABEL: Record<SaveState, string> = {
 };
 
 export interface TopBarProps {
-  modelVersion?: string;
   saveState?: SaveState;
   children?: ReactNode;
 }
@@ -63,7 +64,7 @@ function LightbulbIcon() {
   );
 }
 
-export function TopBar({ modelVersion, saveState = "idle", children }: TopBarProps) {
+export function TopBar({ saveState = "idle", children }: TopBarProps) {
   const [showFeedback, setShowFeedback] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -95,11 +96,6 @@ export function TopBar({ modelVersion, saveState = "idle", children }: TopBarPro
         </a>
         <span className="topbar__brand">Store Projections</span>
         <span className="topbar__spacer" aria-hidden="true" />
-        {modelVersion && (
-          <span className="chip" data-testid="version-chip" aria-label="model version">
-            {`model ${modelVersion}`}
-          </span>
-        )}
         {saveState !== "idle" && (
           <span
             className="chip"
@@ -127,7 +123,7 @@ export function TopBar({ modelVersion, saveState = "idle", children }: TopBarPro
           onClick={() => setShowFeedback(true)}
         >
           <LightbulbIcon />
-          <span aria-hidden="true">Idea</span>
+          <span aria-hidden="true">App suggestion</span>
         </button>
       </div>
 

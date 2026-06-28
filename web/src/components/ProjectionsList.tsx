@@ -105,7 +105,7 @@ export function ProjectionsList({
                           display: "inline-block",
                           marginTop: "0.25rem",
                           padding: "0.125rem 0.5rem",
-                          fontSize: "0.75rem",
+                          fontSize: "var(--text-sm)",
                           fontWeight: 600,
                           color: "var(--brand-primary)",
                           background: "transparent",
