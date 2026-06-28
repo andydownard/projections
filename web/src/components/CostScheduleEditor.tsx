@@ -47,12 +47,15 @@ export function changeKey(index: number, field: CostScheduleField): string {
 export interface CostScheduleEditorProps {
   rows: CostScheduleRow[];
   openingMonthNumber: number;
-  targetOpeningDate: string;
+  /** Target opening DATE is dropped from the wizard (owner Decision 13). When the
+   *  parent omits {@link onChangeTargetDate} the date field is not rendered at all;
+   *  the legacy CostScheduleEditor tests still pass it, so it stays optional. */
+  targetOpeningDate?: string;
   onAddRow: () => void;
   onUpdateRow: (index: number, patch: Partial<CostScheduleRow>) => void;
   onRemoveRow: (index: number) => void;
   onChangeOpeningMonth: (value: number) => void;
-  onChangeTargetDate: (value: string) => void;
+  onChangeTargetDate?: (value: string) => void;
   /** Server-formatted totals (optional). Rendered verbatim — never computed
    * client-side. Absent until the server compute runs. */
   totals?: CostScheduleTotal[];
@@ -115,15 +118,19 @@ export function CostScheduleEditor({
           the project month it lands — before or after opening.
         </p>
 
-        <label className="wizard__field">
-          Target opening date
-          <input
-            type="month"
-            data-testid="opening-date"
-            value={targetOpeningDate}
-            onChange={(e) => onChangeTargetDate(e.target.value)}
-          />
-        </label>
+        {/* Target opening DATE is dropped from the wizard (owner Decision 13) — it
+            only renders when a parent still wires the callback (legacy callers). */}
+        {onChangeTargetDate && (
+          <label className="wizard__field">
+            Target opening date
+            <input
+              type="month"
+              data-testid="opening-date"
+              value={targetOpeningDate ?? ""}
+              onChange={(e) => onChangeTargetDate(e.target.value)}
+            />
+          </label>
+        )}
 
         <label className="wizard__field">
           Grand-opening month #

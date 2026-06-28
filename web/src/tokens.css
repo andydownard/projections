@@ -2180,6 +2180,171 @@ body {
   border-radius: 0 6px 6px 0;
 }
 
+/* --- Phase 2 wizard chrome (Epics B/C) --- */
+
+/* Subtle all-caps "CREATE PROJECTION" eyebrow over the prominent breadcrumb
+   (owner Decision 17). Small + muted so the breadcrumb is the de-facto heading.
+   The `.wizard__intro` scope wins specificity over the legacy `.wizard__intro h1`
+   display-heading rule (which still styles the post-Generate result h1). */
+.wizard__intro .wizard__eyebrow {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* The single "Back to projections" leave affordance (top-left, every step). */
+.wizard__back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: var(--text-base);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.wizard__back-link:hover {
+  color: var(--brand-primary);
+}
+
+/* The planning-estimates disclaimer on the last step (implicit acceptance, #36). */
+.wizard__disclaimer {
+  margin: 0;
+  max-width: 52ch;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* Optional field (store name) — the label reads a touch lighter than a required one. */
+.wizard__field--optional > input::placeholder {
+  color: var(--placeholder);
+}
+
+/* A small pencil edit affordance (households + donor shares). */
+.wizard-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--brand-primary);
+  font-size: var(--text-base);
+  cursor: pointer;
+}
+.wizard-edit-btn:hover {
+  border-color: var(--brand-primary);
+}
+
+/* Households confirm: the resolved number as static text + the pencil (#25). */
+.households-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+.households-confirm__value {
+  font-size: var(--text-lg);
+  font-weight: var(--w-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* Donor market share: three SMALL side-by-side fields, "%" glued to the number. */
+.donor-shares {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+.donor-share {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.donor-share__label {
+  font-size: var(--text-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+.donor-share__value {
+  font-size: var(--text-lg);
+  font-weight: var(--w-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.donor-share__field {
+  display: inline-flex;
+  align-items: center;
+  width: 5rem;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.5rem 0 0.75rem;
+  background: var(--surface);
+}
+.donor-share__input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: right;
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.donor-share__input:focus {
+  outline: none;
+}
+.donor-share__field:focus-within {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+.donor-share__suffix {
+  padding-left: 0.25rem;
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+
+/* Between-steps spinner (#15): a plain-English blocking status (Generate). */
+.wizard-spinner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+.wizard-spinner__dot {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid var(--line);
+  border-top-color: var(--brand-primary);
+  border-radius: 999px;
+  animation: wizard-spin 0.7s linear infinite;
+}
+@keyframes wizard-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wizard-spinner__dot {
+    animation: none;
+  }
+}
+
+/* Make the current breadcrumb step prominent — the page's de-facto heading (#17). */
+.wizard-steps__item--current .wizard-steps__label,
+.wizard-steps__item--current .wizard-steps__btn {
+  font-weight: var(--w-bold);
+  color: var(--brand-primary);
+}
+
 /* Basic cost-schedule rows (the editor ticket enriches this). */
 .wizard__cost-schedule {
   border: 1px solid var(--line);

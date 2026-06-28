@@ -71,18 +71,18 @@ describe("buildCreatePayload (maps wizard draft → POST /api/projections body)"
     expect(schedule.length).toBeGreaterThan(0);
   });
 
-  it("forwards an explicit opening anchor + timed cost schedule", () => {
+  it("forwards an explicit opening month + timed cost schedule (target date dropped)", () => {
     const payload = buildCreatePayload({
       ...DRAFT,
       name: "Timed schedule",
-      targetOpeningDate: "2026-09",
       openingMonthNumber: 4,
       costSchedule: [
         { category: "Consultant", month: 1, amount: 50000 },
         { category: "Build-out", month: 3, amount: 60000 },
       ],
     });
-    expect(payload.inputs.target_opening_date).toBe("2026-09");
+    // Target opening date is dropped entirely (owner Decision 13) — always null.
+    expect(payload.inputs.target_opening_date).toBeNull();
     expect(payload.inputs.opening_month_number).toBe(4);
     expect(payload.inputs.cost_schedule).toEqual([
       { category: "Consultant", month: 1, amount: 50000 },

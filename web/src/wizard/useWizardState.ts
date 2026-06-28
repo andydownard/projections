@@ -3,9 +3,13 @@
 // Owns the wizard draft, the step cursor with per-step validation gating Next,
 // and the households-empty-until-resolved lifecycle (Spec §4). It collects
 // inputs ONLY — the projection numbers come back from the server compute on
-// Generate (PRD §13 / CLAUDE.md hard rule: no client-side math). A future step
-// (or the Spec B Penny drawer) inserts by extending STEPS + the validators.
-import { useCallback, useMemo, useRef, useState } from "react";
+// Generate (PRD §13 / CLAUDE.md hard rule: no client-side math).
+//
+// Phase 2 (Epics B/C, owner Decision 11 — REVISED order): the steps are
+// Address → Square footage → Households → Donor market share → Startup costs.
+// There is NO Review step; terms acceptance is IMPLICIT on Generate (owner
+// Decision 5 — the disclaimer still shows + still stamps artifacts server-side).
+import { useCallback, useMemo, useState, useRef } from "react";
 
 import type { ResolveErrorKind, TradeAreaResolved } from "../api/places";
 import type { RentResearch } from "../api/research";
@@ -27,7 +31,7 @@ export type HouseholdsSource = "census_acs" | "user_edited" | "manual";
 export type Basis = "city" | "county";
 
 // WHO/WHAT set a sq-ft cost assumption (feature #245) — the same provenance
-// language as households_source, surfaced per assumption in the Space & rent step:
+// language as households_source, surfaced on the rent field:
 //   research → server-grounded rent pre-fill (verified or estimated benchmark)
 //   user     → the operator adjusted it (overrides the research/default)
 //   default  → the anchored regional constant (utilities/fixtures, or AI-off rent)
@@ -40,17 +44,24 @@ export { STEPS, STEP_LABELS, type StepKey } from "./steps";
 import { STEPS } from "./steps";
 import type { StepKey } from "./steps";
 
+// Wizard-side defaults (owner Decision 9): the building defaults to 12,500 sq ft /
+// 80% sales floor (the engine golden anchor EXAMPLE_BUILDING_SQFT stays 10,000 — this
+// is wizard-side only, no golden regen). The sq-ft-scaled cost rows + occupancy are
+// recomputed for 12,500 from the SAME #245 per-sq-ft seed.
+const DEFAULT_BUILDING_SQFT = 12500;
+const DEFAULT_SALESFLOOR_PCT = 80;
+
 // The wizard seeds the non-collected engine inputs with House of Hope design
-// parity (mirrors the seeded example) so Generate has a complete body; the steps
-// collect name/address, households, the three shares, and the cost schedule.
+// parity so Generate has a complete body; the steps collect address, sq ft,
+// households, the three shares, and the cost schedule.
 export const DEFAULT_DRAFT: WizardDraft = {
   name: "",
   city: "",
   state: "",
   basis: "city",
   households: 0,
-  buildingSqft: 10000,
-  salesfloorPct: 70,
+  buildingSqft: DEFAULT_BUILDING_SQFT,
+  salesfloorPct: DEFAULT_SALESFLOOR_PCT,
   leaseType: "nnn",
   donationValue: 74,
   basket: 17.08,
@@ -58,10 +69,9 @@ export const DEFAULT_DRAFT: WizardDraft = {
   shareY1: 6,
   shareY2: 8,
   shareY3: 10,
-  // Occupancy is sq ft × rent (#245): 10,000 sq ft × $12 = $120,000 (golden parity
-  // with the old flat occupancy default). The per-sq-ft assumptions are anchored so
-  // the example 10,000 sq ft reproduces today's literals exactly.
-  occupancyAnnual: 120000,
+  // Occupancy is sq ft × rent (#245): 12,500 sq ft × $12 = $150,000. The per-sq-ft
+  // assumptions are anchored; the engine still derives occupancy server-side.
+  occupancyAnnual: DEFAULT_BUILDING_SQFT * DEFAULT_RENT_PER_SQFT,
   rentPerSqft: DEFAULT_RENT_PER_SQFT,
   utilitiesPerSqft: UTILITIES_PER_SQFT,
   fixturesPerSqft: FIXTURES_PER_SQFT,
@@ -69,12 +79,19 @@ export const DEFAULT_DRAFT: WizardDraft = {
   cash: 300000,
   grant: 0,
   loan: 0,
-  // #141 / PRD §21: terms acceptance must be an EXPLICIT, active choice — the box is
-  // unchecked by default (canGenerate gates on it) and the value is persisted server-side.
-  termsAccepted: false,
-  targetOpeningDate: "",
+  // Terms acceptance is IMPLICIT on Generate now (owner Decision 5): the box is gone,
+  // the disclaimer still shows, and create defaults termsAccepted=true so the .xlsx /
+  // packet exports stay reachable (EXPORT_DISCLAIMER still stamps artifacts server-side).
+  termsAccepted: true,
   openingMonthNumber: DEFAULT_OPENING_MONTH_NUMBER,
-  costSchedule: DEFAULT_COST_SCHEDULE.map((r) => ({ ...r })),
+  // Seed the sq-ft-scaled cost rows for 12,500 sq ft on load (Equipment & Fixtures
+  // ≈ $56,250, Build-out ≈ $62,500) — the sanctioned #245 client mirror, not math.
+  costSchedule: reseedScaledCostRows(
+    DEFAULT_COST_SCHEDULE.map((r) => ({ ...r })),
+    DEFAULT_BUILDING_SQFT,
+    FIXTURES_PER_SQFT,
+    BUILDOUT_PER_SQFT,
+  ),
 };
 
 export interface WizardState {
@@ -104,9 +121,9 @@ export interface WizardState {
   applyBasis: (b: Basis) => void;
   setHouseholds: (n: number) => void;
 
-  // --- Space & rent (feature #245) ------------------------------------------
-  // Each sq-ft assumption tracks its provenance (research|user|default) like
-  // households_source, so the Space & rent step can STATE who/what set it.
+  // --- Square footage + rent (feature #245) ----------------------------------
+  // Rent tracks its provenance (research|user|default) like households_source, so the
+  // startup-costs step can STATE who/what set it.
   rentSource: AssumptionSource;
   utilitiesSource: AssumptionSource;
   fixturesSource: AssumptionSource;
@@ -135,31 +152,18 @@ export interface WizardState {
   removeCostRow: (i: number) => void;
 
   canGenerate: boolean;
-
-  // #147: a concise, human-readable reason the ACTIVE gate (Next, or Generate on
-  // the last step) is blocked — null when satisfiable. Surfaced in the UI next to
-  // the disabled button + announced to assistive tech so a greyed control is never
-  // a silent dead end (WCAG status-message guidance).
-  blockReason: string | null;
 }
 
 function hasValue(n: number | null): n is number {
   return n !== null && Number.isFinite(n) && n > 0;
 }
 
-/** Join labels into a readable English list ("Year 1 and Year 2"; "a, b, and c"). */
-function formatList(items: readonly string[]): string {
-  if (items.length <= 1) return items.join("");
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
-}
-
 export function useWizardState(
   initial?: Partial<WizardDraft>,
   // The initial step cursor (Epic B #261): when the wizard mounts on a deep-linked
   // /wizard/<step-slug> route, the cursor starts there so the right step renders on
-  // the first paint (no store→target flicker). Defaults to the first step. Clamped
-  // to the valid range; the URL ↔ cursor sync lives in CreateProjectionPage.
+  // the first paint (no flicker). Defaults to the first step. Clamped to the valid
+  // range; the URL ↔ cursor sync lives in CreateProjectionPage.
   initialStep = 0,
 ): WizardState {
   const [draft, setDraft] = useState<WizardDraft>({ ...DEFAULT_DRAFT, ...initial });
@@ -172,8 +176,8 @@ export function useWizardState(
   const [householdsValue, setHouseholdsValue] = useState<number | null>(null);
   const [resolveError, setResolveError] = useState<ResolveErrorKind | null>(null);
 
-  // Space & rent provenance (feature #245). Each starts at the anchored default;
-  // a manual edit flips to "user", a research pre-fill flips rent to "research".
+  // Rent provenance (feature #245). Starts at the anchored default; a manual edit
+  // flips to "user", a research pre-fill flips rent to "research".
   const [rentSource, setRentSource] = useState<AssumptionSource>("default");
   const [utilitiesSource, setUtilitiesSource] = useState<AssumptionSource>("default");
   const [fixturesSource, setFixturesSource] = useState<AssumptionSource>("default");
@@ -239,7 +243,7 @@ export function useWizardState(
     [set],
   );
 
-  // --- Space & rent setters (feature #245) -----------------------------------
+  // --- Square footage setters (feature #245) ---------------------------------
   // Changing the building size (or the fixtures/build-out $/sq ft) re-seeds the two
   // sq-ft-scaled cost rows (Equipment & Fixtures, Build-out) — the sanctioned client
   // mirror of the server's default_cost_schedule seed; NOT projection math.
@@ -343,25 +347,26 @@ export function useWizardState(
     [draft.costSchedule, set],
   );
 
-  // --- per-step validation gating Next (Spec §3) -----------------------------
+  // --- per-step validation gating Next (owner Decision 11 order) -------------
+  // The address step gates on an attempted resolution (a resolved address OR a
+  // manual fallback) — the store name is OPTIONAL now (owner Decision 14/24).
   const validators: Record<StepKey, () => boolean> = useMemo(
     () => ({
-      store: () => draft.name.trim().length > 0,
-      "trade-area": () => hasValue(householdsValue),
-      space: () =>
+      address: () => resolved != null || resolveError != null,
+      "square-footage": () =>
         draft.buildingSqft > 0 &&
         draft.salesfloorPct > 0 &&
-        draft.salesfloorPct <= 100 &&
-        draft.rentPerSqft >= 0,
+        draft.salesfloorPct <= 100,
+      households: () => hasValue(householdsValue),
       "donor-market": () => draft.shareY1 > 0 && draft.shareY2 > 0 && draft.shareY3 > 0,
-      cost: () =>
+      "startup-costs": () =>
         (draft.openingMonthNumber ?? 1) >= 1 &&
+        draft.rentPerSqft >= 0 &&
         (draft.costSchedule ?? []).every(
           (r) => r.category.trim().length > 0 && r.month >= 1 && r.amount >= 0,
         ),
-      review: () => draft.termsAccepted,
     }),
-    [draft, householdsValue],
+    [draft, householdsValue, resolved, resolveError],
   );
 
   const stepKey = STEPS[step];
@@ -381,80 +386,9 @@ export function useWizardState(
     setStep(() => Math.min(Math.max(0, i), STEPS.length - 1));
   }, []);
 
-  // Generate is blocked until households has a value (§4) + terms accepted.
+  // Generate is blocked until households has a value (§4). Terms is implicit (true),
+  // so the only real gate on the last step is the resolved/entered household count.
   const canGenerate = hasValue(householdsValue) && draft.termsAccepted;
-
-  // #147: derive the reason the active gate is unmet so the disabled Next/Generate
-  // button can state WHY (and AT can announce it). Mirrors the validators above +
-  // canGenerate on the last step, so the message always tracks the real gate.
-  const blockReason = useMemo<string | null>(() => {
-    if (isLast) {
-      // The final gate is canGenerate (households + terms). List EVERY unmet
-      // requirement — both can block at once, so never stop at the first.
-      const missing: string[] = [];
-      if (!hasValue(householdsValue))
-        missing.push(
-          "look up your trade-area households (go back to the Find your trade area step)",
-        );
-      if (!draft.termsAccepted) missing.push("accept the planning-estimates terms below");
-      return missing.length === 0
-        ? null
-        : `To generate the projection, ${formatList(missing)}.`;
-    }
-    switch (stepKey) {
-      case "store":
-        // Next on the store step is gated on the name alone (the address is
-        // collected here but gates households on the Find-your-trade-area step,
-        // not this button), so name it — and only it — to stay accurate.
-        return draft.name.trim().length > 0 ? null : "Enter a store name to continue.";
-      case "trade-area":
-        return hasValue(householdsValue)
-          ? null
-          : "Look up an address or enter the trade-area households to continue.";
-      case "space": {
-        const missing: string[] = [];
-        if (!(draft.buildingSqft > 0))
-          missing.push("enter the building size in square feet");
-        if (!(draft.salesfloorPct > 0 && draft.salesfloorPct <= 100))
-          missing.push("set the sales-floor area between 1% and 100%");
-        if (!(draft.rentPerSqft >= 0))
-          missing.push("enter a rent of $0 or more per square foot");
-        return missing.length === 0 ? null : `To continue, ${formatList(missing)}.`;
-      }
-      case "donor-market": {
-        const missing = (
-          [
-            [draft.shareY1, "Year 1"],
-            [draft.shareY2, "Year 2"],
-            [draft.shareY3, "Year 3"],
-          ] as const
-        )
-          .filter(([v]) => !(v > 0))
-          .map(([, label]) => label);
-        return missing.length === 0
-          ? null
-          : `Enter a donor-market share above 0 for ${formatList(missing)} to continue.`;
-      }
-      case "cost": {
-        // List the SPECIFIC unmet cost-step requirements (the opening month
-        // and/or the per-row fields) rather than a generic catch-all, so the
-        // operator fixes exactly what's blocking. Mirrors validators.cost().
-        const rows = draft.costSchedule ?? [];
-        const missing: string[] = [];
-        if (!((draft.openingMonthNumber ?? 1) >= 1))
-          missing.push("set the opening month to 1 or later");
-        if (rows.some((r) => r.category.trim().length === 0))
-          missing.push("name every cost row");
-        if (rows.some((r) => !(r.month >= 1)))
-          missing.push("put every cost row on month 1 or later");
-        if (rows.some((r) => !(r.amount >= 0)))
-          missing.push("give every cost row an amount of 0 or more");
-        return missing.length === 0 ? null : `To continue, ${formatList(missing)}.`;
-      }
-      default:
-        return null;
-    }
-  }, [isLast, stepKey, draft, householdsValue]);
 
   return {
     draft,
@@ -497,6 +431,5 @@ export function useWizardState(
     updateCostRow,
     removeCostRow,
     canGenerate,
-    blockReason,
   };
 }

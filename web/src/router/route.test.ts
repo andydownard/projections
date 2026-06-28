@@ -17,21 +17,21 @@ describe("parseRoute", () => {
     });
   });
 
-  it("maps /wizard/<step-slug> to that wizard step (Epic B #261)", () => {
-    expect(parseRoute("/wizard/store")).toEqual({
+  it("maps /wizard/<step-slug> to that wizard step (Epic B #261, revised order)", () => {
+    expect(parseRoute("/wizard/address")).toEqual({
       kind: "wizard",
       aiOff: false,
-      step: "store",
+      step: "address",
     });
-    expect(parseRoute("/wizard/trade-area")).toEqual({
+    expect(parseRoute("/wizard/households")).toEqual({
       kind: "wizard",
       aiOff: false,
-      step: "trade-area",
+      step: "households",
     });
-    expect(parseRoute("/wizard/review", "?ai=off")).toEqual({
+    expect(parseRoute("/wizard/startup-costs", "?ai=off")).toEqual({
       kind: "wizard",
       aiOff: true,
-      step: "review",
+      step: "startup-costs",
     });
   });
 
