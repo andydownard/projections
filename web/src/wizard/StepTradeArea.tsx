@@ -15,7 +15,7 @@ export function StepTradeArea({ state }: { state: WizardState }) {
   return (
     <section className="wizard-step" aria-labelledby="step-trade-heading">
       <h2 id="step-trade-heading" className="wizard-step__heading">
-        Trade area
+        Find your trade area
       </h2>
       <p className="wizard-step__lede">
         The number of households in the store’s trade area drives donations and

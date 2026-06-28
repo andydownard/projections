@@ -17,7 +17,7 @@ export function StepReview({ state }: { state: WizardState }) {
   return (
     <section className="wizard-step" aria-labelledby="step-review-heading">
       <h2 id="step-review-heading" className="wizard-step__heading">
-        Review
+        Review &amp; generate
       </h2>
       <p className="wizard-step__lede">
         Confirm the inputs below, then generate the projection. The numbers are
