@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { basisLabel, cashGapLabel, formatListDate, isNegative } from "./displayLabels";
+import {
+  basisLabel,
+  cashGapLabel,
+  formatListDate,
+  householdsSourceLabel,
+  isNegative,
+} from "./displayLabels";
 
 // PRESENTATION-only helpers (#148 negative cue, #151 enum/date labels). They do
 // NO math and re-derive NO figure: isNegative only reads the SIGN of the server
@@ -59,6 +65,24 @@ describe("basisLabel", () => {
     expect(basisLabel("")).toBe("");
     expect(basisLabel(null)).toBe("");
     expect(basisLabel(undefined)).toBe("");
+  });
+});
+
+describe("householdsSourceLabel", () => {
+  it("maps known households-source codes to human labels (no raw enum on screen)", () => {
+    expect(householdsSourceLabel("census_acs")).toBe("U.S. Census");
+    expect(householdsSourceLabel("user_edited")).toBe("Edited");
+    expect(householdsSourceLabel("manual")).toBe("Entered manually");
+  });
+
+  it("title-cases an unknown code so no raw enum string leaks to the user", () => {
+    expect(householdsSourceLabel("third_party")).toBe("Third Party");
+  });
+
+  it("renders nothing for an empty/missing source", () => {
+    expect(householdsSourceLabel("")).toBe("");
+    expect(householdsSourceLabel(null)).toBe("");
+    expect(householdsSourceLabel(undefined)).toBe("");
   });
 });
 
