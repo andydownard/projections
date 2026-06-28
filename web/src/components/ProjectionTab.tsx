@@ -1,26 +1,28 @@
-// web/src/components/ProjectionTab.tsx — the read-only Projection tab (M2 D3).
+// web/src/components/ProjectionTab.tsx — the Projection panel of the owner detail
+// page (Epic G, #39/#40).
 //
-// Renders the Appendix-D view-model VERBATIM (PRD §13, CLAUDE.md hard rule):
-//   - decision banner: reco chip carrying an ICON + TEXT (never color alone) +
-//     headline + sub (DecisionBanner / RecoChip).
-//   - three decision tiles (capital / break-even / cash-gap), each pairing the
-//     server `metrics.*.display` value with its downside/confidence detail
-//     (`reasonCapital` / `reasonBreakeven` / `reasonGap`).
-//   - the hand-rolled monthly cash-flow SVG with a break-even marker (CashflowChart).
+// Renders the Appendix-D view-model VERBATIM (PRD §13, CLAUDE.md hard rule). Epic G
+// reflows the OWNER detail page and de-duplicates the decision:
+//   - NO verdict block. The reco chip / headline / sub (and the "raise cash" /
+//     "Why?" reasons) are SUPPRESSED on the owner detail page — the verdict survives
+//     only as the high-level tiles here, and travels verbatim on /r/<slug> + the
+//     Board Packet (reco{tag,headline,sub} stays in computed_json). (#39/#40)
+//   - 3 high-level tiles ONLY: Startup capital (label drops "required"), Break-even,
+//     Payback. The first-year cash-gap tile is HIDDEN (metrics.cashGap stays in
+//     computed_json). (#39)
+//   - vertical order: 3-year table (TOP) → high-level tiles → first-year cash-flow
+//     detail (chart + monthly table). (#40)
 //   - the 3-year table with an Input/Computed/Overridden/Estimated legend and a
 //     per-cell state class taken from the SERVER `row.class` (the client never
 //     classifies a cell).
 //
-// NO client math: every figure is the server's { display } string. The cell-state
-// class is a SEMANTIC token class (cell--input/computed/overridden/estimated) so
-// meaning never depends on the brand layer and never relies on color alone — the
-// legend names each state in text and the Estimated marker is an icon (tokens.css).
-import { useState, type KeyboardEvent } from "react";
+// The "2nd tile set" (server kpis[]) moved OUT to KpiStrip (the KPIs tab). NO client
+// math: every figure is the server's { display } string.
+import { type KeyboardEvent } from "react";
 
-import { RecoChip } from "./RecoChip";
 import { CashflowChart } from "./CashflowChart";
 import { FieldChange, type FieldChangeActor } from "./FieldChange";
-import { cashGapLabel, isNegative } from "./displayLabels";
+import { isNegative } from "./displayLabels";
 import type { ServerValue } from "../api/client";
 import type { Milestone, Row, ViewModel } from "../api/viewModel";
 
@@ -53,16 +55,17 @@ export interface ProjectionTabProps {
   onUndoField?: (node: string, year: number) => void;
 }
 
-/** One decision tile, resolved from the server view-model. `value` is a server
- *  `{raw,display}` (money/month milestone) rendered verbatim — never re-derived. */
+/** One high-level decision tile, resolved from the server view-model. `value` is a
+ *  server `{raw,display}` (money/month milestone) rendered verbatim — never
+ *  re-derived. The downside/confidence "Why?" reason is SUPPRESSED on the owner
+ *  detail page (#40) — only the explicit N/A-with-reason for an unreached milestone
+ *  survives (#117). */
 interface TileVM {
   testid: string;
   /** Back-compat alias kept for the existing e2e/detail contract. */
   metricTestid: string;
   label: string;
   value: ServerValue | Milestone;
-  /** Tappable "Why?" disclosure (downside/confidence detail). */
-  why?: string;
   /** Always-visible N/A explanation when the milestone is unreached (raw == null);
    *  never a bare, misleading "N/A" or a phantom 0 (#117). */
   naReason?: string;
@@ -70,20 +73,19 @@ interface TileVM {
   negativeAware?: boolean;
 }
 
-/** Build the decision tiles from the view-model. Break-even and Payback are DISTINCT
- *  milestones and are never conflated (#193): Break-even is the operating-profit
- *  crossing; Payback (the recovered-investment month) is its own tile sourced from
- *  `milestones.payback`, mirroring the DecisionBanner. The cash-trough tile is
- *  sign-aware (#194) — a positive trough is a cushion, not a "gap". */
+/** Build the 3 high-level decision tiles from the view-model (Epic G #39). The
+ *  first-year cash-gap tile is intentionally OMITTED — metrics.cashGap stays in
+ *  computed_json (packet / role view / narrative) but is not a tile here. Break-even
+ *  and Payback are DISTINCT milestones and are never conflated (#193). */
 function buildTiles(vm: ViewModel): TileVM[] {
   const { metrics, milestones } = vm;
   const tiles: TileVM[] = [
     {
       testid: "tile-capital",
       metricTestid: "metric-capital",
-      label: "Startup capital required",
+      // #39: drop "required" — the tile reads "Startup capital".
+      label: "Startup capital",
       value: metrics.capital,
-      why: metrics.reasonCapital,
       negativeAware: true,
     },
     {
@@ -93,7 +95,6 @@ function buildTiles(vm: ViewModel): TileVM[] {
       // Prefer the milestone (carries its N/A-with-reason) when present; else the
       // legacy break-even MONTH metric. Either way this is break-even only.
       value: milestones ? milestones.breakEven : metrics.breakeven,
-      why: metrics.reasonBreakeven,
       naReason: milestones?.breakEven.reason,
     },
   ];
@@ -108,15 +109,6 @@ function buildTiles(vm: ViewModel): TileVM[] {
       naReason: milestones.payback.reason,
     });
   }
-
-  tiles.push({
-    testid: "tile-cashgap",
-    metricTestid: "metric-cashgap",
-    label: cashGapLabel(metrics.cashGap),
-    value: metrics.cashGap,
-    why: metrics.reasonGap,
-    negativeAware: true,
-  });
 
   return tiles;
 }
@@ -152,19 +144,51 @@ export function ProjectionTab({
   fieldChanges,
   onUndoField,
 }: ProjectionTabProps) {
-  const { reco, kpis, monthly, breakevenMonth, rows } = vm;
+  const { monthly, breakevenMonth, rows } = vm;
   const tiles = buildTiles(vm);
 
-  // Each decision tile's reason is a tappable "Why?" disclosure (touch-safe; no
-  // hover). Independent toggles so a board member can compare reasons side by side.
-  const [openReasons, setOpenReasons] = useState<Set<string>>(() => new Set());
-  const toggleReason = (id: string) =>
-    setOpenReasons((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const tilesStrip = (
+    // The high-level decision tiles. The `decision-banner` testid is preserved (the
+    // detail/e2e contract reads it), but the verdict chip/headline/sub are GONE —
+    // the decision is no longer repeated on the owner detail page (#39/#40).
+    <section
+      className="decision-banner decision-banner--tiles-only"
+      data-testid="decision-banner"
+      aria-label="Key decision metrics"
+    >
+      <dl className="decision-tiles" data-testid="decision-tiles">
+        {tiles.map((t) => {
+          // An unreached milestone (raw == null) is N/A — show its reason inline,
+          // never a bare "N/A" or a misleading 0 (#117). data-negative is by SIGN.
+          const isNa = t.value.raw == null;
+          const negative =
+            t.negativeAware && isNegative(t.value as ServerValue) ? "true" : undefined;
+          return (
+            <div
+              key={t.testid}
+              className="decision-tile metric"
+              data-testid={t.testid}
+              data-metric={t.metricTestid}
+            >
+              {/* Back-compat hook: the existing detail/e2e contract reads
+                  metric-capital / metric-breakeven / metric-payback. */}
+              <span data-testid={t.metricTestid} className="sr-only">
+                {t.value.display}
+              </span>
+              <dt className="decision-tile__label">{t.label}</dt>
+              {/* #148: a loss (server raw < 0) gets the error color, PAIRED with
+                  the server's parentheses (the non-color cue) — never color alone. */}
+              <dd className="decision-tile__value num" data-negative={negative}>
+                {t.value.display}
+              </dd>
+              {/* Explicit N/A-with-reason (never a misleading 0) — always visible. */}
+              {isNa && t.naReason && <p className="metric__reason">{t.naReason}</p>}
+            </div>
+          );
+        })}
+      </dl>
+    </section>
+  );
 
   return (
     <div className="projection-tab" data-testid="projection-tab">
@@ -173,106 +197,10 @@ export function ProjectionTab({
         {recomputeStatus}
       </span>
 
-      {/* Decision banner — verdict (semantic reco chip: icon + TEXT, never color
-          alone) + headline + sub, then the three decision tiles. The tiles ARE the
-          banner's metric strip, each value paired with its downside/confidence
-          reason string from the server (no duplicate metric surface). */}
-      <section
-        className="decision-banner"
-        data-testid="decision-banner"
-        data-tag={reco.tag}
-        aria-label="Decision"
-      >
-        <div className="decision-banner__verdict">
-          <RecoChip tag={reco.tag} />
-          <div>
-            <p className="decision-banner__headline">{reco.headline}</p>
-            <p className="decision-banner__sub">{reco.sub}</p>
-          </div>
-        </div>
-
-        <dl className="decision-tiles" data-testid="decision-tiles">
-          {tiles.map((t) => {
-            // An unreached milestone (raw == null) is N/A — show its reason inline,
-            // never a bare "N/A" or a misleading 0 (#117). data-negative is by SIGN.
-            const isNa = t.value.raw == null;
-            const negative =
-              t.negativeAware && isNegative(t.value as ServerValue) ? "true" : undefined;
-            return (
-              <div
-                key={t.testid}
-                className="decision-tile metric"
-                data-testid={t.testid}
-                data-metric={t.metricTestid}
-              >
-                {/* Back-compat hook: the existing detail/e2e contract reads
-                    metric-capital / metric-breakeven / metric-payback / metric-cashgap.
-                    The tile IS that metric, enriched with its downside/confidence reason. */}
-                <span data-testid={t.metricTestid} className="sr-only">
-                  {t.value.display}
-                </span>
-                <dt className="decision-tile__label">{t.label}</dt>
-                {/* #148: a loss (server raw < 0) gets the error color, PAIRED with
-                    the server's parentheses (the non-color cue) — never color alone. */}
-                <dd className="decision-tile__value num" data-negative={negative}>
-                  {t.value.display}
-                </dd>
-                {/* Explicit N/A-with-reason (never a misleading 0) — always visible. */}
-                {isNa && t.naReason && <p className="metric__reason">{t.naReason}</p>}
-                {t.why && (
-                  <div className="decision-tile__reason-wrap">
-                    <button
-                      type="button"
-                      className="decision-tile__why"
-                      aria-expanded={openReasons.has(t.testid)}
-                      aria-controls={`${t.testid}-reason`}
-                      onClick={() => toggleReason(t.testid)}
-                    >
-                      Why?
-                    </button>
-                    {/* Kept in the DOM (so aria-controls always resolves) but hidden
-                        from view + a11y tree until expanded. */}
-                    <p
-                      className="decision-tile__reason"
-                      id={`${t.testid}-reason`}
-                      role="note"
-                      hidden={!openReasons.has(t.testid)}
-                    >
-                      {t.why}
-                    </p>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </dl>
-      </section>
-
-      {/* KPI strip — the stored server figures, rendered verbatim. */}
-      <div className="kpis" data-testid="kpi-strip">
-        {kpis.map((k) => (
-          <div
-            key={k.label}
-            className="kpi"
-            data-testid={/^total revenue$/i.test(k.label) ? "kpi-revenue" : `kpi-${k.label}`}
-          >
-            <span className="kpi__label">{k.label}</span>
-            <span className="kpi__value" data-negative={isNegative(k.value) ? "true" : undefined}>
-              {k.value.display}
-            </span>
-            {k.sub && <span className="kpi__sub">{k.sub}</span>}
-          </div>
-        ))}
-      </div>
-
-      <section className="projection-tab__cashflow" aria-label="Monthly launch cash-flow">
-        <h3 className="projection-tab__heading">Monthly launch cash-flow — Year 1</h3>
-        <CashflowChart monthly={monthly} breakevenMonth={breakevenMonth} milestones={vm.milestones} />
-      </section>
-
+      {/* (1) 3-year projection — moved to the TOP (#40). */}
       <section className="projection-tab__rows" aria-label="3-year projection">
         <div className="projection-tab__rows-head">
-          <h3 className="projection-tab__heading">3-year projection</h3>
+          <h2 className="projection-tab__heading">3-year projection</h2>
           <ul className="table-legend" data-testid="table-legend" aria-label="Cell legend">
             {LEGEND.map((l) => (
               <li key={l.cls} className={`table-legend__item table-legend__item--${l.cls}`}>
@@ -313,6 +241,16 @@ export function ProjectionTab({
             </tbody>
           </table>
         </div>
+      </section>
+
+      {/* (2) High-level decision tiles — below the 3-year summary (#40). */}
+      {tilesStrip}
+
+      {/* (3) First-year cash-flow detail — below the 3-year (#40). The chart's
+          months align to the monthly table's columns (see CashflowChart). */}
+      <section className="projection-tab__cashflow" aria-label="First-year cash flow">
+        <h2 className="projection-tab__heading">First-year cash flow</h2>
+        <CashflowChart monthly={monthly} breakevenMonth={breakevenMonth} milestones={vm.milestones} />
       </section>
     </div>
   );

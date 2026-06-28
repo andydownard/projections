@@ -2,11 +2,21 @@
 //
 // The signature decision artifact: the cumulative-cash trajectory (the hero line)
 // with a tinted "underwater" deficit area, monthly NET bars on a secondary scale,
-// the cash-trough marker (which IS the capital required) and the break-even
-// crossing — paired with the full M0–M12 data table that is BOTH the dense detail
+// the cash-trough marker (which IS the capital required) and the milestone
+// crossings — paired with the full M0–M12 data table that is BOTH the dense detail
 // and the chart's accessible text alternative. No chart library; positioning is
 // pure layout geometry, not a projection figure (PRD §13) — every shown number is
 // the server's { display } string.
+//
+// Epic G (#40) redesign:
+//   - milestone names are labeled ON the plotted timeline (text by each marker),
+//     NOT in a separate legend list (that visible list is removed);
+//   - the series legend ("Cumulative cash" + "Net") sits on the LEFT;
+//   - the left y-axis is labeled in $ with 2–3 gridline ticks (server display
+//     strings + the $0 baseline — no client math);
+//   - the chart and the monthly table SHARE one month-column geometry (a fixed
+//     left gutter + N equal month bands), so chart M0..M12 align to the table
+//     columns directly below.
 import { isNegative } from "./displayLabels";
 import type { ServerValue } from "../api/client";
 import type { Milestone, Milestones, MonthlyPoint } from "../api/viewModel";
@@ -57,10 +67,13 @@ export function CashflowChart({
     );
   }
 
-  const padT = 16;
-  const padB = 26;
-  const padL = 12;
-  const padR = 12;
+  // The left gutter (14% of width) is shared with the monthly table's label column
+  // (CSS `--cf-label-col: 14%`) so the chart's month bands sit directly above the
+  // table's month columns. padR is 0 so the last band aligns with the last column.
+  const padT = 30; // room for the on-chart milestone labels
+  const padB = 22; // room for the M0..M12 ticks
+  const padL = width * 0.14;
+  const padR = 0;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
 
@@ -76,27 +89,35 @@ export function CashflowChart({
   const yLine = (v: number) => padT + ((cMax - v) / cSpan) * plotH;
   const zeroY = yLine(0);
 
-  const stepX = monthly.length > 1 ? plotW / (monthly.length - 1) : 0;
-  const xAt = (i: number) => padL + i * stepX;
+  // Each month occupies an equal BAND; the series plot through the band CENTERS so
+  // month i lines up with the table's i-th month column (both are N equal columns
+  // inside the same shared width, after the same left gutter).
+  const n = monthly.length;
+  const bandW = plotW / n;
+  const xAt = (i: number) => padL + (i + 0.5) * bandW;
 
   // Monthly NET bars on a secondary scale anchored at the zero line.
   const nets = monthly.map((m) => m.net.raw);
-  const maxAbsNet = Math.max(1, ...nets.map((n) => Math.abs(n)));
+  const maxAbsNet = Math.max(1, ...nets.map((n2) => Math.abs(n2)));
   const barAmp = plotH * 0.12;
-  const barW = Math.max(3, stepX * 0.46);
+  const barW = Math.max(3, bandW * 0.46);
 
   const linePts = monthly.map((m, i) => `${xAt(i)},${yLine(m.cumulativeCash.raw)}`).join(" ");
   const areaPath =
     `M ${xAt(0)},${zeroY} ` +
     monthly.map((m, i) => `L ${xAt(i)},${yLine(m.cumulativeCash.raw)}`).join(" ") +
-    ` L ${xAt(monthly.length - 1)},${zeroY} Z`;
+    ` L ${xAt(n - 1)},${zeroY} Z`;
 
-  // Trough = the most-negative cumulative position (the cash low point).
+  // Trough = the most-negative cumulative position (the cash low point); peak = the
+  // highest. Their server display strings label the y-axis ticks (no client math).
   let troughIdx = 0;
-  for (let i = 1; i < monthly.length; i++) {
+  let peakIdx = 0;
+  for (let i = 1; i < n; i++) {
     if (monthly[i].cumulativeCash.raw < monthly[troughIdx].cumulativeCash.raw) troughIdx = i;
+    if (monthly[i].cumulativeCash.raw > monthly[peakIdx].cumulativeCash.raw) peakIdx = i;
   }
   const trough = monthly[troughIdx];
+  const peak = monthly[peakIdx];
 
   // Locate a milestone on the series by its server month value (raw), not array
   // position — robust if the series is ever not 1-based-contiguous. Returns -1
@@ -117,10 +138,8 @@ export function CashflowChart({
   // Break-even line shown even without a milestones object (back-compat).
   const beIdx = milestones ? idxOf(milestones.breakEven.raw) : idxOf(breakevenMonth);
 
-  // X ticks: first, ~thirds, last — labeled by the server month index.
-  const tickIdx = monthly.length
-    ? Array.from(new Set([0, Math.round((monthly.length - 1) / 3), Math.round((2 * (monthly.length - 1)) / 3), monthly.length - 1]))
-    : [];
+  // X ticks: EVERY month, so each tick sits under its table column (alignment).
+  const tickIdx = monthly.map((_, i) => i);
 
   const beLabel = milestones
     ? milestones.breakEven.raw != null
@@ -130,174 +149,247 @@ export function CashflowChart({
       ? `month ${breakevenMonth}`
       : "not within Year 1";
 
+  // Accessible description (role=img): the markers' on-chart text is decorative, so
+  // the milestone facts travel here + in the sr-only list + the data table below.
+  const milestoneDesc = markers.length
+    ? ` Milestones: ${markers.map((mk) => `${mk.label} ${mk.ms.display}`).join("; ")}.`
+    : "";
+
+  // y-axis ticks: peak, $0 baseline, trough (deduped by y). Labels are server
+  // display strings ($0 is the constant baseline) — never re-derived.
+  const axisTicks = [
+    { y: yLine(peak.cumulativeCash.raw), label: peak.cumulativeCash.display },
+    { y: zeroY, label: "$0" },
+    { y: yLine(trough.cumulativeCash.raw), label: trough.cumulativeCash.display },
+  ].filter((t, i, arr) => arr.findIndex((o) => Math.abs(o.y - t.y) < 6) === i);
+
   return (
     <figure className="cashflow-chart" data-testid="cashflow-chart">
-      {/* #196: no fixed pixel height — the box follows the viewBox aspect via CSS
-          (.cashflow-chart svg { width:100%; height:auto }) so a narrow phone column
-          scales the chart proportionally instead of letterboxing a ~55% empty band.
-          The viewBox keeps the 660x240 drawing geometry. */}
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        width="100%"
-        role="img"
-        preserveAspectRatio="xMidYMid meet"
-        aria-label={`Monthly cumulative cash. Low point ${trough.cumulativeCash.display} in month ${trough.month}; break-even ${beLabel}. Full figures in the table below.`}
-      >
-        {/* tinted area between the cumulative line and the zero baseline */}
-        <path d={areaPath} className="cashflow-chart__area" />
+      <div className="cashflow-chart__frame">
+        {/* Series legend — on the LEFT (#40). Each entry pairs a swatch with a TEXT
+            label so the two series are never told apart by color alone. */}
+        <ul className="cashflow-chart__legend" data-testid="cashflow-legend" aria-label="Chart series">
+          <li className="cashflow-chart__legend-item">
+            <span className="cashflow-chart__legend-swatch cashflow-chart__legend-swatch--cum" aria-hidden="true" />
+            Cumulative cash
+          </li>
+          <li className="cashflow-chart__legend-item">
+            <span className="cashflow-chart__legend-swatch cashflow-chart__legend-swatch--net" aria-hidden="true" />
+            Net
+          </li>
+        </ul>
 
-        {/* monthly net bars (secondary scale) behind the line */}
-        {monthly.map((m, i) => {
-          const h = (m.net.raw / maxAbsNet) * barAmp;
-          const up = m.net.raw >= 0;
-          return (
-            <rect
-              key={`bar-${m.month}`}
-              x={xAt(i) - barW / 2}
-              y={up ? zeroY - h : zeroY}
-              width={barW}
-              height={Math.max(0.5, Math.abs(h))}
-              className={up ? "cashflow-chart__bar" : "cashflow-chart__bar cashflow-chart__bar--neg"}
+        {/* The plot + the monthly table share ONE scroll container and the SAME
+            month geometry, so the chart columns align to the table columns. */}
+        <div className="cashflow-chart__plot">
+          {/* #196: no fixed pixel height — the box follows the viewBox aspect via CSS
+              so a narrow phone column scales the chart proportionally. The viewBox
+              keeps the 660x240 drawing geometry. */}
+          <svg
+            className="cashflow-chart__svg"
+            viewBox={`0 0 ${width} ${height}`}
+            width="100%"
+            role="img"
+            preserveAspectRatio="xMidYMid meet"
+            aria-label={`Monthly cumulative cash. Low point ${trough.cumulativeCash.display} in month ${trough.month}; break-even ${beLabel}.${milestoneDesc} Full figures in the table below.`}
+          >
+            {/* left y-axis ($), with 2–3 gridline ticks labeled by server display */}
+            <text
+              x={4}
+              y={padT - 14}
+              className="cashflow-chart__axis-title"
+              data-testid="cashflow-axis-label"
+            >
+              $
+            </text>
+            <line
+              x1={padL}
+              x2={padL}
+              y1={padT}
+              y2={height - padB}
+              className="cashflow-chart__axis"
             />
-          );
-        })}
-
-        {/* zero baseline */}
-        <line x1={padL} x2={width - padR} y1={zeroY} y2={zeroY} className="cashflow-chart__zero" />
-
-        {/* hero cumulative-cash line */}
-        <polyline points={linePts} fill="none" className="cashflow-chart__line" />
-
-        {/* cash-trough marker (= capital required) */}
-        <circle
-          cx={xAt(troughIdx)}
-          cy={yLine(trough.cumulativeCash.raw)}
-          r={4}
-          className="cashflow-chart__trough"
-          data-testid="trough-marker"
-        />
-
-        {/* Distinct milestone markers (Grand Opening / Break-even / Payback).
-            Each carries a distinct stroke class AND a distinct icon glyph so the
-            three never rely on color alone (a11y). Server `display` labels the
-            title; an unreached milestone is filtered out — never a 0 marker. */}
-        {milestones
-          ? markers.map((mk) => (
-              <g
-                key={mk.key}
-                data-testid={mk.testid}
-                className={`cashflow-chart__milestone cashflow-chart__milestone--${mk.key}`}
-              >
-                <title>{`${mk.label}: ${mk.ms.display}`}</title>
+            {axisTicks.map((t) => (
+              <g key={t.label}>
                 <line
-                  x1={xAt(mk.idx)}
-                  x2={xAt(mk.idx)}
-                  y1={padT}
-                  y2={height - padB}
-                  className="cashflow-chart__milestone-line"
+                  x1={padL}
+                  x2={width - padR}
+                  y1={t.y}
+                  y2={t.y}
+                  className="cashflow-chart__gridline"
                 />
-                <text
-                  x={xAt(mk.idx)}
-                  y={padT - 4}
-                  className="cashflow-chart__milestone-icon"
-                  aria-hidden="true"
-                >
-                  {mk.icon}
+                <text x={padL - 6} y={t.y + 3} className="cashflow-chart__axis-tick">
+                  {t.label}
                 </text>
               </g>
-            ))
-          : beIdx >= 0 && (
-              <line
-                x1={xAt(beIdx)}
-                x2={xAt(beIdx)}
-                y1={padT}
-                y2={height - padB}
-                className="cashflow-chart__breakeven"
-                data-testid="breakeven-marker"
-              />
-            )}
+            ))}
 
-        {/* x-axis month ticks */}
-        {tickIdx.map((i) => (
-          <text key={`tick-${i}`} x={xAt(i)} y={height - 8} className="cashflow-chart__tick">
-            M{monthly[i].month}
-          </text>
-        ))}
-      </svg>
+            {/* tinted area between the cumulative line and the zero baseline */}
+            <path d={areaPath} className="cashflow-chart__area" />
+
+            {/* monthly net bars (secondary scale) behind the line */}
+            {monthly.map((m, i) => {
+              const h = (m.net.raw / maxAbsNet) * barAmp;
+              const up = m.net.raw >= 0;
+              return (
+                <rect
+                  key={`bar-${m.month}`}
+                  x={xAt(i) - barW / 2}
+                  y={up ? zeroY - h : zeroY}
+                  width={barW}
+                  height={Math.max(0.5, Math.abs(h))}
+                  className={up ? "cashflow-chart__bar" : "cashflow-chart__bar cashflow-chart__bar--neg"}
+                />
+              );
+            })}
+
+            {/* zero baseline (kept distinct from the gridlines) */}
+            <line x1={padL} x2={width - padR} y1={zeroY} y2={zeroY} className="cashflow-chart__zero" />
+
+            {/* hero cumulative-cash line */}
+            <polyline points={linePts} fill="none" className="cashflow-chart__line" />
+
+            {/* cash-trough marker (= capital required) */}
+            <circle
+              cx={xAt(troughIdx)}
+              cy={yLine(trough.cumulativeCash.raw)}
+              r={4}
+              className="cashflow-chart__trough"
+              data-testid="trough-marker"
+            />
+
+            {/* Distinct milestone markers (Grand Opening / Break-even / Payback),
+                each LABELED ON the chart (#40): a distinct stroke + icon glyph + the
+                server `display` text next to the line, staggered so labels of close
+                milestones do not collide. Never color alone (icon + text). */}
+            {milestones
+              ? markers.map((mk, i) => {
+                  const lx = xAt(mk.idx);
+                  // Anchor the label inside the plot near the edges so it never clips.
+                  const anchor = lx > width - 64 ? "end" : lx < padL + 64 ? "start" : "middle";
+                  const labelY = padT - 18 + (i % 2) * 12; // stagger by index
+                  return (
+                    <g
+                      key={mk.key}
+                      data-testid={mk.testid}
+                      className={`cashflow-chart__milestone cashflow-chart__milestone--${mk.key}`}
+                    >
+                      <title>{`${mk.label}: ${mk.ms.display}`}</title>
+                      <line
+                        x1={lx}
+                        x2={lx}
+                        y1={padT}
+                        y2={height - padB}
+                        className="cashflow-chart__milestone-line"
+                      />
+                      <text
+                        x={lx}
+                        y={labelY}
+                        textAnchor={anchor}
+                        className="cashflow-chart__milestone-icon"
+                        aria-hidden="true"
+                      >
+                        {mk.icon}
+                      </text>
+                      <text
+                        x={lx}
+                        y={labelY + 11}
+                        textAnchor={anchor}
+                        className="cashflow-chart__milestone-label"
+                        aria-hidden="true"
+                      >
+                        {mk.label} · {mk.ms.display}
+                      </text>
+                    </g>
+                  );
+                })
+              : beIdx >= 0 && (
+                  <line
+                    x1={xAt(beIdx)}
+                    x2={xAt(beIdx)}
+                    y1={padT}
+                    y2={height - padB}
+                    className="cashflow-chart__breakeven"
+                    data-testid="breakeven-marker"
+                  />
+                )}
+
+            {/* x-axis month ticks — one per month so each sits under its column */}
+            {tickIdx.map((i) => (
+              <text key={`tick-${i}`} x={xAt(i)} y={height - 6} className="cashflow-chart__tick">
+                M{monthly[i].month}
+              </text>
+            ))}
+          </svg>
+
+          {/* The dense monthly detail — aligned to the chart, and the chart's
+              accessible data table. table-layout:fixed + the shared label gutter
+              keep the columns under the chart's month bands. */}
+          <table className="cashflow-table" data-testid="cashflow-table">
+            <caption className="sr-only">Monthly cash-flow, months 0 to 12</caption>
+            <thead>
+              <tr>
+                <th scope="col" className="cashflow-table__label">
+                  Line item
+                </th>
+                {monthly.map((m) => (
+                  <th scope="col" key={m.month} className="num">
+                    M{m.month}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {ROWS.map((r) => (
+                <tr key={r.label}>
+                  <th scope="row" className="cashflow-table__label">
+                    {r.label}
+                  </th>
+                  {monthly.map((m) => {
+                    const cell = r.pick(m);
+                    // #148: a loss reads as a loss — error color PAIRED with the
+                    // server's parentheses (the non-color cue), never color alone.
+                    return (
+                      <td
+                        key={m.month}
+                        className="num"
+                        data-negative={isNegative(cell) ? "true" : undefined}
+                      >
+                        {cell.display}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <figcaption className="cashflow-chart__caption">
         Cash low point <strong className="num">{trough.cumulativeCash.display}</strong> in month{" "}
         {trough.month} · Break-even <strong>{beLabel}</strong>
       </figcaption>
 
-      {/* Milestone callouts — the keyboard-accessible, text alternative to the
-          on-chart markers. Each pairs a distinct icon (shape, not color alone)
-          with the milestone name and the server's display string. An unreached
-          milestone reads its explicit N/A-with-reason, never a 0. */}
+      {/* The keyboard/SR text alternative to the on-chart milestone labels (the
+          visible legend LIST is gone; labels now sit on the chart). Visually hidden
+          but exposed to assistive tech so an unreached milestone still reads its
+          explicit N/A-with-reason, never a 0. */}
       {milestones && (
-        <ul className="cashflow-chart__milestones" data-testid="chart-milestones">
+        <ul className="sr-only" data-testid="chart-milestones-sr">
           {MILESTONE_META.map((meta) => {
             const ms: Milestone = milestones[meta.key];
             const reached = ms.raw != null;
             const when = reached ? ms.display : (ms.reason ?? ms.display);
             return (
-              <li
-                key={meta.key}
-                className={`cashflow-chart__milestone-item cashflow-chart__milestone-item--${meta.key}`}
-              >
-                <span className="cashflow-chart__milestone-badge" aria-hidden="true">
-                  {meta.icon}
-                </span>
-                <span className="cashflow-chart__milestone-name">{meta.label}</span>
-                <span className="cashflow-chart__milestone-when">
-                  {when}
-                  {reached && ms.duration ? ` (${ms.duration})` : ""}
-                </span>
+              <li key={meta.key}>
+                {meta.label}: {when}
+                {reached && ms.duration ? ` (${ms.duration})` : ""}
               </li>
             );
           })}
         </ul>
       )}
-
-      {/* The dense monthly detail — and the chart's accessible data table. */}
-      <div className="cashflow-table__scroll">
-        <table className="cashflow-table" data-testid="cashflow-table">
-          <caption className="sr-only">Monthly cash-flow, months 0 to 12</caption>
-          <thead>
-            <tr>
-              <th scope="col">Line item</th>
-              {monthly.map((m) => (
-                <th scope="col" key={m.month} className="num">
-                  M{m.month}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {ROWS.map((r) => (
-              <tr key={r.label}>
-                <th scope="row" className="cashflow-table__label">
-                  {r.label}
-                </th>
-                {monthly.map((m) => {
-                  const cell = r.pick(m);
-                  // #148: a loss reads as a loss — error color PAIRED with the
-                  // server's parentheses (the non-color cue), never color alone.
-                  return (
-                    <td
-                      key={m.month}
-                      className="num"
-                      data-negative={isNegative(cell) ? "true" : undefined}
-                    >
-                      {cell.display}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </figure>
   );
 }
