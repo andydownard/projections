@@ -76,6 +76,55 @@ def test_trash_hides_from_owner_list_and_restore_brings_back(client):
     assert any(p["view_slug"] == slug for p in lst3)
 
 
+def test_trash_restore_response_envelope_carries_vm_and_bumps_version(client):
+    """The shared trash/restore writer returns the full view-model envelope (not just
+    a status), with the version incremented and a matching ETag. Guards the single
+    _set_status_and_respond helper that both endpoints delegate to."""
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    hdr = {"Authorization": f"Bearer {owner}"}
+
+    r = client.post(f"/api/projections/{slug}/trash", headers={**hdr, "If-Match": "1"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "trashed"
+    assert body["version"] == 2
+    assert r.headers["ETag"] == "2"
+    assert body["view_slug"] == slug
+    assert body["name"] == "House of Hope"
+    # the computed view-model is carried through verbatim, not dropped.
+    for key in ("reco", "metrics", "rows", "monthly"):
+        assert key in body, key
+
+    r2 = client.post(f"/api/projections/{slug}/restore", headers={**hdr, "If-Match": "2"})
+    assert r2.status_code == 200, r2.text
+    body2 = r2.json()
+    assert body2["status"] == "active"
+    assert body2["version"] == 3
+    assert r2.headers["ETag"] == "3"
+    assert "reco" in body2
+
+
+def test_trash_and_restore_reject_stale_if_match_with_409(client):
+    """Optimistic concurrency on both lifecycle endpoints (Mutation Safety Quad c):
+    a stale If-Match flips zero rows -> 409 version_conflict with recovery options."""
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    hdr = {"Authorization": f"Bearer {owner}"}
+
+    r = client.post(f"/api/projections/{slug}/trash", headers={**hdr, "If-Match": "99"})
+    assert r.status_code == 409, r.text
+    detail = r.json().get("detail", r.json())
+    assert detail["error"] == "version_conflict"
+    assert "recovery" in detail
+
+    # a real trash (version -> 2), then a stale restore is likewise rejected.
+    client.post(f"/api/projections/{slug}/trash", headers={**hdr, "If-Match": "1"})
+    r2 = client.post(f"/api/projections/{slug}/restore", headers={**hdr, "If-Match": "1"})
+    assert r2.status_code == 409, r2.text
+    assert r2.json().get("detail", r2.json())["error"] == "version_conflict"
+
+
 def test_delete_on_active_returns_409_not_trashed(client):
     created = _create(client)
     slug, owner = created["view_slug"], created["owner_token"]

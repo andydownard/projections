@@ -1162,17 +1162,11 @@ def apply_projection_patch(
     Returns ``(view_model, new_version, name)`` and writes ONE revision tagged
     ``actor`` (DATA_MODEL §4: the revision ``actor`` enum — user | penny | …).
     """
-    is_owner = token is not None and token_matches(token, row["owner_token_hash"])
-    is_editor = (
-        token is not None
-        and bool(row.get("edit_token_hash"))
-        and token_matches(token, row["edit_token_hash"])
-    )
-    if not (is_owner or is_editor):
+    if not (_is_owner(token, row) or _is_editor(token, row)):
         # view-only (no/invalid token) cannot mutate (SECURITY.md §2; API_SPEC §4.4).
         # A Penny mutate tool gates on capability first, but this is the real wall.
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
-    # is_owner/is_editor both imply a presented token (see checks above).
+    # _is_owner/_is_editor both imply a presented token (see checks above).
     assert token is not None
 
     # Merge the partial onto the stored source-of-truth, then recompute.
@@ -1523,6 +1517,19 @@ def _set_status_or_conflict(store, row, if_match, status):
             "recovery": "reload | overwrite | save_as_copy"})
 
 
+def _set_status_and_respond(store, row, view_slug, response, if_match, status):
+    """Owner-only trash/restore (API_SPEC §4.8): flip status under If-Match, then
+    return the refreshed view-model envelope + new version/status. Shared by trash
+    (-> 'trashed') and restore (-> 'active') so the two never drift."""
+    _set_status_or_conflict(store, row, if_match, status)
+    current = store.get_projection_by_slug(view_slug)
+    vm = loads_obj(current["computed_json"]) if current else {}
+    new_version = if_match + 1
+    response.headers["ETag"] = str(new_version)
+    return {**vm, "view_slug": view_slug, "version": new_version,
+            "name": row["name"], "status": status}
+
+
 @router.post("/{view_slug}/trash")
 def trash_projection(
     view_slug: str,
@@ -1533,13 +1540,7 @@ def trash_projection(
 ):
     """Soft delete (API_SPEC §4.8): status -> trashed. Owner-only, If-Match required."""
     row = _require_owner(store, view_slug, authorization)
-    _set_status_or_conflict(store, row, if_match, "trashed")
-    current = store.get_projection_by_slug(view_slug)
-    vm = loads_obj(current["computed_json"]) if current else {}
-    new_version = if_match + 1
-    response.headers["ETag"] = str(new_version)
-    return {**vm, "view_slug": view_slug, "version": new_version,
-            "name": row["name"], "status": "trashed"}
+    return _set_status_and_respond(store, row, view_slug, response, if_match, "trashed")
 
 
 @router.post("/{view_slug}/restore")
@@ -1552,13 +1553,7 @@ def restore_projection(
 ):
     """Restore from trash (API_SPEC §4.8): status -> active. Owner-only."""
     row = _require_owner(store, view_slug, authorization)
-    _set_status_or_conflict(store, row, if_match, "active")
-    current = store.get_projection_by_slug(view_slug)
-    vm = loads_obj(current["computed_json"]) if current else {}
-    new_version = if_match + 1
-    response.headers["ETag"] = str(new_version)
-    return {**vm, "view_slug": view_slug, "version": new_version,
-            "name": row["name"], "status": "active"}
+    return _set_status_and_respond(store, row, view_slug, response, if_match, "active")
 
 
 @router.delete("/{view_slug}", status_code=204)
