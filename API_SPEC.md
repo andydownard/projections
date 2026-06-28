@@ -123,6 +123,7 @@ Limits apply **per IP and per token** (PRD §20/§27), 429 on breach with `Retry
 | `POST /api/penny/proposal` | 120 / hour (coarse) | 60 / hour / token | Upload intake (token-hashed key). |
 | `PATCH …` (autosave) | 600 / 5 min | 600 / 5 min / projection | High by design (debounced autosave); serialized server-side. Client debounces ~300–400 ms. |
 | `GET …/xlsx`, `GET …/packet` | 60 / hour | — | Export cost (LibreOffice/render). |
+| `POST /api/cost-schedule/preview` | 600 / 5 min | — | Read-only grid-totals compute; fires as the user edits the startup-costs grid (general-read cadence). |
 | All other `GET` | 600 / 5 min | — | General read. |
 
 `429` body: `{ "error": "rate_limited", "retry_after_seconds": <int>, "scope": "ip" | "token" }`.
@@ -524,6 +525,47 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 - **Errors:** `403 forbidden`; `413 file_too_large`; `415 unsupported_type`; `422 ssrf_blocked` / `remote_intake_unavailable` / `empty_upload`; `429 rate_limited`.
 - **`parse_proposal` result (PE9):** when the loop calls `parse_proposal` with this ref it returns extract-only candidates — `{ extract_only, untrusted, candidates:[{amount_text, amount, category, snippet, tier?}], tiers:[…], needs_tier_choice, phases:[{phase, description, duration_months, month}], phase_month_map:[{phase, month}], opening_month, needs_month_confirm }` — every figure traceable to the document; multiple tiers force disambiguation and the phase→month mapping is confirmed before any row is populated via `edit_cost_schedule` (`provenance.source="ai"`).
 
+### 6.9 `POST /api/cost-schedule/preview` — startup-grid totals (read-only, dormant)
+
+Decision #15: keep the **summing and formatting authority server-side** for the pre-Generate startup-costs grid (#263). The client sends the flat cost-schedule rows it is editing and **renders the returned totals verbatim — it never sums** (NO-CLIENT-MATH / `SERVER`, Regression #8). The engine is the one cost-aggregation authority (`engine.compute.cost_schedule_totals`, the same `D(str(amount))` Decimal idiom `compute_annual`/`startup_outflows_by_month` use — no second math authority) and the server formats every aggregate as `{raw, display}` via `engine.money` (the one format authority).
+
+- **Auth:** none required (the wizard previews this **before** a projection exists). **No `If-Match`** — it is **read-only**: no persistence, no projection touched, no `version` bump. Rate-limited **per IP** (§2.3) as the abuse brake — `429` + `Retry-After` is surfaced **before** any work.
+- **Status:** **dormant** — additive, no client consumer wired yet.
+- **Request body:**
+
+```json
+{ "cost_schedule": [
+    { "category": "Equipment", "month": 1, "amount": 45000 },
+    { "category": "Build-out", "month": 2, "amount": "50000" }
+  ],
+  "building_sqft": "10000" }
+```
+`amount` accepts a JSON number **or** a numeric string (the engine coerces via `D(str(...))`, no float poisoning). `building_sqft` is **optional** and **only** scales the seeded default fallback (below) — it never alters caller-supplied rows. Unknown fields are ignored.
+
+- **Behavior:**
+  1. **Per-category row totals** (`rowTotals`) — amounts grouped by `category`, **insertion order preserved** (the grid's right-edge row totals).
+  2. **Per-month column totals** (`columnTotals`) — amounts grouped by `month`, **ascending** (the grid's bottom-row column totals).
+  3. **Grand total** (`grandTotal`) — the sum of every amount (the grid's bottom-right corner).
+  4. **Empty rows → seeded default.** When `cost_schedule` is empty the legacy default schedule (`model.default_cost_schedule(building_sqft)`) is totalled instead, so a no-rows preview shows the seeded startup grid; the default basis is the example's 10,000 sq ft.
+- **Response `200`:** every total is a `{raw, display}` dual value with thousands/millions comma formatting (`$1,234,567`):
+
+```json
+{
+  "rowTotals": [
+    { "category": "Equipment", "total": { "raw": 45000.0, "display": "$45,000" } },
+    { "category": "Build-out", "total": { "raw": 50000.0, "display": "$50,000" } }
+  ],
+  "columnTotals": [
+    { "month": 1, "total": { "raw": 45000.0, "display": "$45,000" } },
+    { "month": 2, "total": { "raw": 50000.0, "display": "$50,000" } }
+  ],
+  "grandTotal": { "raw": 95000.0, "display": "$95,000" },
+  "modelVersion": "2.5.0",
+  "computeSchemaVersion": "1.3.0"
+}
+```
+- **Errors:** `429 rate_limited` (`{ "error":"rate_limited", "retry_after_seconds": N, "scope":"ip" }` + `Retry-After`); `422` validation (a malformed row).
+
 ---
 
 ## 7. Research & external-data proxies
@@ -697,6 +739,7 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `POST /api/penny/proposal` | owner/edit Bearer | — | holds bytes (no parse) | upload |
 | `GET/POST …/{slug}/actuals` | owner/edit(/view GET) | POST: **yes** | POST yes | read |
 | `POST /api/research` | (none) | no | no | research |
+| `POST /api/cost-schedule/preview` | (none) | no | **no (read-only)** | read |
 | `GET /api/places/autocomplete` | (none) | — | no | read |
 | `POST /api/feedback` | (none) | no | persist | feedback |
 | `POST /api/intent` | (none) | no | persist | intent |

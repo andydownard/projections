@@ -280,6 +280,51 @@ def startup_outflows_by_month(inputs, assumptions, occupancy_y1) -> dict:
     return by_month
 
 
+def cost_schedule_totals(cost_schedule, *, building_sqft=None) -> dict:
+    """Aggregate flat ``{category, month, amount}`` cost rows for the startup grid.
+
+    A pure, read-only helper (decision #15): it never mutates the model and never
+    persists. The engine stays the ONE cost-aggregation authority — this reuses the
+    exact ``D(str(amount))`` Decimal idiom that ``compute_annual`` (per-category) and
+    ``startup_outflows_by_month`` (per-month) already use, so the pre-Generate grid
+    preview can never become a second math authority. Returns exact ``Decimal``
+    aggregates; the server formats them with ``engine.money`` (the one format
+    authority) as ``{raw, display}`` so the client renders but never sums.
+
+    Returns a dict with:
+
+    - ``by_category``: per-category row totals, insertion order preserved (grid rows).
+    - ``by_month``: per-month column totals, ascending by month (grid columns).
+    - ``grand_total``: sum of every amount.
+
+    When ``cost_schedule`` is empty the seeded default schedule
+    (``model.default_cost_schedule(building_sqft)``) is used so a no-rows preview
+    shows the seeded startup grid; ``building_sqft`` ONLY scales that default
+    fallback (it never alters caller-supplied rows) and defaults to the example's
+    10,000 sq ft basis.
+    """
+    rows = list(cost_schedule)
+    if not rows:
+        sqft = model.EXAMPLE_BUILDING_SQFT if building_sqft is None else building_sqft
+        rows = model.default_cost_schedule(sqft)
+
+    by_category: dict = {}
+    by_month: dict = {}
+    grand = Decimal("0")
+    for item in rows:
+        amount = D(str(item["amount"]))
+        category = item["category"]
+        month = int(item["month"])
+        by_category[category] = by_category.get(category, Decimal("0")) + amount
+        by_month[month] = by_month.get(month, Decimal("0")) + amount
+        grand += amount
+    return {
+        "by_category": by_category,
+        "by_month": dict(sorted(by_month.items())),
+        "grand_total": grand,
+    }
+
+
 def compute(inputs, assumptions=None, demand_drivers=None, trade_area=None, overrides=None):
     assumptions = assumptions or Assumptions()
     demand_drivers = demand_drivers or DemandDrivers()
