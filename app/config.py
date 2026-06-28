@@ -96,14 +96,10 @@ def app_origin(env: Mapping[str, str] | None = None) -> str:
     return env.get("APP_ORIGIN", "http://localhost:5173")
 
 
-def _as_bool(val: str | None) -> bool:
-    return (val or "").strip().lower() in ("1", "true", "yes", "on")
-
-
 # --- Business-model price/gate FLAG (PRD §3, M6-GATE / issue #85) --------------
 # THE single server config for the free-vs-paid decision: `gate_config` below is
-# the canonical {gate_mode, price_usd} toggle. The older `pricing_config` (cents-
-# denominated UI posture) is retained for backward compatibility only.
+# the canonical {gate_mode, price_usd} toggle (the lead-gen flywheel default is
+# `free`; flipping to `paid_review` is a no-deploy env change).
 GATE_MODE_FREE = "free"
 GATE_MODE_PAID = "paid_review"
 _VALID_GATE_MODES = (GATE_MODE_FREE, GATE_MODE_PAID)
@@ -164,31 +160,6 @@ def gate_config(
         else None
     )
     return {"gate_mode": mode, "price_usd": price_usd}
-
-
-def pricing_config(env: Mapping[str, str] | None = None) -> dict:
-    """Legacy cents-denominated pricing posture (superseded by ``gate_config``).
-
-    Retained for backward compatibility. The canonical free-vs-paid gate for
-    issue #85 is ``gate_config`` above; whether export/share is gated behind the
-    paid expert-review event is a business-model TOGGLE (PRD §3), NOT an
-    access-control bug (SECURITY.md §3). Defaults: free, ungated, $0.
-    """
-    env = _env(env)
-    try:
-        price_cents = int(env.get("PRICE_CENTS", "0"))
-    except (TypeError, ValueError):
-        price_cents = 0
-    return {
-        "tier": env.get("PRICING_TIER", "free").strip().lower() or "free",
-        "export_gated": _as_bool(env.get("EXPORT_GATED")),
-        "price_cents": max(price_cents, 0),
-    }
-
-
-def crm_enabled(env: Mapping[str, str] | None = None) -> bool:
-    """Intent -> CRM is optional/graceful-degrade (SECURITY.md §4.2)."""
-    return bool(_env(env).get("CRM_API_KEY"))
 
 
 def litestream_status(env: Mapping[str, str] | None = None) -> str:

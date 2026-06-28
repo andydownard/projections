@@ -198,3 +198,30 @@ def test_render_docx_carries_disclaimer_and_ai_disclosure():
     assert EXPORT_DISCLAIMER in text
     assert f"Terms v{TERMS_VERSION}" in text
     assert AI_NARRATIVE_DISCLOSURE in text
+
+
+def test_render_docx_flattens_sanitized_html_in_narrative():
+    # narrative `body_md` is allowlist-sanitized HTML (the client renders it via
+    # innerHTML), so it can carry <p>/<strong> tags. The .docx body is plain
+    # OOXML runs — a board must never see a literal "<p>" in Word. The render
+    # flattens those tags to text while keeping the grounded figure verbatim.
+    body = "<p>The store needs <strong>$277,990</strong> in capital.</p>"
+    pkt = build_packet(VM, role="board", narrative_md=body)
+    text = _docx_text(render_packet_docx(pkt))
+    # The tag markup is gone (no literal angle-bracket tags reach the reader)...
+    assert "<p>" not in text
+    assert "</p>" not in text
+    assert "<strong>" not in text
+    # ...but the prose and its grounded figure survive intact.
+    assert "The store needs" in text
+    assert "$277,990" in text
+
+
+def test_render_docx_leaves_tag_free_markdown_lines_untouched():
+    # The flatten guard only fires on lines that actually contain HTML tags;
+    # ordinary markdown (no tags) passes through verbatim so the existing
+    # disclaimer/figure content is unaffected by the narrative-HTML handling.
+    pkt = build_packet(VM, role="board", narrative_md="Capital is $277,990.")
+    text = _docx_text(render_packet_docx(pkt))
+    assert "Capital is $277,990." in text
+    assert EXPORT_DISCLAIMER in text

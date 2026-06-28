@@ -342,9 +342,15 @@ def render_packet_docx(pkt: dict[str, Any]) -> bytes:
     display strings as the markdown packet — one source of truth.
     """
     # Reuse the markdown render as the canonical line source, then split into
-    # Word paragraphs so the .docx and .md never diverge in content/figures.
+    # Word paragraphs so the .docx and .md never diverge in content/figures. The
+    # narrative is the one line source that may carry sanitized HTML tags (the
+    # allowlist <p>/<strong>/<a>/<li>); flatten those to plain text so a board
+    # never sees a literal "<p>" in Word. Tag-free markdown lines pass untouched.
     md = render_packet_md(pkt)
-    paras = [_docx_paragraph(line) for line in md.split("\n")]
+    paras = [
+        _docx_paragraph(_strip_html(line) if _TAG_RE.search(line) else line)
+        for line in md.split("\n")
+    ]
     body = "".join(paras)
     document_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
