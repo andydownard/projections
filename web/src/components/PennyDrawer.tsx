@@ -54,6 +54,14 @@ import {
 
 export type PennyProvider = "anthropic" | "openai";
 
+/** A contextual quick-reply suggestion chip. These are shown ONLY when the chat
+ *  context genuinely merits a prompt (decision #11) — never always-on. */
+export interface QuickReply {
+  id: string;
+  label: string;
+  onSelect: () => void;
+}
+
 export interface PennyDrawerProps {
   /**
    * When false (AI opt-out or no provider key configured), Penny is unavailable:
@@ -71,6 +79,10 @@ export interface PennyDrawerProps {
   children?: ReactNode;
   /** Composer override. Defaults to the built-in composer shell. */
   composer?: ReactNode;
+  /** Contextual quick-reply chips for the default composer — shown ONLY when the
+   *  chat context merits them (decision #11); omitted → no chip row at all. Ignored
+   *  when a `composer` override is supplied. */
+  quickReplies?: QuickReply[];
   /** Controlled open state (optional). Uncontrolled when omitted. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -395,49 +407,107 @@ function PennyPanel({
   );
 }
 
-// Default composer shell — a comfortable multiline input + a paper-airplane Send.
-// No backend: Enter/Send are no-ops here (the live composers wire the real send),
-// but the keyboard contract is identical — Enter sends, Shift+Enter inserts a
-// newline (spec §5).
-function DefaultComposer() {
+/** Contextual quick-reply chips. Renders NOTHING when there is no contextual
+ *  suggestion to offer — the chip row appears ONLY when the chat context merits it
+ *  (decision #11), never always-on. Each chip is a brand-outlined pill. */
+function QuickReplies({ replies, modal }: { replies?: QuickReply[]; modal: boolean }) {
+  if (!replies || replies.length === 0) return null;
+  return (
+    <div
+      data-testid="penny-quick-replies"
+      role="group"
+      aria-label="Suggested replies"
+      style={quickRepliesRowStyle(modal)}
+    >
+      {replies.map((r) => (
+        <button key={r.id} type="button" onClick={r.onSelect} style={quickReplyChipStyle}>
+          {r.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// The composer FIELD (decision #23): a single rounded input with the paper-airplane
+// send button nested INSIDE it (absolute, bottom-right) — not a sibling button beside
+// the input. The trailing control is injected (Send by default; Stop while a turn
+// streams). Enter sends, Shift+Enter inserts a newline; the input font matches the
+// transcript bubbles for one consistent reading size (spec §4).
+function ComposerField({
+  modal,
+  value,
+  disabled,
+  onChange,
+  onSubmit,
+  trailing,
+}: {
+  modal: boolean;
+  value: string;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  trailing: ReactNode;
+}) {
+  return (
+    <div data-testid="penny-field" style={composerFieldWrapStyle}>
+      <textarea
+        aria-label="Ask Penny"
+        placeholder="Ask Penny anything…"
+        rows={3}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter sends; Shift+Enter is a newline (chat convention, keyboard-first).
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            onSubmit();
+          }
+        }}
+        style={composerFieldTextareaStyle(modal)}
+      />
+      {trailing}
+    </div>
+  );
+}
+
+/** The in-field paper-airplane Send button (decision #23) — a labelled icon button
+ *  positioned absolutely at the bottom-right of the field. */
+function InFieldSend({ modal, disabled }: { modal: boolean; disabled: boolean }) {
+  return (
+    <button type="submit" aria-label="Send" disabled={disabled} style={inFieldSendStyle(modal, disabled)}>
+      <SendIcon />
+    </button>
+  );
+}
+
+// Default composer shell — the in-field paper-airplane composer. No backend: Enter /
+// Send are no-ops here (the live composers wire the real send), but the keyboard
+// contract is identical — Enter sends, Shift+Enter inserts a newline (spec §5).
+function DefaultComposer({ quickReplies }: { quickReplies?: QuickReply[] }) {
   const [draft, setDraft] = useState("");
   const modal = useCoexistenceModal();
   const canSend = draft.trim().length > 0;
-  const submit = () => setDraft("");
+  const submit = () => {
+    if (canSend) setDraft("");
+  };
   return (
     <form
       data-testid="penny-composer"
       onSubmit={(e) => {
         e.preventDefault();
-        if (canSend) submit();
+        submit();
       }}
       style={composerFormStyle(modal)}
     >
-      <div style={composerRowStyle}>
-        <textarea
-          aria-label="Ask Penny"
-          placeholder="Ask Penny anything…"
-          rows={3}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter sends; Shift+Enter is a newline (chat convention, keyboard-first).
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              if (canSend) submit();
-            }
-          }}
-          style={composerTextareaStyle(modal)}
-        />
-        <button
-          type="submit"
-          aria-label="Send"
-          disabled={!canSend}
-          style={composerSendStyle(modal, !canSend)}
-        >
-          <SendIcon />
-        </button>
-      </div>
+      <QuickReplies replies={quickReplies} modal={modal} />
+      <ComposerField
+        modal={modal}
+        value={draft}
+        onChange={setDraft}
+        onSubmit={submit}
+        trailing={<InFieldSend modal={modal} disabled={!canSend} />}
+      />
     </form>
   );
 }
@@ -459,12 +529,6 @@ function composerFormStyle(modal: boolean): CSSProperties {
   };
 }
 
-const composerRowStyle: CSSProperties = {
-  display: "flex",
-  gap: "0.5rem",
-  alignItems: "flex-end",
-};
-
 /** A row for an extra composer affordance (e.g. the proposal-upload control) when a
  *  live composer provides one. The redundant wizard suggestion chips are gone — the
  *  wizard already collects name/address/households/shares/costs (spec §3). */
@@ -480,37 +544,97 @@ function affordanceRowStyle(modal: boolean): CSSProperties {
   };
 }
 
-function composerTextareaStyle(modal: boolean): CSSProperties {
+/** Contextual quick-reply chip row — same scroll/wrap behaviour as the affordance row. */
+function quickRepliesRowStyle(modal: boolean): CSSProperties {
   return {
-    flex: "1 1 auto",
+    display: "flex",
+    gap: "0.4rem",
+    alignItems: "center",
+    flexWrap: modal ? "nowrap" : "wrap",
+    overflowX: modal ? "auto" : "visible",
+    WebkitOverflowScrolling: "touch",
+    scrollbarWidth: "thin",
+  };
+}
+
+/** Brand-outlined pill for a contextual quick-reply chip (--text-sm). */
+const quickReplyChipStyle: CSSProperties = {
+  flex: "0 0 auto",
+  fontSize: "0.75rem",
+  padding: "0.3rem 0.7rem",
+  border: "1px solid var(--brand-primary, #35644f)",
+  borderRadius: "999px",
+  background: "var(--surface, #fff)",
+  color: "var(--brand-deep, #1d4733)",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+// ---- In-field composer (decision #23): the send/stop control sits INSIDE the input. ----
+
+/** The field is the positioning context for the absolutely-placed in-field button. */
+const composerFieldWrapStyle: CSSProperties = {
+  position: "relative",
+  display: "flex",
+  flexDirection: "column",
+};
+
+function composerFieldTextareaStyle(modal: boolean): CSSProperties {
+  return {
+    width: "100%",
+    boxSizing: "border-box",
     resize: "vertical",
     // Roomy, multi-line, comfortable; still ≥44px touch target on the mobile sheet.
     minHeight: modal ? TOUCH_TARGET : "5.5rem",
     padding: "0.625rem 0.75rem",
+    // Leave room for the in-field send/stop button at the bottom-right.
+    paddingRight: "3rem",
     border: "1px solid var(--line, #e2e2e2)",
-    borderRadius: "10px",
+    borderRadius: "12px",
     fontFamily: "inherit",
     fontSize: PENNY_MESSAGE_FONT_SIZE,
     lineHeight: 1.5,
   };
 }
 
-function composerSendStyle(modal: boolean, disabled: boolean): CSSProperties {
+function inFieldSendStyle(modal: boolean, disabled: boolean): CSSProperties {
   return {
+    position: "absolute",
+    right: "0.4rem",
+    bottom: "0.4rem",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    flex: "0 0 auto",
-    width: modal ? TOUCH_TARGET : 40,
-    height: modal ? TOUCH_TARGET : 40,
+    width: modal ? TOUCH_TARGET : 34,
+    height: modal ? TOUCH_TARGET : 34,
     minHeight: modal ? TOUCH_TARGET : undefined,
     minWidth: modal ? TOUCH_TARGET : undefined,
     border: "none",
-    borderRadius: "10px",
+    borderRadius: "9px",
     background: BRAND,
     color: "#fff",
     cursor: disabled ? "not-allowed" : "pointer",
     opacity: disabled ? 0.5 : 1,
+  };
+}
+
+/** The in-field Stop control (swaps in for Send while a turn streams). */
+function inFieldStopStyle(modal: boolean): CSSProperties {
+  return {
+    position: "absolute",
+    right: "0.4rem",
+    bottom: "0.4rem",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    height: modal ? TOUCH_TARGET : 34,
+    minHeight: modal ? TOUCH_TARGET : undefined,
+    padding: "0 0.75rem",
+    border: "1px solid var(--line, #e2e2e2)",
+    borderRadius: "9px",
+    background: "var(--surface, #fff)",
+    color: "var(--text, #1a1a1a)",
+    cursor: "pointer",
   };
 }
 
@@ -521,6 +645,7 @@ export function PennyDrawer({
   avatarSrc = "/penny-avatar.png",
   children,
   composer,
+  quickReplies,
   open: openProp,
   onOpenChange,
 }: PennyDrawerProps) {
@@ -622,7 +747,7 @@ export function PennyDrawer({
   }
 
   const body = children ?? <PennyTranscript turns={[]} />;
-  const composerNode = composer ?? <DefaultComposer />;
+  const composerNode = composer ?? <DefaultComposer quickReplies={quickReplies} />;
 
   // The FAB tab DISAPPEARS while the drawer is open (spec §5, issue #264): the
   // in-drawer LEFT-pointing back arrow is the close affordance, so the tab does not
@@ -917,6 +1042,9 @@ interface LiveComposerProps {
   /** Extra composer affordance rendered above the input (e.g. the wizard's
    *  proposal-upload control, Spec §5.1/§9). Additive — omitted on the detail page. */
   extraAffordance?: ReactNode;
+  /** Contextual quick-reply chips, shown ONLY when the chat context merits them
+   *  (decision #11) — omitted → no chip row. */
+  quickReplies?: QuickReply[];
 }
 
 // The LIVE composer: a roomy multiline input + a paper-airplane Send, with a Stop
@@ -933,6 +1061,7 @@ function LiveComposer({
   onSend,
   onStop,
   extraAffordance,
+  quickReplies,
 }: LiveComposerProps) {
   const [draft, setDraft] = useState("");
   const modal = useCoexistenceModal();
@@ -985,61 +1114,28 @@ function LiveComposer({
       }}
       style={composerFormStyle(modal)}
     >
+      <QuickReplies replies={quickReplies} modal={modal} />
       {extraAffordance && (
         <div data-testid="penny-affordances" style={affordanceRowStyle(modal)}>
           {extraAffordance}
         </div>
       )}
-      <div style={composerRowStyle}>
-        <textarea
-          aria-label="Ask Penny"
-          placeholder="Ask Penny anything…"
-          rows={3}
-          value={draft}
-          disabled={pending}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter sends; Shift+Enter is a newline (chat convention, keyboard-first).
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          style={composerTextareaStyle(modal)}
-        />
-        {pending ? (
-          <button
-            type="button"
-            onClick={onStop}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flex: "0 0 auto",
-              padding: "0 0.875rem",
-              height: modal ? TOUCH_TARGET : 40,
-              minHeight: modal ? TOUCH_TARGET : undefined,
-              minWidth: modal ? TOUCH_TARGET : undefined,
-              border: "1px solid var(--line, #e2e2e2)",
-              borderRadius: "10px",
-              background: "var(--surface, #fff)",
-              color: "var(--text, #1a1a1a)",
-              cursor: "pointer",
-            }}
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            type="submit"
-            aria-label="Send"
-            disabled={!canSend}
-            style={composerSendStyle(modal, !canSend)}
-          >
-            <SendIcon />
-          </button>
-        )}
-      </div>
+      <ComposerField
+        modal={modal}
+        value={draft}
+        disabled={pending}
+        onChange={setDraft}
+        onSubmit={submit}
+        trailing={
+          pending ? (
+            <button type="button" onClick={onStop} style={inFieldStopStyle(modal)}>
+              Stop
+            </button>
+          ) : (
+            <InFieldSend modal={modal} disabled={!canSend} />
+          )
+        }
+      />
     </form>
   );
 }
