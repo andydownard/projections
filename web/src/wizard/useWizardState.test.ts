@@ -1,8 +1,11 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { useWizardState } from "./useWizardState";
+import { STEPS, useWizardState } from "./useWizardState";
 import type { TradeAreaResolved } from "../api/places";
+import type { RentResearch } from "../api/research";
+
+const LAST_STEP = STEPS.length - 1; // review
 
 // The shared wizard-state hook: holds the draft, the step cursor with per-step
 // validation gating Next, and the households-empty-until-resolved lifecycle
@@ -122,6 +125,7 @@ describe("useWizardState — blockReason surfaces WHY Next/Generate is disabled 
     act(() => result.current.set("name", "X"));
     act(() => result.current.onResolved(RESOLVED));
     act(() => result.current.goNext()); // trade-area
+    act(() => result.current.goNext()); // space (sq ft / salesfloor / rent default-valid)
     act(() => result.current.goNext()); // donor-market
     expect(result.current.stepKey).toBe("donor-market");
     expect(result.current.blockReason).toBeNull(); // defaults 6/8/10 are valid
@@ -135,7 +139,7 @@ describe("useWizardState — blockReason surfaces WHY Next/Generate is disabled 
     const { result } = renderHook(() => useWizardState());
     act(() => result.current.set("name", "X"));
     act(() => result.current.onResolved(RESOLVED));
-    act(() => result.current.goTo(4)); // review (last)
+    act(() => result.current.goTo(LAST_STEP)); // review (last)
     expect(result.current.isLast).toBe(true);
     // households resolved, terms still unchecked → reason names terms
     expect(result.current.blockReason).toMatch(/terms/i);
@@ -143,6 +147,113 @@ describe("useWizardState — blockReason surfaces WHY Next/Generate is disabled 
     act(() => result.current.set("termsAccepted", true));
     expect(result.current.canGenerate).toBe(true);
     expect(result.current.blockReason).toBeNull();
+  });
+});
+
+describe("useWizardState — Space & rent step (#245)", () => {
+  const RESEARCH: RentResearch = {
+    rent_per_sqft: 18, estimate: 18, low: 15, high: 22,
+    rent_type: "nnn", opex: 3, basis: "$/sq ft/yr",
+    confidence: "high", verified: true, provenance: "verified",
+    sources: [{ url: "https://x", title: "Listing", source_date: "2026-05" }],
+    ai_enabled: true, cached: false,
+  };
+
+  it("inserts the Space & rent step between trade-area and donor-market", () => {
+    expect(STEPS).toEqual([
+      "store", "trade-area", "space", "donor-market", "cost", "review",
+    ]);
+  });
+
+  it("seeds the per-sq-ft assumptions at the anchored defaults with provenance 'default'", () => {
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.draft.rentPerSqft).toBe(12);
+    expect(result.current.draft.utilitiesPerSqft).toBe(2.23);
+    expect(result.current.draft.fixturesPerSqft).toBe(4.5);
+    expect(result.current.rentSource).toBe("default");
+    expect(result.current.utilitiesSource).toBe("default");
+    expect(result.current.fixturesSource).toBe("default");
+  });
+
+  it("gates Next until sq ft > 0 and salesfloor is 1–100%", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.goTo(2)); // space
+    expect(result.current.stepKey).toBe("space");
+    expect(result.current.canProceed).toBe(true); // defaults are valid
+
+    act(() => result.current.setBuildingSqft(0));
+    expect(result.current.canProceed).toBe(false);
+    expect(result.current.blockReason).toMatch(/square feet/i);
+
+    act(() => result.current.setBuildingSqft(8000));
+    act(() => result.current.setSalesfloorPct(120));
+    expect(result.current.canProceed).toBe(false);
+    expect(result.current.blockReason).toMatch(/sales-floor/i);
+
+    act(() => result.current.setSalesfloorPct(65));
+    expect(result.current.canProceed).toBe(true);
+  });
+
+  it("pre-fills rent from research (provenance 'research') and keeps the badge result", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.onRentResearchStart());
+    expect(result.current.rentResearchLoading).toBe(true);
+
+    act(() => result.current.applyRentResearch(RESEARCH));
+    expect(result.current.draft.rentPerSqft).toBe(18);
+    expect(result.current.rentSource).toBe("research");
+    expect(result.current.rentResearch?.verified).toBe(true);
+    expect(result.current.rentResearchLoading).toBe(false);
+  });
+
+  it("a manual rent edit overrides research → provenance 'user'", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.applyRentResearch(RESEARCH));
+    act(() => result.current.setRentPerSqft(20));
+    expect(result.current.draft.rentPerSqft).toBe(20);
+    expect(result.current.rentSource).toBe("user");
+  });
+
+  it("never clobbers a user rent edit with a later research result", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.setRentPerSqft(25));
+    act(() => result.current.applyRentResearch(RESEARCH));
+    expect(result.current.draft.rentPerSqft).toBe(25); // user value preserved
+    expect(result.current.rentSource).toBe("user");
+    // the server badge result is still captured for display
+    expect(result.current.rentResearch?.verified).toBe(true);
+  });
+
+  it("research failure keeps the manual benchmark and flags the degraded state", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.onRentResearchStart());
+    act(() => result.current.onRentResearchError());
+    expect(result.current.rentResearchError).toBe(true);
+    expect(result.current.rentResearchLoading).toBe(false);
+    expect(result.current.draft.rentPerSqft).toBe(12); // anchored benchmark stays
+    expect(result.current.rentSource).toBe("default");
+  });
+
+  it("editing utilities/fixtures $/sq ft flips provenance to 'user' and re-seeds scaled cost rows", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.setUtilitiesPerSqft(3.1));
+    expect(result.current.draft.utilitiesPerSqft).toBe(3.1);
+    expect(result.current.utilitiesSource).toBe("user");
+
+    // building size scales Equipment & Fixtures / Build-out (server seed mirror)
+    act(() => result.current.setBuildingSqft(8000));
+    const sched = result.current.draft.costSchedule ?? [];
+    const fixtures = sched.find((r) => r.category === "Equipment & Fixtures");
+    const buildout = sched.find((r) => r.category.startsWith("Build-out"));
+    expect(fixtures?.amount).toBe(36000); // 4.50 × 8000
+    expect(buildout?.amount).toBe(40000); // 5.00 × 8000
+
+    act(() => result.current.setFixturesPerSqft(6));
+    expect(result.current.fixturesSource).toBe("user");
+    const fx2 = (result.current.draft.costSchedule ?? []).find(
+      (r) => r.category === "Equipment & Fixtures",
+    );
+    expect(fx2?.amount).toBe(48000); // 6 × 8000
   });
 });
 

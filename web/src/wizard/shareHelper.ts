@@ -53,7 +53,18 @@ export interface WizardDraft {
   shareY1: number;
   shareY2: number;
   shareY3: number;
+  // Occupancy is now driven by sq ft × rent (feature #245): the wizard sends
+  // `rent_per_sqft` and the engine resolves occupancy = building_sqft × rent_per_sqft.
+  // `occupancyAnnual` is kept for the Penny draft bridge / server back-compat only.
   occupancyAnnual: number;
+  rentPerSqft: number;
+  // Sq-ft-scaled cost assumptions (feature #245). `utilitiesPerSqft` flows to the
+  // engine `Assumptions` (utilities line = sq ft × this); `fixturesPerSqft` /
+  // `buildoutPerSqft` seed the matching cost-schedule rows (mirror of the server's
+  // `default_cost_schedule`). All anchored so 10,000 sq ft reproduces today's $.
+  utilitiesPerSqft: number;
+  fixturesPerSqft: number;
+  buildoutPerSqft: number;
   cash: number;
   grant: number;
   loan: number;
@@ -74,7 +85,10 @@ export interface CreatePayload {
     salesfloor_pct: number;
     lease_type: LeaseType;
     donation_value: number;
-    occupancy_annual: number;
+    // Occupancy = building_sqft × rent_per_sqft, resolved server-side (#245). The
+    // flat occupancy_annual is no longer sent; the engine accepts either (it is kept
+    // server-side for Penny/back-compat) but the wizard ships rent_per_sqft.
+    rent_per_sqft: number;
     demand: {
       mode: "market_share";
       share_y1: number;
@@ -89,6 +103,11 @@ export interface CreatePayload {
     target_opening_date?: string | null;
     opening_month_number?: number;
     cost_schedule?: CostScheduleRow[];
+  };
+  // Sq-ft-scaled cost assumptions the engine consumes (#245). Utilities is derived
+  // as building_sqft × utilities_per_sqft, so the wizard ships the adjustable rate.
+  assumptions: {
+    utilities_per_sqft: number;
   };
   terms_accepted: boolean;
 }
@@ -113,7 +132,10 @@ export interface ServerCreateBody {
     building_sqft: string;
     salesfloor_pct: string;
     source_of_funds: string;
-    occupancy_annual: string;
+    // Occupancy driver (#245): the wizard ships rent_per_sqft and leaves
+    // occupancy_annual null so the engine resolves occupancy = sq ft × rent.
+    occupancy_annual: string | null;
+    rent_per_sqft: string;
     lease_type: LeaseType;
     nnn_opex_annual: string;
     // Opening anchor + timed cost schedule (Spec §5/§7). The backend InputsIn
@@ -121,6 +143,11 @@ export interface ServerCreateBody {
     target_opening_date: string | null;
     opening_month_number: number;
     cost_schedule: CostScheduleRow[];
+  };
+  // Sq-ft-scaled cost assumptions (#245). The backend AssumptionsIn accepts
+  // utilities_per_sqft; the engine derives the utilities line from it.
+  assumptions: {
+    utilities_per_sqft: string;
   };
   trade_area: {
     basis: TradeAreaBasis;
@@ -158,13 +185,17 @@ export function toServerCreateBody(p: CreatePayload): ServerCreateBody {
       building_sqft: String(p.inputs.building_sqft),
       salesfloor_pct: String(p.inputs.salesfloor_pct),
       source_of_funds: String(total),
-      occupancy_annual: String(p.inputs.occupancy_annual),
+      // rent_per_sqft drives occupancy (#245); occupancy_annual is left null so the
+      // engine resolves occupancy = building_sqft × rent_per_sqft, not a flat $.
+      occupancy_annual: null,
+      rent_per_sqft: String(p.inputs.rent_per_sqft),
       lease_type: p.inputs.lease_type,
       nnn_opex_annual: "0",
       target_opening_date: p.inputs.target_opening_date ?? null,
       opening_month_number: p.inputs.opening_month_number ?? DEFAULT_OPENING_MONTH_NUMBER,
       cost_schedule: p.inputs.cost_schedule ?? DEFAULT_COST_SCHEDULE.map((r) => ({ ...r })),
     },
+    assumptions: { utilities_per_sqft: String(p.assumptions.utilities_per_sqft) },
     trade_area: { basis: p.trade_area.basis, households: String(p.trade_area.households) },
     location: { query: p.location.query },
     terms_accepted: p.terms_accepted,
@@ -182,7 +213,7 @@ export function buildCreatePayload(d: WizardDraft): CreatePayload {
       salesfloor_pct: d.salesfloorPct / 100,
       lease_type: d.leaseType,
       donation_value: d.donationValue,
-      occupancy_annual: d.occupancyAnnual,
+      rent_per_sqft: d.rentPerSqft,
       demand: {
         mode: "market_share",
         share_y1: d.shareY1 / 100,
@@ -194,6 +225,7 @@ export function buildCreatePayload(d: WizardDraft): CreatePayload {
       opening_month_number: d.openingMonthNumber ?? DEFAULT_OPENING_MONTH_NUMBER,
       cost_schedule: d.costSchedule ?? DEFAULT_COST_SCHEDULE.map((r) => ({ ...r })),
     },
+    assumptions: { utilities_per_sqft: d.utilitiesPerSqft },
     terms_accepted: d.termsAccepted,
   };
 }

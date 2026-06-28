@@ -2,6 +2,18 @@
 
 > Final calls from the convening (product lead deciding, informed by the product team + 6 unicorn founders). Supersedes the open blockers in the Engineering Handoff §2.
 
+## ⚑ Sq-ft-scaled utilities + fixtures, location-researched rent (feature #245, `model_version` 2.5.0)
+
+Owner request: ask for sq ft, research representative rent by location, and scale utilities + fixtures with sq ft from the example basis. Calls made for the build:
+
+- **Per-sq-ft constants are anchored to the example store (10,000 sq ft)** so 10k reproduces today's literals byte-for-byte: `UTILITIES_PER_SQFT = $2.23` (22,300/10k), `FIXTURES_PER_SQFT = $4.50` (45,000/10k), `BUILDOUT_PER_SQFT = $5.00` (50,000/10k). Every 10k golden is numerically unchanged; only a non-10k fixture (Grace Mission @8k → utilities $17,840) moves.
+- **Utilities stays the SAME pinnable line + `EXPENSE_ORDER` slot** — only its derivation changes (flat fixed-$ → `building_sqft × UTILITIES_PER_SQFT`). No new DAG node / `.xlsx` row / pinnable surface. It is flat across years (sq ft drives it, not the rent escalator). This is a `MODEL_VERSION` 2.4.0 → 2.5.0 bump + golden regen in the same change.
+- **Fixtures/build-out are a SEED change, not engine-resolution:** `default_cost_schedule(building_sqft=10000)` scales those two lines; a no-arg (legacy/migration) call stays at the example basis, so the frozen m0005 backfill literal is unchanged.
+- **AI-off rent default pinned to `$12/sq ft`** (`DEFAULT_RENT_PER_SQFT`) = today's $120k at 10k, so a new manual projection does not silently jump; the value is always visible + editable.
+- **M-1 gate lift (scoped):** the owner asking for location rent research **lifts the M-1 hard gate for the rent-research slice only** (#60/#62/#64/#65). It is still built to the LLM-GROUNDING contract exactly (extract-only over SSRF-fetched snippets, unfetched citations rejected, AI-disabled-safe labeled benchmark, rate-limited, off the compute hot path). The rest of M3 (attachments #66, full evidence automation) stays deferred.
+
+---
+
 ## ⚑ Owner override: labor default = 60%
 
 The convening recommended **40%**. The owner (Andy) elected to **keep 60%** — which is also the original verified engine default ([methodology.md](./reference/thrift-store-projections-skill/reference/methodology.md)). Consequences, handled by design:

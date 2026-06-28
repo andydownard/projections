@@ -248,16 +248,17 @@ Notes:
   "inputs": {
     "opening":"2027-03", "opening_status":"pre_launch",
     "building_sqft":10000, "salesfloor_pct":0.70, "lease_type":"nnn",
-    "donation_value":74,
+    "donation_value":74, "rent_per_sqft":12,
     "demand": { "mode":"market_share", "share_y1":0.06, "share_y2":0.08, "share_y3":0.10 },
     "source_of_funds": { "cash":150000, "grant":50000 }
   },
   "demand_drivers": { "competition":"low", "pickup_service":true },
-  "assumptions": { "labor_pct":0.40 },
+  "assumptions": { "labor_pct":0.40, "utilities_per_sqft":"2.23" },
   "terms_accepted": true
 }
 ```
 
+- **Occupancy driver (#245):** the wizard ships **`inputs.rent_per_sqft`** (and leaves `occupancy_annual` null) so the engine resolves occupancy = `building_sqft × rent_per_sqft`; a flat `inputs.occupancy_annual` is still accepted for back-compat and **takes precedence when present**. `assumptions.utilities_per_sqft` (default `"2.23"`) scales the Utilities/trash line (`building_sqft × utilities_per_sqft`); the Equipment & Fixtures / Build-out cost-schedule rows are seeded from `FIXTURES_PER_SQFT`/`BUILDOUT_PER_SQFT × building_sqft` (anchored so 10,000 sq ft reproduces today's literals).
 - **Validation:** `share_y1/y2/y3` are **three explicit values** — no auto-midpoint (PRD §7.1; supersedes `methodology.md` line 17). `salesfloor_pct ∈ (0,1]`; `building_sqft > 0` (0 sq ft blocked, §12.4); `terms_accepted` must be `true` before any export/share is later allowed (§21) — create may proceed without it, but exports are gated (see §6/§7).
 - **Behavior:** computes server-side (the only math authority), persists `inputs/assumptions/trade_area/computed_json/monthly_json/flags`, stamps `model_version`, sets `version=1`, mints owner + edit + view tokens. When `terms_accepted: true` is sent, the server **stamps `terms_accepted_at` = now** so the later `.xlsx`/packet exports (§6/§7) are reachable; when it is absent/`false`, `terms_accepted_at` stays unset and exports `403 terms_required`. `terms_accepted` defaults to `false` — an unchecked box must never silently accept.
 - **Response `201`:** the full view-model (§3) **plus** the one-time secrets, returned **only here** (never stored in retrievable plaintext on the server beyond `view_slug`):
@@ -543,35 +544,40 @@ All third-party calls (Places, Census, web fetch, LLM extract) are **server-side
 ```
 - **Errors:** `400` `q` too short; `502 places_unavailable` (wizard falls back to manual households, §19.4); `429`.
 
-### 7.2 `POST /api/research` — retrieval-grounded rent + households
+### 7.2 `POST /api/research` — retrieval-grounded market rent (M3.3 slice, #245)
 
-- **Auth:** none required to research during the wizard (research happens before Generate); rate-limited per IP+token. **No `If-Match`** (read-only against external data; does not mutate a projection — the user accepts results into the wizard, which then `PATCH`es/creates).
+The **rent-research slice** (#60/#62/#64/#65): a representative `$/sq ft` for the resolved location, extracted-only from server-fetched snippets. **Households are not researched here** — they come from `POST /api/places/resolve` (§7.1 derivation), keeping this endpoint a single-purpose rent pre-fill off the compute hot path.
+
+- **Auth:** none required (research happens during the wizard, before a projection exists); rate-limited **per IP + per token** (the token, when present, is SHA-256-hashed before it keys the limiter — no raw secret in memory/logs). **No `If-Match`** (read-only against external data; does not mutate a projection — the user accepts the result into the wizard, which then creates/`PATCH`es).
 - **Request body:**
 
 ```json
-{ "location": { "query":"Longview, Texas", "place_id":"…" },
-  "building_sqft": 10000, "lease_type":"nnn",
-  "trade_area_basis":"city",
-  "force_refresh": false }
+{ "location": { "geography_name":"Longview city", "formatted_address":"Longview, TX, USA" },
+  "location_label": "Longview, TX",
+  "building_sqft": "10000",
+  "basis": "nnn",
+  "token": "<optional owner token for the per-token cap>" }
 ```
+`location` is the resolved geo object from `/api/places/resolve` (or pass `location_label` as a plain string). `basis ∈ {nnn, gross}` (defaults `nnn`).
 
-- **Behavior (PRD §16, verifiable retrieval):**
-  1. **Households** from the US Census API per the locked basis (`city`/`county`/`manual`, §8) with ACS vintage + geography (radius/ZCTA deferred).
-  2. **Rent:** server **fetches** candidate sources (storing `url/title/fetch_date/extracted_text/source_date/source_tier`), then the LLM **extracts only from the provided snippets**. **Unfetched citations are rejected.** Web text is treated as untrusted **data, never instructions** (injection markers stripped, §16.3). The fetcher **blocks private/link-local/metadata IP ranges** and disallows redirects to them (SSRF defense, [SECURITY.md](./SECURITY.md)).
-  3. **Caching** by normalized `location+size+basis` key with TTL; `force_refresh:true` bypasses the cache (manual re-research).
+- **Behavior (PRD §16, verifiable retrieval — LLM-GROUNDING):**
+  1. **Cache** lookup by normalized `location+size+basis` (TTL ~24h); a hit returns immediately with `"cached": true`.
+  2. **Snippets:** `app/research/rent.build_rent_snippets` builds candidate market-rent source URLs from the resolved location and **fetches each through the SSRF-hardened `fetch.py`** (private/link-local/loopback/metadata ranges blocked, every redirect hop re-validated, the validated IP pinned). A blocked/oversized/unreachable candidate is dropped; **zero snippets is valid**.
+  3. **Extract-only:** `app/research/extract.extract_rent` (Anthropic-primary → OpenAI-fallback provider seam) extracts only from those snippets. **Unfetched citations are rejected**; injection markers are stripped (web text is untrusted **data**); if nothing grounded survives, confidence is forced to `low`.
+  4. **AI-disabled-safe:** with the `AI_DISABLED` kill switch set or no provider key, **no fetch and no model call happen** — the response is the **labeled regional benchmark** (`rent_per_sqft = 12.0`, the `$12/sq ft` golden-parity default) at `confidence:"low"`. A provider outage degrades to the same benchmark (never a 500). The wizard rent field is always editable.
 - **Response `200`:**
 
 ```json
 {
-  "households": { "value":31798, "basis":"city", "acs_vintage":2023, "geography":"Longview city, TX" },
-  "rent": { "estimate":9.0, "low":7.5, "high":11.0, "rent_type":"nnn", "opex":2.5,
-            "basis":"$/sq ft/yr", "confidence":"low",
-            "sources":[ { "url":"…","title":"…","source_date":"2026-05","source_tier":"listing" } ] },
-  "cached": false
+  "rent_per_sqft": 11.0, "estimate": 11.0, "low": 9.0, "high": 13.0,
+  "rent_type": "nnn", "opex": 3.0, "basis": "$/sq ft/yr",
+  "confidence": "high", "verified": true, "provenance": "verified",
+  "sources": [ { "url":"…","title":"…","source_date":"2026-05","source_tier":"listing" } ],
+  "ai_enabled": true, "cached": false
 }
 ```
-Weak/no sources → `confidence:"low"` or a labeled benchmark fallback; **always editable** by the user. Households for `manual` basis return `confidence:"user"` with no Census call.
-- **Errors:** `422 unsupported_basis` (e.g. radius/ZCTA in v1); `502 census_unavailable` / `502 research_unavailable` (wizard falls back to manual entry — research failures **never block**, §19.2); `429`.
+`verified` is `true` only when a server-fetched source survived **and** confidence is not `low` — it drives the wizard's **verified-vs-estimated** badge (icon + text, never color-only). AI-off / ungrounded → `verified:false`, `provenance:"estimated"`, `sources:[]`, `rent_per_sqft:12.0`. No key/secret ever appears in the body or logs.
+- **Errors:** `429 rate_limited` (`{ "error":"rate_limited", "retry_after_seconds": N }` + `Retry-After`, surfaced **before** any upstream fetch/provider call); `422` validation (missing `building_sqft`). Research failures **never block** — they degrade to the benchmark, not an error (§19.2).
 
 ---
 

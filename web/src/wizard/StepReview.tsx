@@ -8,11 +8,15 @@
 // humanized for display (basisLabel / householdsSourceLabel) so a non-finance ED
 // reads "County" / "U.S. Census" on the confirm screen, never "county"/"census_acs"
 // (#151 — keep raw enum codes off-screen).
-import { basisLabel, householdsSourceLabel } from "../components/displayLabels";
+import {
+  assumptionSourceLabel,
+  basisLabel,
+  householdsSourceLabel,
+} from "../components/displayLabels";
 import type { WizardState } from "./useWizardState";
 
 export function StepReview({ state }: { state: WizardState }) {
-  const { draft, householdsValue, householdsSource } = state;
+  const { draft, householdsValue, householdsSource, rentSource } = state;
 
   return (
     <section className="wizard-step" aria-labelledby="step-review-heading">
@@ -38,6 +42,19 @@ export function StepReview({ state }: { state: WizardState }) {
           <dd>
             {householdsValue ?? "—"}
             {householdsSource ? ` (${householdsSourceLabel(householdsSource)})` : ""}
+          </dd>
+        </div>
+        <div className="wizard-review__row">
+          <dt>Space (building / sales floor)</dt>
+          <dd>
+            {draft.buildingSqft.toLocaleString()} sq ft · {draft.salesfloorPct}% sales floor
+          </dd>
+        </div>
+        <div className="wizard-review__row">
+          <dt>Rent ($/sq ft/yr)</dt>
+          <dd>
+            ${draft.rentPerSqft}
+            {rentSource ? ` (${assumptionSourceLabel(rentSource)})` : ""}
           </dd>
         </div>
         <div className="wizard-review__row">

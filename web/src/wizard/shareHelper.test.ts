@@ -1,34 +1,42 @@
 import { describe, expect, it } from "vitest";
 
-import { buildCreatePayload, toServerCreateBody } from "./shareHelper";
+import { buildCreatePayload, toServerCreateBody, type WizardDraft } from "./shareHelper";
 
 // The wizard's create-payload shaping: buildCreatePayload (draft -> nested payload)
 // + toServerCreateBody (nested -> flat backend body). No client projection math —
 // the authoritative numbers come back from the server compute (PRD §13).
 
+// A draft sized at the example 10,000 sq ft × $12 rent so occupancy resolves to
+// $120,000 server-side — golden parity with the old flat occupancy_annual default.
+const DRAFT: WizardDraft = {
+  name: "House of Hope — Longview, TX",
+  city: "Longview",
+  state: "TX",
+  basis: "city",
+  households: 31800,
+  buildingSqft: 10000,
+  salesfloorPct: 70,
+  leaseType: "nnn",
+  donationValue: 74,
+  basket: 17.08,
+  donationsPerHh: 3,
+  shareY1: 6,
+  shareY2: 8,
+  shareY3: 10,
+  occupancyAnnual: 120000,
+  rentPerSqft: 12,
+  utilitiesPerSqft: 2.23,
+  fixturesPerSqft: 4.5,
+  buildoutPerSqft: 5.0,
+  cash: 150000,
+  grant: 50000,
+  loan: 0,
+  termsAccepted: true,
+};
+
 describe("buildCreatePayload (maps wizard draft → POST /api/projections body)", () => {
   it("emits three EXPLICIT shares as fractions — never an auto-midpoint", () => {
-    const payload = buildCreatePayload({
-      name: "House of Hope — Longview, TX",
-      city: "Longview",
-      state: "TX",
-      basis: "city",
-      households: 31800,
-      buildingSqft: 10000,
-      salesfloorPct: 70,
-      leaseType: "nnn",
-      donationValue: 74,
-      basket: 17.08,
-      donationsPerHh: 3,
-      shareY1: 6,
-      shareY2: 8,
-      shareY3: 10,
-      occupancyAnnual: 90000,
-      cash: 150000,
-      grant: 50000,
-      loan: 0,
-      termsAccepted: true,
-    });
+    const payload = buildCreatePayload(DRAFT);
     expect(payload.name).toBe("House of Hope — Longview, TX");
     expect(payload.trade_area).toEqual({ basis: "city", households: 31800 });
     expect(payload.inputs.demand).toEqual({
@@ -44,28 +52,16 @@ describe("buildCreatePayload (maps wizard draft → POST /api/projections body)"
     expect(payload.terms_accepted).toBe(true);
   });
 
+  it("ships rent_per_sqft (not a flat occupancy) + the utilities $/sq ft assumption (#245)", () => {
+    const payload = buildCreatePayload(DRAFT);
+    expect(payload.inputs.rent_per_sqft).toBe(12);
+    expect(payload.assumptions.utilities_per_sqft).toBe(2.23);
+    // occupancy is no longer a first-class payload field — the engine derives it.
+    expect("occupancy_annual" in payload.inputs).toBe(false);
+  });
+
   it("defaults the opening anchor + cost schedule to a month-1 lump when unset", () => {
-    const payload = buildCreatePayload({
-      name: "Legacy default",
-      city: "Longview",
-      state: "TX",
-      basis: "city",
-      households: 31800,
-      buildingSqft: 10000,
-      salesfloorPct: 70,
-      leaseType: "nnn",
-      donationValue: 74,
-      basket: 17.08,
-      donationsPerHh: 3,
-      shareY1: 6,
-      shareY2: 8,
-      shareY3: 10,
-      occupancyAnnual: 90000,
-      cash: 150000,
-      grant: 50000,
-      loan: 0,
-      termsAccepted: true,
-    });
+    const payload = buildCreatePayload({ ...DRAFT, name: "Legacy default" });
     // Defaults reproduce today's numbers: every startup line at month 1, opening
     // month 1 (no pre-opening months) — Spec §7 migration default.
     expect(payload.inputs.opening_month_number).toBe(1);
@@ -77,25 +73,8 @@ describe("buildCreatePayload (maps wizard draft → POST /api/projections body)"
 
   it("forwards an explicit opening anchor + timed cost schedule", () => {
     const payload = buildCreatePayload({
+      ...DRAFT,
       name: "Timed schedule",
-      city: "Longview",
-      state: "TX",
-      basis: "city",
-      households: 31800,
-      buildingSqft: 10000,
-      salesfloorPct: 70,
-      leaseType: "nnn",
-      donationValue: 74,
-      basket: 17.08,
-      donationsPerHh: 3,
-      shareY1: 6,
-      shareY2: 8,
-      shareY3: 10,
-      occupancyAnnual: 90000,
-      cash: 150000,
-      grant: 50000,
-      loan: 0,
-      termsAccepted: true,
       targetOpeningDate: "2026-09",
       openingMonthNumber: 4,
       costSchedule: [
@@ -113,27 +92,7 @@ describe("buildCreatePayload (maps wizard draft → POST /api/projections body)"
 });
 
 describe("toServerCreateBody (nested wizard payload → flat backend body)", () => {
-  const payload = buildCreatePayload({
-    name: "House of Hope",
-    city: "Longview",
-    state: "TX",
-    basis: "city",
-    households: 31798,
-    buildingSqft: 10000,
-    salesfloorPct: 70,
-    leaseType: "nnn",
-    donationValue: 74,
-    basket: 17.08,
-    donationsPerHh: 3,
-    shareY1: 6,
-    shareY2: 8,
-    shareY3: 10,
-    occupancyAnnual: 90000,
-    cash: 150000,
-    grant: 50000,
-    loan: 0,
-    termsAccepted: true,
-  });
+  const payload = buildCreatePayload({ ...DRAFT, name: "House of Hope", households: 31798 });
 
   it("flattens shares to string fractions the backend Inputs model accepts", () => {
     const body = toServerCreateBody(payload);
@@ -146,6 +105,13 @@ describe("toServerCreateBody (nested wizard payload → flat backend body)", () 
     expect(body.inputs.source_of_funds).toBe("200000");
     expect(body.inputs.city).toBe("Longview, TX");
     expect(body.trade_area).toEqual({ basis: "city", households: "31798" });
+  });
+
+  it("ships rent_per_sqft as a string with a null occupancy_annual + utilities assumption (#245)", () => {
+    const body = toServerCreateBody(payload);
+    expect(body.inputs.rent_per_sqft).toBe("12");
+    expect(body.inputs.occupancy_annual).toBeNull();
+    expect(body.assumptions.utilities_per_sqft).toBe("2.23");
   });
 
   it("forwards the opening anchor + cost schedule to the flat backend body", () => {

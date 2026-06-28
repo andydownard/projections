@@ -14,6 +14,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import type { PennyDraftApplied, PennyDraftState } from "../api/penny";
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
+import { researchRent } from "../api/research";
 import { type ViewModel, xlsxHref } from "../api/viewModel";
 import { setOwnerToken } from "../api/projections";
 import { CashflowChart } from "../components/CashflowChart";
@@ -30,6 +31,7 @@ import {
 import { StepIndicator } from "../wizard/StepIndicator";
 import { StepStore } from "../wizard/StepStore";
 import { StepTradeArea } from "../wizard/StepTradeArea";
+import { StepSpace } from "../wizard/StepSpace";
 import { StepDonorMarket } from "../wizard/StepDonorMarket";
 import { StepCostSchedule } from "../wizard/StepCostSchedule";
 import { StepReview } from "../wizard/StepReview";
@@ -112,6 +114,45 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
     if (vm) resultHeadingRef.current?.focus();
   }, [vm]);
   const generateStatus = vm ? "Projection ready." : busy ? "Generating your projection…" : "";
+
+  // #245 — pre-fill rent on the Space & rent step from the server research endpoint
+  // (extract-only, off the compute hot path). Fires once per resolved-location +
+  // size + lease-basis key (a ref guards against refetch loops). With AI disabled,
+  // or no resolved location, we skip the call and the field stays the anchored
+  // benchmark / manual entry (CLAUDE.md "AI opt-out works end-to-end"). A failure
+  // degrades to manual — research NEVER blocks the wizard (API_SPEC §19.2).
+  const researchedKey = useRef<string | null>(null);
+  const { stepKey, resolved, draft, applyRentResearch, onRentResearchStart, onRentResearchError } =
+    wiz;
+  const buildingSqft = draft.buildingSqft;
+  const leaseType = draft.leaseType;
+  useEffect(() => {
+    if (stepKey !== "space" || aiOff || !resolved || !(buildingSqft > 0)) return;
+    const basis = leaseType === "gross" ? "gross" : "nnn";
+    const key = `${resolved.location.place_id}|${buildingSqft}|${basis}`;
+    if (researchedKey.current === key) return;
+    researchedKey.current = key;
+    onRentResearchStart();
+    researchRent({
+      buildingSqft,
+      location: {
+        geography_name: resolved.trade_area.geography_name,
+        formatted_address: resolved.location.formatted_address,
+      },
+      basis,
+    })
+      .then((r) => applyRentResearch(r))
+      .catch(() => onRentResearchError());
+  }, [
+    stepKey,
+    resolved,
+    buildingSqft,
+    leaseType,
+    aiOff,
+    applyRentResearch,
+    onRentResearchStart,
+    onRentResearchError,
+  ]);
 
   // --- Penny (DRAFT mode) ↔ wizard bridge (Spec §5.2) ------------------------
   // She fills/refines any wizard field and builds the cost schedule by mutating the
@@ -402,6 +443,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
       >
         {wiz.stepKey === "store" && <StepStore state={wiz} />}
         {wiz.stepKey === "trade-area" && <StepTradeArea state={wiz} />}
+        {wiz.stepKey === "space" && <StepSpace state={wiz} />}
         {wiz.stepKey === "donor-market" && <StepDonorMarket state={wiz} />}
         {wiz.stepKey === "cost" && <StepCostSchedule state={wiz} />}
         {wiz.stepKey === "review" && <StepReview state={wiz} />}

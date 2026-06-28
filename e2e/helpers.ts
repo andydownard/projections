@@ -50,6 +50,16 @@ const PREDICTIONS = {
   predictions: [{ description: "123 Main St, Longview, TX, USA", place_id: "test-place-1" }],
 };
 
+// A deterministic rent-research result (#245). CI has no AI key, so the server
+// already returns the labeled $12 benchmark — this stub just makes the Space & rent
+// step's pre-fill deterministic and instant regardless of provider config.
+const RESEARCH_BENCHMARK = {
+  rent_per_sqft: 12.0, estimate: 12.0, low: 8.0, high: 16.0,
+  rent_type: "nnn", opex: 3.0, basis: "$/sq ft/yr",
+  confidence: "low", verified: false, provenance: "estimated",
+  sources: [], ai_enabled: false, cached: false,
+};
+
 /** Stub the server-proxied Places + Census endpoints (CI has no Google/Census key). */
 export async function mockPlaces(page: Page): Promise<void> {
   await page.route("**/api/places/autocomplete", (route) =>
@@ -57,6 +67,10 @@ export async function mockPlaces(page: Page): Promise<void> {
   );
   await page.route("**/api/places/resolve", (route) =>
     route.fulfill({ json: RESOLVED_TRADE_AREA }),
+  );
+  // The Space & rent step (#245) pre-fills rent from POST /api/research.
+  await page.route("**/api/research", (route) =>
+    route.fulfill({ json: RESEARCH_BENCHMARK }),
   );
 }
 
@@ -82,13 +96,18 @@ export async function createProjectionViaWizard(
   await expect(page.getByLabel("Households (trade area)")).toHaveValue("31798");
   await page.getByRole("button", { name: "Next" }).click();
 
-  // Step 3 — Donor market: three explicit shares are pre-filled (6/8/10).
+  // Step 3 — Space & rent (#245): sq ft / salesfloor / rent default-valid; rent
+  // pre-fills from the (stubbed) research benchmark. Defaults pass straight through.
+  await expect(page.getByLabel(/building size/i)).toHaveValue("10000");
   await page.getByRole("button", { name: "Next" }).click();
 
-  // Step 4 — Cost schedule: the default month-1 lump rows are valid.
+  // Step 4 — Donor market: three explicit shares are pre-filled (6/8/10).
   await page.getByRole("button", { name: "Next" }).click();
 
-  // Step 5 — Review: terms is an EXPLICIT, active accept (#141 / PRD §21) that
+  // Step 5 — Cost schedule: the default month-1 lump rows are valid.
+  await page.getByRole("button", { name: "Next" }).click();
+
+  // Step 6 — Review: terms is an EXPLICIT, active accept (#141 / PRD §21) that
   // gates Generate; the seeded `example` predates this, so a fresh create is the
   // only path that exercises terms_accepted -> a 200 (not 403) .xlsx export.
   await page.getByRole("checkbox", { name: /planning estimates/i }).check();

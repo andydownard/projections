@@ -1,7 +1,7 @@
 # ENGINE_CONTRACT.md — The Math Authority
 
 > **Status:** Build spec (ready-to-build, not yet built) · **Repo:** `rallytasks/projections` · **Owner:** Andy Downard
-> **Model version this contract defines:** `model_version = "2.4.0"` · `compute_schema_version = "1.2.0"` (2.4.0: `first_year_cash_gap` is scoped **strictly** to the operating Year-1 window `G..G+11`, so a scheduled cost beyond `G+11` no longer leaks its deeper trough into the first-year headline (#182); `cash_runway_months` ignores leading zero-cost pre-opening months instead of trivially reporting `1` (#184); 2.3.0: downside sensitivity rent stress applied to the **resolved** occupancy — `rent_per_sqft` and `nnn` opex are stressed too, not just `occupancy_annual` (#181); 2.2.0: multi-month pre-opening timeline + scheduled costs + 3 milestones; schema 1.2.0: view-model `milestones` block + Payback-period KPI, monthly `scheduledCosts`)
+> **Model version this contract defines:** `model_version = "2.5.0"` · `compute_schema_version = "1.3.0"` (2.5.0: **Utilities/trash service** stops being a flat fixed-$ line and is **derived** as `UTILITIES_PER_SQFT × building_sqft` — the SAME pinnable line + slot, now sq-ft-scaled; the default cost-schedule seed scales **Equipment & Fixtures** + **Build-out** as `FIXTURES_PER_SQFT`/`BUILDOUT_PER_SQFT × building_sqft`; all three **anchored** so the example's 10,000 sq ft reproduces today's literals byte-for-byte (#245); schema 1.3.0: view-model `settings.utilitiesPerSqft` + `settings.rentPerSqft` additive scalars; 2.4.0: `first_year_cash_gap` is scoped **strictly** to the operating Year-1 window `G..G+11`, so a scheduled cost beyond `G+11` no longer leaks its deeper trough into the first-year headline (#182); `cash_runway_months` ignores leading zero-cost pre-opening months instead of trivially reporting `1` (#184); 2.3.0: downside sensitivity rent stress applied to the **resolved** occupancy — `rent_per_sqft` and `nnn` opex are stressed too, not just `occupancy_annual` (#181); 2.2.0: multi-month pre-opening timeline + scheduled costs + 3 milestones; schema 1.2.0: view-model `milestones` block + Payback-period KPI, monthly `scheduledCosts`)
 > **Source of truth for requirements:** [`PRD.md`](reference/PRD.md) (cited inline as §) and [`methodology.md`](reference/thrift-store-projections-skill/reference/methodology.md).
 > **Sibling docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [BUILD_PLAN.md](BUILD_PLAN.md) · [DATA_MODEL.md](DATA_MODEL.md) · [API_SPEC.md](API_SPEC.md) · [SECURITY.md](SECURITY.md) · [OPS_RUNBOOK.md](OPS_RUNBOOK.md) · [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CLAUDE.md](CLAUDE.md) · [AGENTS.md](AGENTS.md) · [IDEA_FAB.md](IDEA_FAB.md)
 
@@ -85,17 +85,30 @@ PAYROLL_TAX_PCT_OF_PAYROLL= 0.075    # §7.3
 # --- occupancy
 RENT_ESCALATOR            = 0.03     # §7.3 — compound, Y2–Y3 (resolved §1)
 
-# --- fixed annual operating $ (unchanged from engine; not %-based)
+# --- sq-ft scaling basis (#245). Example store = 10,000 sq ft; each per-sq-ft
+# constant is the example literal / 10,000, ANCHORED so that × 10,000 reproduces
+# today's literal exactly. No formula hard-codes the literal.
+EXAMPLE_BUILDING_SQFT     = 10000    # reference/.../house_of_hope.json sqft
+UTILITIES_PER_SQFT        = "2.23"   # 22,300 / 10,000  (utilities/trash, $/sqft/yr)
+FIXTURES_PER_SQFT         = "4.50"   # 45,000 / 10,000  (Equipment & Fixtures, $/sqft)
+BUILDOUT_PER_SQFT         = "5.00"   # 50,000 / 10,000  (Build-out / Renovations / TI)
+DEFAULT_RENT_PER_SQFT     = "12.00"  # AI-off manual default — 120,000 / 10,000 (parity)
+
+# --- fixed annual operating $ (not %-based)
 FIXED_ANNUAL = {
     "Insurance liability":      2000,   # methodology line 24
     "Internet, Phones":         3000,
     "Pest control":              300,
     "Repairs/maintenance":      1600,
     "Security system":           900,
-    "Utilities/trash service": 22300,
-}   # NOTE: "Store/office supplies" $3,700 is REMOVED — now SUPPLIES_PCT
+}   # NOTE: "Store/office supplies" $3,700 REMOVED (now SUPPLIES_PCT);
+    # "Utilities/trash service" REMOVED here — now DERIVED as UTILITIES_PER_SQFT ×
+    # building_sqft in compute (#245), keeping its same pinnable line + EXPENSE_ORDER slot.
 
-# --- one-time startup (Year 0)
+# --- one-time startup (Year 0). Equipment & Fixtures / Build-out are the per-sq-ft
+# anchor source: at EXAMPLE_BUILDING_SQFT they equal FIXTURES_PER_SQFT/BUILDOUT_PER_SQFT
+# × sqft. The default cost-schedule SEED scales them by building_sqft; this no-schedule
+# lump stays at the example basis. (DECISION #245: seed change, not engine-resolution.)
 STARTUP = {
     "Thrift Store Consultant":                         100000,  # methodology line 43
     "Equipment & Fixtures":                              45000,
@@ -174,7 +187,7 @@ If `lease_type == "nnn"`, add researched/entered NNN opex to occupancy (§7.3, �
 | Pest control | fixed | $300 |
 | Repairs/maintenance | fixed | $1,600 |
 | Security system | fixed | $900 |
-| Utilities/trash service | fixed | $22,300 |
+| **Utilities/trash service** *(sq-ft-derived, #245)* | `building_sqft × UTILITIES_PER_SQFT` (flat across years — sq ft drives it, not the rent escalator) | $2.23/sqft → $22,300 at 10k |
 
 ```
 total_exp[y] = sum(all expense lines above)

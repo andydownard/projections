@@ -120,10 +120,11 @@ def test_view_model_is_json_serializable(canonical_result):
 
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
-    assert vm["model_version"] == "2.4.0"
-    # Adding the milestones block + replacing the simple-payback KPI is a view-model
-    # SHAPE change (no math change) -> COMPUTE_SCHEMA_VERSION bumps to 1.2.0.
-    assert vm["compute_schema_version"] == "1.2.0"
+    assert vm["model_version"] == "2.5.0"
+    # 1.3.0: settings gained utilitiesPerSqft + rentPerSqft (additive shape change).
+    assert vm["compute_schema_version"] == "1.3.0"
+    assert "utilitiesPerSqft" in vm["settings"]
+    assert "rentPerSqft" in vm["settings"]
 
 
 # ----------------------------------------------------- three milestones (§8, #117)

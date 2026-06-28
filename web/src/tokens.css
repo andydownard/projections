@@ -810,6 +810,99 @@ body {
   color: var(--warning);
 }
 
+/* --- Space & rent step: sq-ft cost assumptions + provenance (#245) --- */
+.wizard__field-hint {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Grouped, adjustable cost assumptions (rent / utilities / fixtures) each STATING
+ * its provenance — a bordered group so it reads as the "where these came from" block. */
+.space-assumptions {
+  margin: 1rem 0 0;
+  padding: 0.75rem 1rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.space-assumptions > legend {
+  padding: 0 0.4rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.assumption {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0;
+}
+.assumption + .assumption {
+  border-top: 1px solid var(--line);
+}
+
+.assumption__provenance {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.assumption__provenance--manual {
+  color: var(--warning);
+}
+.assumption__source {
+  font-weight: 600;
+  color: var(--text);
+}
+.assumption__range {
+  color: var(--text-muted);
+}
+
+/* Verified-vs-estimated badge: icon + TEXT (never color-only), with a subtle tint. */
+.assumption__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.assumption__badge--verified {
+  color: var(--brand-deep);
+  background: color-mix(in srgb, var(--brand-primary) 12%, transparent);
+}
+.assumption__badge--estimated {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+}
+
+.assumption__warn {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--warning);
+}
+
+.assumption__sources {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.assumption__sources > summary {
+  cursor: pointer;
+}
+
+.assumption__hint {
+  margin: 0;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
 /* --- Settings & assumptions tab (SLICE 4) --- */
 /* Review-first on mobile-375: status banner above the slider controls. */
 .settings-tab {
