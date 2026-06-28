@@ -10,8 +10,20 @@ dbs:
         bucket: ${LITESTREAM_BUCKET}
         # Path prefix isolates this DB within a shared bucket (Cloudflare R2).
         path: ${LITESTREAM_PATH}
+        # Cloudflare R2 is S3-compatible but requires PATH-STYLE addressing with
+        # the ACCOUNT endpoint as host (bucket in the path, NOT the hostname):
+        #   endpoint = https://<accountid>.r2.cloudflarestorage.com   (no bucket)
+        #   region   = auto
+        # Without force-path-style the AWS SDK defaults to VIRTUAL-HOSTED style
+        # (bucket.<accountid>.r2.cloudflarestorage.com) and signs the request for a
+        # different host than it sends to → R2 returns `SignatureDoesNotMatch` (403),
+        # which crash-looped prod. force-path-style makes the signed host match.
+        # NOTE: litestream uses S3-style creds — a dedicated R2 *S3 API token*
+        # (Access Key ID + Secret Access Key) scoped to projections-db-backups —
+        # NOT a Cloudflare `cfut_` user API token.
         endpoint: ${LITESTREAM_ENDPOINT}
         region: ${LITESTREAM_REGION}
+        force-path-style: true
         access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
         secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
         # Retention/purge limits are bounded and disclosed to users (PRD §21).

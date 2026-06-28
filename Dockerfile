@@ -47,8 +47,10 @@ ENV DB_BACKEND=sqlite
 ENV DB_PATH=/data/projections.db
 
 EXPOSE 8000
-# Boot order: (restore from R2 if volume lost) -> migrate -> validate -> serve,
-# running uvicorn UNDER `litestream replicate` when LITESTREAM_BUCKET is set so
-# every WAL change streams to R2. start.sh binds Railway's injected $PORT (a
-# hardcoded port makes the /api/health check fail even though the app booted).
+# Boot order: (best-effort restore from R2 if volume lost) -> exec uvicorn ->
+# migrate -> validate -> serve. UVICORN is the FOREGROUND/main process; when
+# LITESTREAM_BUCKET is set, `litestream replicate` runs as a BEST-EFFORT
+# BACKGROUND process so a backup/R2 error logs but NEVER crashes the container
+# (see start.sh). start.sh binds Railway's injected $PORT (a hardcoded port makes
+# the /api/health check fail even though the app booted).
 CMD ["/usr/local/bin/start.sh"]

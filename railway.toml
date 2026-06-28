@@ -14,9 +14,10 @@ watchPatterns = ["**"]
 
 [deploy]
 # NO startCommand here on purpose: the Docker image's start.sh entrypoint runs
-# uvicorn UNDER `litestream replicate` and binds ${PORT:-8000}. A startCommand
-# would override start.sh and disable continuous backups. The service has a
-# PORT var so the container binds the port Railway routes the healthcheck to.
+# uvicorn as the FOREGROUND process and `litestream replicate` as a BEST-EFFORT
+# BACKGROUND process, binding ${PORT:-8000}. A startCommand would override
+# start.sh and disable continuous backups. The service has a PORT var so the
+# container binds the port Railway routes the healthcheck to.
 healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 numReplicas = 1
