@@ -89,11 +89,58 @@ def test_preview_building_sqft_scales_the_default_fallback(client):
     assert r.json()["grandTotal"] == {"raw": 303500.0, "display": "$303,500"}
 
 
-def test_preview_stamps_model_version(client):
+def test_preview_stamps_model_and_schema_version(client):
     from engine import model
 
     r = client.post("/api/cost-schedule/preview", json={"cost_schedule": []})
-    assert r.json()["modelVersion"] == model.MODEL_VERSION
+    data = r.json()
+    assert data["modelVersion"] == model.MODEL_VERSION
+    assert data["computeSchemaVersion"] == model.COMPUTE_SCHEMA_VERSION
+
+
+def test_preview_formats_negative_amounts_in_parentheses(client):
+    # A credit/refund row is negative; the server's format authority renders it in
+    # accounting parentheses ("($5,000)"), never a bare minus the client must style.
+    body = {"cost_schedule": [
+        {"category": "Equipment", "month": 1, "amount": 45000},
+        {"category": "Vendor refund", "month": 1, "amount": -5000},
+    ]}
+    r = client.post("/api/cost-schedule/preview", json=body)
+    assert r.status_code == 200
+    data = r.json()
+    refund = next(row for row in data["rowTotals"] if row["category"] == "Vendor refund")
+    assert refund["total"] == {"raw": -5000.0, "display": "($5,000)"}
+    assert data["grandTotal"] == {"raw": 40000.0, "display": "$40,000"}
+
+
+def test_preview_column_totals_are_ascending_regardless_of_input_order(client):
+    body = {"cost_schedule": [
+        {"category": "A", "month": 3, "amount": 300},
+        {"category": "A", "month": 1, "amount": 100},
+        {"category": "A", "month": 2, "amount": 200},
+    ]}
+    r = client.post("/api/cost-schedule/preview", json=body)
+    assert [c["month"] for c in r.json()["columnTotals"]] == [1, 2, 3]
+
+
+def test_preview_ignores_unknown_row_fields(client):
+    # Rows may carry client-only metadata (provenance, note); extra="ignore" drops
+    # it so a richer client payload never 422s the read-only preview.
+    body = {"cost_schedule": [
+        {"category": "A", "month": 1, "amount": 1000,
+         "note": "from proposal", "provenance": {"source": "ai"}},
+    ]}
+    r = client.post("/api/cost-schedule/preview", json=body)
+    assert r.status_code == 200
+    assert r.json()["grandTotal"] == {"raw": 1000.0, "display": "$1,000"}
+
+
+def test_preview_keeps_sub_dollar_raw_but_rounds_display_half_up(client):
+    # raw preserves the exact value; display is whole-dollars half-up (the engine's
+    # money rounding) — the client renders display and never re-rounds.
+    body = {"cost_schedule": [{"category": "A", "month": 1, "amount": "100.50"}]}
+    r = client.post("/api/cost-schedule/preview", json=body)
+    assert r.json()["grandTotal"] == {"raw": 100.5, "display": "$101"}
 
 
 def test_preview_is_rate_limited_per_ip(client):
