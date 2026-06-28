@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TopBar } from "./TopBar";
 
 // Component + a11y tests for the single shared top bar (W1). The brand text is
-// "Store Projections"; the docked Idea Fab lightbulb is in the tab order, opens
-// the existing FeedbackModal on Enter/click, closes on Esc, and restores focus
-// to the trigger. The version chip is server-owned; the save-label is a live
-// region; meaning carries text, not color alone.
+// "Store Projections"; the docked "App suggestion" button is in the tab order,
+// opens the existing FeedbackModal on Enter/click, closes on Esc, and restores
+// focus to the trigger. The model version is no longer displayed (#38); the
+// save-label is a live region; meaning carries text, not color alone.
 
 describe("TopBar", () => {
   it("renders as a banner landmark with the 'Store Projections' brand", () => {
@@ -26,19 +26,12 @@ describe("TopBar", () => {
     expect(screen.getByRole("img", { name: /thriftly/i })).toBeInTheDocument();
   });
 
-  it("shows no version chip until a projection loads (no 'model —' placeholder)", () => {
-    render(<TopBar />);
+  it("never renders a model-version chip (#38 — model_version stays on computed_json, not the UI)", () => {
+    // The model version is no longer displayed anywhere. Even with the save chip
+    // active, no "model x.y.z" chip is rendered.
+    render(<TopBar saveState="saved" />);
     expect(screen.queryByTestId("version-chip")).not.toBeInTheDocument();
-  });
-
-  it("renders the server-provided model version verbatim", () => {
-    render(<TopBar modelVersion="2.0.0" />);
-    expect(screen.getByTestId("version-chip")).toHaveTextContent("model 2.0.0");
-  });
-
-  it("the version chip has an accessible label", () => {
-    render(<TopBar modelVersion="2.0.0" />);
-    expect(screen.getByLabelText(/model version/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^model\s/i)).not.toBeInTheDocument();
   });
 
   it("renders the autosave label as a polite live region when saving", () => {
@@ -100,9 +93,9 @@ describe("TopBar", () => {
     it("reads as a button with a visible label, not a bare icon", () => {
       render(<TopBar />);
       const fab = screen.getByRole("button", { name: /send feedback/i });
-      // A visible text label ("Idea") sits beside the lightbulb so the control is
-      // obviously tappable — not an unlabelled glyph.
-      expect(fab).toHaveTextContent(/idea/i);
+      // A visible text label ("App suggestion") sits beside the lightbulb so the
+      // control is obviously tappable — not an unlabelled glyph (#2).
+      expect(fab).toHaveTextContent(/app suggestion/i);
       expect(fab).toHaveClass("idea-fab");
     });
 

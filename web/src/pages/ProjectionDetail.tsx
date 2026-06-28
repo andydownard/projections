@@ -216,12 +216,10 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     };
   }, [slug]);
 
-  // Publish the detail-only header chips (model version + autosave state) to the
-  // shared TopBar (#150). The shell also gates these on the detail route, but we
-  // reset on unmount so nothing lingers after navigating away.
-  useEffect(() => {
-    setDetailHeader({ modelVersion: vm?.model_version });
-  }, [vm?.model_version]);
+  // Publish the detail-only autosave chip to the shared TopBar (#150). The shell
+  // also gates this on the detail route, but we reset on unmount so nothing lingers
+  // after navigating away. The model_version is NO LONGER displayed (#38) — it
+  // stays on vm.model_version / computed_json, just never rendered as a chip.
   useEffect(() => {
     setDetailHeader({ saveState: edit ? labelToSaveState(saveLabel) : "idle" });
   }, [edit, saveLabel]);

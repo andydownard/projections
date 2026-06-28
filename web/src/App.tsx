@@ -29,10 +29,11 @@ export function App() {
   useSyncExternalStore(subscribe, getSnapshot);
   const route = parseRoute(window.location.pathname, window.location.search);
 
-  // The model-version / save-state chips are DETAIL-PAGE-ONLY (DESIGN_PROMPT
-  // header anchor, #150). The detail page publishes them to a tiny external store;
-  // the shell reads them here and passes them to the single shared TopBar, gated
-  // on the detail route so a chip never leaks onto home/wizard/role.
+  // The save-state chip is DETAIL-PAGE-ONLY (DESIGN_PROMPT header anchor, #150).
+  // The detail page publishes it to a tiny external store; the shell reads it here
+  // and passes it to the single shared TopBar, gated on the detail route so the
+  // chip never leaks onto home/wizard/role. The model_version is no longer shown
+  // anywhere (#38) — it stays on computed_json; only the display is gone.
   const detailHeader = useDetailHeader();
   const isDetail = route.kind === "detail";
 
@@ -41,10 +42,7 @@ export function App() {
       <a className="skip-link" href="#main">
         Skip to content
       </a>
-      <TopBar
-        modelVersion={isDetail ? detailHeader.modelVersion : undefined}
-        saveState={isDetail ? detailHeader.saveState : "idle"}
-      />
+      <TopBar saveState={isDetail ? detailHeader.saveState : "idle"} />
       <main id="main" className="app__main" tabIndex={-1}>
         {route.kind === "home" && <ListPage />}
         {route.kind === "wizard" && <CreateProjectionPage aiOff={route.aiOff} />}

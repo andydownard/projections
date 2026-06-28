@@ -342,7 +342,12 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
             <h1
               ref={resultHeadingRef}
               tabIndex={-1}
-              style={{ outline: "none", margin: "0 0 1rem", fontSize: "1.5rem", lineHeight: 1.25 }}
+              style={{
+                outline: "none",
+                margin: "0 0 1rem",
+                fontSize: "var(--text-lg)",
+                lineHeight: 1.25,
+              }}
             >
               {vm.name?.trim() ? `${vm.name} — projection ready` : "Your projection is ready"}
             </h1>
@@ -413,7 +418,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
             alignItems: "center",
             gap: "0.25rem",
             margin: "0 0 0.5rem",
-            fontSize: "0.8125rem",
+            fontSize: "var(--text-base)",
             color: "var(--text-muted)",
             textDecoration: "none",
           }}
@@ -496,7 +501,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
                   alignItems: "flex-start",
                   margin: "0.75rem 0 0",
                   maxWidth: "52ch",
-                  fontSize: "0.8125rem",
+                  fontSize: "var(--text-base)",
                   lineHeight: 1.45,
                   color: "var(--text-muted)",
                 }

@@ -13,6 +13,7 @@ import {
   basisLabel,
   householdsSourceLabel,
 } from "../components/displayLabels";
+import { formatCount } from "../format";
 import type { WizardState } from "./useWizardState";
 
 export function StepReview({ state }: { state: WizardState }) {
@@ -40,14 +41,14 @@ export function StepReview({ state }: { state: WizardState }) {
         <div className="wizard-review__row">
           <dt>Households ({basisLabel(draft.basis)})</dt>
           <dd>
-            {householdsValue ?? "—"}
+            {householdsValue != null ? formatCount(householdsValue) : "—"}
             {householdsSource ? ` (${householdsSourceLabel(householdsSource)})` : ""}
           </dd>
         </div>
         <div className="wizard-review__row">
           <dt>Space (building / sales floor)</dt>
           <dd>
-            {draft.buildingSqft.toLocaleString()} sq ft · {draft.salesfloorPct}% sales floor
+            {formatCount(draft.buildingSqft)} sq ft · {draft.salesfloorPct}% sales floor
           </dd>
         </div>
         <div className="wizard-review__row">

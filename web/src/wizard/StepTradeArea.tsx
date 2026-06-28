@@ -5,6 +5,7 @@
 // user may overwrite it (-> user_edited). A Places/Census failure makes the
 // field manually editable (-> manual). No client math — the count is the
 // server-derived Census value, editable by the operator (PRD §13).
+import { formatCount } from "../format";
 import type { WizardState } from "./useWizardState";
 
 const BASES = ["city", "county"] as const;
@@ -69,7 +70,7 @@ export function StepTradeArea({ state }: { state: WizardState }) {
 
         {resolved && householdsSource === "census_acs" && householdsValue !== null && (
           <p className="places__provenance">
-            {householdsValue} households · {resolved.trade_area.geography_name} · U.S.
+            {formatCount(householdsValue)} households · {resolved.trade_area.geography_name} · U.S.
             Census ACS {resolved.trade_area.acs_vintage}
             {resolved.trade_area.moe !== null ? ` · ±${resolved.trade_area.moe} (MOE)` : ""} ·
             estimate
