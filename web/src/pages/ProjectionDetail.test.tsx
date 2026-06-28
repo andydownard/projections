@@ -261,7 +261,10 @@ describe("ProjectionDetail — per-field change affordance (PE7, #126)", () => {
       );
       expect(patchCall).toBeTruthy();
       const opts = patchCall![1] as RequestInit;
-      expect(JSON.parse(opts.body as string)).toEqual({ inputs: { demand: { share_y1: 0.06 } } });
+      // Donor shares PATCH as a flat `inputs.share_yN` (an engine Inputs field).
+      // The old nested `inputs.demand.share_y1` shape 422'd at the real merge path
+      // (Inputs(**{demand: ...}) -> unknown kwarg), so the undo could never settle.
+      expect(JSON.parse(opts.body as string)).toEqual({ inputs: { share_y1: 0.06 } });
       expect((opts.headers as Record<string, string>)["If-Match"]).toBe("4");
     });
 
