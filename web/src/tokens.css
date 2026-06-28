@@ -581,7 +581,8 @@ body {
 }
 
 .wizard__actions,
-.wizard__shortcut {
+.wizard__shortcut,
+.wizard__result-actions {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;

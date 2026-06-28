@@ -9,7 +9,7 @@
 // returns the Appendix-D view-model, which renders the decision banner + KPI
 // strip + monthly cash-flow. NO client math — every figure is the server's
 // { display } string (PRD §13 / CLAUDE.md hard rule).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import type { PennyDraftApplied, PennyDraftState } from "../api/penny";
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
@@ -243,6 +243,19 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
     }
   }
 
+  // Open the just-created projection's full editable surface (3-year table, evidence,
+  // trade-area map, Settings sliders) so the create → review → refine loop closes
+  // here instead of forcing a trip through Home. The owner token minted on Generate
+  // is already persisted (setOwnerToken), so /p/<slug>/edit is owner-authorized with
+  // no secret in the URL — the same path the owner list's Edit uses (#143). A modified
+  // click (new tab/window) or non-primary button falls through to the real href.
+  function openProjection(e: MouseEvent<HTMLAnchorElement>, slug: string) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    window.history.pushState(null, "", `/p/${slug}/edit`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+
   async function startFromExample() {
     setBusy(true);
     try {
@@ -317,15 +330,29 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
             milestones={vm.milestones}
           />
 
-          <a
-            className="btn"
-            role="button"
-            data-testid="download-xlsx"
-            href={xlsxHref(vm.view_slug)}
-            download
-          >
-            Download .xlsx
-          </a>
+          <div className="wizard__result-actions">
+            {/* Close the create → review → refine loop: the primary action opens the
+                full editable projection (3-year table + Settings sliders) so the ED
+                can act on a "Revise"/"Find cheaper rent" verdict without hunting the
+                Home list. The .xlsx export stays as the secondary action. */}
+            <a
+              className="btn btn--primary"
+              data-testid="open-projection"
+              href={`/p/${vm.view_slug}/edit`}
+              onClick={(e) => openProjection(e, vm.view_slug)}
+            >
+              Open full projection
+            </a>
+            <a
+              className="btn"
+              role="button"
+              data-testid="download-xlsx"
+              href={xlsxHref(vm.view_slug)}
+              download
+            >
+              Download .xlsx
+            </a>
+          </div>
           </div>
         </div>
       </>

@@ -49,6 +49,21 @@ export function basisLabel(basis: string | null | undefined): string {
   return BASIS_LABELS[basis] ?? titleCase(basis);
 }
 
+// Known households-source codes → human labels. Mirrors the trade-area provenance
+// language in StepTradeArea so the wizard Review never shows a raw enum (#151).
+// Unknown codes fall through to a title-cased form so a future code can never leak.
+const HOUSEHOLDS_SOURCE_LABELS: Record<string, string> = {
+  census_acs: "U.S. Census",
+  user_edited: "Edited",
+  manual: "Entered manually",
+};
+
+/** Human label for a households-source enum code (presentation only). */
+export function householdsSourceLabel(source: string | null | undefined): string {
+  if (!source) return "";
+  return HOUSEHOLDS_SOURCE_LABELS[source] ?? titleCase(source);
+}
+
 function titleCase(code: string): string {
   return code.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }

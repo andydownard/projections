@@ -222,6 +222,44 @@ describe("CreateProjectionPage — full flow to Generate", () => {
   });
 });
 
+// The post-Generate result must offer a way INTO the full editable projection so
+// the create → review → refine loop closes here (act on a "Revise"/"Find cheaper
+// rent" verdict) instead of routing through Home. The link targets the owner-
+// authorized edit surface (/p/<slug>/edit) and SPA-navigates (no full reload).
+describe("CreateProjectionPage — open full projection link (refine loop)", () => {
+  async function stepToResult(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
+    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
+    await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+    await waitFor(() =>
+      expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"),
+    );
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> cost schedule
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> review
+    await user.click(screen.getByRole("checkbox", { name: /planning estimates/i }));
+    await user.click(screen.getByRole("button", { name: /generate/i }));
+    await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
+  }
+
+  it("links the result to the editable full projection at /p/<slug>/edit", async () => {
+    window.history.pushState(null, "", "/wizard");
+    wireFetch({});
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToResult(user);
+
+    const open = screen.getByTestId("open-projection");
+    // The real href is the owner-authorized edit surface (works for new tab / right-click).
+    expect(open).toHaveAttribute("href", "/p/p_new/edit");
+    // A plain left-click SPA-navigates (no full reload) to that route.
+    await user.click(open);
+    expect(window.location.pathname).toBe("/p/p_new/edit");
+    window.history.pushState(null, "", "/");
+  });
+});
+
 // #203 — on Generate, swapping the form for the result must NOT strand focus
 // (the Generate button unmounts → focus reverts to <body>) and must announce
 // completion to AT (no aria-live → a screen-reader user never hears the
