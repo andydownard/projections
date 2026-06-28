@@ -18,6 +18,7 @@ from app.store.migrations import (
     m0007_revision_seq_unique,
     m0008_card_summary,
     m0009_role_links,
+    m0010_clerk_owner,
 )
 
 # Ordered list of (name, ddl) migrations. Append-only.
@@ -31,4 +32,5 @@ MIGRATIONS = [
     ("0007_revision_seq_unique", m0007_revision_seq_unique.SQL),
     ("0008_card_summary", m0008_card_summary.SQL),
     ("0009_role_links", m0009_role_links.SQL),
+    ("0010_clerk_owner", m0010_clerk_owner.SQL),
 ]

@@ -30,7 +30,14 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
 from app import config, narrative_provider, ratelimit
-from app.deps import hash_token, parse_if_match, token_matches
+from app.deps import (
+    CapabilityBearer,
+    ClerkOwner,
+    hash_token,
+    parse_if_match,
+    resolve_bearer_identity,
+    token_matches,
+)
 from app.geo.client import GeoUpstreamError, static_map_bytes
 from app.jsonutil import loads_obj
 from app.narrative import (
@@ -172,16 +179,34 @@ def _is_editor(token: Optional[str], row: dict) -> bool:
     )
 
 
+def _clerk_owns(row: dict, ident: ClerkOwner) -> bool:
+    """A verified Clerk identity owns this row when its user (or org) id matches the
+    stamped owner column. NULL columns (token-owned rows) never match (the empty
+    string / None guards prevent a NULL == NULL cross-owner leak)."""
+    uid = row.get("owner_clerk_user_id")
+    if uid and ident.clerk_user_id and uid == ident.clerk_user_id:
+        return True
+    oid = row.get("owner_org_id")
+    if oid and ident.org_id and oid == ident.org_id:
+        return True
+    return False
+
+
 def _require_owner(store: Store, view_slug: str, authorization: Optional[str]) -> dict:
     """Load the projection and assert the bearer is the OWNER (owner-only routes).
 
-    Edit/view tokens get 403 owner_required (rotate/trash/restore/delete/revisions
-    are owner-scoped — API_SPEC §1.2). Unknown slug -> 404 (never reveal existence
-    beyond what the slug already grants).
+    Owner identity is a verified Clerk JWT (when ``CLERK_ENABLED``) OR the hashed
+    capability owner token — resolved COOKIE-BLIND from the Authorization header
+    only. Edit/view tokens get 403 owner_required (rotate/trash/restore/delete/
+    revisions are owner-scoped — API_SPEC §1.2). Unknown slug -> 404 (never reveal
+    existence beyond what the slug already grants).
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
+    identity = resolve_bearer_identity(authorization)
+    if isinstance(identity, ClerkOwner) and _clerk_owns(row, identity):
+        return row
     token = _bearer(authorization)
     if _is_owner(token, row):
         return row
@@ -644,9 +669,23 @@ def create_projection(
         ) from exc
     _enrich_view_model(vm, body.location.model_dump(), body.trade_area.model_dump())
 
-    presented_owner = _bearer(authorization)
+    # Resolve the caller COOKIE-BLIND: a verified Clerk owner (when CLERK_ENABLED),
+    # an opaque capability owner token, or anonymous. With Clerk off this is
+    # byte-for-byte today's behavior (every bearer is a capability token).
+    identity = resolve_bearer_identity(authorization)
     minted_owner = None
-    if presented_owner is None:
+    clerk_cols: dict[str, Any] = {}
+    if isinstance(identity, ClerkOwner):
+        # Clerk-owned: stamp the verified identity and still mint a capability owner
+        # token (the schema requires owner_token_hash; it is the recovery/claim seam).
+        presented_owner = secrets.token_urlsafe(32)
+        minted_owner = presented_owner
+        clerk_cols["owner_clerk_user_id"] = identity.clerk_user_id
+        if identity.org_id:
+            clerk_cols["owner_org_id"] = identity.org_id
+    elif isinstance(identity, CapabilityBearer):
+        presented_owner = identity.token  # join that token's workspace (unchanged)
+    else:  # Anonymous
         presented_owner = secrets.token_urlsafe(32)  # ~256-bit
         minted_owner = presented_owner
     owner_hash = hash_token(presented_owner)
@@ -678,6 +717,7 @@ def create_projection(
         "terms_accepted_at": now if body.terms_accepted else None,
         "created_at": now,
         "updated_at": now,
+        **clerk_cols,
         **_schedule_columns(inputs_dump),
     }
     store.create_projection(row)
@@ -699,13 +739,21 @@ def list_projections(
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
 ):
-    """Owner-scoped list (never global). No/invalid token -> empty list."""
-    owner = _bearer(authorization)
-    if owner is None:
-        return {"projections": []}
+    """Owner-scoped list (never global). No/invalid token -> empty list.
+
+    Owner identity is resolved COOKIE-BLIND from the Authorization header — a
+    verified Clerk owner (when CLERK_ENABLED) lists by ``owner_clerk_user_id``;
+    an opaque owner token lists by its hash (today's path); anything else is empty.
+    """
+    identity = resolve_bearer_identity(authorization)
     # #178: read the small denormalized card columns (summary_json) only — the store
     # never SELECTs or parses the full ~10KB computed_json per row for the owner list.
-    rows = store.list_card_summaries(hash_token(owner))
+    if isinstance(identity, ClerkOwner):
+        rows = store.list_card_summaries_by_clerk_owner(identity.clerk_user_id)
+    elif isinstance(identity, CapabilityBearer):
+        rows = store.list_card_summaries(hash_token(identity.token))
+    else:  # Anonymous
+        return {"projections": []}
     items = []
     for r in rows:
         summary = loads_obj(r.get("summary_json"))

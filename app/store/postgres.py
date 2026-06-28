@@ -41,6 +41,16 @@ class PostgresStore:
     ) -> list[dict]:
         self._stub("list_card_summaries")
 
+    def list_by_clerk_owner(
+        self, clerk_user_id: str, *, include_trashed: bool = False
+    ) -> list[dict]:
+        self._stub("list_by_clerk_owner")
+
+    def list_card_summaries_by_clerk_owner(
+        self, clerk_user_id: str, *, include_trashed: bool = False
+    ) -> list[dict]:
+        self._stub("list_card_summaries_by_clerk_owner")
+
     def create_projection(self, p: dict) -> dict:
         self._stub("create_projection")
 

@@ -62,6 +62,82 @@ def _missing_required(env: Mapping[str, str]) -> list[str]:
     return missing
 
 
+# --- Clerk satellite auth (SECURITY.md §2.6; ship-dark behind CLERK_ENABLED) ---
+# projections is a cross-apex Clerk SATELLITE. The backend verifies a Clerk session
+# JWT (JWKS-Bearer, cookie-blind) and holds NO Clerk secret (finding C1). Every var
+# is OPTIONAL when the kill switch is off, so an un-configured deployment boots and
+# behaves exactly as the capability-token app it is today.
+_CLERK_TRUTHY = ("1", "true", "yes", "on")
+
+# A satellite/daughter must NEVER hold a Clerk secret — verification is public-key
+# (JWKS) only. Boot refuses if either is present (security review finding C1).
+CLERK_FORBIDDEN_SECRETS = ("CLERK_SECRET_KEY", "CLERK_WEBHOOK_SIGNING_SECRET")
+
+# Required (in prod) ONLY when CLERK_ENABLED is truthy.
+CLERK_REQUIRED_WHEN_ENABLED = (
+    "CLERK_JWT_ISSUER",
+    "CLERK_PUBLISHABLE_KEY",
+    "CLERK_AUTHORIZED_PARTIES",
+)
+
+_DEFAULT_CLERK_LEEWAY_SECONDS = 10
+
+
+def clerk_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """The Clerk kill switch — strict truthy, read at call time (no caching).
+
+    Off/unset ⇒ the only auth path is the existing owner-bearer/capability token
+    (the app is unchanged). On ⇒ the auth dep ALSO accepts a verified Clerk JWT.
+    """
+    return _env(env).get("CLERK_ENABLED", "").strip().lower() in _CLERK_TRUTHY
+
+
+def clerk_config(env: Mapping[str, str] | None = None) -> dict:
+    """The single resolved view of the Clerk env (verify-side only).
+
+    Shape: ``{enabled, issuer, publishable_key, domain, sign_in_url,
+    authorized_parties[], leeway_seconds}``. No secret is ever surfaced. The
+    ``authorized_parties`` CSV becomes the ``azp`` allowlist; ``leeway_seconds``
+    is the ``exp``/``nbf`` clock-skew window (default 10s).
+    """
+    env = _env(env)
+    parties = [
+        p.strip()
+        for p in env.get("CLERK_AUTHORIZED_PARTIES", "").split(",")
+        if p.strip()
+    ]
+    try:
+        leeway = int(env.get("CLERK_JWT_LEEWAY_SECONDS", "") or _DEFAULT_CLERK_LEEWAY_SECONDS)
+        if leeway < 0:
+            leeway = _DEFAULT_CLERK_LEEWAY_SECONDS
+    except (TypeError, ValueError):
+        leeway = _DEFAULT_CLERK_LEEWAY_SECONDS
+    return {
+        "enabled": clerk_enabled(env),
+        "issuer": env.get("CLERK_JWT_ISSUER") or None,
+        "publishable_key": env.get("CLERK_PUBLISHABLE_KEY") or None,
+        "domain": env.get("CLERK_DOMAIN") or None,
+        "sign_in_url": env.get("CLERK_SIGN_IN_URL") or None,
+        "authorized_parties": parties,
+        "leeway_seconds": leeway,
+    }
+
+
+def _clerk_missing_required(env: Mapping[str, str]) -> list[str]:
+    """Names of Clerk vars required-but-unset (only when the kill switch is on)."""
+    if not clerk_enabled(env):
+        return []
+    return [name for name in CLERK_REQUIRED_WHEN_ENABLED if not env.get(name)]
+
+
+def _clerk_forbidden_present(env: Mapping[str, str]) -> list[str]:
+    """Names of forbidden Clerk SECRETS that are present (C1 guardrail).
+
+    Unconditional: a satellite never holds these, on or off.
+    """
+    return [name for name in CLERK_FORBIDDEN_SECRETS if env.get(name)]
+
+
 def validate_required(env: Mapping[str, str] | None = None) -> None:
     """Refuse to boot in production if any required var is unset.
 
@@ -72,12 +148,21 @@ def validate_required(env: Mapping[str, str] | None = None) -> None:
     env = _env(env)
     if not is_production(env):
         return
-    missing = _missing_required(env)
-    if missing:
-        raise ConfigError(
-            "Refusing to boot: required configuration is unset (no fallback "
-            "chains): " + ", ".join(missing)
-        )
+    missing = _missing_required(env) + _clerk_missing_required(env)
+    forbidden = _clerk_forbidden_present(env)
+    if missing or forbidden:
+        parts = []
+        if missing:
+            parts.append(
+                "required configuration is unset (no fallback chains): "
+                + ", ".join(missing)
+            )
+        if forbidden:
+            parts.append(
+                "forbidden Clerk secret(s) present — projections is a satellite and "
+                "holds NO Clerk secret (finding C1): " + ", ".join(forbidden)
+            )
+        raise ConfigError("Refusing to boot: " + "; ".join(parts))
 
 
 def build_sha(env: Mapping[str, str] | None = None) -> str:

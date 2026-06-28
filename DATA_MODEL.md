@@ -97,7 +97,11 @@ CREATE TABLE IF NOT EXISTS projections (
   opening_month_number INTEGER NOT NULL DEFAULT 1,  -- project month (>=1) opening lands on (frozen literal DEFAULT)
   cost_schedule_json   TEXT NOT NULL DEFAULT '[...]', -- [{category,month,amount}]; frozen month-1 lump (see 0005, #187)
   -- 0008: compact owner-list card summary, denormalized from computed_json at write time (#178).
-  summary_json         TEXT NOT NULL DEFAULT '{}'   -- {location,basis,y1_revenue,y1_net,capital_required,reco_tag,coords}
+  summary_json         TEXT NOT NULL DEFAULT '{}',  -- {location,basis,y1_revenue,y1_net,capital_required,reco_tag,coords}
+  -- 0010: Clerk satellite owner identity (Override SESSION / SECURITY §2.8). Nullable —
+  -- a row is token-owned (NULL) OR clerk-owned. Owner scope keys on these when CLERK_ENABLED.
+  owner_clerk_user_id  TEXT,                        -- Clerk `sub` (user id); NULL for token-owned rows
+  owner_org_id         TEXT                         -- Clerk `org_id` for org-scoped sessions (stored now; org lists later)
 );
 ```
 
@@ -126,14 +130,19 @@ CREATE TABLE IF NOT EXISTS projections (
 | `created_at` / `updated_at` | TEXT | App-set ISO-8601 UTC. |
 | `deleted_at` | TEXT, nullable | **Legacy** soft-delete marker (`status='trashed'` is the user-visible soft delete). The hard purge now **DELETEs the row outright** + cascades (§5.4, #202); reads still filter `deleted_at IS NULL` to exclude any legacy soft-deleted rows. |
 | `summary_json` | TEXT | **0008 (#178).** Compact owner-list card summary `{location, basis, y1_revenue, y1_net, capital_required, reco_tag, coords}`, denormalized from `computed_json` at write time. `list_card_summaries` SELECTs only this + the small identity columns so the owner list never `SELECT *` + parses the full ~10KB `computed_json` per row. See §4.10. |
+| `owner_clerk_user_id` | TEXT, nullable | **0010 (Clerk satellite, Override SESSION / [SECURITY.md](./SECURITY.md) §2.8).** The Clerk `sub` (user id) that owns the row when the owner signed in via Clerk (`CLERK_ENABLED`). NULL for the token-owned rows that exist today. v1 keys owner scope on this; `list_by_clerk_owner` / `list_card_summaries_by_clerk_owner` filter on it (never global). A projection is **token-owned OR clerk-owned**; a *claim* path that links a legacy token-owned row to a signed-in Clerk identity is a deliberate **follow-up** (these columns are its additive foundation). |
+| `owner_org_id` | TEXT, nullable | **0010.** The Clerk `org_id` for org-scoped sessions; stored now so org-scoped lists can ship without a second migration. NULL for personal/user-scoped and token-owned rows. |
 
 **Indexes:**
 ```sql
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projections_view_slug   ON projections(view_slug);
 CREATE INDEX        IF NOT EXISTS idx_projections_owner        ON projections(owner_token_hash, status, updated_at DESC);
 CREATE INDEX        IF NOT EXISTS idx_projections_edit         ON projections(edit_token_hash);
+-- 0010: back the Clerk-owner-scoped list (mirrors the token-owner index), never global.
+CREATE INDEX        IF NOT EXISTS idx_projections_clerk_owner  ON projections(owner_clerk_user_id, status, updated_at DESC);
+CREATE INDEX        IF NOT EXISTS idx_projections_clerk_org    ON projections(owner_org_id, status, updated_at DESC);
 ```
-The owner index backs the **owner-scoped list** (`GET /api/projections`) — there is **no global index of projections** (PRD §20). The list query is always `WHERE owner_token_hash = ? AND status = 'active' AND deleted_at IS NULL ORDER BY updated_at DESC`, and (since #178) selects **only** `view_slug, name, status, version, updated_at, summary_json` — never the heavy JSON blobs.
+The owner index backs the **owner-scoped list** (`GET /api/projections`) — there is **no global index of projections** (PRD §20). The list query is always `WHERE owner_token_hash = ? AND status = 'active' AND deleted_at IS NULL ORDER BY updated_at DESC`, and (since #178) selects **only** `view_slug, name, status, version, updated_at, summary_json` — never the heavy JSON blobs. **0010 (Clerk satellite):** when `CLERK_ENABLED` and the caller is a verified Clerk owner, the identical query keys on `owner_clerk_user_id` instead (`list_by_clerk_owner` / `list_card_summaries_by_clerk_owner`), backed by `idx_projections_clerk_owner` — still owner-scoped, still never global (Override TENANT).
 
 ### 3.2 `revisions` (append-only snapshots)
 
@@ -671,6 +680,10 @@ class Store(Protocol):
     def get_projection_by_role_slug(self, role_slug: str) -> Projection | None: ...  # O(1) role_links slug PK (#180)
     def list_by_owner(self, owner_token_hash: str, *, include_trashed: bool = False) -> list[Projection]: ...
     def list_card_summaries(self, owner_token_hash: str, *, include_trashed: bool = False) -> list[dict]: ...  # small card cols only (#178)
+    # 0010 Clerk satellite (Override SESSION / §2.8): owner-scope keyed on the verified
+    # Clerk identity instead of the hashed capability token. NEVER global (Override TENANT).
+    def list_by_clerk_owner(self, clerk_user_id: str, *, include_trashed: bool = False) -> list[Projection]: ...
+    def list_card_summaries_by_clerk_owner(self, clerk_user_id: str, *, include_trashed: bool = False) -> list[dict]: ...
     def create_projection(self, p: Projection) -> Projection: ...        # app-generated ULID + view_slug
     def update_with_version_check(self, id: str, expected_version: int,
                                   patch: ProjectionPatch) -> int: ...     # rows-affected; 0 -> 409
@@ -814,11 +827,15 @@ CREATE TABLE IF NOT EXISTS projections (
   target_opening_date TEXT,
   opening_month_number INTEGER NOT NULL DEFAULT 1,
   cost_schedule_json TEXT NOT NULL DEFAULT '[{"category": "Thrift Store Consultant", "month": 1, "amount": 100000}, {"category": "Equipment & Fixtures", "month": 1, "amount": 45000}, {"category": "Build-out / Renovations / Tenant Improvements", "month": 1, "amount": 50000}, {"category": "Legal, Permits, Insurance Setup, Signage", "month": 1, "amount": 13500}]',
-  summary_json TEXT NOT NULL DEFAULT '{}'         -- 0008: owner-list card summary, denormalized from computed_json (#178)
+  summary_json TEXT NOT NULL DEFAULT '{}',        -- 0008: owner-list card summary, denormalized from computed_json (#178)
+  owner_clerk_user_id TEXT,                        -- 0010: Clerk owner user id (Override SESSION / §2.8); NULL = token-owned
+  owner_org_id TEXT                                -- 0010: Clerk org id for org-scoped sessions
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projections_view_slug ON projections(view_slug);
 CREATE INDEX IF NOT EXISTS idx_projections_owner ON projections(owner_token_hash, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_projections_edit  ON projections(edit_token_hash);
+CREATE INDEX IF NOT EXISTS idx_projections_clerk_owner ON projections(owner_clerk_user_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_projections_clerk_org   ON projections(owner_org_id, status, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS revisions (
   id TEXT PRIMARY KEY,

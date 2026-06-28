@@ -14,11 +14,17 @@
 // "model —" placeholder). Feedback redaction is server-enforced; this component
 // opens FeedbackModal in idea mode (a description, no title) and never sends a
 // view_slug/token/financial field (PRD §22).
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { submitFeedback } from "../api/feedback";
+import { clerkActive } from "../auth/clerkToken";
 import { FeedbackModal } from "./FeedbackModal";
 import { ThriftlyLogo } from "./ThriftlyLogo";
+
+// The owner sign-in / account affordance is loaded ONLY when the Clerk satellite
+// is active (lazy ⇒ the Clerk import path is never executed in the ship-dark
+// default). It mounts inside the active <ClerkProvider> that RootProviders adds.
+const OwnerAuthControls = lazy(() => import("../auth/OwnerAuthControls"));
 
 export type SaveState = "saved" | "saving" | "error" | "idle";
 
@@ -105,6 +111,11 @@ export function TopBar({ modelVersion, saveState = "idle", children }: TopBarPro
           </span>
         )}
         {children}
+        {clerkActive() && (
+          <Suspense fallback={null}>
+            <OwnerAuthControls />
+          </Suspense>
+        )}
         <button
           ref={triggerRef}
           type="button"
