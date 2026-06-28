@@ -509,3 +509,29 @@ def test_post_open_scheduled_cost_extends_the_timeline(tmp_path):
     assert max(rowmap) == 16
     assert sorted(rowmap) == list(range(1, 17))
     assert float(ws.cell(row=rowmap[16], column=sched_col).value) == 9000.0
+
+
+def test_expense_row_skipped_when_label_absent_from_annual(tmp_path):
+    # build_xlsx walks EXPENSE_ORDER and `continue`s past any label the year's
+    # expenses dict doesn't carry (xlsx.py). Drop one fixed-annual line so its
+    # EXPENSE_ORDER label is genuinely absent, and assert the workbook simply omits
+    # that row (no crash, no phantom row) while a full build still renders it.
+    from engine import model
+    trimmed = {k: v for k, v in model.FIXED_ANNUAL.items() if k != "Pest control"}
+    res = compute(_inputs(), Assumptions(fixed_annual=trimmed), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"))
+    assert "Pest control" not in res.annual[1].expenses  # the absent label
+    path = tmp_path / "trimmed.xlsx"
+    build_xlsx(res, str(path))
+    ws = openpyxl.load_workbook(path)["Projection"]
+    assert "Pest control" not in _projection_label_map(ws)  # row skipped
+    # a present line is unaffected — still rendered.
+    assert "Utilities/trash service" in _projection_label_map(ws)
+
+    # Contrast: the default build (all fixed lines present) DOES render the row.
+    full = compute(_inputs(), Assumptions(), DemandDrivers(),
+                   TradeArea(basis="city", households="31798"))
+    full_path = tmp_path / "full.xlsx"
+    build_xlsx(full, str(full_path))
+    full_ws = openpyxl.load_workbook(full_path)["Projection"]
+    assert "Pest control" in _projection_label_map(full_ws)
