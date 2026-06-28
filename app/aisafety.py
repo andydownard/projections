@@ -10,11 +10,16 @@ hard validators, not prompt niceties:
 - ``assert_no_ungrounded_money`` rejects any $/% token in generated prose that is
   not one of those grounded tokens — so no LLM-originated currency/percent token
   can reach a render path (numeric grounding, PRD §17).
-- ``ai_disabled`` is the single AI opt-out check: a per-projection flag, a
-  deployment kill switch, OR all AI keys unset all force the zero-AI path.
+- ``ai_disabled`` is a key-presence-aware opt-out predicate (per-projection flag,
+  ``AI_DISABLED`` kill switch, OR all AI keys unset). It is NOT shared by the render
+  paths: the routers keep their own ``_ai_disabled`` with intentionally different
+  key-presence semantics (narrative has a local generator that needs no provider key;
+  Penny gates on a live provider chain), so this is the test reference only — do not
+  wire a render path to it.
 
-These mirror the existing research-extract/feedback-redact patterns (DRY) but live
-in one place so the preview/narrative/packet render paths share one safety surface.
+The injection-strip / grounding / figure-token helpers above mirror the existing
+research-extract/feedback-redact patterns (DRY) and live in one place so the
+preview/narrative/packet render paths share one safety surface.
 """
 from __future__ import annotations
 
@@ -136,11 +141,15 @@ def ai_keys_present() -> bool:
 
 
 def ai_disabled(row: dict | None = None) -> bool:
-    """The single AI opt-out check (SECURITY.md §6.4).
+    """Key-presence-aware AI opt-out predicate (SECURITY.md §6.4).
 
     AI is disabled when ANY of these hold: a per-projection ``ai_opt_out`` flag, a
     deployment-wide ``AI_DISABLED`` kill switch, or no AI provider key configured.
-    With AI disabled, compute/save/.xlsx still run with zero AI calls.
+
+    Reference predicate exercised by the AI-off safety tests; production code does NOT
+    call it. The routers carry their own ``_ai_disabled`` with intentionally different
+    key-presence semantics (narrative works without a provider key via a local
+    generator; Penny treats an empty provider chain as disabled).
     """
     if row is not None and int(row.get("ai_opt_out") or 0):
         return True
