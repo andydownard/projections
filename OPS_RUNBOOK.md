@@ -68,11 +68,12 @@ watchPatterns = ["**"]
 
 [deploy]
 # NO startCommand here ON PURPOSE. The Docker image's start.sh entrypoint runs
-# uvicorn UNDER `litestream replicate -exec` and binds Railway's injected ${PORT}.
-# A startCommand would OVERRIDE start.sh and thereby DISABLE continuous Litestream
-# backups (turns OFF replication); a hardcoded `:8080` also breaks the healthcheck
-# because Railway routes to $PORT, not 8080. Do NOT add startCommand here — pasting
-# one during recovery silently kills the only backup mechanism (issue #191).
+# uvicorn as the FOREGROUND process and `litestream replicate` as a BEST-EFFORT
+# BACKGROUND process, binding Railway's injected ${PORT}. A startCommand would
+# OVERRIDE start.sh and thereby DISABLE continuous Litestream backups (turns OFF
+# replication); a hardcoded `:8080` also breaks the healthcheck because Railway
+# routes to $PORT, not 8080. Do NOT add startCommand here — pasting one during
+# recovery silently kills the only backup mechanism (issue #191).
 healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 numReplicas = 1
@@ -90,7 +91,7 @@ sleepApplication = false
 
 The image is a single Python container that must contain three operationally critical things beyond the app:
 
-1. **Litestream binary** + `litestream.yml`, started as a supervisor so the DB is replicated from process start. The container entrypoint runs `litestream replicate -exec "uvicorn app.main:app ..."` so Litestream owns the process lifecycle and flushes on shutdown.
+1. **Litestream binary** + `litestream.yml`, run as a **best-effort background** replicator. **Process model (load-bearing):** the container entrypoint (`start.sh`) makes **uvicorn the FOREGROUND / main process** (`exec uvicorn …`) and starts `litestream replicate` as a **backgrounded, best-effort** process. A Litestream/R2 failure (e.g. R2 `SignatureDoesNotMatch`) is **logged but NEVER fatal** — uvicorn keeps serving with backups degraded. This is the deliberate reversal of the older `litestream replicate -exec uvicorn` supervisor model, where a backup-credential error took the whole container down and **crash-looped prod** (Litestream owned PID 1, so its exit = container restart). Backups are important but **must never gate the app**; replication health is surfaced via `/api/health` (`litestream` field) and the freshness check (§4.3), not by crashing.
 2. **A pinned LibreOffice** (`soffice`) + the `timeout`/`gtimeout` wrapper that `recalc.py` depends on. This is required by the Excel-correctness release gate (§9). **Pin the LibreOffice version in the Dockerfile** — `recalc.py` recalculation values are version-sensitive and an unpinned `soffice` can drift the `< $0.50` tolerance or flake the gate. The gate runs in CI (the same image), not in the production request path.
 3. **The Python engine** (`engine/`) — the single math authority (PRD §13), including the `.xlsx` builder. See [`ENGINE_CONTRACT.md`](./ENGINE_CONTRACT.md).
 
@@ -100,6 +101,7 @@ The image is a single Python container that must contain three operationally cri
 
 On every boot, in this exact order:
 
+0. **Best-effort R2 restore (non-fatal, in `start.sh` before uvicorn).** If `LITESTREAM_BUCKET` is set, `litestream restore -if-db-not-exists -if-replica-exists` recovers the DB from R2 **only** if the local `/data` copy is missing but a replica exists (volume loss); a healthy volume or first boot is a no-op. **A restore failure logs and continues** — it never blocks the boot. Then `start.sh` backgrounds `litestream replicate` (best-effort) and `exec`s uvicorn; steps 1–5 below run inside uvicorn app startup.
 1. **`validate_config()`** — boot-refuse if any required env var is unset in production (§5.3). No fallback chains.
 2. **`run_migrations(db)`** — apply pending versioned migrations (§8). Migrations run **first**, before any table/index/statement creation, mirroring timpager regression #14 ("Schema before migrations" → migrations before schema).
 3. **`init_schema(db)` / `prepare_statements(db)`** — create-if-not-exists schema and prepared statements.
@@ -169,8 +171,9 @@ dbs:
         # Path PREFIX inside the (possibly shared) R2 bucket — env-driven, not a
         # literal, so a re-provision can't collide with another DB's prefix.
         path: ${LITESTREAM_PATH}
-        endpoint: ${LITESTREAM_ENDPOINT}            # e.g. https://<acct>.r2.cloudflarestorage.com
+        endpoint: ${LITESTREAM_ENDPOINT}            # ACCOUNT endpoint, bucket NOT in host: https://<acct>.r2.cloudflarestorage.com
         region: ${LITESTREAM_REGION}                # R2: "auto"
+        force-path-style: true                      # R2 requires PATH-STYLE (see note below)
         access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
         secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
         # Backup purge limit (PRD §21) + WAL stream cadence (RPO < 10 s):
@@ -178,6 +181,22 @@ dbs:
         sync-interval: 1s         # ship WAL frames ~every second
 ```
 
+> **R2 addressing — `force-path-style: true` is load-bearing.** Cloudflare R2 is
+> S3-compatible but needs **path-style** addressing against the **account endpoint**
+> (`https://<accountid>.r2.cloudflarestorage.com`, bucket in the *path*, not the host)
+> with **region `auto`**. Without `force-path-style`, the AWS SDK defaults to
+> **virtual-hosted** style (`<bucket>.<accountid>.r2.cloudflarestorage.com`) and signs
+> for a different host than it sends to, so R2 returns **`SignatureDoesNotMatch` (403)**
+> — the exact failure that crash-looped prod. Because Litestream now runs **best-effort
+> in the background** (§1.3), that 403 no longer crashes the app, but backups stay
+> degraded until the addressing + credentials are correct.
+>
+> **Credential type — an R2 *S3 API token*, NOT a `cfut_` user token.** `LITESTREAM_ACCESS_KEY_ID` /
+> `LITESTREAM_SECRET_ACCESS_KEY` must be a dedicated **R2 S3 API token** (an Access Key ID +
+> Secret Access Key pair) scoped to the `projections-db-backups` bucket. Litestream speaks the
+> S3 API and signs with SigV4; a Cloudflare user-level `cfut_…` API token is **not** an S3
+> credential and will not authenticate.
+>
 > **This block matches the shipped `litestream.yml` exactly.** It intentionally has
 > **no `snapshot-interval` and no `validation-interval`** — earlier drafts of this
 > runbook showed both, but they are NOT in the shipped file (issue #191). Restore-
