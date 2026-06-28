@@ -76,6 +76,13 @@ const BRAND = "#35644f";
  *  (header + composer), per the PE12 mobile-375 / a11y pass (issue #131, spec §5). */
 const TOUCH_TARGET = 44;
 
+/** The collapsed FAB is anchored to the UPPER-LEFT, flush against the left edge.
+ *  This top inset clears the sticky top bar (min-height 56px, z-index 20) so the
+ *  FAB — which renders above the bar — never sits over the brand / home link. The
+ *  drawer panel itself is anchored to the very top (`top: 0`) and slides out from
+ *  the left (`translateX(-100%)→0`). */
+const FAB_TOP = "4rem";
+
 /** Safe matchMedia probe — jsdom and SSR have no matchMedia; default to `fallback`. */
 function mediaMatches(query: string, fallback: boolean): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -590,16 +597,20 @@ export function PennyDrawer({
         }
         style={{
           position: "fixed",
-          left: "max(1rem, env(safe-area-inset-left))",
-          bottom: "max(1rem, env(safe-area-inset-bottom))",
+          // Upper-LEFT, flush to the left edge (mirrors the enabled FAB), anchored
+          // below the top bar so it never overlaps the brand / home link.
+          left: 0,
+          top: FAB_TOP,
           zIndex: 40,
           display: "inline-flex",
           alignItems: "center",
           gap: "0.5rem",
           height: "48px",
-          padding: "0 0.875rem",
-          borderRadius: "999px",
+          padding: "0 0.875rem 0 0.6rem",
+          // Squared off on the left so the pill reads as flush against the edge.
+          borderRadius: "0 999px 999px 0",
           border: "1px dashed var(--line, #b9b9b9)",
+          borderLeft: "none",
           background: "var(--surface-alt, #ededeb)",
           color: "var(--text-muted, #666)",
           textDecoration: "none",
@@ -634,24 +645,27 @@ export function PennyDrawer({
         onClick={() => (open ? close() : setOpen(true))}
         style={{
           position: "fixed",
-          // Bottom-LEFT, inset past the safe area so the FAB never sits over the
-          // table's right scrollbar / primary actions on mobile (spec §5.1, #131).
-          left: "max(1rem, env(safe-area-inset-left))",
-          bottom: "max(1rem, env(safe-area-inset-bottom))",
+          // Upper-LEFT, FLUSH against the left edge (no inset), anchored just below
+          // the top bar so it never overlaps the brand / home link. The drawer it
+          // opens slides out from this same left edge (spec §5.1, #131).
+          left: 0,
+          top: FAB_TOP,
           zIndex: 40,
           display: "inline-flex",
           alignItems: "center",
           gap: "0.5rem",
           height: "48px",
-          padding: "0 0.875rem 0 0.4rem",
-          borderRadius: "999px",
+          padding: "0 0.875rem 0 0.5rem",
+          // Squared off on the left so the pill reads as flush against the edge.
+          borderRadius: "0 999px 999px 0",
           border: "none",
           background: BRAND,
           color: "#fff",
           cursor: "pointer",
           boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-          // Scroll auto-hide; transition suppressed under reduced-motion.
-          transform: fabHidden ? "translateY(150%)" : "translateY(0)",
+          // Scroll auto-hide slides UP off the top edge (the FAB is top-anchored);
+          // transition suppressed under reduced-motion.
+          transform: fabHidden ? "translateY(-150%)" : "translateY(0)",
           opacity: fabHidden ? 0 : 1,
           pointerEvents: fabHidden ? "none" : "auto",
           transition: reducedMotion ? "none" : "transform 200ms ease, opacity 200ms ease",

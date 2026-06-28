@@ -108,25 +108,15 @@ export function TopBar({ modelVersion, saveState = "idle", children }: TopBarPro
         <button
           ref={triggerRef}
           type="button"
+          className="idea-fab"
           data-testid="idea-fab"
           aria-label="Send feedback"
           aria-haspopup="dialog"
           aria-expanded={showFeedback}
           onClick={() => setShowFeedback(true)}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: "36px",
-            height: "36px",
-            border: "1px solid var(--line)",
-            borderRadius: "8px",
-            background: "var(--surface)",
-            color: "var(--brand-primary)",
-            cursor: "pointer",
-          }}
         >
           <LightbulbIcon />
+          <span aria-hidden="true">Idea</span>
         </button>
       </div>
 

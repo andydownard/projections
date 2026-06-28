@@ -97,6 +97,15 @@ describe("TopBar", () => {
       expect(fab).not.toHaveAttribute("tabindex", "-1");
     });
 
+    it("reads as a button with a visible label, not a bare icon", () => {
+      render(<TopBar />);
+      const fab = screen.getByRole("button", { name: /send feedback/i });
+      // A visible text label ("Idea") sits beside the lightbulb so the control is
+      // obviously tappable — not an unlabelled glyph.
+      expect(fab).toHaveTextContent(/idea/i);
+      expect(fab).toHaveClass("idea-fab");
+    });
+
     it("the modal is closed until the lightbulb is activated", () => {
       render(<TopBar />);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

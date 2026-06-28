@@ -9,9 +9,8 @@ import { expect, test } from "@playwright/test";
 // read surface shipped, so this runs for real against the booted app.
 test.describe("AI opt-out works end-to-end", () => {
   test("compute + save + xlsx export succeed with AI disabled", async ({ page }) => {
-    await page.goto("/wizard?ai=off");
-    await page.getByRole("button", { name: /start from example/i }).click();
-    // "Start from example" opens the seeded projection at its view_slug (ai=off kept).
+    // Open the seeded `example` projection directly at its view_slug (ai=off kept).
+    await page.goto("/p/example?ai=off");
     await expect(page).toHaveURL(/\/p\/example\?ai=off/);
     await expect(page.getByTestId("decision-banner")).toBeVisible();
 

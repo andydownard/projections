@@ -158,6 +158,46 @@ body {
   flex: 1 1 auto;
 }
 
+/* Idea Fab — the docked feedback trigger reads as an obvious BUTTON (icon + a
+   visible "Idea" label), not a bare lightbulb. A brand-outlined pill that fills
+   on hover/active; the shared :focus-visible ring covers keyboard focus. The
+   meaning is carried by the text label, never color alone. */
+.idea-fab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 36px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--brand-primary);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--brand-primary);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.idea-fab:hover {
+  background: var(--brand-primary);
+  color: #fff;
+}
+
+.idea-fab:active {
+  background: var(--brand-deep);
+  border-color: var(--brand-deep);
+  color: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .idea-fab {
+    transition: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .skip-link {
     transition: none;

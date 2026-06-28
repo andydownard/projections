@@ -272,6 +272,22 @@ describe("ProjectionDetail — per-field change affordance (PE7, #126)", () => {
   });
 });
 
+// A subtle, keyboard-accessible "Back to projections" link returns to the owner
+// list (route "/") without a full reload.
+describe("ProjectionDetail — back-to-projections nav", () => {
+  it("renders a keyboard-accessible back link that SPA-navigates to the list", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    window.history.pushState({}, "", "/p/p_8x");
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    const back = await screen.findByTestId("back-to-projections");
+    expect(back).toHaveAttribute("href", "/");
+    expect(back).toHaveAccessibleName(/back to projections/i);
+    await user.click(back);
+    expect(window.location.pathname).toBe("/");
+  });
+});
+
 // #203 — the read-only detail page rendered no page heading; the first heading was
 // an <h3>, so h1/h2 were skipped (WCAG 1.3.1 / 2.4.6). A visible h1 names the
 // projection and a section h2 keeps the existing h3s from skipping levels.

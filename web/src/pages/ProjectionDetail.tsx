@@ -387,6 +387,30 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
 
   return (
     <div className="detail">
+      {/* Subtle back-nav to the owner's projections list (route "/"). A real
+          anchor (keyboard-focusable, right-click/new-tab works); a plain left
+          click SPA-navigates via goHome so there is no full reload. */}
+      <a
+        href="/"
+        data-testid="back-to-projections"
+        onClick={(e) => {
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          goHome();
+        }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "0.25rem",
+          margin: "0 0 0.75rem",
+          fontSize: "0.8125rem",
+          color: "var(--text-muted)",
+          textDecoration: "none",
+        }}
+      >
+        <span aria-hidden="true">←</span> Back to projections
+      </a>
+
       {/* #203 — a visible top-level page heading naming the projection (the read
           view previously had none; the first heading was an <h3>, skipping h1/h2).
           WCAG 1.3.1 (A) / 2.4.6 (AA). Inline styles only — tokens.css is owned
