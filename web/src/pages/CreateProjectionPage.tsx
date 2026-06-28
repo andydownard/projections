@@ -36,6 +36,13 @@ import { StepDonorMarket } from "../wizard/StepDonorMarket";
 import { StepCostSchedule } from "../wizard/StepCostSchedule";
 import { StepReview } from "../wizard/StepReview";
 import { useWizardState, type WizardState } from "../wizard/useWizardState";
+import {
+  pathForStep,
+  stepFromPath,
+  STEP_LABELS,
+  STEPS,
+  type StepKey,
+} from "../wizard/steps";
 
 // Human labels for the server `draft_state` field keys Penny mutates (Spec §6.2),
 // shown on each per-field FieldChange affordance in the wizard drawer.
@@ -95,10 +102,103 @@ function wizardToDraftState(wiz: WizardState): PennyDraftState {
 
 export interface CreateProjectionPageProps {
   aiOff?: boolean;
+  // Epic B (#261): the active step parsed from the route (/wizard/<step-slug>) by
+  // the App shell. null = the bare /wizard or an unknown slug → redirect to the
+  // current/first step. The page keeps the URL and the wizard cursor in sync so
+  // browser Back/Forward navigate between steps and each step is deep-linkable;
+  // the draft survives because this page never unmounts while on a /wizard route.
+  step?: StepKey | null;
 }
 
-export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProps) {
-  const wiz = useWizardState();
+/** The step the cursor should START on, read from the deep-linked /wizard/<slug>
+ *  URL so the right step renders on the first paint (no flicker). Non-wizard or
+ *  unknown slugs start at the first step (the mount effect canonicalizes the URL). */
+function initialStepFromUrl(): number {
+  const s = stepFromPath(window.location.pathname);
+  return s ? STEPS.indexOf(s) : 0;
+}
+
+export function CreateProjectionPage({ aiOff = false, step = null }: CreateProjectionPageProps) {
+  const wiz = useWizardState(undefined, initialStepFromUrl());
+
+  // --- route ↔ step-cursor sync (Epic B #261) --------------------------------
+  // The wizard cursor and the URL are kept in lock-step: a Next/Back/jump pushes a
+  // new /wizard/<slug> history entry (so browser Back/Forward navigate steps), and
+  // a browser Back/Forward (an external URL change → a new `step` prop) drives the
+  // cursor. The draft lives in useWizardState above and is never unmounted across
+  // this navigation, so no input is lost. Each guarded by an equality check so the
+  // two directions converge instead of looping.
+  const stepContainerRef = useRef<HTMLDivElement | null>(null);
+  const mirrorInitRef = useRef(false);
+  const adoptInitRef = useRef(false);
+  const prevStepRef = useRef(wiz.step);
+  const [stepAnnounce, setStepAnnounce] = useState("");
+  const wizStepKey = wiz.stepKey;
+  const wizStep = wiz.step;
+
+  // Mount: canonicalize a bare/unknown /wizard URL to the current step's path. The
+  // cursor already started on the deep-linked step (initialStepFromUrl), so a valid
+  // slug is a no-op; a bare /wizard or unknown slug is REPLACED (no junk history
+  // entry) with the current step — the invalid-slug redirect guard.
+  useEffect(() => {
+    const target = pathForStep(wizStepKey) + window.location.search;
+    if (window.location.pathname + window.location.search !== target) {
+      window.history.replaceState(null, "", target);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cursor → URL: when the cursor advances/retreats (Next/Back/jump), push a NEW
+  // history entry and move focus to the new step heading + announce it (WCAG
+  // 2.4.3 / 4.1.3). The first run (mount) is skipped so initial load never steals
+  // focus and the mount effect owns canonicalization.
+  useEffect(() => {
+    if (!mirrorInitRef.current) {
+      mirrorInitRef.current = true;
+      prevStepRef.current = wizStep;
+      return;
+    }
+    const target = pathForStep(wizStepKey) + window.location.search;
+    if (window.location.pathname + window.location.search !== target) {
+      window.history.pushState(null, "", target);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+    if (prevStepRef.current !== wizStep) {
+      const heading = stepContainerRef.current?.querySelector<HTMLElement>(
+        ".wizard-step__heading",
+      );
+      if (heading) {
+        if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1");
+        heading.focus();
+      }
+      setStepAnnounce(`Step ${wizStep + 1} of ${STEPS.length}: ${STEP_LABELS[wizStepKey]}`);
+    }
+    prevStepRef.current = wizStep;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wizStep]);
+
+  // URL → cursor: a browser Back/Forward (or a typed URL) changes the route `step`
+  // prop. Adopt it into the cursor. A null prop (bare/unknown slug) is canonicalized
+  // back to the current step. The first run (mount) is skipped — the cursor already
+  // started on the right step via initialStepFromUrl.
+  useEffect(() => {
+    if (!adoptInitRef.current) {
+      adoptInitRef.current = true;
+      return;
+    }
+    if (step == null) {
+      const target = pathForStep(wizStepKey) + window.location.search;
+      if (window.location.pathname + window.location.search !== target) {
+        window.history.replaceState(null, "", target);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }
+      return;
+    }
+    const idx = STEPS.indexOf(step);
+    if (idx !== -1 && idx !== wizStep) wiz.goTo(idx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
   const [vm, setVm] = useState<ViewModel | null>(null);
   const [busy, setBusy] = useState(false);
   // One ephemeral Bearer for the whole wizard session's /penny/draft calls.
@@ -446,12 +546,38 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
           }
         }}
       >
-        {wiz.stepKey === "store" && <StepStore state={wiz} />}
-        {wiz.stepKey === "trade-area" && <StepTradeArea state={wiz} />}
-        {wiz.stepKey === "space" && <StepSpace state={wiz} />}
-        {wiz.stepKey === "donor-market" && <StepDonorMarket state={wiz} />}
-        {wiz.stepKey === "cost" && <StepCostSchedule state={wiz} />}
-        {wiz.stepKey === "review" && <StepReview state={wiz} />}
+        {/* The active step. display:contents keeps the wrapper layout-transparent
+            (no flex/grid box) while giving the route→step focus effect a stable
+            element to query the step heading from. */}
+        <div ref={stepContainerRef} style={{ display: "contents" }}>
+          {wiz.stepKey === "store" && <StepStore state={wiz} />}
+          {wiz.stepKey === "trade-area" && <StepTradeArea state={wiz} />}
+          {wiz.stepKey === "space" && <StepSpace state={wiz} />}
+          {wiz.stepKey === "donor-market" && <StepDonorMarket state={wiz} />}
+          {wiz.stepKey === "cost" && <StepCostSchedule state={wiz} />}
+          {wiz.stepKey === "review" && <StepReview state={wiz} />}
+        </div>
+
+        {/* Announce the new step to assistive tech on route change (#261 a11y).
+            Visually hidden, polite, NOT role=status (the block-reason owns that). */}
+        <div
+          data-testid="wizard-step-status"
+          aria-live="polite"
+          aria-atomic="true"
+          style={{
+            position: "absolute",
+            width: 1,
+            height: 1,
+            padding: 0,
+            margin: -1,
+            overflow: "hidden",
+            clip: "rect(0 0 0 0)",
+            whiteSpace: "nowrap",
+            border: 0,
+          }}
+        >
+          {stepAnnounce}
+        </div>
 
         <div className="wizard__actions">
           <button

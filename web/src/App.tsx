@@ -45,7 +45,9 @@ export function App() {
       <TopBar saveState={isDetail ? detailHeader.saveState : "idle"} />
       <main id="main" className="app__main" tabIndex={-1}>
         {route.kind === "home" && <ListPage />}
-        {route.kind === "wizard" && <CreateProjectionPage aiOff={route.aiOff} />}
+        {route.kind === "wizard" && (
+          <CreateProjectionPage aiOff={route.aiOff} step={route.step} />
+        )}
         {route.kind === "detail" && (
           <ProjectionDetail slug={route.slug} edit={route.edit} aiOff={route.aiOff} />
         )}
