@@ -2,9 +2,10 @@
 //
 // A full-page route (titled "Create Projection") rather than a modal, so Spec B's
 // left-slide Penny drawer composes cleanly. One step is visible at a time with a
-// step indicator, Back/Next, and Generate on the final step; "Start from example"
-// remains available. State lives in the shared useWizardState hook (validation
-// gates Next; a future step inserts without rework). On Generate the collected
+// step indicator, Back/Next, and Generate on the final step. A subtle "Back to
+// projections" link returns to the owner list. State lives in the shared
+// useWizardState hook (validation gates Next; a future step inserts without
+// rework). On Generate the collected
 // inputs are shaped to the flat backend body and POSTed; the server computes and
 // returns the Appendix-D view-model, which renders the decision banner + KPI
 // strip + monthly cash-flow. NO client math — every figure is the server's
@@ -13,7 +14,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import type { PennyDraftApplied, PennyDraftState } from "../api/penny";
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
-import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
+import { type ViewModel, xlsxHref } from "../api/viewModel";
 import { setOwnerToken } from "../api/projections";
 import { CashflowChart } from "../components/CashflowChart";
 import { DecisionBanner } from "../components/DecisionBanner";
@@ -33,8 +34,6 @@ import { StepDonorMarket } from "../wizard/StepDonorMarket";
 import { StepCostSchedule } from "../wizard/StepCostSchedule";
 import { StepReview } from "../wizard/StepReview";
 import { useWizardState, type WizardState } from "../wizard/useWizardState";
-
-const EXAMPLE_SLUG = "example";
 
 // Human labels for the server `draft_state` field keys Penny mutates (Spec §6.2),
 // shown on each per-field FieldChange affordance in the wizard drawer.
@@ -100,10 +99,6 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
   const wiz = useWizardState();
   const [vm, setVm] = useState<ViewModel | null>(null);
   const [busy, setBusy] = useState(false);
-  // "Start from example" fetches the seeded `example` projection, which may be absent
-  // in some environments (e.g. prod). A failed fetch must never be a silent no-op on a
-  // primary onboarding affordance — surface an inline message so the ED can fall back.
-  const [exampleError, setExampleError] = useState(false);
   // One ephemeral Bearer for the whole wizard session's /penny/draft calls.
   const draftToken = useRef<string>(makeWizardDraftToken());
 
@@ -260,21 +255,13 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
     window.dispatchEvent(new PopStateEvent("popstate"));
   }
 
-  async function startFromExample() {
-    setBusy(true);
-    setExampleError(false);
-    try {
-      await fetchProjection(EXAMPLE_SLUG); // warm the cache / surface fetch errors
-      const qs = aiOff ? "?ai=off" : "";
-      window.history.pushState(null, "", `/p/${EXAMPLE_SLUG}${qs}`);
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    } catch {
-      // The example projection couldn't load (e.g. not seeded): show feedback rather
-      // than silently aborting the navigation, so the click is never a dead end.
-      setExampleError(true);
-    } finally {
-      setBusy(false);
-    }
+  // Subtle back-nav to the owner's projections list (route "/"). A plain left-click
+  // SPA-navigates; modified clicks (new tab/window) fall through to the real href.
+  function backToProjections(e: MouseEvent<HTMLAnchorElement>) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    window.history.pushState(null, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
   }
 
   // A polite live region kept at the SAME fragment position in BOTH the form and
@@ -373,6 +360,25 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
       {liveRegion}
       <div className="wizard wizard--full">
       <header className="wizard__intro">
+        {/* Subtle back-nav to the owner's projections list (route "/"). A real
+            anchor (keyboard-focusable, right-click/new-tab works); a plain left
+            click SPA-navigates so there is no full reload. */}
+        <a
+          href="/"
+          data-testid="back-to-projections"
+          onClick={backToProjections}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.25rem",
+            margin: "0 0 0.5rem",
+            fontSize: "0.8125rem",
+            color: "var(--text-muted)",
+            textDecoration: "none",
+          }}
+        >
+          <span aria-hidden="true">←</span> Back to projections
+        </a>
         <h1>Create Projection</h1>
       </header>
 
@@ -429,27 +435,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
               Next
             </button>
           )}
-
-          <button
-            type="button"
-            className="btn"
-            disabled={busy}
-            onClick={() => void startFromExample()}
-          >
-            Start from example
-          </button>
         </div>
-
-        {exampleError && (
-          <p
-            role="alert"
-            className="wizard__note"
-            data-testid="example-error"
-            style={{ color: "var(--error)", margin: "0.75rem 0 0" }}
-          >
-            Couldn’t load the example projection. Please fill in the form to start.
-          </p>
-        )}
 
         {/* #147: state WHY the Next/Generate button is disabled, right beside it.
             role=status + aria-live=polite announces the reason to assistive tech

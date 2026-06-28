@@ -91,7 +91,7 @@ describe("CreateProjectionPage — Penny mounts in the wizard (Spec §5.2)", () 
     // The manual wizard remains fully intact.
     expect(screen.getByRole("heading", { name: /create projection/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/store name/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /start from example/i })).toBeInTheDocument();
+    expect(screen.getByTestId("back-to-projections")).toBeInTheDocument();
   });
 });
 

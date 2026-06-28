@@ -6,9 +6,10 @@ import { CreateProjectionPage } from "./CreateProjectionPage";
 import type { ViewModel } from "../api/viewModel";
 
 // W2 — the full-page Create-Projection wizard shell: one step at a time, a step
-// indicator, validation gating Next, Generate on the final step, Start-from-example,
-// and households empty-until-resolved (§4). NO client math — every figure on the
-// result screen is the server's { display } string (PRD §13).
+// indicator, validation gating Next, Generate on the final step, a subtle
+// "Back to projections" link, and households empty-until-resolved (§4). NO client
+// math — every figure on the result screen is the server's { display } string
+// (PRD §13).
 
 const VM: ViewModel = {
   reco: { tag: "proceed", headline: "Proceed.", sub: "Capital is within reach." },
@@ -66,27 +67,25 @@ afterEach(() => {
 });
 
 describe("CreateProjectionPage shell", () => {
-  it("renders the full-page title + a step indicator + Start-from-example", () => {
+  it("renders the full-page title + a step indicator (no 'Start from example')", () => {
     render(<CreateProjectionPage />);
     expect(screen.getByRole("heading", { name: /create projection/i })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: /create projection steps/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /start from example/i })).toBeInTheDocument();
+    // The dead-end "Start from example" affordance was removed entirely.
+    expect(screen.queryByRole("button", { name: /start from example/i })).toBeNull();
   });
 
-  it("surfaces an inline error when 'Start from example' can't load it (no silent dead end)", async () => {
+  it("offers a subtle, keyboard-accessible 'Back to projections' link to the list (route '/')", async () => {
     const user = userEvent.setup();
-    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
-      const url = String(input);
-      // The seeded `example` is absent in this environment -> the fetch 404s.
-      if (url.includes("/api/projections/example"))
-        return Promise.resolve(new Response("not found", { status: 404 }));
-      return jsonResponse({});
-    });
+    window.history.pushState(null, "", "/wizard");
     render(<CreateProjectionPage />);
-    await user.click(screen.getByRole("button", { name: /start from example/i }));
-    // Feedback appears instead of the click being a no-op; the wizard stays put.
-    expect(await screen.findByTestId("example-error")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /create projection/i })).toBeInTheDocument();
+    const back = screen.getByTestId("back-to-projections");
+    expect(back).toHaveAttribute("href", "/");
+    expect(back).toHaveAccessibleName(/back to projections/i);
+    // A plain left-click SPA-navigates to the list route (no full reload).
+    await user.click(back);
+    expect(window.location.pathname).toBe("/");
+    window.history.pushState(null, "", "/");
   });
 
   it("gates Next on the Store step until a name is entered", async () => {
