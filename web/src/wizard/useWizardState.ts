@@ -33,23 +33,12 @@ export type Basis = "city" | "county";
 //   default  → the anchored regional constant (utilities/fixtures, or AI-off rent)
 export type AssumptionSource = "research" | "user" | "default";
 
-/** The ordered wizard steps (Spec §3). "space" (Size & rent, feature #245) sits
- * between trade-area and donor-market: it needs the resolved location (for the
- * rent research pre-fill) and feeds occupancy into the donor-driven projection. */
-export const STEPS = ["store", "trade-area", "space", "donor-market", "cost", "review"] as const;
-export type StepKey = (typeof STEPS)[number];
-
-// Each label is an imperative VERB phrase (not a bare noun) so a non-finance ED
-// reads the indicator as an action to take — "Name your store", not "Store".
-// The step headings in each Step*.tsx mirror these exactly.
-export const STEP_LABELS: Record<StepKey, string> = {
-  store: "Name your store",
-  "trade-area": "Find your trade area",
-  space: "Size & rent your space",
-  "donor-market": "Set donor shares",
-  cost: "Plan your costs",
-  review: "Review & generate",
-};
+// The ordered step set + labels live in ./steps (the single source of truth shared
+// with the path router, Epic B #261). Re-exported here so existing
+// `from "./useWizardState"` imports keep working.
+export { STEPS, STEP_LABELS, type StepKey } from "./steps";
+import { STEPS } from "./steps";
+import type { StepKey } from "./steps";
 
 // The wizard seeds the non-collected engine inputs with House of Hope design
 // parity (mirrors the seeded example) so Generate has a complete body; the steps
@@ -165,9 +154,18 @@ function formatList(items: readonly string[]): string {
   return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }
 
-export function useWizardState(initial?: Partial<WizardDraft>): WizardState {
+export function useWizardState(
+  initial?: Partial<WizardDraft>,
+  // The initial step cursor (Epic B #261): when the wizard mounts on a deep-linked
+  // /wizard/<step-slug> route, the cursor starts there so the right step renders on
+  // the first paint (no store→target flicker). Defaults to the first step. Clamped
+  // to the valid range; the URL ↔ cursor sync lives in CreateProjectionPage.
+  initialStep = 0,
+): WizardState {
   const [draft, setDraft] = useState<WizardDraft>({ ...DEFAULT_DRAFT, ...initial });
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(() =>
+    Math.min(Math.max(0, Math.trunc(initialStep)), STEPS.length - 1),
+  );
   const [resolved, setResolved] = useState<TradeAreaResolved | null>(null);
   const [basis, setBasis] = useState<Basis>("city");
   const [householdsSource, setHouseholdsSource] = useState<HouseholdsSource | null>(null);

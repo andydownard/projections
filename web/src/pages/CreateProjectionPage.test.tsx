@@ -78,6 +78,10 @@ function wireFetch(bodies: Record<string, unknown>) {
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
+  // The wizard is now route-driven (each step is /wizard/<slug>, Epic B #261) and
+  // derives its initial step from the URL — reset it between tests so each starts
+  // fresh on the first step instead of inheriting the prior test's step path.
+  window.history.replaceState(null, "", "/wizard");
 });
 
 describe("CreateProjectionPage shell", () => {

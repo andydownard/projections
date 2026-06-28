@@ -75,6 +75,8 @@ function wireFetch(opts: { draftReply?: unknown; bodies?: Record<string, unknown
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
+  // Reset the route-driven wizard step between tests (Epic B #261).
+  window.history.replaceState(null, "", "/wizard");
 });
 
 describe("CreateProjectionPage — Penny mounts in the wizard (Spec §5.2)", () => {
