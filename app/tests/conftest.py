@@ -10,11 +10,16 @@ of requests still accumulates normally, so the rate-limit tests are unaffected.
 """
 import pytest
 
+from app.feedback.dedup import reset_dedup
 from app.ratelimit import reset_rate_limits
 
 
 @pytest.fixture(autouse=True)
 def _isolate_rate_limits():
     reset_rate_limits()
+    # Penny's feedback dedup map is also PROCESS-GLOBAL (mirrors the rate limiter);
+    # reset it so a redacted body filed in one test never deduplicates the next.
+    reset_dedup()
     yield
     reset_rate_limits()
+    reset_dedup()

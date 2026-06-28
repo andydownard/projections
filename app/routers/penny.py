@@ -312,7 +312,13 @@ def penny_turn(
         bearer_token=token,
         can_mutate=can_mutate,
         version=int(row["version"]),
-        extra={"turn_id": _new_turn_id(), "proposal_ref": body.proposal_ref},
+        extra={
+            "turn_id": _new_turn_id(),
+            "proposal_ref": body.proposal_ref,
+            # Threaded for the (flag-gated) file_product_feedback tool's per-IP brake
+            # (#189: the right-most XFF hop, never the shared proxy socket peer).
+            "client_ip": _client_ip(request),
+        },
     )
     result = _run_loop(
         user_message=body.message,
