@@ -48,10 +48,15 @@ export interface PennyTranscriptProps {
   pending?: boolean;
 }
 
-const ROLE_LABEL: Record<PennyRole, string> = {
-  user: "You",
-  assistant: "Penny",
-  tool: "Penny (tool)",
+/** Screen-reader-only role labels. The bubbles are texting-style — distinguished by
+ *  alignment + color, with NO visible per-message caption or avatar (decision #10) —
+ *  so the role is carried for assistive tech ONLY, via an `sr-only` span, keeping the
+ *  transcript announced "You said… / Penny said…" (a11y; the drawer-HEADER avatar is
+ *  the brand cue, decision #17). */
+const ROLE_SR_LABEL: Record<PennyRole, string> = {
+  user: "You said:",
+  assistant: "Penny said:",
+  tool: "Penny said:",
 };
 
 /** ONE message font size shared with the composer textarea (PennyDrawer) so the
@@ -170,7 +175,8 @@ function AssistantBubble({
       data-role="assistant"
       style={{ alignSelf: "flex-start", maxWidth: "92%" }}
     >
-      <span style={roleLabelStyle}>{ROLE_LABEL.assistant}</span>
+      {/* Role is announced to screen readers only — no visible caption/icon (#10). */}
+      <span className="sr-only">{ROLE_SR_LABEL.assistant}</span>
       <div style={assistantBubbleStyle}>
         {typeof content === "string" ? (
           <AssistantContent text={content} reduced={reduced} />
@@ -183,16 +189,6 @@ function AssistantBubble({
     </div>
   );
 }
-
-const roleLabelStyle = {
-  display: "block",
-  fontSize: "0.6875rem",
-  fontWeight: 600,
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-  color: "var(--text-muted, #5b655f)",
-  marginBottom: "0.2rem",
-} as const;
 
 const assistantBubbleStyle = {
   fontSize: PENNY_MESSAGE_FONT_SIZE,
@@ -256,8 +252,9 @@ export function PennyTranscript({
             data-role={turn.role}
             style={{ alignSelf: "flex-end", maxWidth: "92%" }}
           >
-            {/* Role is carried by text, never by color alone (a11y). */}
-            <span style={{ ...roleLabelStyle, textAlign: "right" }}>{ROLE_LABEL[turn.role]}</span>
+            {/* Texting-style: right-aligned, brand-tinted bubble with NO visible
+                caption/avatar — the role is announced to screen readers only (#10). */}
+            <span className="sr-only">{ROLE_SR_LABEL[turn.role]}</span>
             <div style={userBubbleStyle}>{turn.content}</div>
           </div>
         ),
@@ -268,7 +265,9 @@ export function PennyTranscript({
           caret animates while we wait (suppressed under reduced-motion). */}
       {pending && (
         <div data-testid="penny-pending" data-role="assistant" style={{ alignSelf: "flex-start" }}>
-          <span style={roleLabelStyle}>{ROLE_LABEL.assistant}</span>
+          {/* The visible "Penny is thinking…" text already names Penny; the sr-only
+              label keeps the role announcement consistent with her settled turns. */}
+          <span className="sr-only">{ROLE_SR_LABEL.assistant}</span>
           <div
             style={{
               ...assistantBubbleStyle,
