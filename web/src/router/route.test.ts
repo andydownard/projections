@@ -7,9 +7,41 @@ describe("parseRoute", () => {
     expect(parseRoute("/")).toEqual({ kind: "home" });
   });
 
-  it("maps /wizard and reads ai=off", () => {
-    expect(parseRoute("/wizard")).toEqual({ kind: "wizard", aiOff: false });
-    expect(parseRoute("/wizard", "?ai=off")).toEqual({ kind: "wizard", aiOff: true });
+  it("maps bare /wizard to the wizard with no specific step (redirect target)", () => {
+    expect(parseRoute("/wizard")).toEqual({ kind: "wizard", aiOff: false, step: null });
+    expect(parseRoute("/wizard/")).toEqual({ kind: "wizard", aiOff: false, step: null });
+    expect(parseRoute("/wizard", "?ai=off")).toEqual({
+      kind: "wizard",
+      aiOff: true,
+      step: null,
+    });
+  });
+
+  it("maps /wizard/<step-slug> to that wizard step (Epic B #261, revised order)", () => {
+    expect(parseRoute("/wizard/address")).toEqual({
+      kind: "wizard",
+      aiOff: false,
+      step: "address",
+    });
+    expect(parseRoute("/wizard/households")).toEqual({
+      kind: "wizard",
+      aiOff: false,
+      step: "households",
+    });
+    expect(parseRoute("/wizard/startup-costs", "?ai=off")).toEqual({
+      kind: "wizard",
+      aiOff: true,
+      step: "startup-costs",
+    });
+  });
+
+  it("treats an unknown wizard step slug as null (caller redirects to a valid step)", () => {
+    expect(parseRoute("/wizard/bogus")).toEqual({
+      kind: "wizard",
+      aiOff: false,
+      step: null,
+    });
+    expect(parseRoute("/wizard/42")).toEqual({ kind: "wizard", aiOff: false, step: null });
   });
 
   it("maps /p/<slug> to a read-only detail", () => {

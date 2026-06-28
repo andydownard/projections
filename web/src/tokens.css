@@ -25,6 +25,30 @@
 
   --focus-ring: 2px solid var(--brand-primary);
 
+  /* --- type scale (#22): EXACTLY THREE sizes ---------------------------------
+   * Hierarchy comes from WEIGHT / CASE / COLOR, never from extra sizes. Every
+   * page holds to this budget (Home LG/BASE/SM · Wizard BASE/SM · Detail LG/
+   * BASE/SM). The ONE documented data-density exception is the dense M0–M12
+   * monthly cash-flow table (.cashflow-table), which stays at --text-sm because
+   * it scrolls (owner Decision #18). SVG chart glyphs keep their px sizing so
+   * they scale with the chart viewBox, not the document type scale. */
+  --text-lg: 1.5rem; /* display headings + hero figures */
+  --text-base: 0.9375rem; /* body copy, inputs, labels (15px) */
+  --text-sm: 0.75rem; /* captions, eyebrows, micro-labels, dense table (12px) */
+
+  /* Line-heights paired with the scale (tight for display, relaxed for body). */
+  --lh-tight: 1.2;
+  --lh-base: 1.5;
+
+  /* Weights — emphasis is carried HERE (with case/color), not by adding sizes. */
+  --w-regular: 400;
+  --w-semibold: 600;
+  --w-bold: 700;
+
+  /* Placeholder text: muted AND lighter than --text-muted so an empty input
+   * reads as a hint, not as filled content (#21). Subtler than body muted. */
+  --placeholder: #9aa39d;
+
   /* Shared content frame: the topbar inner row and the main column align to it. */
   --frame: 72rem;
 }
@@ -82,7 +106,7 @@ body {
   border: 1px solid var(--brand-primary);
   border-radius: 8px;
   color: var(--brand-deep);
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   text-decoration: none;
   transform: translateY(-150%);
@@ -148,7 +172,7 @@ body {
 
 .topbar__brand {
   font-weight: 600;
-  font-size: 0.875rem;
+  font-size: var(--text-base);
   color: var(--text);
   padding-left: 0.75rem;
   border-left: 1px solid var(--line);
@@ -158,10 +182,12 @@ body {
   flex: 1 1 auto;
 }
 
-/* Idea Fab — the docked feedback trigger reads as an obvious BUTTON (icon + a
-   visible "Idea" label), not a bare lightbulb. A brand-outlined pill that fills
-   on hover/active; the shared :focus-visible ring covers keyboard focus. The
-   meaning is carried by the text label, never color alone. */
+/* App-suggestion button (#2) — the docked feedback trigger reads as an obvious
+   BUTTON (lightbulb icon + a visible "App suggestion" label), not a bare glyph.
+   A brand-outlined pill with a soft drop-shadow so it lifts off the bar as a
+   tappable affordance; it fills on hover/active and the shared :focus-visible
+   ring covers keyboard focus. Meaning is carried by the text label + the raised
+   button shape, never color alone. */
 .idea-fab {
   display: inline-flex;
   align-items: center;
@@ -173,17 +199,20 @@ body {
   background: var(--surface);
   color: var(--brand-primary);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .idea-fab:hover {
   background: var(--brand-primary);
   color: #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.16);
 }
 
 .idea-fab:active {
@@ -218,7 +247,7 @@ body {
   background: var(--surface);
   color: var(--brand-primary);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -250,7 +279,7 @@ body {
 }
 
 .chip {
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   padding: 0.125rem 0.5rem;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -271,7 +300,7 @@ body {
   border-radius: 8px;
   background: var(--surface);
   color: var(--text);
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   cursor: pointer;
   text-decoration: none;
@@ -289,10 +318,15 @@ body {
 }
 
 /* --- owner-scoped list page (SLICE 2) --- */
+/* #1/#8 — left rail: the list content shares ONE left gutter with the topbar
+ * "Store Projections" brand. The brand and .app__main both sit at the frame's
+ * 1.25rem inner padding; an extra horizontal pad here would push the heading +
+ * create control right of that line, so we drop the side padding and keep only
+ * the vertical rhythm (top spacing already comes from .app__main). */
 .list,
 .list-empty,
 .list-loading {
-  padding: 1rem;
+  padding: 0;
 }
 
 .list__header,
@@ -318,7 +352,7 @@ body {
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--line);
   text-align: left;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
 }
 
 .list__open {
@@ -333,7 +367,7 @@ body {
 
 .list__sub {
   display: block;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -352,7 +386,7 @@ body {
 
 .reco-chip {
   display: inline-block;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   padding: 0.125rem 0.5rem;
   border-radius: 999px;
@@ -376,10 +410,15 @@ body {
 }
 
 /* --- create wizard (SLICE 2) --- */
+/* #1/#8 — left rail: the wizard left-anchors to the SAME gutter as the topbar
+ * "Store Projections" brand (the .app__main left padding edge) instead of being
+ * centered. Width is capped per-region (the full-page panel below, fields at
+ * 22rem, ledes at ~60ch) so the column stays readable while its left edge lines
+ * up with the brand. */
 .wizard {
   padding: 0;
-  max-width: 34rem;
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
 }
 
 .wizard__head {
@@ -398,7 +437,7 @@ body {
 }
 .wizard__intro h1 {
   margin: 0;
-  font-size: 1.625rem;
+  font-size: var(--text-lg);
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.15;
@@ -407,7 +446,7 @@ body {
 .wizard__lede {
   margin: 0;
   max-width: 46ch;
-  font-size: 0.9375rem;
+  font-size: var(--text-base);
   line-height: 1.5;
   color: var(--text-muted);
 }
@@ -425,7 +464,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
 }
@@ -438,12 +477,16 @@ body {
   border-radius: 8px;
   padding: 0 0.75rem;
   background: var(--surface);
-  font-size: 0.9375rem;
+  font-size: var(--text-base);
   font-weight: 400;
   color: var(--text);
 }
-.wizard__field > input::placeholder {
-  color: var(--text-muted);
+/* #21 — subtler placeholders: the muted-AND-lighter --placeholder token so an
+ * empty wizard input reads as a hint, not as filled content. Covers every wizard
+ * field input (store name, address autocomplete, households, sqft, rent). */
+.wizard__field > input::placeholder,
+.wizard__step input::placeholder {
+  color: var(--placeholder);
 }
 /* Numeric inputs: tabular and right-aligned so values share one right edge and
  * read down the column like a ledger (the form caps width; no per-input cap). */
@@ -464,7 +507,7 @@ body {
   flex-direction: column;
   gap: 0.375rem;
   max-width: 16rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
 }
@@ -474,7 +517,7 @@ body {
   border-radius: 8px;
   padding: 0 0.75rem;
   background: var(--surface);
-  font-size: 0.9375rem;
+  font-size: var(--text-base);
   font-weight: 400;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -505,7 +548,7 @@ body {
 }
 
 .metric__label {
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-weight: 600;
   text-transform: uppercase;
@@ -514,7 +557,7 @@ body {
 
 .metric__value {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: var(--text-lg);
   font-weight: 600;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
@@ -523,7 +566,7 @@ body {
 /* Explicit N/A-with-reason under a milestone metric (never a misleading 0). */
 .metric__reason {
   margin: 0.125rem 0 0;
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   line-height: 1.3;
   text-transform: none;
@@ -549,7 +592,7 @@ body {
   background: var(--surface);
   color: var(--text-muted);
   font: inherit;
-  font-size: 0.625rem;
+  font-size: var(--text-sm);
   font-weight: 700;
   font-style: italic;
   line-height: 1;
@@ -574,7 +617,7 @@ body {
   background: var(--text);
   color: var(--surface);
   border-radius: 6px;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   font-weight: 400;
   font-style: normal;
   line-height: 1.4;
@@ -617,7 +660,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   color: var(--text);
 }
 
@@ -629,7 +672,7 @@ body {
   border-radius: 8px;
   padding: 0 0.5rem;
   background: var(--surface);
-  font-size: 0.875rem;
+  font-size: var(--text-base);
 }
 
 .wizard__choices {
@@ -645,7 +688,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
 }
 
 .wizard__presets {
@@ -656,7 +699,7 @@ body {
 
 .wizard__note,
 .wizard__helper {
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   color: var(--text-muted);
   margin: 0;
 }
@@ -699,20 +742,20 @@ body {
 }
 
 .wizard__summary dt {
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
 .wizard__summary dd {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--text-base);
 }
 
 .wizard__terms {
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
 }
 
 /* --- address autocomplete + Census-derived households (M3 location) --------- */
@@ -730,7 +773,7 @@ body {
 
 .places__status {
   margin: 0.375rem 0 0;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 
@@ -754,7 +797,7 @@ body {
 .places__option {
   padding: 0.5rem 0.625rem;
   border-radius: 6px;
-  font-size: 0.875rem;
+  font-size: var(--text-base);
   color: var(--text);
   cursor: pointer;
 }
@@ -765,7 +808,7 @@ body {
 /* Households block: a flex column (via .wizard__field) of label, basis toggle,
  * input, and the provenance line. */
 .places__households-label {
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
 }
@@ -783,7 +826,7 @@ body {
   background: var(--surface);
   color: var(--text-muted);
   font: inherit;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   padding: 0.3rem 0.75rem;
   cursor: pointer;
@@ -798,7 +841,7 @@ body {
 
 .places__provenance {
   margin: 0;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
@@ -814,7 +857,7 @@ body {
 .wizard__field-hint {
   display: block;
   margin-top: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -829,7 +872,7 @@ body {
 }
 .space-assumptions > legend {
   padding: 0 0.4rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
 }
@@ -846,7 +889,7 @@ body {
 
 .assumption__provenance {
   margin: 0;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
@@ -869,7 +912,7 @@ body {
   gap: 0.2rem;
   padding: 0.05rem 0.4rem;
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 .assumption__badge--verified {
@@ -883,13 +926,13 @@ body {
 
 .assumption__warn {
   margin: 0;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--warning);
 }
 
 .assumption__sources {
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 .assumption__sources > summary {
@@ -898,7 +941,7 @@ body {
 
 .assumption__hint {
   margin: 0;
-  font-size: 0.7rem;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--text-muted);
 }
@@ -913,7 +956,7 @@ body {
 }
 
 .settings-tab__status {
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 
@@ -947,14 +990,14 @@ body {
 }
 
 .settings-tab__control-label {
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   color: var(--text);
 }
 
 .settings-tab__control-value {
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
 }
 
 /* Two-column control rows on wider viewports; single column at 375. */
@@ -977,7 +1020,7 @@ body {
 
 .projection-tab__heading {
   margin: 0 0 0.5rem;
-  font-size: 0.9375rem;
+  font-size: var(--text-base);
   font-weight: 600;
 }
 
@@ -1030,7 +1073,7 @@ body {
 
 .decision-banner__headline {
   margin: 0;
-  font-size: 1.3125rem;
+  font-size: var(--text-lg);
   font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.25;
@@ -1038,7 +1081,7 @@ body {
 
 .decision-banner__sub {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   color: var(--text-muted);
   line-height: 1.45;
 }
@@ -1049,6 +1092,17 @@ body {
   gap: 0;
   margin: 0;
   border-left: 1px solid var(--line);
+}
+
+/* Epic G (#39/#40): the owner detail page drops the verdict block — the banner is
+   tiles ONLY, so the container has a neutral rail (no verdict color) and no internal
+   divider; the tiles fill the full width. */
+.decision-banner--tiles-only {
+  border-left: 4px solid var(--line);
+}
+.decision-banner--tiles-only .decision-tiles {
+  border-left: none;
+  width: 100%;
 }
 
 .decision-tile {
@@ -1064,7 +1118,7 @@ body {
 }
 
 .decision-tile__label {
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-weight: 600;
   text-transform: uppercase;
@@ -1072,14 +1126,14 @@ body {
 }
 
 .decision-tile__value {
-  font-size: 1.5rem;
+  font-size: var(--text-lg);
   font-weight: 600;
   letter-spacing: -0.02em;
 }
 
 .decision-tile__reason {
   margin: 0.125rem 0 0;
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   line-height: 1.4;
 }
@@ -1095,7 +1149,7 @@ body {
   margin: -5px -6px;
   min-height: 24px;
   font: inherit;
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--brand-primary);
   text-decoration: underline;
@@ -1137,7 +1191,7 @@ body {
   margin: 0;
   padding: 0;
   list-style: none;
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -1184,7 +1238,7 @@ body {
 .three-year-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
 }
 
 .three-year-table th,
@@ -1199,7 +1253,7 @@ body {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
 }
 .three-year-table th[scope="col"]:first-child,
 .three-year-table__label {
@@ -1289,12 +1343,12 @@ body {
   gap: 3px;
 }
 .kpi__label {
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-weight: 600;
 }
 .kpi__value {
-  font-size: 1.1875rem;
+  font-size: var(--text-lg);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -1360,10 +1414,10 @@ body {
   display: flex;
   align-items: baseline;
   gap: 0.375rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
 }
 .cashflow-chart__milestone-badge {
-  font-size: 0.875rem;
+  font-size: var(--text-base);
   line-height: 1;
 }
 .cashflow-chart__milestone-item--grandOpening .cashflow-chart__milestone-badge {
@@ -1385,18 +1439,109 @@ body {
 
 /* --- detail page: cash-flow dual-encoding, monthly table, shell (crown jewel) - */
 .cashflow-chart {
+  /* Shared month geometry (#40): the SVG left gutter AND the monthly table's label
+     column are both this fraction of the width, so the chart's month bands sit
+     directly above the table's month columns. The plot is wide + scrolls so the 13
+     equal columns never crush their figures; the chart scrolls WITH the table. */
+  --cf-label-col: 14%;
+  --cf-plot-min: 58rem;
   margin: 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
 }
+/* Series legend on the LEFT (#40), chart + table stacked on the right. */
+.cashflow-chart__frame {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+}
+.cashflow-chart__legend {
+  flex: 0 0 auto;
+  width: 7.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.cashflow-chart__legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.cashflow-chart__legend-swatch {
+  flex: none;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+}
+.cashflow-chart__legend-swatch--cum {
+  height: 0;
+  border-top: 2px solid var(--brand-primary);
+  border-radius: 0;
+}
+.cashflow-chart__legend-swatch--net {
+  background: var(--success);
+  opacity: 0.6;
+}
+/* The chart + monthly table share ONE horizontal scroll so they stay aligned. */
+.cashflow-chart__plot {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
 /* #196: the SVG follows its viewBox aspect (660:240) instead of a pinned 240px
-   height. On a narrow phone column the box scales down proportionally — no
-   ~55% letterboxed empty band above/below the cumulative-cash trajectory. */
-.cashflow-chart svg {
+   height. The min-width keeps the 13 month bands wide enough to align with the
+   table columns (both share --cf-plot-min); on a narrow column the plot scrolls. */
+.cashflow-chart__svg {
   display: block;
   width: 100%;
+  min-width: var(--cf-plot-min);
   height: auto;
+}
+.cashflow-chart__axis {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.cashflow-chart__axis-title {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.cashflow-chart__axis-tick {
+  fill: var(--text-muted);
+  font-size: 11px;
+  text-anchor: end;
+}
+.cashflow-chart__gridline {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.7;
+}
+.cashflow-chart__milestone-label {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+@media (max-width: 560px) {
+  .cashflow-chart__frame {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .cashflow-chart__legend {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: auto;
+    gap: 0.375rem 1rem;
+  }
 }
 .cashflow-chart__area {
   fill: var(--brand-primary);
@@ -1420,7 +1565,7 @@ body {
   text-anchor: middle;
 }
 .cashflow-chart__caption {
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 .cashflow-chart__caption strong {
@@ -1432,9 +1577,18 @@ body {
   overflow-x: auto;
 }
 .cashflow-table {
+  /* table-layout:fixed + equal month columns + the shared label gutter line the
+     columns up under the chart's month bands (#40). min-width matches the chart
+     so both scroll together inside .cashflow-chart__plot. */
   width: 100%;
+  min-width: var(--cf-plot-min, 58rem);
+  table-layout: fixed;
   border-collapse: collapse;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
+}
+.cashflow-table th[scope="col"]:first-child,
+.cashflow-table th[scope="row"] {
+  width: var(--cf-label-col, 14%);
 }
 .cashflow-table th,
 .cashflow-table td {
@@ -1458,7 +1612,7 @@ body {
 }
 
 .kpi__sub {
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1478,6 +1632,39 @@ body {
   max-width: 60rem;
   margin: 0 auto;
 }
+/* Page header (#266): name on the LEFT, the trade-area map in the upper-RIGHT as a
+   roughly square box (not a stretched full-width banner). */
+.detail__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.detail__header-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 14rem;
+  flex: 1 1 18rem;
+}
+.detail__map {
+  flex: 0 0 auto;
+  width: 15rem;
+  max-width: 42vw;
+}
+/* a11y section heading for the KPIs tab panel (keeps the h1→h2 chain). */
+.detail__panel-heading {
+  margin: 0 0 0.25rem;
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+@media (max-width: 560px) {
+  .detail__map {
+    width: 100%;
+    max-width: none;
+  }
+}
 .detail--loading {
   padding: 2rem 0;
   color: var(--text-muted);
@@ -1487,7 +1674,7 @@ body {
   flex-direction: column;
   gap: 0.25rem;
   max-width: 24rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
 }
 .detail__name input {
@@ -1495,7 +1682,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0 0.75rem;
-  font-size: 1rem;
+  font-size: var(--text-base);
   font-weight: 600;
 }
 .detail__rent {
@@ -1503,7 +1690,7 @@ body {
   flex-direction: column;
   gap: 0.25rem;
   max-width: 16rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
 }
 .detail__rent input {
@@ -1545,7 +1732,7 @@ body {
   padding: 0.5rem 0.875rem;
   margin-bottom: -1px;
   font: inherit;
-  font-size: 0.875rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text-muted);
   border-bottom: 2px solid transparent;
@@ -1581,8 +1768,16 @@ body {
   border-radius: 10px;
 }
 .map__caption {
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   color: var(--text-muted);
+}
+/* Detail map (#266): a roughly SQUARE box (the wide proxy image is cropped to it),
+   not a stretched full-width banner. */
+.map--detail .map__img {
+  width: 100%;
+  max-width: none;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
 }
 .map--empty {
   align-items: center;
@@ -1593,10 +1788,17 @@ body {
   color: var(--text-muted);
 }
 .map--detail.map--empty {
-  height: 160px;
+  aspect-ratio: 1 / 1;
+}
+/* #266: a transient upstream/quota failure reads as "map unavailable", distinct
+   from the "no mapped location" placeholder; both reuse the dashed empty box. */
+.map--unavailable,
+.map--loading {
+  /* styling inherited from .map--empty; explicit selectors keep the gate honest */
+  color: var(--text-muted);
 }
 .map__placeholder-text {
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
 }
 /* List-row thumbnail variant (compact, fixed box). */
 .map--thumb {
@@ -1614,7 +1816,7 @@ body {
   height: 44px;
 }
 .map--thumb .map__placeholder-text {
-  font-size: 0.5625rem;
+  font-size: var(--text-sm);
   text-align: center;
 }
 
@@ -1626,7 +1828,7 @@ body {
 }
 .evidence__heading {
   margin: 0 0 0.75rem;
-  font-size: 0.9375rem;
+  font-size: var(--text-base);
   font-weight: 600;
 }
 .evidence__list {
@@ -1648,12 +1850,12 @@ body {
   flex-wrap: wrap;
 }
 .evidence__label {
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
 }
 .evidence__badge {
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   padding: 0.05rem 0.45rem;
   border: 1px solid var(--line);
@@ -1670,13 +1872,13 @@ body {
 }
 .evidence__value {
   margin-top: 0.125rem;
-  font-size: 1.0625rem;
+  font-size: var(--text-base);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 .evidence__meta {
   margin: 0.125rem 0 0;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--text-muted);
 }
@@ -1713,7 +1915,7 @@ body {
   justify-content: center;
   border-radius: 50%;
   font-weight: 700;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   line-height: 1;
   color: var(--surface);
 }
@@ -1733,11 +1935,11 @@ body {
 .degraded__title {
   margin: 0 0 0.125rem;
   font-weight: 600;
-  font-size: 0.875rem;
+  font-size: var(--text-base);
 }
 .degraded__body {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   color: var(--text-muted);
   line-height: 1.4;
 }
@@ -1845,7 +2047,7 @@ body {
 }
 .narrative-canvas__grounded-title {
   margin: 0 0 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -1867,7 +2069,7 @@ body {
   background: var(--surface-alt);
   color: var(--brand-deep);
   font-variant-numeric: tabular-nums;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1908,7 +2110,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text-muted);
 }
@@ -1932,7 +2134,7 @@ body {
   border-radius: 999px;
   background: var(--surface-alt);
   border: 1px solid var(--line);
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
 }
 .wizard-steps__item--current .wizard-steps__num {
@@ -1954,7 +2156,7 @@ body {
 }
 .wizard-step__heading {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: var(--text-lg);
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text);
@@ -1962,20 +2164,185 @@ body {
 .wizard-step__lede {
   margin: 0;
   max-width: 52ch;
-  font-size: 0.9375rem;
+  font-size: var(--text-base);
   line-height: 1.5;
   color: var(--text-muted);
 }
 .wizard-step__note {
   margin: 0;
   max-width: 52ch;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   line-height: 1.45;
   color: var(--text-muted);
   padding: 0.625rem 0.75rem;
   border-left: 3px solid var(--line);
   background: var(--surface-alt);
   border-radius: 0 6px 6px 0;
+}
+
+/* --- Phase 2 wizard chrome (Epics B/C) --- */
+
+/* Subtle all-caps "CREATE PROJECTION" eyebrow over the prominent breadcrumb
+   (owner Decision 17). Small + muted so the breadcrumb is the de-facto heading.
+   The `.wizard__intro` scope wins specificity over the legacy `.wizard__intro h1`
+   display-heading rule (which still styles the post-Generate result h1). */
+.wizard__intro .wizard__eyebrow {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* The single "Back to projections" leave affordance (top-left, every step). */
+.wizard__back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: var(--text-base);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.wizard__back-link:hover {
+  color: var(--brand-primary);
+}
+
+/* The planning-estimates disclaimer on the last step (implicit acceptance, #36). */
+.wizard__disclaimer {
+  margin: 0;
+  max-width: 52ch;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* Optional field (store name) — the label reads a touch lighter than a required one. */
+.wizard__field--optional > input::placeholder {
+  color: var(--placeholder);
+}
+
+/* A small pencil edit affordance (households + donor shares). */
+.wizard-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--brand-primary);
+  font-size: var(--text-base);
+  cursor: pointer;
+}
+.wizard-edit-btn:hover {
+  border-color: var(--brand-primary);
+}
+
+/* Households confirm: the resolved number as static text + the pencil (#25). */
+.households-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+.households-confirm__value {
+  font-size: var(--text-lg);
+  font-weight: var(--w-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* Donor market share: three SMALL side-by-side fields, "%" glued to the number. */
+.donor-shares {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+.donor-share {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.donor-share__label {
+  font-size: var(--text-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+.donor-share__value {
+  font-size: var(--text-lg);
+  font-weight: var(--w-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.donor-share__field {
+  display: inline-flex;
+  align-items: center;
+  width: 5rem;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.5rem 0 0.75rem;
+  background: var(--surface);
+}
+.donor-share__input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: right;
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.donor-share__input:focus {
+  outline: none;
+}
+.donor-share__field:focus-within {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+.donor-share__suffix {
+  padding-left: 0.25rem;
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+
+/* Between-steps spinner (#15): a plain-English blocking status (Generate). */
+.wizard-spinner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+.wizard-spinner__dot {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid var(--line);
+  border-top-color: var(--brand-primary);
+  border-radius: 999px;
+  animation: wizard-spin 0.7s linear infinite;
+}
+@keyframes wizard-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wizard-spinner__dot {
+    animation: none;
+  }
+}
+
+/* Make the current breadcrumb step prominent — the page's de-facto heading (#17). */
+.wizard-steps__item--current .wizard-steps__label,
+.wizard-steps__item--current .wizard-steps__btn {
+  font-weight: var(--w-bold);
+  color: var(--brand-primary);
 }
 
 /* Basic cost-schedule rows (the editor ticket enriches this). */
@@ -1986,7 +2353,7 @@ body {
   margin: 0;
 }
 .wizard__cost-schedule > legend {
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
   padding: 0 0.375rem;
@@ -2019,7 +2386,7 @@ body {
   gap: 1rem;
   padding: 0.5rem 0;
   border-bottom: 1px solid var(--line);
-  font-size: 0.875rem;
+  font-size: var(--text-base);
 }
 .wizard-review__row > dt {
   color: var(--text-muted);
@@ -2088,7 +2455,7 @@ body {
 .feedback-modal__panel h2,
 .conflict-modal__title {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: var(--text-lg);
   font-weight: 700;
   letter-spacing: -0.01em;
   line-height: 1.25;
@@ -2108,7 +2475,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
 }
@@ -2121,7 +2488,7 @@ body {
   padding: 0.5rem 0.75rem;
   background: var(--surface);
   font: inherit;
-  font-size: 0.9375rem;
+  font-size: var(--text-base);
   font-weight: 400;
   color: var(--text);
 }
@@ -2143,14 +2510,14 @@ body {
   border-left: 3px solid var(--warning);
   border-radius: 0 6px 6px 0;
   background: var(--surface-alt);
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   line-height: 1.45;
   color: var(--text-muted);
 }
 
 .feedback-modal__success p {
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: var(--text-base);
   line-height: 1.5;
   color: var(--text);
 }
@@ -2160,13 +2527,13 @@ body {
   letter-spacing: 0.01em;
 }
 .feedback-modal__success .feedback-modal__note {
-  font-size: 0.8125rem;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 
 .conflict-modal__body {
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: var(--text-base);
   line-height: 1.5;
   color: var(--text-muted);
 }

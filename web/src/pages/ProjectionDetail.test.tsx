@@ -1,8 +1,8 @@
 // web/src/pages/ProjectionDetail.test.tsx — detail load-failure + header chips.
 //
 // #146: a 404/failed load renders a load-failed DegradedState, never an infinite
-// "Loading…" spinner. #150: a successful load publishes the server model_version
-// into the shared TopBar header chip (detail-page-only; rendered by App).
+// "Loading…" spinner. #38: the model_version is no longer displayed — even after a
+// successful load, no version chip is rendered (it stays on computed_json).
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -76,13 +76,17 @@ describe("ProjectionDetail — load failure (#146)", () => {
   });
 });
 
-describe("ProjectionDetail — header model-version chip (#150)", () => {
-  it("publishes the server model_version into the shared TopBar on the detail route", async () => {
+describe("ProjectionDetail — no model-version chip (#38)", () => {
+  it("never renders a model-version chip even after the projection loads", async () => {
+    // model_version stays on computed_json (vm.model_version is still "2.1.0"),
+    // but it is no longer displayed anywhere in the UI (#38).
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     window.history.pushState({}, "", "/p/p_8x");
     render(<App />);
-    const chip = await screen.findByTestId("version-chip");
-    expect(chip).toHaveTextContent("model 2.1.0");
+    // Wait for the projection to actually load before asserting the chip's absence.
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("version-chip")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^model\s/i)).not.toBeInTheDocument();
   });
 });
 
@@ -101,7 +105,7 @@ describe("ProjectionDetail — Penny mount (PE6, #125)", () => {
     render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
     const fab = await screen.findByTestId("penny-fab");
     expect(fab).toHaveAttribute("data-state", "ai-enabled");
-    expect(fab).toHaveAccessibleName(/ask penny/i);
+    expect(fab).toHaveAccessibleName(/penny ai/i);
   });
 
   it("degrades to the muted Settings FAB when AI is opt-out (?ai=off) — never a dead-end", async () => {
@@ -164,6 +168,54 @@ describe("ProjectionDetail — Penny mount (PE6, #125)", () => {
     await waitFor(() => expect(vi.mocked(fetchProjection)).toHaveBeenCalledTimes(2));
 
     vi.unstubAllGlobals();
+  });
+});
+
+describe("App shell — Penny is openable on every primary route (#264, Epic E #3)", () => {
+  afterEach(() => {
+    localStorage.clear();
+    window.history.pushState({}, "", "/");
+  });
+
+  it("mounts the general-help Penny on a READ-ONLY detail view (the page mounts none of its own)", async () => {
+    // The read-only detail page has no edit token, so it mounts NO Penny of its own
+    // (asserted above). The App shell adds the general-help Penny so Penny is still
+    // openable here — and it never errors with no editable projection loaded.
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    window.history.pushState({}, "", "/p/p_8x"); // view route, NO /edit
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByTestId("decision-banner");
+
+    const fab = screen.getByTestId("penny-fab"); // exactly one (throws if doubled)
+    expect(fab).toHaveAttribute("data-state", "ai-enabled");
+    expect(fab).toHaveAccessibleName(/penny ai/i);
+
+    await user.click(fab);
+    await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(screen.getByTestId("penny-transcript")).toHaveTextContent(/i'm penny/i),
+    );
+  });
+
+  it("does NOT double-mount Penny on the editable detail page (the page mounts its own)", async () => {
+    // Edit mode mounts the live PennyAssistant; the shell must NOT add a second FAB.
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    window.history.pushState({}, "", "/p/p_8x/edit");
+    render(<App />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.getAllByTestId("penny-fab")).toHaveLength(1);
+  });
+
+  it("honors ?ai=off on the read-only view: the shell's Penny degrades to the muted FAB", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    window.history.pushState({}, "", "/p/p_8x?ai=off");
+    render(<App />);
+    await screen.findByTestId("decision-banner");
+    const fab = screen.getByTestId("penny-fab");
+    expect(fab).toHaveAttribute("data-state", "ai-disabled");
+    expect(fab).toHaveAccessibleName(/settings/i);
   });
 });
 
@@ -299,11 +351,75 @@ describe("ProjectionDetail — heading hierarchy (a11y #203)", () => {
     expect(h1).toHaveTextContent(/House of Hope/i);
   });
 
-  it("inserts an h2 section heading so the existing h3s don't skip levels", async () => {
+  it("keeps h2 section headings so the page never skips h1→h3", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     render(<ProjectionDetail slug="p_8x" edit={false} />);
     await screen.findByRole("heading", { level: 1 });
-    expect(screen.getByRole("heading", { level: 2 })).toBeInTheDocument();
+    // The Projection panel section headings ("3-year projection", "First-year cash
+    // flow") are h2 (Epic G removed the standalone "Decision & 3-year projection").
+    expect(screen.getAllByRole("heading", { level: 2 }).length).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("heading", { name: /decision & 3-year projection/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+// Epic G (#39/#40/#41) — the owner detail page de-duplicates the decision, hides the
+// cash-gap tile, relabels the capital tile, and reflows into a Projection | KPIs IA
+// with Settings merged into the KPIs tab + a trade-area map in the upper-right.
+describe("ProjectionDetail — Epic G reorg", () => {
+  it("SUPPRESSES the verdict on the owner read page (reco headline/sub not repeated)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("reco-chip")).not.toBeInTheDocument();
+    expect(screen.queryByText(/the trough is covered/i)).not.toBeInTheDocument();
+  });
+
+  it("HIDES the first-year cash-gap tile (metric.cashGap stays in the vm)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("metric-cashgap")).not.toBeInTheDocument();
+    // Capital tile drops "required".
+    expect(screen.getByTestId("tile-capital")).toHaveTextContent(/startup capital/i);
+    expect(screen.getByTestId("tile-capital")).not.toHaveTextContent(/required/i);
+  });
+
+  it("renders the 2nd tile set (KPIs) inline on the read page so kpi-revenue is visible", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    expect(await screen.findByTestId("kpi-revenue")).toBeInTheDocument();
+    // No Settings on the read page.
+    expect(screen.queryByTestId("settings-tab")).not.toBeInTheDocument();
+  });
+
+  it("places the trade-area map in the page header (upper-right)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.getByTestId("detail-map")).toBeInTheDocument();
+  });
+
+  it("edit mode shows a Projection | KPIs tablist and merges Settings into the KPIs tab", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+
+    // The tablist is Projection | KPIs (no standalone Settings tab).
+    expect(screen.getByRole("tab", { name: /projection/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /kpis/i })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /^settings$/i })).not.toBeInTheDocument();
+
+    // Settings is hidden under the (inactive) KPIs tab, then revealed on activation.
+    expect(screen.getByTestId("settings-tab")).not.toBeVisible();
+    await user.click(screen.getByRole("tab", { name: /kpis/i }));
+    expect(screen.getByTestId("settings-tab")).toBeVisible();
+    // The KPIs tab also carries the 2nd tile set.
+    expect(screen.getByTestId("kpi-revenue")).toBeVisible();
+    localStorage.clear();
   });
 });
 

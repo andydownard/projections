@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PennyDrawer } from "./PennyDrawer";
+import { PennyDrawer, PennyGeneralAssistant } from "./PennyDrawer";
 
 /**
  * jsdom does not implement window.matchMedia. Install a stub so the component's
@@ -33,8 +33,8 @@ describe("PennyDrawer — collapsed FAB", () => {
     const fab = screen.getByTestId("penny-fab");
     expect(fab).toHaveAttribute("aria-haspopup", "dialog");
     expect(fab).toHaveAttribute("aria-expanded", "false");
-    // Accessible name names Penny + the projection, not a bare icon.
-    expect(fab).toHaveAccessibleName(/ask penny/i);
+    // Accessible name is the product name "Penny AI" (#264), not a bare icon.
+    expect(fab).toHaveAccessibleName(/penny ai/i);
     // Avatar is a static image with alt text (no animated avatar).
     const avatar = within(fab).getByRole("img");
     expect(avatar).toHaveAttribute("src", "/penny-avatar.png");
@@ -50,8 +50,8 @@ describe("PennyDrawer — collapsed FAB", () => {
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
     expect(screen.getByTestId("penny-fab")).toHaveAttribute("aria-expanded", "true");
-    // Header carries the avatar + the name "Penny".
-    expect(within(dialog).getByRole("heading", { name: "Penny" })).toBeInTheDocument();
+    // Header carries the avatar + the name "Penny AI" (#264).
+    expect(within(dialog).getByRole("heading", { name: "Penny AI" })).toBeInTheDocument();
   });
 
   it("opens via keyboard (Enter) when the FAB is focused", async () => {
@@ -74,18 +74,18 @@ describe("PennyDrawer — collapsed FAB", () => {
 });
 
 describe("PennyDrawer — open/close + focus management", () => {
-  it("moves focus into the drawer on open and back to the FAB on close (FAB toggle)", async () => {
+  it("moves focus into the drawer on open and back to the FAB on close (back arrow)", async () => {
     const user = userEvent.setup();
     render(<PennyDrawer />);
     const fab = screen.getByTestId("penny-fab");
     await user.click(fab);
-    // Focus moves INTO the drawer — the dialog itself is the focus anchor (there is
-    // no header close button; closing is Esc / scrim / the FAB toggle, spec §1).
+    // Focus moves INTO the drawer — the dialog itself is the focus anchor.
     const dialog = await screen.findByRole("dialog");
     await waitFor(() => expect(dialog).toHaveFocus());
 
-    // Re-clicking the FAB toggles the drawer closed and restores focus to the FAB.
-    await user.click(fab);
+    // The in-drawer LEFT-pointing back arrow slides the drawer closed and restores
+    // focus to the FAB (the FAB tab is hidden while open — see #5 tests below).
+    await user.click(within(dialog).getByRole("button", { name: /close penny/i }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(fab).toHaveFocus();
   });
@@ -133,18 +133,80 @@ describe("PennyDrawer — body + composer shell", () => {
     expect(screen.getByTestId("custom-composer")).toBeInTheDocument();
   });
 
-  it("has a de-crufted header: just the avatar + name (no provider line, info, New chat or close)", async () => {
+  it("has a de-crufted header: avatar + name + a back arrow (no provider line, info or New chat)", async () => {
     const user = userEvent.setup();
     render(<PennyDrawer />);
     await user.click(screen.getByTestId("penny-fab"));
     await screen.findByRole("dialog");
-    // The removed cruft is gone…
+    // The removed cruft is still gone…
     expect(screen.queryByTestId("penny-provider")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /about penny/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /new chat/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /close penny/i })).not.toBeInTheDocument();
-    // …leaving just the avatar + the name "Penny".
-    expect(screen.getByRole("heading", { name: "Penny" })).toBeInTheDocument();
+    // …leaving the avatar, the name "Penny AI", and the LEFT-pointing back arrow that
+    // slides the drawer closed (#264).
+    expect(screen.getByRole("heading", { name: "Penny AI" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /close penny/i })).toBeInTheDocument();
+  });
+});
+
+describe("PennyDrawer — back arrow + FAB hides while open (#264)", () => {
+  it("renders a LEFT-pointing back arrow in the open drawer header", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    await user.click(screen.getByTestId("penny-fab"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("penny-back")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /close penny/i })).toBeInTheDocument();
+  });
+
+  it("hides the FAB tab while the drawer is open and restores it on close", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    const fab = screen.getByTestId("penny-fab");
+    // Closed: the tab is shown and interactive.
+    expect(fab).toHaveAttribute("data-scroll-hidden", "false");
+    expect(fab).toHaveStyle({ opacity: "1", pointerEvents: "auto" });
+
+    await user.click(fab);
+    await screen.findByRole("dialog");
+    // Open: the tab DISAPPEARS (hidden + non-interactive) so it never sits over the
+    // open panel; the in-drawer back arrow is the close affordance.
+    expect(fab).toHaveAttribute("data-scroll-hidden", "true");
+    expect(fab).toHaveStyle({ opacity: "0", pointerEvents: "none" });
+
+    // Closing via the back arrow brings the tab back.
+    await user.click(screen.getByRole("button", { name: /close penny/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(fab).toHaveAttribute("data-scroll-hidden", "false");
+    expect(fab).toHaveStyle({ opacity: "1", pointerEvents: "auto" });
+  });
+
+  it("closes via the back arrow with the keyboard (Enter) and returns focus to the FAB", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    const fab = screen.getByTestId("penny-fab");
+    await user.click(fab);
+    const dialog = await screen.findByRole("dialog");
+    // The back arrow is a real button: focusable + activatable by keyboard (a11y).
+    const back = within(dialog).getByRole("button", { name: /close penny/i });
+    back.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(fab).toHaveFocus();
+  });
+
+  it("hides the FAB and shows the back arrow on the DESKTOP non-modal panel too", async () => {
+    stubMatchMedia({ "(min-width: 1180px)": true });
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    const fab = screen.getByTestId("penny-fab");
+    await user.click(fab);
+    const dialog = await screen.findByRole("dialog");
+    // Even on the wide non-modal layout the tab disappears (it no longer shifts to
+    // sit beside the drawer); the in-drawer back arrow is the close affordance.
+    expect(fab).toHaveAttribute("data-scroll-hidden", "true");
+    expect(fab).toHaveStyle({ opacity: "0", pointerEvents: "none" });
+    expect(within(dialog).getByRole("button", { name: /close penny/i })).toBeInTheDocument();
   });
 });
 
@@ -296,5 +358,85 @@ describe("PennyDrawer — AI-disabled fallback", () => {
     await user.click(screen.getByTestId("penny-fab"));
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("PennyGeneralAssistant — general help on projection-less routes (#264)", () => {
+  it("exposes the 'Penny AI' FAB and opens with a general (no-projection) greeting", async () => {
+    const user = userEvent.setup();
+    render(<PennyGeneralAssistant />);
+    const fab = screen.getByTestId("penny-fab");
+    expect(fab).toHaveAttribute("data-state", "ai-enabled");
+    expect(fab).toHaveAccessibleName(/penny ai/i);
+
+    await user.click(fab);
+    await screen.findByRole("dialog");
+    // The greeting is general help, not projection-scoped — and Penny never errors
+    // without a projection loaded.
+    await waitFor(() =>
+      expect(screen.getByTestId("penny-transcript")).toHaveTextContent(/i'm penny/i),
+    );
+  });
+
+  it("answers a message with a general-help reply and never fabricates a number", async () => {
+    const user = userEvent.setup();
+    render(<PennyGeneralAssistant />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+
+    await user.type(screen.getByRole("textbox", { name: /ask penny/i }), "help me get started");
+    await user.click(screen.getByRole("button", { name: /^send$/i }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("penny-transcript")).toHaveTextContent(
+        /open or start a projection/i,
+      ),
+    );
+  });
+
+  it("degrades to the muted Settings FAB when AI is opt-out (never a dead-end)", async () => {
+    const user = userEvent.setup();
+    render(<PennyGeneralAssistant aiEnabled={false} settingsHref="/?settings=ai" />);
+    const fab = screen.getByTestId("penny-fab");
+    expect(fab).toHaveAttribute("data-state", "ai-disabled");
+    expect(fab).toHaveAccessibleName(/settings/i);
+    await user.click(fab);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows the greeting first, then appends the user turn and Penny's reply in order", async () => {
+    const user = userEvent.setup();
+    render(<PennyGeneralAssistant />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    // The greeting is the intro bubble shown before any real turn.
+    await waitFor(() =>
+      expect(screen.getByTestId("penny-transcript-empty")).toHaveTextContent(/i'm penny/i),
+    );
+
+    await user.type(screen.getByRole("textbox", { name: /ask penny/i }), "hello");
+    await user.click(screen.getByRole("button", { name: /^send$/i }));
+
+    // After sending, the real turns render: the user's message THEN Penny's reply.
+    await waitFor(() =>
+      expect(screen.getByTestId("penny-transcript")).toHaveTextContent(
+        /open or start a projection/i,
+      ),
+    );
+    const turns = screen.getAllByTestId("penny-turn");
+    expect(turns[0]).toHaveAttribute("data-role", "user");
+    expect(turns[0]).toHaveTextContent("hello");
+    expect(turns[turns.length - 1]).toHaveAttribute("data-role", "assistant");
+  });
+
+  it("closes on Escape from the general drawer (never a dead-end without a projection)", async () => {
+    const user = userEvent.setup();
+    render(<PennyGeneralAssistant />);
+    const fab = screen.getByTestId("penny-fab");
+    await user.click(fab);
+    await screen.findByRole("dialog");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(fab).toHaveFocus();
   });
 });

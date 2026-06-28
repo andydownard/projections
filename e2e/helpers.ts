@@ -76,7 +76,9 @@ export async function mockPlaces(page: Page): Promise<void> {
 
 /**
  * Drive the shipped 5-step wizard to Generate a FRESH projection (not the seeded
- * `example`). Returns when the server view-model has rendered the result.
+ * `example`). The revised order (owner Decision 11) is Address → Square footage →
+ * Households → Donor market share → Startup costs, with "Generate projections" on the
+ * last step landing DIRECTLY on /p/<slug>/edit. Returns once that click is issued.
  * Requires `mockPlaces(page)` to have been called first.
  */
 export async function createProjectionViaWizard(
@@ -85,31 +87,28 @@ export async function createProjectionViaWizard(
 ): Promise<void> {
   await page.goto("/wizard");
 
-  // Step 1 — Store: name + resolve an address (the resolve fills households).
-  await page.getByLabel("Store name", { exact: true }).fill(storeName);
-  await page.getByRole("combobox", { name: "Store address" }).fill("123 Main St");
+  // Step 1 — Address: resolve an address (the resolve fills households). The store
+  // name is OPTIONAL and sits beneath the address; we set it for a recognisable label.
+  await page.getByRole("combobox", { name: "Address" }).fill("123 Main St");
   await page.getByRole("option").first().click();
+  await page.getByLabel("Store name (optional)").fill(storeName);
   await page.getByRole("button", { name: "Next" }).click();
 
-  // Step 2 — Trade area: households filled from the (stubbed) Census resolve. This
-  // assertion is the real synchronisation point — it waits for the resolve to land.
-  await expect(page.getByLabel("Households (trade area)")).toHaveValue("31798");
+  // Step 2 — Square footage: defaults 12,500 sq ft / 80% sales floor pass straight
+  // through (the building-size assertion is the resolve synchronisation point).
+  await expect(page.getByLabel(/building size/i)).toHaveValue("12500");
   await page.getByRole("button", { name: "Next" }).click();
 
-  // Step 3 — Space & rent (#245): sq ft / salesfloor / rent default-valid; rent
-  // pre-fills from the (stubbed) research benchmark. Defaults pass straight through.
-  await expect(page.getByLabel(/building size/i)).toHaveValue("10000");
+  // Step 3 — Confirm # of households: the resolved count renders as static text.
+  await expect(page.getByTestId("households-confirm")).toContainText("31,798 households");
   await page.getByRole("button", { name: "Next" }).click();
 
-  // Step 4 — Donor market: three explicit shares are pre-filled (6/8/10).
+  // Step 4 — Donor market share: three explicit shares are pre-filled (6/8/10).
   await page.getByRole("button", { name: "Next" }).click();
 
-  // Step 5 — Cost schedule: the default month-1 lump rows are valid.
-  await page.getByRole("button", { name: "Next" }).click();
-
-  // Step 6 — Review: terms is an EXPLICIT, active accept (#141 / PRD §21) that
-  // gates Generate; the seeded `example` predates this, so a fresh create is the
-  // only path that exercises terms_accepted -> a 200 (not 403) .xlsx export.
-  await page.getByRole("checkbox", { name: /planning estimates/i }).check();
-  await page.getByRole("button", { name: "Generate" }).click();
+  // Step 5 — Startup costs: rent pre-fills from the (stubbed) research benchmark and
+  // the default month-1 lump rows are valid. Terms acceptance is IMPLICIT on Generate
+  // (owner Decision 5) — there is no checkbox; the disclaimer is shown and the server
+  // still stamps EXPORT_DISCLAIMER so the .xlsx export stays a 200 (not 403).
+  await page.getByRole("button", { name: "Generate projections" }).click();
 }

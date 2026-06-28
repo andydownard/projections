@@ -1,24 +1,22 @@
 // web/src/pages/CreateProjectionPage.tsx — the full-page Create-Projection wizard.
 //
-// A full-page route (titled "Create Projection") rather than a modal, so Spec B's
-// left-slide Penny drawer composes cleanly. One step is visible at a time with a
-// step indicator, Back/Next, and Generate on the final step. A subtle "Back to
-// projections" link returns to the owner list. State lives in the shared
-// useWizardState hook (validation gates Next; a future step inserts without
-// rework). On Generate the collected
-// inputs are shaped to the flat backend body and POSTed; the server computes and
-// returns the Appendix-D view-model, which renders the decision banner + KPI
-// strip + monthly cash-flow. NO client math — every figure is the server's
-// { display } string (PRD §13 / CLAUDE.md hard rule).
+// A full-page route rather than a modal, so Spec B's left-slide Penny drawer composes
+// cleanly. One step is visible at a time over a prominent breadcrumb under a subtle
+// "CREATE PROJECTION" eyebrow (owner Decision 17). State lives in the shared
+// useWizardState hook. The step order (owner Decision 11) is Address → Square footage
+// → Households → Donor market share → Startup costs; there is NO Review step. On the
+// last step the primary button is "Generate projections": it shapes the collected
+// inputs to the flat backend body, POSTs, and — on success — lands DIRECTLY on
+// /p/<slug>/edit (owner Decision 12; no "projection ready" interstitial). Terms
+// acceptance is IMPLICIT (owner Decision 5 — the disclaimer still shows + stamps
+// artifacts). NO client math — the server computes (PRD §13 / CLAUDE.md hard rule).
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import type { PennyDraftApplied, PennyDraftState } from "../api/penny";
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
 import { researchRent } from "../api/research";
-import { type ViewModel, xlsxHref } from "../api/viewModel";
+import type { ViewModel } from "../api/viewModel";
 import { setOwnerToken } from "../api/projections";
-import { CashflowChart } from "../components/CashflowChart";
-import { DecisionBanner } from "../components/DecisionBanner";
 import { PennyDraftAssistant } from "../components/PennyDrawer";
 import { SidePanelProvider } from "../components/sidePanels";
 import {
@@ -29,22 +27,29 @@ import {
   type WizardDraft,
 } from "../wizard/shareHelper";
 import { StepIndicator } from "../wizard/StepIndicator";
-import { StepStore } from "../wizard/StepStore";
-import { StepTradeArea } from "../wizard/StepTradeArea";
-import { StepSpace } from "../wizard/StepSpace";
+import { StepSelectAddress } from "../wizard/StepSelectAddress";
+import { StepSquareFootage } from "../wizard/StepSquareFootage";
+import { StepHouseholds } from "../wizard/StepHouseholds";
 import { StepDonorMarket } from "../wizard/StepDonorMarket";
-import { StepCostSchedule } from "../wizard/StepCostSchedule";
-import { StepReview } from "../wizard/StepReview";
+import { StepStartupCosts } from "../wizard/StepStartupCosts";
 import { useWizardState, type WizardState } from "../wizard/useWizardState";
+import {
+  pathForStep,
+  stepFromPath,
+  STEP_LABELS,
+  STEPS,
+  type StepKey,
+} from "../wizard/steps";
 
 // Human labels for the server `draft_state` field keys Penny mutates (Spec §6.2),
-// shown on each per-field FieldChange affordance in the wizard drawer.
+// shown on each per-field FieldChange affordance in the wizard drawer. UI copy never
+// says "trade area" (owner Decision 8); `target_opening_date` is gone (Decision 13).
 const DRAFT_FIELD_LABELS: Record<string, string> = {
   name: "Store name",
   org_name: "Store name",
-  city: "Store address",
-  address: "Store address",
-  households: "Trade-area households",
+  city: "Address",
+  address: "Address",
+  households: "# of households",
   share_y1: "Year-1 donor share",
   share_y2: "Year-2 donor share",
   share_y3: "Year-3 donor share",
@@ -52,7 +57,6 @@ const DRAFT_FIELD_LABELS: Record<string, string> = {
   donation_value: "Donation value",
   occupancy_annual: "Annual occupancy",
   opening_month_number: "Opening month",
-  target_opening_date: "Target opening date",
   cost_schedule: "Cost schedule",
 };
 
@@ -78,7 +82,7 @@ function wizardToDraftState(wiz: WizardState): PennyDraftState {
       city: wiz.draft.city,
       org_name: wiz.draft.name,
       opening_month_number: wiz.draft.openingMonthNumber ?? DEFAULT_OPENING_MONTH_NUMBER,
-      target_opening_date: wiz.draft.targetOpeningDate ?? null,
+      target_opening_date: null,
     },
     assumptions: {
       share_y1: String(wiz.draft.shareY1),
@@ -95,39 +99,124 @@ function wizardToDraftState(wiz: WizardState): PennyDraftState {
 
 export interface CreateProjectionPageProps {
   aiOff?: boolean;
+  // Epic B (#261): the active step parsed from the route (/wizard/<step-slug>) by
+  // the App shell. null = the bare /wizard or an unknown slug → redirect to the
+  // current/first step. The page keeps the URL and the wizard cursor in sync so
+  // browser Back/Forward navigate between steps and each step is deep-linkable;
+  // the draft survives because this page never unmounts while on a /wizard route.
+  step?: StepKey | null;
 }
 
-export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProps) {
-  const wiz = useWizardState();
-  const [vm, setVm] = useState<ViewModel | null>(null);
+/** The step the cursor should START on, read from the deep-linked /wizard/<slug>
+ *  URL so the right step renders on the first paint (no flicker). Non-wizard or
+ *  unknown slugs start at the first step (the mount effect canonicalizes the URL). */
+function initialStepFromUrl(): number {
+  const s = stepFromPath(window.location.pathname);
+  return s ? STEPS.indexOf(s) : 0;
+}
+
+export function CreateProjectionPage({ aiOff = false, step = null }: CreateProjectionPageProps) {
+  const wiz = useWizardState(undefined, initialStepFromUrl());
+
+  // --- route ↔ step-cursor sync (Epic B #261) --------------------------------
+  // The wizard cursor and the URL are kept in lock-step: a Next/Back/jump pushes a
+  // new /wizard/<slug> history entry (so browser Back/Forward navigate steps), and
+  // a browser Back/Forward (an external URL change → a new `step` prop) drives the
+  // cursor. The draft lives in useWizardState above and is never unmounted across
+  // this navigation, so no input is lost. Each guarded by an equality check so the
+  // two directions converge instead of looping.
+  const stepContainerRef = useRef<HTMLDivElement | null>(null);
+  const mirrorInitRef = useRef(false);
+  const adoptInitRef = useRef(false);
+  const prevStepRef = useRef(wiz.step);
+  const [stepAnnounce, setStepAnnounce] = useState("");
+  const wizStepKey = wiz.stepKey;
+  const wizStep = wiz.step;
+
+  // Mount: canonicalize a bare/unknown /wizard URL to the current step's path. The
+  // cursor already started on the deep-linked step (initialStepFromUrl), so a valid
+  // slug is a no-op; a bare /wizard or unknown slug is REPLACED (no junk history
+  // entry) with the current step — the invalid-slug redirect guard.
+  useEffect(() => {
+    const target = pathForStep(wizStepKey) + window.location.search;
+    if (window.location.pathname + window.location.search !== target) {
+      window.history.replaceState(null, "", target);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cursor → URL: when the cursor advances/retreats (Next/Back/jump), push a NEW
+  // history entry and move focus to the new step heading + announce it (WCAG
+  // 2.4.3 / 4.1.3). The first run (mount) is skipped so initial load never steals
+  // focus and the mount effect owns canonicalization.
+  useEffect(() => {
+    if (!mirrorInitRef.current) {
+      mirrorInitRef.current = true;
+      prevStepRef.current = wizStep;
+      return;
+    }
+    const target = pathForStep(wizStepKey) + window.location.search;
+    if (window.location.pathname + window.location.search !== target) {
+      window.history.pushState(null, "", target);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+    if (prevStepRef.current !== wizStep) {
+      const heading = stepContainerRef.current?.querySelector<HTMLElement>(
+        ".wizard-step__heading",
+      );
+      if (heading) {
+        if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1");
+        heading.focus();
+      }
+      setStepAnnounce(`Step ${wizStep + 1} of ${STEPS.length}: ${STEP_LABELS[wizStepKey]}`);
+    }
+    prevStepRef.current = wizStep;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wizStep]);
+
+  // URL → cursor: a browser Back/Forward (or a typed URL) changes the route `step`
+  // prop. Adopt it into the cursor. A null prop (bare/unknown slug) is canonicalized
+  // back to the current step. The first run (mount) is skipped — the cursor already
+  // started on the right step via initialStepFromUrl.
+  useEffect(() => {
+    if (!adoptInitRef.current) {
+      adoptInitRef.current = true;
+      return;
+    }
+    if (step == null) {
+      const target = pathForStep(wizStepKey) + window.location.search;
+      if (window.location.pathname + window.location.search !== target) {
+        window.history.replaceState(null, "", target);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }
+      return;
+    }
+    const idx = STEPS.indexOf(step);
+    if (idx !== -1 && idx !== wizStep) wiz.goTo(idx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
   const [busy, setBusy] = useState(false);
   // One ephemeral Bearer for the whole wizard session's /penny/draft calls.
   const draftToken = useRef<string>(makeWizardDraftToken());
 
-  // #203 — on Generate the form (incl. the focused Generate button) unmounts and
-  // the result view mounts. Move focus to the result heading so a keyboard user
-  // isn't dropped to <body>/top-of-document, and announce the busy→ready transition
-  // via the polite live region below so a screen-reader user hears the projection
-  // was produced (WCAG 2.4.3 / 4.1.3).
-  const resultHeadingRef = useRef<HTMLHeadingElement | null>(null);
-  useEffect(() => {
-    if (vm) resultHeadingRef.current?.focus();
-  }, [vm]);
-  const generateStatus = vm ? "Projection ready." : busy ? "Generating your projection…" : "";
+  // A polite live region that announces the blocking Generate transition to assistive
+  // tech (the only async transition that warrants a between-steps spinner, #15).
+  const generateStatus = busy ? "Generating your projection…" : "";
 
-  // #245 — pre-fill rent on the Space & rent step from the server research endpoint
-  // (extract-only, off the compute hot path). Fires once per resolved-location +
-  // size + lease-basis key (a ref guards against refetch loops). With AI disabled,
-  // or no resolved location, we skip the call and the field stays the anchored
-  // benchmark / manual entry (CLAUDE.md "AI opt-out works end-to-end"). A failure
-  // degrades to manual — research NEVER blocks the wizard (API_SPEC §19.2).
+  // #245 — pre-fill rent (shown on the startup-costs step) from the server research
+  // endpoint (extract-only, off the compute hot path). Fires once per resolved-location
+  // + size + lease-basis key (a ref guards against refetch loops) as soon as an address
+  // resolves, so the rate is pre-filled by the time the operator reaches the cost step.
+  // With AI disabled or no resolved location we skip the call and the field stays the
+  // anchored benchmark / manual entry. A failure degrades to manual — research NEVER
+  // blocks the wizard (API_SPEC §19.2).
   const researchedKey = useRef<string | null>(null);
-  const { stepKey, resolved, draft, applyRentResearch, onRentResearchStart, onRentResearchError } =
-    wiz;
+  const { resolved, draft, applyRentResearch, onRentResearchStart, onRentResearchError } = wiz;
   const buildingSqft = draft.buildingSqft;
   const leaseType = draft.leaseType;
   useEffect(() => {
-    if (stepKey !== "space" || aiOff || !resolved || !(buildingSqft > 0)) return;
+    if (aiOff || !resolved || !(buildingSqft > 0)) return;
     const basis = leaseType === "gross" ? "gross" : "nnn";
     const key = `${resolved.location.place_id}|${buildingSqft}|${basis}`;
     if (researchedKey.current === key) return;
@@ -144,7 +233,6 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
       .then((r) => applyRentResearch(r))
       .catch(() => onRentResearchError());
   }, [
-    stepKey,
     resolved,
     buildingSqft,
     leaseType,
@@ -215,9 +303,6 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
       case "opening_month_number":
         wiz.set("openingMonthNumber", Number(value));
         break;
-      case "target_opening_date":
-        wiz.set("targetOpeningDate", String(value ?? ""));
-        break;
       case "cost_schedule":
         wiz.set("costSchedule", (value as CostScheduleRow[]) ?? []);
         break;
@@ -240,6 +325,8 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
     }
   }
 
+  // Generate: POST the create body and land DIRECTLY on the editable detail page
+  // (owner Decision 12 — no in-page result view, no "projection ready" interstitial).
   async function onGenerate(d: WizardDraft) {
     setBusy(true);
     try {
@@ -273,27 +360,17 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
         body: JSON.stringify(body),
       });
       const created = (await resp.json()) as ViewModel & { owner_token?: string };
-      // Persist the minted owner token so the owner-scoped list (PRD §20) finds it.
+      // Persist the minted owner token so /p/<slug>/edit is owner-authorized with no
+      // secret in the URL — the same path the owner list's Edit uses (#143).
       if (created.owner_token) {
         setOwnerToken(created.owner_token);
       }
-      setVm(created);
+      // Land directly on the editable projection (owner Decision 12).
+      window.history.pushState(null, "", `/p/${created.view_slug}/edit`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
     } finally {
       setBusy(false);
     }
-  }
-
-  // Open the just-created projection's full editable surface (3-year table, evidence,
-  // trade-area map, Settings sliders) so the create → review → refine loop closes
-  // here instead of forcing a trip through Home. The owner token minted on Generate
-  // is already persisted (setOwnerToken), so /p/<slug>/edit is owner-authorized with
-  // no secret in the URL — the same path the owner list's Edit uses (#143). A modified
-  // click (new tab/window) or non-primary button falls through to the real href.
-  function openProjection(e: MouseEvent<HTMLAnchorElement>, slug: string) {
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    e.preventDefault();
-    window.history.pushState(null, "", `/p/${slug}/edit`);
-    window.dispatchEvent(new PopStateEvent("popstate"));
   }
 
   // Subtle back-nav to the owner's projections list (route "/"). A plain left-click
@@ -305,9 +382,8 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
     window.dispatchEvent(new PopStateEvent("popstate"));
   }
 
-  // A polite live region kept at the SAME fragment position in BOTH the form and
-  // result trees, so it stays mounted across the Generate swap and a screen reader
-  // hears the text change (busy→ready) rather than a fresh, silent subtree (#203).
+  // A polite live region — kept mounted across the Generate transition so a screen
+  // reader hears that the projection is being produced before the route swaps (#203).
   const liveRegion = (
     <div
       data-testid="generate-status"
@@ -329,214 +405,133 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
     </div>
   );
 
-  if (vm) {
-    return (
-      <>
-        {liveRegion}
-        <div className="wizard">
-          <div className="wizard__result">
-            {/* #203 — the result view used to start with the DecisionBanner (a
-                <section> whose headline is a <p>), so there was no heading to land
-                on and focus reverted to <body>. A focusable result h1 (tabindex=-1)
-                receives focus on mount and names the projection. */}
-            <h1
-              ref={resultHeadingRef}
-              tabIndex={-1}
-              style={{ outline: "none", margin: "0 0 1rem", fontSize: "1.5rem", lineHeight: 1.25 }}
-            >
-              {vm.name?.trim() ? `${vm.name} — projection ready` : "Your projection is ready"}
-            </h1>
-            <DecisionBanner reco={vm.reco} metrics={vm.metrics} milestones={vm.milestones} />
-
-          <div className="kpis" data-testid="kpi-strip">
-            {vm.kpis.map((k) => (
-              <div
-                key={k.label}
-                className="kpi"
-                data-testid={/^total revenue$/i.test(k.label) ? "kpi-revenue" : `kpi-${k.label}`}
-              >
-                <span className="kpi__label">{k.label}</span>
-                <span className="kpi__value">{k.value.display}</span>
-              </div>
-            ))}
-          </div>
-
-          <CashflowChart
-            monthly={vm.monthly}
-            breakevenMonth={vm.breakevenMonth}
-            milestones={vm.milestones}
-          />
-
-          <div className="wizard__result-actions">
-            {/* Close the create → review → refine loop: the primary action opens the
-                full editable projection (3-year table + Settings sliders) so the ED
-                can act on a "Revise"/"Find cheaper rent" verdict without hunting the
-                Home list. The .xlsx export stays as the secondary action. */}
-            <a
-              className="btn btn--primary"
-              data-testid="open-projection"
-              href={`/p/${vm.view_slug}/edit`}
-              onClick={(e) => openProjection(e, vm.view_slug)}
-            >
-              Open full projection
-            </a>
-            <a
-              className="btn"
-              role="button"
-              data-testid="download-xlsx"
-              href={xlsxHref(vm.view_slug)}
-              download
-            >
-              Download .xlsx
-            </a>
-          </div>
-          </div>
-        </div>
-      </>
-    );
-  }
-
   return (
     <>
       {liveRegion}
       <div className="wizard wizard--full">
-      <header className="wizard__intro">
-        {/* Subtle back-nav to the owner's projections list (route "/"). A real
-            anchor (keyboard-focusable, right-click/new-tab works); a plain left
-            click SPA-navigates so there is no full reload. */}
-        <a
-          href="/"
-          data-testid="back-to-projections"
-          onClick={backToProjections}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.25rem",
-            margin: "0 0 0.5rem",
-            fontSize: "0.8125rem",
-            color: "var(--text-muted)",
-            textDecoration: "none",
+        <header className="wizard__intro">
+          {/* The ONLY leave affordance on step 1 (owner Decision 7): the bottom Back
+              button is hidden on the first step; this top link leaves the wizard. */}
+          <a
+            href="/"
+            data-testid="back-to-projections"
+            className="wizard__back-link"
+            onClick={backToProjections}
+          >
+            <span aria-hidden="true">←</span> Back to projections
+          </a>
+          {/* Subtle all-caps eyebrow over the prominent breadcrumb (owner Decision 17).
+              Kept a heading so the page still has a labelled landmark. */}
+          <h1 className="wizard__eyebrow">Create projection</h1>
+        </header>
+
+        <StepIndicator current={wiz.step} onJump={wiz.goTo} />
+
+        <form
+          className="wizard__form"
+          // #149: widen the step content beyond the shared 20rem field column so cost
+          // rows lay out and the step reads as a real full-page wizard.
+          style={{ maxWidth: "44rem" }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (wiz.isLast) {
+              if (wiz.canGenerate) void onGenerate(wiz.draft);
+            } else {
+              wiz.goNext();
+            }
           }}
         >
-          <span aria-hidden="true">←</span> Back to projections
-        </a>
-        <h1>Create Projection</h1>
-      </header>
+          {/* The active step. display:contents keeps the wrapper layout-transparent
+              while giving the route→step focus effect a stable element to query. */}
+          <div ref={stepContainerRef} style={{ display: "contents" }}>
+            {wiz.stepKey === "address" && <StepSelectAddress state={wiz} />}
+            {wiz.stepKey === "square-footage" && <StepSquareFootage state={wiz} />}
+            {wiz.stepKey === "households" && <StepHouseholds state={wiz} />}
+            {wiz.stepKey === "donor-market" && <StepDonorMarket state={wiz} />}
+            {wiz.stepKey === "startup-costs" && <StepStartupCosts state={wiz} />}
+          </div>
 
-      <StepIndicator current={wiz.step} onJump={wiz.goTo} />
-
-      <form
-        className="wizard__form"
-        // #149: the shared .wizard__form caps at 20rem, which leaves the full-page
-        // wizard's step content cramped in a ~320px column inside the 44rem panel.
-        // Widen it here so cost rows lay out 3-up and the review list uses the
-        // panel width — reading as a real full-page wizard.
-        style={{ maxWidth: "44rem" }}
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (wiz.isLast) {
-            if (wiz.canGenerate) void onGenerate(wiz.draft);
-          } else {
-            wiz.goNext();
-          }
-        }}
-      >
-        {wiz.stepKey === "store" && <StepStore state={wiz} />}
-        {wiz.stepKey === "trade-area" && <StepTradeArea state={wiz} />}
-        {wiz.stepKey === "space" && <StepSpace state={wiz} />}
-        {wiz.stepKey === "donor-market" && <StepDonorMarket state={wiz} />}
-        {wiz.stepKey === "cost" && <StepCostSchedule state={wiz} />}
-        {wiz.stepKey === "review" && <StepReview state={wiz} />}
-
-        <div className="wizard__actions">
-          <button
-            type="button"
-            className="btn"
-            onClick={wiz.goBack}
-            disabled={wiz.isFirst || busy}
+          {/* Announce the new step to assistive tech on route change (#261 a11y). */}
+          <div
+            data-testid="wizard-step-status"
+            aria-live="polite"
+            aria-atomic="true"
+            style={{
+              position: "absolute",
+              width: 1,
+              height: 1,
+              padding: 0,
+              margin: -1,
+              overflow: "hidden",
+              clip: "rect(0 0 0 0)",
+              whiteSpace: "nowrap",
+              border: 0,
+            }}
           >
-            Back
-          </button>
+            {stepAnnounce}
+          </div>
 
-          {wiz.isLast ? (
-            <button
-              type="submit"
-              className="btn btn--primary"
-              disabled={busy || !wiz.canGenerate}
-              aria-describedby={wiz.blockReason ? "wizard-block-reason" : undefined}
-            >
-              Generate
-            </button>
-          ) : (
-            <button
-              type="submit"
-              className="btn btn--primary"
-              disabled={busy || !wiz.canProceed}
-              aria-describedby={wiz.blockReason ? "wizard-block-reason" : undefined}
-            >
-              Next
-            </button>
+          {/* The planning-estimates disclaimer stays visible — acceptance is now
+              IMPLICIT on Generate (owner Decision 5 / PRD §21); EXPORT_DISCLAIMER still
+              stamps the exported artifacts server-side. */}
+          {wiz.isLast && (
+            <p className="wizard__disclaimer" data-testid="terms-disclaimer">
+              These are planning estimates, not financial advice. Generating accepts that.
+            </p>
           )}
-        </div>
 
-        {/* #147: state WHY the Next/Generate button is disabled, right beside it.
-            role=status + aria-live=polite announces the reason to assistive tech
-            when it changes; the submit button references this via aria-describedby.
-            Always rendered (empty when the step is satisfiable) so the live region
-            is stable, and the cue is TEXT (with a non-color icon), never color-only. */}
-        <p
-          id="wizard-block-reason"
-          role="status"
-          aria-live="polite"
-          style={
-            wiz.blockReason
-              ? {
-                  display: "flex",
-                  gap: "0.5rem",
-                  alignItems: "flex-start",
-                  margin: "0.75rem 0 0",
-                  maxWidth: "52ch",
-                  fontSize: "0.8125rem",
-                  lineHeight: 1.45,
-                  color: "var(--text-muted)",
-                }
-              : { margin: 0 }
-          }
-        >
-          {wiz.blockReason && (
-            <>
-              <span
-                aria-hidden="true"
-                style={{ flex: "0 0 auto", fontWeight: 700, color: "var(--brand-primary)" }}
+          <div className="wizard__actions">
+            {/* Back is bottom-left on every step EXCEPT the first (owner Decision 7). */}
+            {!wiz.isFirst && (
+              <button type="button" className="btn" onClick={wiz.goBack} disabled={busy}>
+                Back
+              </button>
+            )}
+
+            {wiz.isLast ? (
+              <button
+                type="submit"
+                className="btn btn--primary"
+                disabled={busy || !wiz.canGenerate}
               >
-                ⓘ
-              </span>
-              <span>{wiz.blockReason}</span>
-            </>
-          )}
-        </p>
-      </form>
+                Generate projections
+              </button>
+            ) : (
+              <button
+                type="submit"
+                className="btn btn--primary"
+                disabled={busy || !wiz.canProceed}
+              >
+                Next
+              </button>
+            )}
+          </div>
+        </form>
 
-      {/* Penny — the LEFT slide-out assistant in DRAFT mode (Spec §5.2). She fills/
-          refines any wizard field + builds the cost schedule by mutating the in-memory
-          draft via /penny/draft; her edits flow into the live inputs above and persist
-          NOTHING until Generate (which sends the draft, incl. any Penny-built schedule
-          WITH provenance). With ?ai=off she degrades to the muted Settings FAB and the
-          whole manual wizard stays intact (CLAUDE.md "AI opt-out works end-to-end"). */}
-      {/* The wizard is full-page with NO Override Inspector, so Penny is the only
-          side panel here (Spec B §10, issue #129). Wrapped in the shared coordinator
-          for identical breakpoint behaviour (non-modal ≥1180px, modal sheet below)
-          and the shared polite live region. */}
-      <SidePanelProvider>
-        <PennyDraftAssistant
-          token={draftToken.current}
-          aiEnabled={!aiOff}
-          buildDraftState={() => wizardToDraftState(wiz)}
-          onApplyDraft={onApplyDraft}
-          onRevertField={applyDraftField}
-          labelField={labelDraftField}
-        />
-      </SidePanelProvider>
+        {/* A between-steps spinner for the one blocking transition (#15): Generate.
+            Plain-English caption so the operator knows what is happening. */}
+        {busy && (
+          <div className="wizard-spinner" role="status" data-testid="wizard-spinner">
+            <span className="wizard-spinner__dot" aria-hidden="true" />
+            <span>Generating your projection…</span>
+          </div>
+        )}
+
+        {/* Penny — the LEFT slide-out assistant in DRAFT mode (Spec §5.2). She fills/
+            refines any wizard field + builds the cost schedule by mutating the in-memory
+            draft via /penny/draft; her edits flow into the live inputs above and persist
+            NOTHING until Generate. With ?ai=off she degrades to the muted FAB and the
+            whole manual wizard stays intact (CLAUDE.md "AI opt-out works end-to-end"). */}
+        <SidePanelProvider>
+          <PennyDraftAssistant
+            token={draftToken.current}
+            aiEnabled={!aiOff}
+            buildDraftState={() => wizardToDraftState(wiz)}
+            onApplyDraft={onApplyDraft}
+            onRevertField={applyDraftField}
+            labelField={labelDraftField}
+          />
+        </SidePanelProvider>
       </div>
     </>
   );

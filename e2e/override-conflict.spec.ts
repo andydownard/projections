@@ -24,15 +24,17 @@ test.describe("override + 409 optimistic-concurrency", () => {
     // Fragment secret is scrubbed from the URL after read (SECURITY.md §2.5).
     await expect(page).not.toHaveURL(/#edit-secret/);
     const capitalBefore = await page.getByTestId("metric-capital").textContent();
-    // Settings controls live behind the Settings tab; the pct field is 0-1.
-    await page.getByRole("tab", { name: /settings/i }).click();
+    // Epic G (#41): Settings is MERGED into the KPIs tab (no standalone Settings
+    // page); the KPI strip + the sliders both live there. The pct field is 0-1.
+    await page.getByRole("tab", { name: /kpis/i }).click();
     await page.getByLabel(/labor %/i).fill("0.5"); // change from the seed's 40%
-    // Back on Projection: the Settings panel is truly hidden, and the SERVER
-    // recompute (no client math) shows — the Labor-ratio KPI is 50% AND a
-    // downstream figure (capital) changed; neither was computed on the client.
+    // The SERVER recompute (no client math) shows in the KPIs tab — the Labor-ratio
+    // KPI reads 50%, never computed on the client.
+    await expect(page.getByTestId("kpi-Labor ratio")).toContainText("50.0%");
+    // Back on Projection: the Settings panel is truly hidden, and a downstream
+    // figure (the capital tile) changed — also a server recompute, not client math.
     await page.getByRole("tab", { name: /projection/i }).click();
     await expect(page.getByTestId("settings-tab")).toBeHidden();
-    await expect(page.getByTestId("kpi-Labor ratio")).toContainText("50.0%");
     await expect(page.getByTestId("metric-capital")).not.toHaveText(capitalBefore ?? "");
   });
 

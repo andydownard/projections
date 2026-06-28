@@ -28,19 +28,27 @@ test.describe("happy path: create -> decision -> milestones -> export -> reopen"
     await mockPlaces(page);
     await createProjectionViaWizard(page, "Happy Path Store");
 
+    // "Generate projections" lands DIRECTLY on the editable detail page (owner
+    // Decision 12) — no in-wizard result view, no "projection ready" interstitial.
+    await expect(page).toHaveURL(/\/p\/.+\/edit/);
+
     // The decision artifact ships together (PRD §12): a verdict banner + the
-    // decision metric tiles, all rendered from the server view-model.
+    // decision metric tiles, all rendered from the server view-model. The owner
+    // detail page intentionally drops the first-year cash-gap tile (owner Decision 2
+    // / Epic G) — `metrics.cashGap` stays in computed_json but is not tiled here.
     await expect(page.getByTestId("decision-banner")).toBeVisible();
     await expect(page.getByTestId("metric-capital")).toBeVisible();
     await expect(page.getByTestId("metric-breakeven")).toBeVisible();
-    await expect(page.getByTestId("metric-cashgap")).toBeVisible();
     // The milestone tile (issue #117) — present only when the server emits the
     // milestones block, so it proves milestones rendered, not a legacy snapshot.
     await expect(page.getByTestId("metric-payback")).toBeVisible();
 
-    // Server KPIs + the monthly cash-flow chart render from `computed_json`.
-    await expect(page.getByTestId("kpi-revenue")).toBeVisible();
+    // The monthly cash-flow chart renders on the default Projection tab.
     await expect(page.getByTestId("cashflow-chart")).toBeVisible();
+    // Server KPIs moved into the KPIs tab (Epic G / Decision G3) — switch to it,
+    // then the revenue KPI renders from `computed_json`.
+    await page.getByRole("tab", { name: "KPIs" }).click();
+    await expect(page.getByTestId("kpi-revenue")).toBeVisible();
 
     // #141 regression: exports 403'd for EVERY freshly-created projection because
     // the wizard's terms_accepted:true was dropped server-side. This drives a FRESH

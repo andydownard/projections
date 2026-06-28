@@ -125,7 +125,7 @@ export function PlacesAutocomplete({ label, basis, onResolved, onError }: Places
       </label>
       {busy && (
         <p className="places__status" role="status">
-          Looking up the trade area…
+          Checking that address…
         </p>
       )}
       {open && (

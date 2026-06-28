@@ -86,7 +86,7 @@ function mount(over: Partial<React.ComponentProps<typeof PennyDraftAssistant>> =
 }
 
 async function open(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: /ask penny/i }));
+  await user.click(screen.getByRole("button", { name: /penny ai/i }));
 }
 
 afterEach(() => {
