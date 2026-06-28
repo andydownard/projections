@@ -390,12 +390,12 @@ Each settled mutation writes a snapshot (`monthly_json`+`computed_json`+`overrid
 ```json
 { "revisions": [
   { "id":"r_01J…", "version":7, "change_summary":"labor_pct 0.40→0.45",
-    "actor":"owner", "created_at":"2026-06-24T17:03:21Z",
+    "actor":"user", "created_at":"2026-06-24T17:03:21Z",
     "event":"edit" }
 ] }
 ```
 
-`event` ∈ `edit | override | rotate | restore | upgrade_model | export | share_access`. Bodies of snapshots are not inlined in the list (fetch via restore preview if needed); the list is metadata + `change_summary`.
+`actor` ∈ `user | penny | penny_undo | user_undo` (the stored revision `actor` enum, DATA_MODEL §4 — a Penny edit reads back `"penny"`, a manual edit `"user"`). `event` ∈ `edit | override | rotate | restore | upgrade_model | export | share_access`. Bodies of snapshots are not inlined in the list (fetch via restore preview if needed); the list is metadata + `change_summary`.
 - **Errors:** `403` (edit/view); `404`.
 
 ### 5.2 `POST /api/projections/{view_slug}/revisions/{id}/restore`
