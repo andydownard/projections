@@ -46,14 +46,29 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app import config, ratelimit
 from app.aisafety import is_computed_figure_token
+from app.deps import hash_token, resolve_clerk_identity
+from app.feedback import dedup
+from app.feedback.creator import creator_fields_from_claims
+from app.feedback.redact import (
+    DESCRIPTION_CAP,
+    TITLE_CAP,
+    build_safe_context,
+    normalize_type,
+    redact_text,
+)
 from app.routers.projections import (
     MAX_COST_SCHEDULE_ROWS,
     PatchProjectionIn,
     apply_projection_patch,
 )
 from app.store import Store
-from engine.model import DEFAULT_OPENING_MONTH_NUMBER, default_cost_schedule
+from engine.model import (
+    DEFAULT_OPENING_MONTH_NUMBER,
+    MODEL_VERSION,
+    default_cost_schedule,
+)
 
 from . import proposal as proposal_intake
 from .loop import Tool, ToolContext, ToolRegistry
@@ -500,6 +515,152 @@ def _edit_cost_schedule(store: Store):
     return handler
 
 
+# ----------------------------------------------- file_product_feedback (Epic F)
+# Penny files a redacted GitHub issue AT HER DISCRETION (decisions #7/#12). The tool
+# ships DORMANT — it is only registered when ``PENNY_GITHUB_FEEDBACK_ENABLED`` is on
+# (see ``build_registry``), so with the flag off Penny can never auto-file in prod.
+#
+# Guardrails (mirrors the public /api/feedback abuse controls, IDEA_FAB §4):
+#   * per-user (hashed bearer / Clerk sub) AND per-IP rate limit;
+#   * server-side DEDUP on the SHA-256 of the REDACTED body, per identity/window.
+# The label attribution; the creator_* identity rides the feedback ROW only.
+_PENNY_FEEDBACK_USER_LIMIT = 5   # per owner/Clerk filer per hour (primary brake)
+_PENNY_FEEDBACK_IP_LIMIT = 20    # coarse per-IP safety bound (shared proxy, #189)
+_PENNY_FEEDBACK_WINDOW_SECONDS = 3600
+_PENNY_LABEL = "filed-by-penny"
+
+
+def _penny_feedback_identity(
+    ctx: ToolContext, creator: dict, ip: str | None
+) -> tuple[str, str | None]:
+    """Resolve (dedup_identity, rate_limit_token_key) — server-only, never logged.
+
+    The rate-limit token scope is the HASHED bearer (never the raw secret), matching
+    the public feedback path; an anonymous caller falls back to the IP-only brake.
+    The dedup identity is the most stable server-only id available so the same filer
+    re-filing the same redacted body is caught: hashed token > Clerk sub > IP > anon.
+    """
+    token_key = hash_token(ctx.bearer_token) if ctx.bearer_token else None
+    dedup_identity = (
+        token_key
+        or creator.get("creator_clerk_user_id")
+        or ip
+        or "anon"
+    )
+    return dedup_identity, token_key
+
+
+def _file_product_feedback(store: Store):
+    def handler(args: dict, ctx: ToolContext) -> dict:
+        # Defense-in-depth: registration already gates on the flag, but re-check so a
+        # stale registry can never auto-file once the flag is flipped back off.
+        if not config.penny_github_feedback_enabled():
+            return {"error": "feedback_disabled", "status": 403,
+                    "filed": False,
+                    "message": "Product-feedback filing isn't enabled right now."}
+
+        description = str(args.get("description") or args.get("body") or "").strip()
+        if not description:
+            return {"error": "invalid_inputs", "status": 422, "filed": False,
+                    "message": "I need a short description of the problem to file it."}
+        ftype = normalize_type(args.get("type"))
+        own_slug = ctx.view_slug or None
+
+        # 1) Redact BEFORE anything else — $/%/links/slugs/tokens/emails are stripped
+        #    to a qualitative report (the public issue's #1 leak risk, PRD §22).
+        title = redact_text(str(args.get("title") or ""), own_slug=own_slug, cap=TITLE_CAP)
+        redacted_body = redact_text(description, own_slug=own_slug, cap=DESCRIPTION_CAP)
+
+        # 2) Server-only creator identity from the verified Clerk JWT CLAIMS (no Clerk
+        #    Backend API, no secret — finding C1). It rides the ROW only, NEVER the issue.
+        creator: dict = {}
+        if ctx.bearer_token:
+            ident = resolve_clerk_identity(f"Bearer {ctx.bearer_token}")
+            if ident is not None:
+                creator = creator_fields_from_claims(
+                    ident.claims, clerk_user_id=ident.clerk_user_id)
+
+        ip = ctx.extra.get("client_ip") if isinstance(ctx.extra, dict) else None
+        dedup_identity, token_key = _penny_feedback_identity(ctx, creator, ip)
+
+        # 3) Dedup on the redacted body (read-only) — a duplicate is a friendly no-op,
+        #    not a second issue. Checked BEFORE the rate limit so it costs no budget.
+        if dedup.is_duplicate(
+            dedup_identity, redacted_body,
+            window_seconds=_PENNY_FEEDBACK_WINDOW_SECONDS,
+        ):
+            return {"filed": False, "duplicate": True,
+                    "message": ("I've already logged that one for the team — no need "
+                                "to file it twice.")}
+
+        # 4) Rate limit (per-user primary + per-IP coarse), BEFORE any GitHub/DB work.
+        allowed, retry_after = ratelimit.check(
+            "penny_feedback", ip=ip, token=token_key,
+            ip_limit=_PENNY_FEEDBACK_IP_LIMIT, token_limit=_PENNY_FEEDBACK_USER_LIMIT,
+            window_seconds=_PENNY_FEEDBACK_WINDOW_SECONDS)
+        if not allowed:
+            return {"filed": False, "rate_limited": True, "status": 429,
+                    "retry_after_seconds": retry_after,
+                    "message": ("I've filed a lot of feedback recently — I'll hold this "
+                                "one for now. Mention it again later and I'll log it.")}
+
+        # 5) Build the GitHub payload from the REDACTED parts only and file it through
+        #    the EXISTING best-effort path (stubbed in tests). Tagged "filed-by-penny";
+        #    degrades to a null url (creds unset / GitHub down) without ever raising.
+        import app.routers.feedback as _feedback  # lazy: avoid an import cycle
+
+        support_id = _feedback._support_id()
+        now = _utcnow()
+        context = build_safe_context(
+            route=f"/p/{own_slug}" if own_slug else "/penny",
+            own_slug=own_slug,
+            app_version=config.build_sha(),
+            model_version=MODEL_VERSION,
+            feedback_type=ftype,
+            ts=now,
+        )
+        gh_payload = {
+            "support_id": support_id,
+            "type": ftype,
+            "title": title,
+            "body": redacted_body,
+            "context": context,
+            "extra_labels": [_PENNY_LABEL],
+        }
+        github_issue_url = _feedback.file_github_issue(gh_payload)
+
+        # 6) Persist the SAME redacted artifact + the server-only creator_* identity
+        #    (NEVER in gh_payload above). Columns only — no schema change.
+        store.create_feedback({
+            "support_id": support_id,
+            "type": ftype,
+            "title": title,
+            "body": redacted_body,
+            "email": None,
+            "context_json": json.dumps(context),
+            "github_issue_url": github_issue_url,
+            "status": "open",
+            "created_at": now,
+            **creator,
+        })
+
+        # 7) Remember it for dedup only AFTER we committed to filing.
+        dedup.record(dedup_identity, redacted_body)
+
+        # 8) Tell the user in-thread (Penny relays this message — no asking first).
+        return {
+            "filed": True,
+            "support_id": support_id,
+            "github_issue_filed": bool(github_issue_url),
+            "message": (
+                f"I've logged this as product feedback for the team (ref {support_id}). "
+                "I stripped out any specific figures, links, or identifiers so it's "
+                "safe to share. You don't need to do anything else."
+            ),
+        }
+    return handler
+
+
 # --------------------------------------------------------------- tool schemas
 _VALUE_NOTE = ("Raw input value (a bare number or fraction, e.g. 0.08 or 5000); "
                "NEVER a display-formatted figure like $5,000 or 8% — those are "
@@ -581,6 +742,22 @@ _SCHEMAS: dict[str, dict] = {
         },
         "additionalProperties": False,
     },
+    "file_product_feedback": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string",
+                      "description": "A short qualitative summary of the problem/idea."},
+            "description": {"type": "string",
+                            "description": ("The problem or opportunity in the user's "
+                                            "words, QUALITATIVELY — do NOT include "
+                                            "specific dollar figures, percentages, "
+                                            "links, or identifiers; they are stripped "
+                                            "anyway.")},
+            "type": {"type": "string", "enum": ["bug", "idea", "other"]},
+        },
+        "required": ["description"],
+        "additionalProperties": False,
+    },
 }
 
 _FACTORIES = {
@@ -610,13 +787,30 @@ _DESCRIPTIONS = {
                            "amount} and set the opening anchor. Server-validated."),
 }
 
+# Registered ONLY when PENNY_GITHUB_FEEDBACK_ENABLED is on (build_registry gates it),
+# so the seven-tool surface is byte-for-byte unchanged with the flag off (dormant).
+_FEEDBACK_FACTORY = (_file_product_feedback, "action")
+_FEEDBACK_DESCRIPTION = (
+    "File the user's bug report or product idea for the team as a redacted GitHub "
+    "issue. Use this AT YOUR DISCRETION whenever a conversation surfaces a genuine "
+    "problem or improvement — you do NOT need to ask permission first. All figures, "
+    "links, and identifiers are stripped server-side, so report it qualitatively. "
+    "After it files, briefly TELL the user you've logged it (share the returned ref) "
+    "and that you removed any sensitive details. Do not file vague or duplicate notes."
+)
+
 
 def build_registry(store: Store) -> ToolRegistry:
-    """Register the seven Penny tools (bound to ``store``) into a fresh registry.
+    """Register Penny's tools (bound to ``store``) into a fresh registry.
 
     PE5's router builds the registry per request with the resolved store and passes
     it to :func:`app.penny.loop.run_turn`; the loop sends each tool's schema to the
     model and executes the matching handler server-side.
+
+    The seven core tools are always registered. ``file_product_feedback`` (Epic F,
+    decisions #7/#12) is added ONLY when ``PENNY_GITHUB_FEEDBACK_ENABLED`` is on, so
+    the capability ships DORMANT: with the flag off (the default) the tool is not in
+    the surface the model sees, so Penny has no way to auto-file in prod.
     """
     registry = ToolRegistry()
     for name, (factory, kind) in _FACTORIES.items():
@@ -624,6 +818,15 @@ def build_registry(store: Store) -> ToolRegistry:
             name=name,
             description=_DESCRIPTIONS[name],
             input_schema=_SCHEMAS[name],
+            handler=factory(store),
+            kind=kind,
+        ))
+    if config.penny_github_feedback_enabled():
+        factory, kind = _FEEDBACK_FACTORY
+        registry.register(Tool(
+            name="file_product_feedback",
+            description=_FEEDBACK_DESCRIPTION,
+            input_schema=_SCHEMAS["file_product_feedback"],
             handler=factory(store),
             kind=kind,
         ))

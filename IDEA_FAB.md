@@ -259,6 +259,19 @@ REST API (`POST /repos/{owner}/{repo}/issues`):
 
 v1 files the issue **synchronously** as a best-effort, non-fatal step (`file_github_issue()`): the redacted payload is POSTed to the Issues REST API with a short **5 s** timeout, then the `feedback` row is persisted with the resulting `github_issue_url`. On **any** failure — unset token/repo, a `4xx`/`5xx`, or a timeout — the failure is logged (never the token or the body) and the call returns `null`, so the row is still saved with `github_issue_url = null` and the user still receives `201 {support_id}`. A GitHub outage therefore **never** 500s the user. This matches timpager regression #11 (GitHub non-fatal) and PRD §22's "safe even if … fails" intent. *(Future enhancement: move filing to a background task + the `pending_github` backfill job in §5.5 so even the 5 s call leaves the request path.)*
 
+**Diagnosable failures (Epic F).** The failure handler logs the `support_id`, the exception class, **and** GitHub's `status_code` plus a **~200-char excerpt of GitHub's response body** (e.g. `Bad credentials`, validation messages). That excerpt is GitHub's *own* error text — **never** our `GITHUB_TOKEN`/`GH_PAT` (those live only in request headers, which are never logged) and never the already-redacted issue body — so a future filing outage (bad PAT, repo moved, rate cap) is diagnosable from the logs without leaking a secret. A timeout/connect error has no response and logs `status=None`.
+
+### 5.8 Penny may file at her discretion — `PENNY_GITHUB_FEEDBACK_ENABLED` (default OFF)
+
+Penny (the assistant) can file a redacted GitHub issue **at her own discretion** when a chat surfaces a genuine bug or product opportunity — she files first and **tells the user in-thread** (she does not ask permission). This is a Penny tool, `file_product_feedback` (`app/penny/tools.py`), and it ships **DORMANT** behind the flag **`PENNY_GITHUB_FEEDBACK_ENABLED` (default OFF)**: the tool is registered into Penny's tool surface **only when the flag is truthy** (`build_registry` gates it), so with the flag off Penny has no way to auto-file in prod — flipping the flag is a no-deploy env change. The path reuses the **same** redaction + filing primitives as the lightbulb modal:
+
+- **Always through `redact.py`.** The model-composed `title`/`description` are run through `redact_text` (with the projection's own `view_slug` as `own_slug`) **before** anything else, so any `$`/`%`/link/slug/token/email Penny might include is stripped to a qualitative report. The outbound issue is assembled by the same `_issue_body`/`build_safe_context` allowlist, and files through the **existing** `file_github_issue()` (best-effort/non-fatal, §5.4).
+- **Tagged `filed-by-penny`.** The issue carries the normal channel/`type:*` labels **plus** a server-controlled `filed-by-penny` attribution label (never user content).
+- **Creator identity on the ROW only.** The server-only `creator_*` identity (from the verified Clerk JWT **claims** — no Clerk Backend API, no secret; §7/decisions #6/#13) is persisted on the `feedback` row, **never** in the issue body or payload.
+- **Guardrails.** A **per-user (hashed bearer / Clerk `sub`) + per-IP** rate limit (5/user/hr, 20/IP/hr) and a **server-side dedup** on the SHA-256 of the *redacted* body, scoped per identity/window (`app/feedback/dedup.py`), so the same chat re-surfacing the same issue files **at most once** and a flood is capped before any GitHub/DB write. A duplicate or a rate-limited attempt is a **friendly no-op** Penny relays ("I've already logged that one") — never a second issue.
+
+CI (adversarial, **stubbed GitHub client** — no real issue): flag-off = no-op (tool absent, seven-tool surface unchanged); flag-on = files via the redacted path; redaction-intact-at-the-wire; dedup; rate-limit; creator_* on the row but never the issue; and the in-thread acknowledgement through the loop (`app/tests/test_penny_github_feedback.py`).
+
 ### 5.5 Backfill / retry job
 
 A small periodic task scans `feedback WHERE github_issue_url IS NULL AND status='pending_github'` and re-attempts filing (respecting the §4.3 circuit breaker). Documented as an ops task in [OPS_RUNBOOK.md](OPS_RUNBOOK.md).
@@ -376,3 +389,5 @@ Notes:
 7. **Issues land on "Projections Roadmap" (GitHub Project #5, `rallytasks`) (Project v2) with `Status` Inbox → Triage → Planned → Done; server sets `Inbox`.** [§5.7]
 8. **`GITHUB_PROJECT_NUMBER` is a placeholder until the board is created** — fill in per the §5.7 checklist. [§5.7]
 9. **`support_id` is the only user-visible handle; `github_issue_url` is server-only; only staff resolve support_id → projection.** [§3.4, §2]
+10. **Penny auto-filing is dormant behind `PENNY_GITHUB_FEEDBACK_ENABLED` (default OFF); flag-on files via the same redacted path, tagged `filed-by-penny`, dedup + rate-limited, creator_* on the row only.** [§5.8]
+11. **Filing failures log GitHub's `status_code` + a ~200-char response-body excerpt — never our token/PAT or the issue body.** [§5.4]
