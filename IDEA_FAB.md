@@ -217,12 +217,12 @@ Per PRD §22/§23 and [SECURITY.md](SECURITY.md) env inventory, GitHub wiring is
 
 | Env var | Required? | Purpose |
 |---|---|---|
-| `GITHUB_TOKEN` | optional (feedback degrades if unset) | Least-scoped PAT/fine-grained token that can create issues and add items to the Project (§5.6). |
-| `GITHUB_ORG` | optional | `rallytasks` |
-| `GITHUB_REPO` | optional | `projections` |
+| `GITHUB_TOKEN` **or** `GH_PAT` | optional (feedback degrades if unset) | Least-scoped PAT/fine-grained token that can create issues and add items to the Project (§5.6). Either name is accepted (`GITHUB_TOKEN` first, then `GH_PAT` — timpager parity). Server-env only; never logged. |
+| `GITHUB_ORG` | optional | `rallytasks` — combined with `GITHUB_REPO` when the latter is a bare repo name. |
+| `GITHUB_REPO` | optional | `projections` — accepted as a bare repo name (combined with `GITHUB_ORG`) **or** already in `owner/repo` form (e.g. `rallytasks/projections`), in which case `GITHUB_ORG` is not needed. |
 | `GITHUB_PROJECT_NUMBER` | optional | The org Project (v2) number for **"Projections Roadmap" (GitHub Project #5, `rallytasks`)**. **`<FILL IN ONCE THE PROJECT IS CREATED>`** — see §5.7. |
 
-If any of `GITHUB_TOKEN` / `GITHUB_ORG` / `GITHUB_REPO` is unset in production, the server **does not refuse to boot** (unlike `DB_PATH`, `ANTHROPIC_API_KEY`, etc.) — it logs a structured "feedback→GitHub disabled" event and feedback still persists locally. This is explicitly in the **optional/graceful-degrade** column of the boot-refuse policy in [SECURITY.md](SECURITY.md), matching timpager's treatment of `GH_PAT`.
+**Resolution (server-side):** the token is `GITHUB_TOKEN` or `GH_PAT`; the `owner/repo` slug is `GITHUB_REPO` when it already contains a `/`, otherwise `GITHUB_ORG/GITHUB_REPO`. If the token **or** the resolved repo is missing, filing is skipped (graceful-degrade). With any of these unset in production the server **does not refuse to boot** (unlike `DB_PATH`, `ANTHROPIC_API_KEY`, etc.) — it logs a structured "feedback→GitHub disabled / failed" event and feedback still persists locally. This is explicitly in the **optional/graceful-degrade** column of the boot-refuse policy in [SECURITY.md](SECURITY.md), matching timpager's treatment of `GH_PAT`.
 
 ### 5.2 Private vs public repo
 
@@ -232,10 +232,11 @@ If any of `GITHUB_TOKEN` / `GITHUB_ORG` / `GITHUB_REPO` is unset in production, 
 
 ### 5.3 Issue shape
 
-For each accepted, redacted feedback, the server creates a GitHub Issue:
+For each accepted, redacted feedback, the server creates a GitHub Issue via the
+REST API (`POST /repos/{owner}/{repo}/issues`):
 
-- **Title:** `[Idea] <redacted title>` / `[Bug] <redacted title>` / `[Other] <redacted title>`
-- **Labels:** `idea-fab` (always) + one of `type:idea` / `type:bug` / `type:other`.
+- **Title:** built from `support_id` + `type`, with the already-redacted title appended when present — `[Idea] FB-7K2Q-9XFD: <redacted title>` (or just `[Bug] FB-7K2Q-9XFD` when no title).
+- **Labels:** a channel label — `app-suggestion` for an `idea` (the Idea button), `feedback` otherwise — **plus** one of `type:idea` / `type:bug` / `type:other`.
 - **Body (Markdown, fully redacted — §3.3):**
 
   ```md
@@ -243,7 +244,8 @@ For each accepted, redacted feedback, the server creates a GitHub Issue:
 
   ---
   - Support ID: FB-7K2Q-9XFD
-  - Route: /:view_slug/edit
+  - Type: idea
+  - Route: /:slug/edit
   - App version: projections@1.4.2
   - Model version: 2.0.0
   - Reported: 2026-06-24T17:03:00Z
@@ -251,11 +253,11 @@ For each accepted, redacted feedback, the server creates a GitHub Issue:
   _Filed by the Projections Idea Fab. Contains no projection link and no financial data._
   ```
 
-  Note the body carries **only** `support_id` + the four non-sensitive context fields. **No email, no view_slug, no link, no numbers.**
+  The body is assembled from the **already-redacted payload only**: the `support_id` + the redacted description + the server-allowlisted context fields (`route` slug-stripped, `app_version`, `model_version`, `type`, `ts`). **No email, no view_slug, no link, no numbers.**
 
 ### 5.4 Filing is best-effort and non-fatal
 
-The GitHub call happens **after** the local `feedback` row is committed. The request returns `201 {support_id}` as soon as the row is saved; the GitHub issue + Project-add can complete asynchronously (a background task) so a slow GitHub API never blocks the user. On GitHub failure the row keeps `github_issue_url = null`, `status = "pending_github"`, and the backfill job (§5.5) retries. This matches timpager regression #11 (GitHub non-fatal) and PRD §22's "safe even if … fails" intent.
+v1 files the issue **synchronously** as a best-effort, non-fatal step (`file_github_issue()`): the redacted payload is POSTed to the Issues REST API with a short **5 s** timeout, then the `feedback` row is persisted with the resulting `github_issue_url`. On **any** failure — unset token/repo, a `4xx`/`5xx`, or a timeout — the failure is logged (never the token or the body) and the call returns `null`, so the row is still saved with `github_issue_url = null` and the user still receives `201 {support_id}`. A GitHub outage therefore **never** 500s the user. This matches timpager regression #11 (GitHub non-fatal) and PRD §22's "safe even if … fails" intent. *(Future enhancement: move filing to a background task + the `pending_github` backfill job in §5.5 so even the 5 s call leaves the request path.)*
 
 ### 5.5 Backfill / retry job
 
