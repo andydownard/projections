@@ -9,25 +9,33 @@ figure can never reach GitHub. A Tier-1 CI test asserts the assembled payload
 contains none of these (PRD §22, impossible to regress).
 
 Abuse controls (IDEA_FAB §4): per-IP/per-token rate limit + honeypot + length
-caps run BEFORE any GitHub call or DB write. GitHub delivery degrades gracefully:
-with GITHUB_TOKEN/GITHUB_REPO unset the feedback is still persisted and a
-support_id returned (github_issue_url=null) — never a 500.
+caps run BEFORE any GitHub call or DB write. GitHub delivery (a live REST issue
+create — IDEA_FAB §5) authenticates with a server-only PAT (GITHUB_TOKEN or
+GH_PAT) and resolves the repo from GITHUB_REPO ("owner/repo") OR GITHUB_ORG +
+GITHUB_REPO. It degrades gracefully: with the token/repo unset, or on any GitHub
+error/timeout, the feedback is still persisted and a support_id returned
+(github_issue_url=null) — never a 500.
 """
 from __future__ import annotations
 
 # ruff: noqa: UP045 -- keep typing.Optional: Pydantic/FastAPI evaluate these
 # annotations at runtime, and PEP 604 `X | None` is unsupported on Python 3.9.
 import json
+import logging
 import os
 import secrets
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+import httpx
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app import config, ratelimit
+from app.deps import resolve_clerk_identity
+from app.feedback.creator import creator_fields_from_claims
 from app.feedback.redact import (
     DESCRIPTION_CAP,
     TITLE_CAP,
@@ -38,6 +46,8 @@ from app.feedback.redact import (
 from app.store import Store, get_store
 from engine.model import MODEL_VERSION
 
+logger = logging.getLogger("app.feedback")
+
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
 # A short, human-quotable id. SUP- prefix so the e2e/UX can assert on it.
@@ -45,6 +55,16 @@ _SUP_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 # Abuse caps (IDEA_FAB §4.1). v1 starting template, tuned against real traffic.
 _IP_LIMIT_PER_HOUR = 10
+
+# --- GitHub issue filing (IDEA_FAB §5; API_SPEC §8.1) ------------------------
+# REST issue-create endpoint. Authenticated with a server-only PAT; the outbound
+# body is the ALREADY-REDACTED payload (no slug/token/link/$/% can reach here).
+_GITHUB_API = "https://api.github.com"
+_GITHUB_TIMEOUT_SECONDS = 5.0  # short: a slow GitHub must never block the user.
+
+# Human-facing type prefix for the issue title; the persisted/filed `type` is the
+# closed FEEDBACK_TYPES enum, so this lookup is total.
+_TYPE_DISPLAY = {"bug": "Bug", "idea": "Idea", "other": "Other"}
 
 
 def _support_id() -> str:
@@ -92,6 +112,7 @@ def submit_feedback(
     body: FeedbackIn,
     request: Request,
     response: Response,
+    authorization: Optional[str] = Header(default=None),
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
 ):
     # `type` is untrusted client free-text — normalize to the closed enum ONCE
@@ -158,8 +179,21 @@ def submit_feedback(
     }
     github_issue_url = _maybe_file_github_issue(gh_payload)
 
-    # 6) Persist the SAME redacted artifact (no email in GitHub, but email is
-    #    stored server-only for an optional reply).
+    # 6) Server-only creator identity (decisions #6/#13): when a signed-in Clerk
+    #    owner files feedback, record WHO from the verified session-JWT CLAIMS (NO
+    #    Clerk Backend API, NO secret). All fields optional/nullable. These PII
+    #    columns are persisted SERVER-SIDE ONLY and are deliberately NOT part of
+    #    `gh_payload` above — they never reach the redacted GitHub issue (PRD §22).
+    #    Anonymous / kill-switch-off feedback adds NO creator keys (row unchanged).
+    creator: dict = {}
+    clerk_ident = resolve_clerk_identity(authorization)
+    if clerk_ident is not None:
+        creator = creator_fields_from_claims(
+            clerk_ident.claims, clerk_user_id=clerk_ident.clerk_user_id
+        )
+
+    # 7) Persist the SAME redacted artifact (no email in GitHub, but email is
+    #    stored server-only for an optional reply), plus any creator_* identity.
     store.create_feedback({
         "support_id": support_id,
         "type": safe_type,
@@ -170,26 +204,145 @@ def submit_feedback(
         "github_issue_url": github_issue_url,
         "status": "open",
         "created_at": _utcnow(),
+        **creator,
     })
 
     # Only the support_id is shown to the user (NEVER github_issue_url).
     return {"support_id": support_id}
 
 
-def file_github_issue(payload: dict) -> Optional[str]:
+def _github_token() -> Optional[str]:
+    """The server-only filing PAT — GITHUB_TOKEN, else GH_PAT (timpager parity).
+
+    Server-env only (SECRETS): never logged, never returned to the client.
+    """
+    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_PAT")
+
+
+def _resolve_owner_repo() -> Optional[str]:
+    """Resolve ``owner/repo`` from the env, or None when unconfigured.
+
+    Accepts ``GITHUB_REPO`` already in ``owner/repo`` form, OR combines
+    ``GITHUB_ORG`` + ``GITHUB_REPO`` (current prod sets GITHUB_ORG=rallytasks,
+    GITHUB_REPO=projections). Unset/blank -> None so filing degrades gracefully.
+    """
+    repo = (os.environ.get("GITHUB_REPO") or "").strip().strip("/")
+    if not repo:
+        return None
+    if "/" in repo:  # already "owner/repo"
+        return repo
+    org = (os.environ.get("GITHUB_ORG") or "").strip().strip("/")
+    if not org:
+        return None
+    return f"{org}/{repo}"
+
+
+def _labels_for_type(feedback_type: str) -> list[str]:
+    """Issue labels: a stable base channel label + the `type:*` taxonomy.
+
+    `idea` -> the Idea-button "app-suggestion" channel; everything else -> the
+    general "feedback" channel. Plus a `type:{enum}` label for board filtering.
+    """
+    base = "app-suggestion" if feedback_type == "idea" else "feedback"
+    return [base, f"type:{feedback_type}"]
+
+
+def _issue_title(payload: dict) -> str:
+    """Issue title from support_id + type (+ the already-redacted title)."""
+    ftype = payload.get("type", "other")
+    display = _TYPE_DISPLAY.get(ftype, "Other")
+    support_id = payload.get("support_id", "")
+    redacted_title = (payload.get("title") or "").strip()
+    base = f"[{display}] {support_id}"
+    return f"{base}: {redacted_title}" if redacted_title else base
+
+
+def _issue_body(payload: dict) -> str:
+    """Issue body from the redacted payload ONLY (support_id + safe context + desc).
+
+    Every component here is already redactor-clean: the qualitative description
+    has been through ``redact_text`` and the context is the server allowlist
+    (route/app_version/model_version/type/ts). No view_slug, token, link, email,
+    or financial figure can be assembled here (PRD §22, IDEA_FAB §3.3/§5.3).
+    """
+    ctx = payload.get("context") or {}
+    description = (payload.get("body") or "").strip() or "_(no description provided)_"
+    lines = [
+        description,
+        "",
+        "---",
+        f"- Support ID: {payload.get('support_id', '')}",
+        f"- Type: {ctx.get('type', payload.get('type', ''))}",
+        f"- Route: {ctx.get('route', '')}",
+        f"- App version: {ctx.get('app_version', '')}",
+        f"- Model version: {ctx.get('model_version', '')}",
+        f"- Reported: {ctx.get('ts', '')}",
+        "",
+        "_Filed by the Projections Idea Fab. "
+        "Contains no projection link and no financial data._",
+    ]
+    return "\n".join(lines)
+
+
+def _default_client() -> httpx.Client:
+    """Default httpx client for the GitHub call (short timeout, no redirects)."""
+    return httpx.Client(follow_redirects=False, timeout=_GITHUB_TIMEOUT_SECONDS)
+
+
+def file_github_issue(
+    payload: dict,
+    *,
+    _client_factory: Optional[Callable[[], httpx.Client]] = None,
+) -> Optional[str]:
     """File a redacted GitHub issue; return the issue URL or None.
 
-    v1 keeps the live network call deferred: when GITHUB_TOKEN/GITHUB_REPO are
-    unset (dev, e2e, AI-off) we return None so the path degrades gracefully. The
-    payload here is ALREADY redacted (router-side) — this function is the seam
-    the Tier-1 leak test stubs to capture the exact outbound payload.
+    Live delivery (IDEA_FAB §5): POST ``/repos/{owner}/{repo}/issues`` with the
+    ALREADY-REDACTED payload — title from support_id+type, body from support_id +
+    the safe context + the redacted description, labelled by channel/type.
+    Authenticated with the server-only PAT (GITHUB_TOKEN or GH_PAT).
+
+    Degrades gracefully (FEEDBACK / OUTBOUND): when the token/repo is unset, or
+    GitHub errors/times out, it logs (never the token/body) and returns None so
+    the endpoint still returns 201 and persists the feedback — never a 500 on a
+    GitHub outage. ``_client_factory`` is a test seam (stub httpx; no real call).
     """
-    token = os.environ.get("GITHUB_TOKEN")
-    repo = os.environ.get("GITHUB_REPO")
+    token = _github_token()
+    repo = _resolve_owner_repo()
     if not (token and repo):
         return None
-    # Live delivery (issue create + Project add) lands behind this seam; the
-    # redaction contract is what CI/e2e gate. Returning None keeps it graceful.
+
+    issue = {
+        "title": _issue_title(payload),
+        "body": _issue_body(payload),
+        "labels": _labels_for_type(payload.get("type", "other")),
+    }
+    factory = _client_factory or _default_client
+    try:
+        with factory() as client:
+            resp = client.post(
+                f"{_GITHUB_API}/repos/{repo}/issues",
+                json=issue,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "User-Agent": "projections-idea-fab",
+                },
+            )
+            resp.raise_for_status()
+            url = resp.json().get("html_url")
+    except Exception as exc:  # noqa: BLE001 — any GitHub failure degrades, never 500s.
+        # Log the failure WITHOUT the token or the issue body (SECRETS/PII).
+        logger.warning(
+            "feedback.github_issue_failed support_id=%s err=%s",
+            payload.get("support_id"),
+            type(exc).__name__,
+        )
+        return None
+
+    if isinstance(url, str) and url:
+        logger.info("feedback.github_issue_filed support_id=%s", payload.get("support_id"))
+        return url
     return None
 
 

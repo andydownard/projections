@@ -255,11 +255,19 @@ CREATE TABLE IF NOT EXISTS feedback (
   type             TEXT NOT NULL,              -- 'bug' | 'idea' | ...
   title            TEXT NOT NULL,
   body             TEXT NOT NULL,
-  email            TEXT,                       -- optional
+  email            TEXT,                       -- optional reply-to; server-only, never in GitHub
   context_json     TEXT NOT NULL DEFAULT '{}', -- NON-SENSITIVE ONLY: {route, app_version, model_version, ts}
   github_issue_url TEXT,
   status           TEXT NOT NULL DEFAULT 'open',
-  created_at       TEXT NOT NULL
+  created_at       TEXT NOT NULL,
+  -- 0011 (Clerk satellite, Epic F / decisions #6/#13). SERVER-ONLY creator identity
+  -- read from the verified Clerk session-JWT CLAIMS (NO Clerk Backend API, NO secret).
+  -- All nullable: NULL for anonymous / token-owned feedback (the rows that exist
+  -- today). These PII columns NEVER reach the redacted GitHub issue (see hard rules).
+  creator_email         TEXT,                  -- optional, from JWT claims
+  creator_name          TEXT,                  -- optional, from JWT claims
+  creator_phone         TEXT,                  -- optional, from JWT claims
+  creator_clerk_user_id TEXT                   -- Clerk `sub` of the signed-in filer; NULL if anonymous
 );
 ```
 
@@ -268,6 +276,7 @@ CREATE TABLE IF NOT EXISTS feedback (
 - **No financial fields** in `body` or `context_json`. UI notice: "Don't paste sensitive financial details."
 - `context_json` is non-sensitive only: route, app version, `model_version`, support ID, timestamp.
 - `support_id` is a random user-facing code; only **server-side staff tooling** resolves it to a projection (the mapping is not in this table — it lives in staff-only audit logs, see [`SECURITY.md`](./SECURITY.md)). Safe even if the repo is public.
+- **`creator_*` (0011) and `email` are SERVER-ONLY PII** — recorded next to each other for support follow-up and **never** part of the GitHub-bound payload. The public payload (`support_id`, `type`, redacted `title`/`body`, allowlisted `context`) is assembled by `app.feedback.redact` and carries no creator/email column; a CI test (`app/tests/test_feedback_creator_identity.py`) asserts `creator_*` PII never reaches the sink. When `CLERK_ENABLED` is off (default) and for anonymous feedback, every `creator_*` is NULL (the row is byte-for-byte what it is today — additive + dormant).
 
 A CI test asserts the GitHub payload contains none of the forbidden fields (see [`DEFINITION_OF_DONE.md`](./DEFINITION_OF_DONE.md), feedback-redaction test). See [`IDEA_FAB.md`](./IDEA_FAB.md) for the bug/idea → GitHub flow and intent → CRM split.
 
@@ -914,7 +923,11 @@ CREATE TABLE IF NOT EXISTS feedback (
   context_json TEXT NOT NULL DEFAULT '{}',
   github_issue_url TEXT,
   status TEXT NOT NULL DEFAULT 'open',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  creator_email TEXT,             -- 0011: server-only creator PII from Clerk JWT claims; NULL if anonymous
+  creator_name TEXT,              -- 0011
+  creator_phone TEXT,             -- 0011
+  creator_clerk_user_id TEXT      -- 0011: Clerk `sub` of the signed-in filer; NULL if anonymous
 );
 
 CREATE TABLE IF NOT EXISTS actuals (
