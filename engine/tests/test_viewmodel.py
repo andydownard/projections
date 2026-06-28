@@ -392,3 +392,30 @@ def test_milestone_duration_is_singular_for_one_month():
     assert out["duration"] == "1 month"
     # >1 month uses the plural.
     assert _milestone(7, {}, "k", opening_month=5)["duration"] == "3 months"
+
+
+def test_month_view_formats_reached_month_and_na_sentinel_when_none():
+    from engine.money import na_view
+    from engine.viewmodel import _month_view
+
+    # A reached project month -> dual-value {raw, display}; the "Month N" string is
+    # built here ONCE (the engine's lone format authority), never on the client (§9).
+    assert _month_view(6) == {"raw": 6, "display": "Month 6"}
+    assert _month_view(1) == {"raw": 1, "display": "Month 1"}
+    # Unreached (None) -> the explicit N/A sentinel, never a misleading 0.
+    assert _month_view(None) == na_view()
+    assert _month_view(None)["raw"] is None and _month_view(None)["display"] == "N/A"
+
+
+def test_breakeven_surfaces_all_route_through_one_month_view(canonical_result):
+    from engine.viewmodel import _month_view, to_view_model
+
+    # metrics.breakeven, the "Break-even month" KPI, and the breakEven milestone are
+    # the SAME dual-value from one helper, so the three surfaces can never disagree.
+    vm = to_view_model(canonical_result)
+    expected = _month_view(canonical_result.decision.break_even_month)
+    assert vm["metrics"]["breakeven"] == expected
+    kpi = [k for k in vm["kpis"] if k["label"] == "Break-even month"]
+    assert len(kpi) == 1 and kpi[0]["value"] == expected
+    assert vm["milestones"]["breakEven"]["raw"] == expected["raw"]
+    assert vm["milestones"]["breakEven"]["display"] == expected["display"]
