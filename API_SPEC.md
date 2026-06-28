@@ -638,9 +638,9 @@ The **rent-research slice** (#60/#62/#64/#65): a representative `$/sq ft` for th
 - **`title`:** required for a `bug` (it must stay triageable → `422 {"error":"title_required"}` when absent); **optional for an `idea`** — an Idea Fab suggestion is just a description, so the client omits `title` entirely.
 
 - **Redaction guarantee (PRD §22, CI-tested):** the GitHub-issue payload contains **only** non-sensitive context — `route` (with any slug stripped), `app_version`, `model_version`, the random `support_id`, and the timestamp. It **never** contains `view_slug`, any token, any resolvable projection link, or any financial field. A server-side test asserts none of these ever appear in the outbound payload — this is the product's top data-leak risk and must be impossible to regress.
-- **Behavior:** generate a random `support_id`, open a redacted GitHub issue via `GITHUB_TOKEN`/`GITHUB_REPO`, persist to `feedback` (no financial fields, no projection link).
-- **Response `201`:** `{ "support_id":"FB-7K3Q9", "github_issue_url":"https://github.com/…/issues/123" }`. Only the `support_id` is shown to the user; staff-only tooling resolves it server-side.
-- **Degrade:** if `GITHUB_TOKEN`/`GITHUB_REPO` unset, feedback is still persisted and a `support_id` returned (`github_issue_url:null`) — graceful, never a 500.
+- **Behavior:** generate a random `support_id`; file a **live** redacted GitHub issue — `POST https://api.github.com/repos/{owner}/{repo}/issues` (server-only `GITHUB_TOKEN` **or** `GH_PAT`; `{owner}/{repo}` from `GITHUB_REPO` in `owner/repo` form **or** `GITHUB_ORG`+`GITHUB_REPO`), labelled by channel/type; then persist to `feedback` (no financial fields, no projection link). The issue **title** is built from `support_id`+`type` and the **body** from `support_id` + the safe context + the redacted description — assembled from the already-redacted payload only.
+- **Response `201`:** `{ "support_id":"FB-7K3Q9" }`. `github_issue_url` is stored server-side but **not** returned to the client; only the `support_id` is shown, and staff-only tooling resolves it server-side.
+- **Degrade:** if the token/repo is unset, or GitHub errors/times out (short 5 s timeout), the failure is logged and feedback is still persisted and a `support_id` returned (`github_issue_url:null`) — graceful, never a 500.
 - **Errors:** `400` validation; `429`.
 
 ### 8.2 `POST /api/intent` — customer intent → CRM
