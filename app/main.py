@@ -24,6 +24,7 @@ from app.routers import (
     penny,
     places,
     projections,
+    research,
     roles,
 )
 from app.store import build_store
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(feedback.router)
     app.include_router(intent.router)
     app.include_router(places.router)
+    app.include_router(research.router)  # POST /api/research — grounded market rent (M3.3)
     app.include_router(metrics.router)  # owner-gated GET /api/metrics (M7.7 #95)
 
     @app.get("/robots.txt", include_in_schema=False)

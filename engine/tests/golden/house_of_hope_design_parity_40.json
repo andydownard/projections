@@ -1,6 +1,6 @@
 {
   "breakevenMonth": 5,
-  "compute_schema_version": "1.2.0",
+  "compute_schema_version": "1.3.0",
   "evidence": [],
   "flags": {
     "model_upgrade_available": false,
@@ -132,7 +132,7 @@
       "reason": "N/A \u2014 startup costs are not recovered within the projection horizon"
     }
   },
-  "model_version": "2.4.0",
+  "model_version": "2.5.0",
   "monthly": [
     {
       "cumulativeCash": {
@@ -824,14 +824,16 @@
     "leaseType": "nnn",
     "marketingPct": 0.0375,
     "payrollTaxPct": 0.075,
+    "rentPerSqft": null,
     "reserveBuffer": 25000,
     "salesfloorSqft": 7000.0,
     "salvagePct": 0.008,
     "shareY1": 0.06,
     "shareY2": 0.08,
     "shareY3": 0.1,
-    "suppliesPct": 0.05
+    "suppliesPct": 0.05,
+    "utilitiesPerSqft": 2.23
   },
   "staleNodes": [],
-  "version": "2.4.0"
+  "version": "2.5.0"
 }

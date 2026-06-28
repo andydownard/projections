@@ -377,7 +377,15 @@ def _schedule_columns(inputs_d: dict) -> dict:
     contract. A row without a schedule resolves to the month-1 lump default so every
     row always carries a resolvable schedule (legacy parity, Spec §7).
     """
-    schedule = inputs_d.get("cost_schedule") or default_cost_schedule()
+    schedule = inputs_d.get("cost_schedule")
+    if not schedule:
+        # Seed Equipment & Fixtures + Build-out scaled to this projection's sq ft
+        # (feature #245); a missing sq ft falls back to the example 10,000 basis.
+        building_sqft = inputs_d.get("building_sqft")
+        schedule = (
+            default_cost_schedule(building_sqft) if building_sqft is not None
+            else default_cost_schedule()
+        )
     opening = inputs_d.get("opening_month_number")
     return {
         "cost_schedule_json": json.dumps(schedule),
