@@ -1,268 +1,244 @@
-# AGENTS.md — Build Process & Review Roles
+<!-- AGENT INSTRUCTIONS — read and obey before writing any code. -->
+# projections — Thrift Store Projection web app (a decision-and-funding tool, not a calculator)
 
-**Repo:** `rallytasks/projections` (Thrift Store Projection web app)
-**Status:** Scaffolded, ready to build. Not yet built.
-**Audience:** The human + AI agent team that builds this product.
-**Companion to:** [CLAUDE.md](./CLAUDE.md) (hard rules, regression registry, vocabulary). This file is the *loop* — how work gets planned, built, reviewed, and shipped. CLAUDE.md is the *law* — what is always true. When they appear to conflict, CLAUDE.md wins on rules; AGENTS.md wins on process.
+A server-authoritative tool that helps a first-time nonprofit thrift-store operator decide **whether and how** to launch, and produces a board/funder-ready case for it. From a few inputs it researches the local trade area + market rent, builds a **monthly launch cash-flow** plus a **3-year projection** with KPIs and **decision outputs** (break-even month, startup capital required, first-year cash gap, rules-based go/no-go), and exports a cited **Board Packet** and a formula-driven `.xlsx`. Every number shows its evidence and confidence.
 
-> **One-sentence mandate.** Build a *decision-and-funding tool* for first-store nonprofits — server-authoritative compute, capability-token access, grounded narrative, a board-defensible trust layer — plan-first, TDD-enforced, subagent-driven, milestone by milestone, with the engine as the verification oracle.
+> **Global engineering contract:** https://github.com/rallytasks/agents/blob/main/AGENTS.md
+> Every rule there applies to this repo. Cite rules by ID — `SECRETS`, `TENANT`, `DB`, `MUTATION`, `SERVER`, `OUTBOUND`, `MONEY`, `DESTRUCTIVE`, `INJECTION`, `PLAN`, `TDD`, `VERIFY`, `GIT`, `DOCS`, `HYGIENE`, `PATTERNS`, `REGRESSIONS`, `TRACKING`, `STYLE`, `STANDARD`, `API`, `SESSION`, `PII`, `AI`, `UI`, plus the portfolio conventions (Feedback FAB, Maximum parallelization). This file adds **only** project specifics and any `Override <ID>:` line. Shared rules live in the global file **once** — they are never copied here. A `grep "Override "` of this file lists exactly where projections diverges.
+@../../agents/AGENTS.md   <!-- local-checkout convenience; projections is nested one level deeper, so two `..`. No-op in a standalone clone — the URL above is canonical. -->
+
+**`CLAUDE.md` is a symlink to this file. Edit `AGENTS.md`; never edit `CLAUDE.md`.**
+
+**Read first:** [reference/PRD.md](./reference/PRD.md) (authoritative requirements) → this file → [ARCHITECTURE.md](./ARCHITECTURE.md) → [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) → [BUILD_PLAN.md](./BUILD_PLAN.md) → [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) (the bar).
+
+**Status:** scaffolded, **not yet built**. The Python script in `reference/` is a *calibration seed*, not the v1 engine — see [The engine is a rewrite](#the-engine-is-a-rewrite-not-a-reuse-read-before-touching-m1).
 
 ---
 
-## 0. Read order
+## Stack
 
-1. This file (the build loop).
-2. [CLAUDE.md](./CLAUDE.md) — hard rules + regression registry. **Read before writing any code.**
-3. [`reference/PRD.md`](./projections/reference/PRD.md) — authoritative product requirements (cited throughout as §N).
-4. The doc for the layer you are touching:
-
-| Topic | Doc |
+| Fact | Value |
 |---|---|
-| System shape, modules, endpoint→module map | [ARCHITECTURE.md](./ARCHITECTURE.md) |
-| Milestone scope, sequencing, entry gates | [BUILD_PLAN.md](./BUILD_PLAN.md) |
-| Compute-core contract, view-model, versions | [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) |
-| Tables, columns, override keys | [DATA_MODEL.md](./DATA_MODEL.md) |
-| Endpoints, request/response, If-Match/409 | [API_SPEC.md](./API_SPEC.md) |
-| Tokens, CSP/CORS, grounding, SSRF, rate limits | [SECURITY.md](./SECURITY.md) |
-| Railway, volume, Litestream, restore drill | [OPS_RUNBOOK.md](./OPS_RUNBOOK.md) |
-| The verification bar (gates) | [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) |
-| Branching, PRs, "Docs Are Code" | [CONTRIBUTING.md](./CONTRIBUTING.md) |
-| Feedback→GitHub redaction loop | [IDEA_FAB.md](./IDEA_FAB.md) |
+| Backend | Python **FastAPI**; server-authoritative compute (PRD §13). |
+| Frontend | **React 18 + TypeScript + Vite**; TanStack Query for server cache; hand-rolled SVG charts. No client-side math (PRD §13, §22 item 22). |
+| Storage | **SQLite (WAL)** + `busy_timeout`, serialized writes; **Litestream** continuous replication to object storage (PRD §26). |
+| Deploy | **Railway** service in the **thriftly.com** project; durable volume at **`/data`**; **`DB_PATH=/data/projections.db`** (NOT `/app` — see [OPS_RUNBOOK.md](./OPS_RUNBOOK.md)). |
+| Access | **No login. Capability tokens** (see `Override SESSION` below). |
+| AI | Anthropic primary, OpenAI fallback; **extract-only** research with citation validation; **numeric-grounded** narrative. Compute works fully with AI disabled (PRD §16/§17/§21). |
+| Health | `GET /api/health`. |
+| Key files (once built) | `engine/compute.py` (pure math), `engine/monthly.py`, `dag.py`, `decision.py`, `xlsx.py`, `packet.py`, `model.py` (constants + versions), `engine/tests/golden/`; `app/main.py`, `app/deps.py`, `app/routers/`, `app/store/` (`base.py` Protocol, `sqlite.py`, `postgres.py` stub). |
+| Reference | `reference/PRD.md`, `reference/DESIGN_PROMPT.md`, `reference/thrift-store-projections-skill/` (SKILL.md, `methodology.md`, `scripts/generate_projection.py`, `scripts/recalc.py`, `examples/house_of_hope.json`). |
 
----
+## Commands
 
-## 1. The two methodologies we run
+test: `pytest -q` · golden: `pytest engine/tests/golden -q` (3-way reconcile) · recalc: `python recalc.py <xlsx>` (assert `status=="success"` **and** `total_errors==0`; fail closed on an `{"error":…}` dict) · ratio: `python scripts/ratio.py` · front: `npm test -- --run` / `npm run typecheck` / `npm run lint` · health: `GET /api/health` shows the **new build SHA**.
+This is the project's concrete `VERIFY` proof set; the full Verification Bar table is the single home in [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md).
 
-This repo distills two systems. Use both, in this division of labor:
+## Beachhead ICP (judge everything against it)
 
-- **gstack** (Garry Tan's specialist slash-command roles) supplies the **review gates** — `/office-hours`, `/autoplan` (CEO → design → eng → DX), `/review`, `/design-review`, `/qa`, `/cso`, `/ship`, `/land-and-deploy`. These are *who looks at the work and when*.
-- **Superpowers** (obra's skills) supplies the **inner loop** — `brainstorming`, `writing-plans`, `using-git-worktrees`, `subagent-driven-development`, `test-driven-development`, `requesting-code-review` / `receiving-code-review`, `systematic-debugging`, `verification-before-completion`. These are *how a unit of work is actually produced*.
+One small nonprofit/church-backed operator planning their **first** store in 3–12 months; the **user** is an ED/ops lead/volunteer who is **not** a finance expert; the **buyer** is a board/treasurer. Multi-store, for-profit, and chains are **out of scope for v1** (PRD §2).
 
-| Need | Superpowers skill | gstack role |
+## Vocabulary (satisfies `UI`)
+
+| User sees | Code uses | Never say in UI |
 |---|---|---|
-| Shape an unclear idea | `brainstorming` | `/office-hours` |
-| Turn a spec slice into a plan | `writing-plans` | `/autoplan` (`/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/plan-devex-review`) |
-| Isolate the workspace | `using-git-worktrees` | — |
-| Execute plan tasks | `subagent-driven-development` | — |
-| Write code | `test-driven-development` | — |
-| Get a review | `requesting-code-review` / `receiving-code-review` | `/review`, `/codex` |
-| Audit the UI in a real browser | — | `/design-review`, `/qa` |
-| Audit security | — | `/cso` (OWASP + STRIDE) |
-| Debug a failure | `systematic-debugging` | `/investigate` |
-| Claim "done" | `verification-before-completion` | — |
-| Ship | `finishing-a-development-branch` | `/ship`, `/land-and-deploy`, `/canary` |
+| Projection | `projection` (one per `id`/`view_slug`) | — |
+| Saved version | `revision` (snapshot per autosave settle / restore) | — |
+| Override / pin | a user-fixed value on a DAG node, key `"{node}#{year}"` — components only, never derived rows/KPIs | "DAG node" |
+| Share link | `view_slug` (read-only lookup key, plaintext, ≥128-bit) | "slug" |
+| Edit / recovery link | owner / edit token (capability secret, hashed at rest; edit token via URL fragment) | "bearer token" |
+| Feedback id | `support_id` (random; the only thing in a GitHub issue) | — |
+| Model version | `model_version` / `compute_schema_version` (math version / view-model shape, both stamped on `computed_json`) | — |
 
-**Note on `brainstorming`:** the PRD has *already* done the adversarial brainstorming (Appendix C changelog, Appendix D view-model contract are locked). For in-scope milestone work, skip open-ended ideation and go straight to plan-first. Reserve `brainstorming` / `/office-hours` for genuinely new product surface (e.g., resolving an open question in §29, or net-new UI flagged "still to design" in Appendix D).
+## Top damage risks (the single home — DoD references this)
 
----
-
-## 2. The review roles (who runs, and when)
-
-Six review lenses gate this project. Each maps to a gstack command and to specific PRD requirements. A milestone does not close until its required lenses are green.
-
-| Role | Runs as | What it asks | Primary PRD anchor | When it runs |
-|---|---|---|---|---|
-| **Product / CEO** | `/office-hours`, `/plan-ceo-review` | Is this the decision-and-funding tool, or did it slip back to a calculator? Is the milestone the smallest credible cut? Is M-1 demand actually validated? | §1–§5, §12.3, §28 | Plan-mode, **every** milestone; hard gate at **M-1** and **M2** |
-| **Eng / Architecture** | `/plan-eng-review`, `/review` | Server is the only math authority? Override DAG topological + non-pinnable derived rows? `If-Match`/409 on every mutation? `Store` interface keeps the Postgres path open? | §13, §14, §22, §24–§26 | Plan-mode + pre-land, every milestone |
-| **Design** | `/plan-design-review`, `/design-review`, `/qa` | Table-first finance-grade density? Brand vs semantic tokens separate? Cell-state machine + inspector correct? Negatives in parentheses, N/A explicit? | §11, §14, §19, Appendix D, DESIGN_PROMPT | Any milestone with UI (M2, M4, M5, M7) |
-| **QA** | `/qa` (real browser @ 1440/768/375) | Stress dataset renders clean? Keyboard cell editing? Degraded states real? 409 conflict modal works? | §12.4, §19.4, §27 | Every milestone with UI; full sweep at **M7** |
-| **Security** | `/cso`, `security-review` | No client compute. No cross-owner read. No secret in path/query/log. Narrative sanitized. Grounding + SSRF enforced as tests, not hopes. Boot-refuses on missing secrets. | §13, §16, §17, §20, §21, §22 | **Every** mutating endpoint; full audit at **M3** (research), **M5** (narrative), **M7** |
-| **Release** | `/ship`, `/land-and-deploy`, `/canary` | Golden gate green? Healthcheck shows the **new build SHA**? Restore drill documented + run? Migrations additive-only? | §13, §18, §26 | Every merge; ops sign-off at **M0** and **M7** |
-
-These are *lenses*, not headcount. One agent (or one human) can run several. The rule is that the lens's questions are answered with **evidence in the PR**, not asserted.
+1. **Treating M1 as "wire up the existing engine."** It is a rewrite (~70% net-new: monthly cash-flow, decision metrics, % cost lines, escalator, three shares, override DAG). Scope it from the gap table below.
+2. **Shipping a second math authority** by porting the prototype's client `calc*` functions — violates `SERVER`/PRD §13 and breaks the golden gate.
+3. **Leaking a resolvable projection link / financial field into GitHub feedback** (PRD §22). Only `support_id`.
+4. **Cross-owner data access / global list** — every query is owner-scoped (`TENANT`, PRD §20).
+5. **A mutation without `If-Match`/409, or a secret in a URL path/log** (`MUTATION`/`SESSION`, PRD §20/§25).
+6. **A confidently-wrong decision metric** (break-even / capital / ramp). Label confidence, show sensitivity, calibrate against real openings (PRD §6.3 backlog).
 
 ---
 
-## 3. The per-feature / per-milestone build loop
+## Project rules & overrides
 
-Each milestone (M0–M7, see [BUILD_PLAN.md](./BUILD_PLAN.md)) is one trip through this pipeline. Smaller features inside a milestone repeat steps 3–7.
+Every bullet is project-specific or overrides a global default. Generic rules (plan-first, red-green TDD, evidence-before-done, secrets-in-env, branch/CI/deploy, additive migrations, parameterized SQL, untrusted-input-is-data, WCAG-AA, YAGNI) are **not** restated — they live in the global file under the cited ID.
 
-```
-idea / milestone spec slice
-      │
-  (1) office-hours / brainstorm   ── only for new surface; in-scope work skips to (2)
-      │
-  (2) plan reviews  ── /autoplan: CEO → design → eng → DX
-      │              writing-plans → docs/plans/YYYY-MM-DD-<milestone>.md
-      │              (TDD tasks only, no placeholders, Global Constraints block verbatim from PRD)
-      │
-  (3) isolate       ── using-git-worktrees: one worktree per milestone branch
-      │
-  (4) TDD build via subagents ── subagent-driven-development
-      │              RED test first → implement → per-task review (spec + quality)
-      │              model policy in §5; .superpowers progress ledger maintained
-      │
-  (5) verify        ── verification-before-completion: paste real command output
-      │              pytest -q · golden-reconcile · recalc → total_errors:0
-      │
-  (6) review        ── whole-branch /review on most-capable model
-      │              + role lenses required for this milestone (§2)
-      │              + /qa (real browser @ 1440/768/375) for UI milestones
-      │              + /cso for endpoints/secrets
-      │
-  (7) ship          ── /ship → PR → /land-and-deploy
-                     healthcheck MUST report the NEW build SHA before flip → /canary
-```
-
-**No milestone merges to `main` without every required gate green.** "Green" means fresh command output, not a claim. See [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md).
-
-### 3.1 The plan artifact (step 2)
-
-`writing-plans` produces `docs/plans/YYYY-MM-DD-<milestone>.md` with:
-
-- A **Global Constraints** block copied verbatim from the PRD (the relevant § rules + the items from CLAUDE.md "Hard Rules"). This survives context compaction.
-- Bite-sized **TDD tasks** — each names the RED test, the file(s), and acceptance criteria. **No placeholders, no "TBD".** If a task can't be written concretely, the spec is not understood — return to step 1/2.
-- The **role lenses** required to close this milestone (from §2).
-- The **golden / property tests** that must exist when the milestone is done.
-- The **ops deliverable** (if any) for the milestone.
-
-### 3.2 Verification (step 5) — what counts as proof
-
-A "done / passing / fixed" claim is invalid without fresh output **in the same message**. The canonical proof commands:
-
-```
-pytest -q                                  # zero failures
-pytest engine/tests/golden -q              # 3-way reconcile green (compute == computed_json == LibreOffice recalc)
-python recalc.py "<exported>.xlsx"         # asserts status=='success' AND total_errors:0
-# UI milestones:  /qa screenshots @ 1440 / 768 / 375 against the stress dataset
-# deploy:         healthcheck JSON showing the NEW build SHA (a bare HTTP 200 is NOT proof)
-```
+- **ENGINE — the one version-locked math authority** (extends `SERVER` + `MONEY`). `model_version` + `compute_schema_version` are stamped on every `computed_json`. Projections **never silently recompute** on a newer engine — read returns the stored snapshot verbatim and surfaces "New model available"; `upgrade-model` writes a **new revision** preserving the prior (PRD §13). The engine is the *one* math authority; the server emits display strings as the *one* formatting authority (`{raw, display}`) — DRY. It is a **rewrite, not a reuse** ([below](#the-engine-is-a-rewrite-not-a-reuse-read-before-touching-m1)).
+- **NO-CLIENT-MATH** (`SERVER`, load-bearing here). The interactive prototype's `support.js` (`calcYears`/`calcMonthly`/`scenario`/`startupTotal`/`paybackYears`) is **forbidden in production** — the prototype is a *layout + view-model field-name reference only*. The client sends inputs/overrides via `PATCH` and renders `computed_json` (PRD §13).
+- **GOLDEN — the three-way reconcile is CI-blocking** (extends `VERIFY` + `TDD`). server compute == stored `computed_json` == LibreOffice recalc of the exported `.xlsx`, **with AND without overrides**, within **< $0.50** on dollar cells / **< 0.1pp** on percent cells, with **zero** formula errors (`#VALUE! #DIV/0! #REF! #NAME? #NULL! #NUM! #N/A`). Pin the `soffice` version in the build image. **Built in M1 before feature breadth;** if it is red, nothing lands (PRD §13/§18). Full gate in [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md).
+- **Override SESSION + Override TENANT — capability tokens, no cookies.** Owner ≥256-bit bearer in `localStorage`; `view_slug` ≥128-bit plaintext **lookup key**; edit/role secrets in the **URL fragment only** (scrubbed after read with `searchParams.delete()` + `replaceState()`; **never** in path/query/logs). Generated with a CSPRNG (`secrets.token_urlsafe`), stored **hashed** (SHA-256), compared **constant-time** (`hmac.compare_digest`). **Do NOT introduce a cookie/session** (re-adds the CSRF the PRD designs out), so the global `SESSION` HttpOnly-cookie model does not apply. `TENANT` still applies in full: lists are owner-scoped, never global; no cross-owner read/write (PRD §20).
+- **Mutation Safety Quad** (instantiates `MUTATION` + `TENANT` in the capability-token model). Every `PATCH`/`POST` has all four, **each with a test**: (a) `Authorization: Bearer` required → 401 otherwise; (b) owner-scope isolation (owner A cannot touch owner B); (c) `If-Match: <version>` optimistic concurrency — `UPDATE … SET version=version+1 WHERE id=? AND version=?`; 0 rows → **HTTP 409** with current server state (reload / overwrite / save-as-copy); (d) negative/abuse path with **per-IP + per-token** rate limit. One revision snapshot per autosave settle (PRD §24/§25).
+- **Override DAG is server-enforced.** Topological resolve; **no upstream back-solve**; derived rows / totals / KPIs are **non-pinnable** — pin writes to them are **rejected at the API boundary**, not just hidden in the UI; stale-upstream rows are flagged; override key `"{node}#{year}"` (PRD §14).
+- **LLM-GROUNDING** (extends `AI` + `INJECTION`). Web text is **untrusted data** (strip injection markers); the model **extracts only from server-fetched snippets**; **unfetched citations are rejected**; **every numeric figure in narrative prose must exist in `computed_json` or generation is rejected**; SSRF guard on the research fetcher (block private/link-local/loopback/metadata ranges + redirects to them). **AI opt-out works end-to-end** — full create → compute → save → `.xlsx` with all AI keys unset. These are **adversarial CI tests with stubbed providers**, not prompt niceties (PRD §16/§17/§21).
+- **FEEDBACK — leaks nothing but `support_id`** (extends portfolio Feedback FAB + `PII`). GitHub issues carry only a random `support_id` + non-sensitive context (route, app version, `model_version`, timestamp). **No `view_slug`, no edit token, no resolvable link, no financial fields ever** (PRD §22). CI redaction test.
+- **No raw HTML** (`INJECTION`). `narrative.body_md` and any user rich text are server-side **allowlist-sanitized** before storage and render — stored XSS = `localStorage` bearer-token theft = full projection takeover (also `SESSION`).
+- **Terms acceptance before export/share** (planning estimates, not advice) (PRD §21).
+- **Override DB** (project deltas only; the rest — additive-only migrations, no DROP/recreate, parameterized SQL, app-generated string PKs — per global `DB`). No SQLite-only SQL above the `Store` interface so the Postgres path stays drop-in; take a **pre-migration Litestream snapshot**; DB at `DB_PATH=/data/projections.db` (never `/app`).
+- **DOCS-CODE** (instantiates `DOCS`). Any PR touching the engine, the API contract (`computed_json`/view-model), or the schema **updates the matching doc — `ENGINE_CONTRACT.md` / `API_SPEC.md` / `DATA_MODEL.md` — in the same PR**. Keep plans in `docs/plans/` (no new tracking files, per `TRACKING`).
+- **M-1 is a hard gate** (do not skip). Before heavy build of M3+ (research/narrative/overrides): **20 ICP interviews · 10 manual projections · 5 board/funder shares · 3 paid-or-SQL conversions**, plus a human go/no-go (PRD §28). An eager agent must not barrel past this. The free-vs-paid gate (PRD §3) is a config decision, not a rebuild.
+- **MODEL-SELECTION** (instantiates portfolio "Maximum parallelization"). **Name the model in every subagent dispatch** — never inherit the session default. *cheapest* = transcription where the plan contains complete code (most M2/M6 CRUD, `.xlsx` cell wiring); *standard* = integration/glue (override-DAG, monthly cash-flow, research retrieval, 409 handling); *most-capable* = the **M1 engine rewrite + decision-metric solver + every milestone-end whole-branch review**. Keep a `.superpowers` progress ledger so a compaction never re-dispatches finished work.
 
 ---
 
-## 4. The engine is the verification oracle — and it is a REWRITE, not a reuse
+## The engine is a rewrite, not a reuse (read before touching M1)
 
-> **#1 process correction.** The PRD repeatedly calls the Python engine "the single math authority" (§13, §23, Appendix A). That is the *goal*, not the *current state*. A line-by-line read of [`generate_projection.py`](./projections/reference/thrift-store-projections-skill/scripts/generate_projection.py) shows it satisfies ~30% of v1. Treating M1 as "wire up the existing script" will build the wrong model and badly under-estimate the work.
+The PRD calls the Python engine "the single math authority." **As-built it is not.** `reference/.../generate_projection.py` implements the OLD model and satisfies ~30% of v1: it is **annual-only**, hard-codes **Year-2 = midpoint** of Y1/Y3 (`compute()` L65; Excel `=AVERAGE(...)` L209), has **no monthly cash-flow**, **no decision metrics**, **no override/DAG**, treats supplies as a **fixed $3,700 line** (L44), has **no Marketing line and no rent escalator**, and emits **unguarded divisions** (`=net/totrev` L257, `=startup/Y1net` L284) that produce `#DIV/0!` — an automatic recalc-gate failure.
 
-The existing script is the **bottom-up driver chain seed** and a **calibration golden** (the known-good Longview numbers). It is forked into a pure compute core. The legacy annual script stays in `reference/` and is *only* a calibration reference.
+**M1 is a versioned rewrite into a pure compute core**, keeping the bottom-up driver chain and blue-input/live-formula Excel styling as the *calibration seed* and extending everything else. The legacy script is retained **only as a calibration golden**. Each row below is an M1 TDD task: write the failing golden test first. **The full gap table, formula spec, and resolved defaults are authoritative in [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md);** this is the single working summary.
 
-### 4.1 Engine gap table (the M1 task list)
-
-Each row is a TDD task: write the failing golden test first, then implement.
-
-| Concern | As-built in `generate_projection.py` | v1 requirement | Status |
+| Concern | As-built (`generate_projection.py`) | v1 requirement | Status |
 |---|---|---|---|
-| Bottom-up chain (donating_hh → donations → retail → customers → salvage → total_rev) | `compute()` L63–94 | Same chain, kept | **EXISTS — extract** |
-| Blue-input / live-formula Excel styling | `style_input`, `line()` | Kept + extended (§18) | **EXISTS — extract** |
-| Year-2 donor share | `share[2]=(y1+y3)/2` (L65); Excel `=AVERAGE()` (L209) | **Three explicit shares** Y1/Y2/Y3, no midpoint (§7.1) | **REWRITE** |
-| Supplies | fixed `$3,700` (L44) | **% of revenue, 5.0%** (§7.3) | **REWRITE** |
-| Marketing & outreach | none | **% of revenue, 3.75%** (§7.3) | **NEW** |
-| Rent escalator | none | **3.0% compounding Y2–Y3** (§7.3) | **NEW** |
-| Monthly cash-flow M0–M12 | none | S-curve ramp, timed startup outflows, hire-date payroll, cumulative cash (§10) | **NEW** |
-| Decision metrics | none | break-even month, startup capital required, first-year cash gap, runway, sensitivity (§12) | **NEW** |
-| Recommendation | none | rules-based, explainable (§12.3) | **NEW** |
-| Reserve buffer | none | **$25,000** into capital-required (§12.1) | **NEW** |
-| Override DAG | none | topological resolve, pins, no back-solve, non-pinnable derived rows (§14) | **NEW** |
-| N/A guards / `flags` | `=net/totrev`, `=startup/Y1net` with **no zero-guard** → `#DIV/0!` | explicit `null` + `flags` map; `IF(denom=0,"",…)` in Excel (§12.4/§18) | **REWRITE (known defect)** |
-| Output shape | positional tuple | **Appendix-D view-model** as native output (one structure for frontend + .xlsx) | **REWRITE** |
-| Year-1 totals | annual-only | **roll-up of M0–M12** (annual == sum(monthly) to the penny) (§10.2) | **NEW** |
+| Driver chain (hh × share → donations → retail → customers → salvage → total) | `compute()` L63–94 | keep verbatim | **KEEP** |
+| Blue input / live-formula Excel styling | exists | keep + extend | **KEEP** |
+| Year-2 share | midpoint of Y1/Y3 (L65) | **three explicit shares** (PRD §7.1) — kill `AVERAGE`; Y2 has its own blue input | **REWRITE** |
+| Supplies & processing | fixed $3,700 (L44) | **% of revenue, default 5.0%** (PRD §7.3) | **REWRITE** |
+| Marketing & outreach | none | **% of revenue, default 3.75%** (new line) | **NEW** |
+| Rent escalator | none | **`rent_y1 × (1+escalator)^(y-1)`, 3.0%, Y2–Y3** | **NEW** |
+| Monthly M0–M12 cash-flow | none | S-curve donation ramp, hire-date payroll, timed startup outflows; **Year-1 annual = roll-up of the 12 months** (PRD §10) | **NEW** |
+| Decision metrics | none | break-even month; **capital required = \|peak cash shortfall\| + reserve buffer** (the monthly trough already embeds startup; never add it twice); first-year cash gap; runway; sensitivity (PRD §12) | **NEW** |
+| Override DAG | none | topological resolve; **no upstream back-solve**; derived rows/KPIs **non-pinnable** (server-enforced); key `"{node}#{year}"` (PRD §14) | **NEW** |
+| Edge-case N/A | unguarded → `#DIV/0!` | explicit `null` + `flags` map; Excel `IF(denom=0,"",num/denom)` (PRD §12.4) | **NEW** |
+| Output shape | positional tuples | the **Appendix-D view-model** as native output (below) | **NEW** |
 
-**Build M1 = write `engine/tests/golden/` FIRST, then make it pass.** Feature breadth (M2+) does not start until the golden gate is green.
+**Resolved defaults** (close PRD §7.3 open items; the golden fixtures use these — full table in [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) §1):
 
-### 4.2 Resolved defaults (close §7.3 open items before M1)
-
-These block every golden fixture. The chosen values must reproduce the Appendix-D prototype headline numbers, or those numbers are corrected — pick once, document in [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md):
-
-| Constant | Decision | Why |
+| Driver | v1 default | Source |
 |---|---|---|
-| Labor (payroll) % of revenue | **40%** (design-aligned default; slider stays editable) | Only 40% reconciles the prototype headline (Y1 ~$426,911, capital ~$277,990, break-even ~month 5). Document Longview rationale; CLAUDE.md owns the final call. |
-| Average basket value | **$17.08** | Required to reproduce ~$426,911 / break-even month 5 (Appendix D). §7.3 says $17; the fixture authority is Appendix D. |
-| Marketing & outreach | **3.75%** of revenue | §7.3 |
-| Supplies & processing | **5.0%** of revenue (replaces fixed $3,700) | §7.3 |
-| Rent escalator | **3.0%, compounding**, `rent_y1 × (1+e)^(y-1)`, Y2–Y3 | §7.3; compounding chosen — document whether it also escalates NNN opex and the deposit line |
-| Cash reserve buffer | **$25,000** | §7.3 / §12.1 |
-| Donations / household / yr | **3** | §7.3 |
-| Salvage % of retail | **0.8%** | §7.3 |
+| **Labor (payroll) % of revenue** | **60%** (slider editable) | **Owner decision** ([DECISIONS.md](./DECISIONS.md)); matches the original verified engine. Canonical golden runs at 60%; a **40% design-parity** twin reproduces the Appendix-D headline for design-QA only. *(See note in [Sample golden fixtures](#sample-golden-fixtures-ship-as-goldens-from-day-one) — DECISIONS.md still carries a 40% "CLOSED" entry; the owner override at 60% governs.)* |
+| Average basket value | **$17.08** | reproduces prototype Y1 revenue ~$426,911 / break-even ~month 5 |
+| Marketing & outreach % | 3.75% | PRD §7.3 |
+| Supplies & processing % | 5.0% (replaces fixed supplies) | PRD §7.3 |
+| Annual rent escalator | 3.0%, compounds Y2–Y3 (`(1+e)^(y-1)`) | PRD §7.3 |
+| Cash reserve buffer | $25,000 | PRD §7.3/§12.1 |
+| Donations / household / yr | 3 | PRD §7.3 |
+| Salvage % of retail | 0.8% · Card fees 2.0% · Payroll tax 7.5% | methodology + PRD §7.3 |
 
-### 4.3 Golden fixtures (ship from day one)
+**Numeric discipline.** Compute in **cents/Decimal**; round only at display (whole dollars / 0.1%). The < $0.50 tolerance absorbs Python-Decimal vs LibreOffice-double divergence — document which side rounds. Totals/net/margin/KPIs are **always Excel formulas** over their component cells (even when a component is an overridden orange hard-coded value), so the sheet foots and the in-sheet `SUM` equals the server's resolved total.
 
-Three named projections drive design, edge-case math, and the §13/§18 reconciliation gate:
+**View-model contract** (engine's native output — frontend and `.xlsx` share it; full field list in [DATA_MODEL.md](./DATA_MODEL.md) / [API_SPEC.md](./API_SPEC.md)). `computed_json` serializes by the exact Appendix-D names with `model_version` + `compute_schema_version` stamped: `reco{tag,headline,sub,…}` (server emits a **semantic `tag` enum** — `proceed|revise|find_cheaper_rent|raise_cash|delay|do_not_proceed`; the **client** maps enum→color token, the API never hard-codes hex), `metrics{capital,cashGap,breakeven}`+reasons, `kpis[]`, `monthly[]{revenue,expenses,net,cumulativeCash}`+`breakevenMonth`, `rows[]{label,group,y1,y2,y3,class,editable}`, `overrides[]{node,year,calculated,value,note,pinnedDate,affected[]}`, `evidence[]`, `settings{…}`, `flags`, `version`. Emit money/percent as `{raw, display}` so the client never re-derives formatting.
 
-1. **House of Hope (conservative)** — shares 6/8/10%, ~$427k Y1 revenue, ~11% margin, ~$278k capital required, break-even ~month 5. The happy-path oracle.
-2. **Aggressive (flagged)** — shares 15/20/25%, ~39% margin → MUST trigger the §12.2 guardrail and require a justification note that travels into the packet.
-3. **Grace Mission (loss case)** — Y1 net (\$12,400), payback **N/A**, low-confidence \$14/sqft rent, one overridden Payroll cell. MUST render cleanly: parentheses for negatives, explicit N/A, **no `#DIV/0!`** in Excel.
+## Sample golden fixtures (ship as goldens from day one)
 
-Each fixture runs through the golden gate **with and without overrides**.
+Three named projections pinned to `model_version` drive design, edge-case math, and the recalc gate (PRD §12.4/§13/§18); each runs through the golden gate **with and without overrides**:
 
----
+1. **House of Hope** — shares 6/8/10%, basket $17.08. **Canonical fixture runs at labor 60%** (owner default): Y1 revenue ~$426,911 (labor-independent), margin/capital/reco pinned at 60% at fixture-gen (a loss/"revise" case at 60% — a valid correctness fixture; the gate tests the math, not the recommendation). A **40% design-parity twin** reproduces the prototype headline (~11% margin, capital ~$277,990, break-even ~month 5, reco=proceed) for design-QA only. See [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) §1/§10 and [DECISIONS.md](./DECISIONS.md).
+2. **Aggressive (flagged)** — shares 15/20/25% (the legacy `house_of_hope.json` values), ~39% margin; **must** trigger the §12.2 net-margin guardrail and require a justification note that travels into the packet.
+3. **Grace Mission (loss case)** — negative Y1 net, payback **N/A — no Year 1 profit**, low-confidence $14/sqft rent, one **overridden Payroll cell**; must render cleanly (parentheses for negatives, explicit `null`, never `#DIV/0!`) and recalc clean **with the override present**.
 
-## 5. Subagent model-selection policy
+## Regressions (check before coding; satisfies `REGRESSIONS`)
 
-`subagent-driven-development` must **name the model in every dispatch** — never inherit the session default. Keep a `.superpowers` progress ledger so a compaction never re-dispatches a finished task.
-
-| Task class | Model tier | Examples |
-|---|---|---|
-| Transcription (plan contains complete code) | cheapest | M2/M6 CRUD, .xlsx cell wiring, schema migrations |
-| Integration (judgment, glue) | standard | research retrieval, places/census, autosave loop, 409 handling |
-| Hard math + judgment | most-capable | the M1 engine rewrite, monthly cash-flow, override DAG, decision-metric solver |
-| Whole-branch review (milestone end) | most-capable | always |
-
-Property tests for the hard-math tasks are mandatory (goldens check totals; properties check shape): the statement always foots; a pinned node uses its value; a derived/total/KPI node can never be pinned; `annual == sum(monthly)`.
-
----
-
-## 6. Hard process rules (the ones agents get wrong)
-
-These are non-negotiable. Full rule list lives in [CLAUDE.md](./CLAUDE.md); these are the process-critical few.
-
-1. **TDD is the Iron Law** for all engine, decision-metric, override-DAG, and API-mutation code. Commit the RED test and watch it fail first. No production code without a prior failing test. Bugfixes get a reproducing regression test (`systematic-debugging`). The *only* exception is a throwaway research/LLM-prompt spike, which is deleted before the real TDD pass.
-2. **No client-side math, ever (§13).** The design prototype (`support.js` `calcYears`/`calcMonthly`/`scenario`) is a **layout + view-model-field-name reference only**. Porting its math is a P0 violation and breaks the golden reconciliation. The frontend sends inputs/overrides via `PATCH (If-Match: <version>)` and renders the server's `computed_json`.
-3. **Mutation Safety quad** on every `PATCH`/`POST` (§25): (a) bearer-token auth required, (b) owner-scope isolation (never a global list, never cross-owner read/write — §20), (c) `If-Match` optimistic-concurrency 409-on-stale, (d) a negative/abuse path with per-IP + per-token rate limit (§20). No mutation merges without all four tests.
-4. **Grounding & safety are tests, not prompts.** Adversarial, in CI, with recorded/stubbed provider responses: a hallucinated figure in narrative prose → **rejected** (§17); an unfetched citation → **rejected** (§16); injected "ignore previous instructions" web text → **stripped/ignored** (§16). Happy-path-only grounding tests are forbidden.
-5. **Feedback redaction is a CI test (§22).** Assert no `view_slug`, no edit token, no resolvable projection link, and no financial field ever reaches a GitHub-issue payload — only the random `support_id`. See [IDEA_FAB.md](./IDEA_FAB.md).
-6. **Capability tokens, never sessions.** Do not introduce a cookie (it re-adds the CSRF the PRD designs out). Owner token in `localStorage` + `Authorization: Bearer`; edit secret only in the URL fragment, scrubbed after read (`searchParams.delete()` + `replaceState()`); never in path/query/logs. Pin this with a test.
-7. **Boot-refuses on missing secrets** in production, single source of truth, **no fallback chains** — required: `DB_PATH=/data/projections.db`, `GOOGLE_PLACES_API_KEY`, `CENSUS_API_KEY`, plus at-least-one AI provider (`ANTHROPIC_API_KEY` primary, `OPENAI_API_KEY` fallback); optional/graceful-degrade: `GITHUB_TOKEN`+`GITHUB_REPO`, `CRM_API_KEY`, `LITESTREAM_*`. See [SECURITY.md](./SECURITY.md), [OPS_RUNBOOK.md](./OPS_RUNBOOK.md).
-8. **AI opt-out must actually work end-to-end (§21):** a test runs the full create → compute → save → `.xlsx` flow with **all AI keys unset**.
-9. **Docs Are Code.** Any PR touching the engine, the API contract, the data model, or the view-model **updates the matching doc in the same PR**.
-10. **Version everything; never silently recompute (§13).** `model_version` (math) and `compute_schema_version` (view-model shape) are stamped on every `computed_json`. On read, if the stored `model_version` differs from current, return the stored snapshot verbatim and surface "new model available" — `upgrade-model` writes a NEW revision, preserving the prior.
+| # | Trap | Rule | Ref |
+|---|---|---|---|
+| 1 | Year-2 = midpoint | Three explicit shares; kill `AVERAGE`; Y2 has its own input | §7.1 |
+| 2 | `#DIV/0!` in Excel | Guard every division `IF(denom=0,"",num/denom)`; emit explicit `null`+`flags` | §12.4/§18 |
+| 3 | Override back-solves upstream | No back-solve; flag orphaned upstream; recompute is topological | §14 |
+| 4 | Pinning a derived/total/KPI cell | Non-pinnable; **reject server-side**, not just hidden in UI | §14 |
+| 5 | Narrative figure not in `computed_json` | Reject generation | §17 |
+| 6 | LLM citation not server-fetched | Reject the citation | §16 |
+| 7 | Feedback carries a projection link | Only random `support_id`; no financial fields | §22 |
+| 8 | Client computes math | Backend owns logic; render `computed_json` only | §13/§22(22) |
+| 9 | Mutation without `If-Match` | Require it; real 409 + current state | §25 |
+| 10 | Secret in URL path/query/log | Fragment only; scrub after read | §20 |
+| 11 | Cookie/session reintroduced | Bearer-token only — no CSRF surface | §20 |
+| 12 | Silent recompute on new engine | Return stored snapshot; upgrade = new revision | §13 |
+| 13 | Litestream replicating `/app` (timpager bug) | Replicate **`/data/projections.db`** | §26 |
+| 14 | Boot with missing secret / fallback chain | Refuse to boot in prod; single-source env requirements | §20 |
+| 15 | Annual P&L drifts from monthly | Year-1 annual = roll-up of M0–M12; golden asserts equality | §10.2 |
 
 ---
 
-## 7. Milestone gate map
+## Build process (project) — gstack × Superpowers
 
-The detailed scope lives in [BUILD_PLAN.md](./BUILD_PLAN.md). This is the process view: entry gate, required review lenses, the tests that must exist, and the ops deliverable.
+This is the project's process layer (extends `PLAN` → `TDD` → `VERIFY` → `GIT`). It is **not** in the global file. Two systems, one division of labor:
+
+- **gstack** (specialist slash-command roles) supplies the **review gates** — `/office-hours`, `/autoplan` (CEO → design → eng → DX), `/review`, `/design-review`, `/qa`, `/cso`, `/ship`, `/land-and-deploy`, `/canary`. *Who looks at the work and when.*
+- **Superpowers** (skills) supplies the **inner loop** — `brainstorming`, `writing-plans`, `using-git-worktrees`, `subagent-driven-development`, `test-driven-development`, `requesting/receiving-code-review`, `systematic-debugging`, `verification-before-completion`, `finishing-a-development-branch`. *How a unit of work is produced.*
+
+> The PRD has *already* done the adversarial brainstorming (Appendix C/D are locked). For in-scope milestone work, skip open-ended ideation and go straight to plan-first; reserve `brainstorming` / `/office-hours` for genuinely new surface (an open §29 question, or net-new UI flagged "still to design").
+
+### Per-milestone loop
+
+Each milestone (M0–M7, see [BUILD_PLAN.md](./BUILD_PLAN.md)) is one trip; smaller features repeat steps 3–7:
+
+```
+(1) office-hours / brainstorm   ── only for new surface; in-scope work skips to (2)
+(2) plan reviews   ── /autoplan: CEO → design → eng → DX
+                     writing-plans → docs/plans/YYYY-MM-DD-<milestone>.md
+                     (TDD tasks only, no placeholders; a Global Constraints block copied verbatim from the PRD survives compaction)
+(3) isolate        ── using-git-worktrees: one worktree per milestone branch
+(4) TDD build      ── subagent-driven-development: RED test first → implement → per-task review (spec + quality)
+                     model policy = MODEL-SELECTION above; .superpowers progress ledger maintained
+(5) verify         ── verification-before-completion: paste the Commands proof set (VERIFY)
+(6) review         ── whole-branch /review (most-capable) + the milestone's required lenses + /qa (UI) + /cso (endpoints/secrets)
+(7) ship           ── /ship → PR → /land-and-deploy → /canary; healthcheck MUST report the NEW build SHA before flip
+```
+
+**No milestone merges to `main` without every required gate green** ("green" = fresh command output, not a claim — `VERIFY`). "Shipped" = all required lenses green with evidence in the PR + [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) Tier-1/Tier-2 pass + golden gate green (with/without overrides) + healthcheck shows the new build SHA + every behavior-changing doc updated in the same PR.
+
+### Review lenses (who runs, and when)
+
+Six lenses gate this project; they are *lenses*, not headcount (one agent can run several). Each lens's questions are answered with **evidence in the PR**, not asserted.
+
+| Lens | Runs as | Asks | PRD anchor | When |
+|---|---|---|---|---|
+| **Product / CEO** | `/office-hours`, `/plan-ceo-review` | Decision-and-funding tool, not a calculator? Smallest credible cut? Is M-1 demand validated? | §1–§5, §12.3, §28 | Plan-mode, every milestone; hard gate at **M-1** and **M2** |
+| **Eng / Architecture** | `/plan-eng-review`, `/review` | Server-only math? Override DAG topological + non-pinnable derived? `If-Match`/409 on every mutation? `Store` keeps Postgres open? | §13, §14, §22, §24–§26 | Plan-mode + pre-land, every milestone |
+| **Design** | `/plan-design-review`, `/design-review`, `/qa` | Table-first finance density? Brand vs semantic tokens separate? Cell-state machine + inspector? Negatives in parens, N/A explicit? | §11, §14, §19, App. D | Any UI milestone (M2, M4, M5, M7) |
+| **QA** | `/qa` (real browser @ 1440/768/375) | Stress dataset renders clean? Keyboard cell editing? Degraded states real? 409 modal works? | §12.4, §19.4, §27 | Every UI milestone; full sweep at **M7** |
+| **Security** | `/cso`, `security-review` | No client compute. No cross-owner read. No secret in path/query/log. Narrative sanitized. Grounding + SSRF as tests. Boot-refuses on missing secrets. | §13, §16, §17, §20, §21, §22 | Every mutating endpoint; full audit at **M3**, **M5**, **M7** |
+| **Release** | `/ship`, `/land-and-deploy`, `/canary` | Golden gate green? Healthcheck shows the new build SHA? Restore drill run? Migrations additive-only? | §13, §18, §26 | Every merge; ops sign-off at **M0** and **M7** |
+
+### Milestone gate map (the single home — DoD/CONTRIBUTING point here)
+
+Detailed scope in [BUILD_PLAN.md](./BUILD_PLAN.md). Process view: entry gate, required lenses, tests that must exist, ops deliverable.
 
 | Milestone | Entry gate | Required lenses | Tests that must exist | Ops / deliverable |
 |---|---|---|---|---|
-| **M-1 Pre-build validation** | — | **Product/CEO (hard go/no-go)** | n/a (discovery) | 20 ICP interviews · 10 manual projections · 5 board/funder shares · 3 paid-or-SQL conversions. **No M3+ heavy build until met.** Human go/no-go. |
-| **M0 Scaffold** | M-1 passed | Eng, Security, Release | boot-refuse env test; feedback-redaction test stub; CSP/noindex header test | Repo, FastAPI, SQLite(WAL)+Litestream on `/data`, terms gate, `railway.toml`, restore-drill script |
+| **M-1 Pre-build validation** | — | **Product/CEO (hard go/no-go)** | n/a (discovery) | 20 ICP interviews · 10 manual projections · 5 board/funder shares · 3 paid-or-SQL conversions. **No M3+ heavy build until met.** |
+| **M0 Scaffold** | M-1 passed | Eng, Security, Release | boot-refuse env test; feedback-redaction test stub; CSP/noindex header test; **`scripts/ratio.py` meter exists** | Repo, FastAPI, SQLite(WAL)+Litestream on `/data`, terms gate, `railway.toml`, restore-drill script |
 | **M1 Compute + cash flow** | M0 green | **Eng (most-capable)** | **golden 3-way reconcile (with/without overrides); annual==sum(monthly); decision-metric goldens; property tests** | engine `model_version` + `compute_schema_version` stamped; CI-blocking golden gate (LibreOffice pinned) |
-| **M2 MVP loop (credibility gate)** | M1 golden green | **Product/CEO (hard), Eng, Design, QA, Release** | mutation quad on create/PATCH; 409 test; `.xlsx` recalc clean | inputs → compute → save → reopen → `.xlsx` + basic packet **including decision banner + monthly cash-flow + recommendation** (these ARE the product) |
-| **M3 Research + evidence** | M2 shipped | Eng, **Security (full)**, Design | SSRF block test; unfetched-citation reject; injection-strip; cache TTL | Places + Census + retrieval-grounded rent + evidence panel + attachments (file-upload hardening) |
+| **M2 MVP loop (credibility gate)** | M1 golden green | **Product/CEO (hard), Eng, Design, QA, Release** | mutation quad on create/PATCH; 409 test; `.xlsx` recalc clean | inputs → compute → save → reopen → `.xlsx` + basic packet **including decision banner + monthly cash-flow + recommendation** |
+| **M3 Research + evidence** | M2 shipped | Eng, **Security (full)**, Design | SSRF block; unfetched-citation reject; injection-strip; cache TTL | Places + Census + retrieval-grounded rent + evidence panel + attachments (upload hardening) |
 | **M4 Editing depth** | M3 shipped | Eng, **Design**, QA, Security | override-DAG props (non-pinnable derived; reset; stale-flag); revisions; role links | cell overrides + Override Inspector + revisions + view/edit/role links + 409 + soft delete |
 | **M5 Board Packet + narrative** | M4 shipped | **Security (full)**, Design, Product/CEO | numeric-grounding reject; stale-narrative diff; sensitivity goldens | packet export + grounded prose + stale handling + sensitivity |
 | **M6 Feedback + intent** | M5 shipped | Security, Eng | **feedback-redaction CI test (P0)**; CRM intent path | redacted GitHub + support IDs ([IDEA_FAB.md](./IDEA_FAB.md)); CRM intent loop |
-| **M7 Hardening + actuals** | M6 shipped | **All six lenses; full QA sweep** | a11y AA on wizard/table/overrides/modals; full degraded-state set; restore drill run | security/ops/runbooks, error states, design QA; actuals table + opt-in benchmarks (schema only, no compounding UI) |
+| **M7 Hardening + actuals** | M6 shipped | **All six lenses; full QA sweep** | a11y AA on wizard/table/overrides/modals; full degraded-state set; restore drill run | security/ops/runbooks, error states, design QA; actuals **schema** only (no UI) |
 
----
-
-## 8. Scope fences (YAGNI — enforced in plan review)
-
-The rich PRD tempts over-building. Plan-mode review (Product/CEO + Eng) rejects any task that pulls these into v1:
+### Scope fences (YAGNI — enforced in plan review, per `STANDARD`)
 
 **In v1:** decision-and-funding tool for first-store nonprofits; city/county/manual trade area (§8); monthly cash-flow + decision metrics + recommendation; evidence/trust layer; grounded packet; capability-token sharing.
+**Out of v1** (deferred, rules pre-specified where noted): multi-store / for-profit (§2); radius / drive-time / ZCTA trade area (§8); actuals **benchmarking** beyond the empty table (§6.3 — ship schema, no UI); demand-drivers that *scale* the point estimate (§9 — v1 drivers adjust *confidence* only); any client-side compute (§13). The M2 "smallest shippable loop" stays small but MUST carry the decision banner, monthly cash-flow, and recommendation — a calculator without the decision is not shippable for this ICP.
 
-**Out of v1 (deferred, rules pre-specified where noted):** multi-store / for-profit (§2); radius / drive-time / ZCTA trade area (§8 — deferred *with* ACS-vintage/FIPS/MOE/partial-tract rules); actuals **benchmarking** and data-compounding beyond the empty table (§6.3 — ship the schema, build no UI); demand-drivers that *scale* the point estimate (§9 — v1 drivers adjust *confidence* only); any client-side compute (§13).
-
-The M2 "smallest shippable loop" stays genuinely small — but it MUST carry the decision banner, monthly cash-flow, and recommendation, because a calculator without the decision is not shippable for this ICP.
-
----
-
-## 9. Open questions to close (elevated from §29)
-
-These block the build and need a human decision logged in the relevant doc before the dependent milestone starts:
+### Open questions to close (elevated from §29)
 
 | Question | Blocks | Owner doc |
 |---|---|---|
-| Business-model price/gate ($199–$499? bundled?) — what is free vs. paid/reviewed (§3) | M-1 exit criteria framing | PRD §3 / Product |
-| Labor % product default — confirm **40%** (resolved §4.2) | every golden fixture (M1) | [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) |
-| Ramp/seasonality calibration source for the S-curve + break-even (§10.2) | decision-metric confidence (M1) | [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md); calibration backlog = §6.3 actuals |
+| Business-model price/gate — free vs paid/reviewed (§3) | M-1 exit framing | PRD §3 / Product |
+| Labor % product default — **owner override = 60%** (DECISIONS.md still lists a stale 40% "CLOSED"; reconcile) | every golden fixture (M1) | [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) / [DECISIONS.md](./DECISIONS.md) |
+| Ramp/seasonality calibration source for the S-curve + break-even (§10.2) | decision-metric confidence (M1) | [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) |
 | Escalator scope — does 3.0% also escalate NNN opex + the deposit startup line? | engine determinism (M1) | [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) |
 
-A confidently-wrong break-even month is worse than none: label confidence, show sensitivity, and treat §6.3 actuals as the calibration backlog.
+A confidently-wrong break-even month is worse than none: label confidence, show sensitivity, treat §6.3 actuals as the calibration backlog.
 
 ---
 
-## 10. Definition of "shipped"
+## Doc index
 
-A milestone is shipped when: all required lenses (§2) are green with evidence in the PR; [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) Tier-1 (every commit) and Tier-2 (every PR) gates pass; the golden gate is green (with and without overrides); `/land-and-deploy` confirms the healthcheck reports the **new build SHA**; and every behavior-changing doc was updated in the same PR. Anything less is "in progress," regardless of how it feels.
+| Topic | File |
+|---|---|
+| Authoritative requirements (the product) | [reference/PRD.md](./reference/PRD.md) |
+| Design brief (table-first, dense, finance-grade, a11y) | [reference/DESIGN_PROMPT.md](./reference/DESIGN_PROMPT.md) |
+| System architecture, layout, endpoint→module map | [ARCHITECTURE.md](./ARCHITECTURE.md) |
+| Milestones (M-1…M7), entry gates, deliverables | [BUILD_PLAN.md](./BUILD_PLAN.md) |
+| Engine formulas, defaults, override resolution, Excel cell contract, golden gate | [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) |
+| SQLite schema, `computed_json`/view-model fields, versioning | [DATA_MODEL.md](./DATA_MODEL.md) |
+| REST endpoints, `If-Match`/409, request/response shapes | [API_SPEC.md](./API_SPEC.md) |
+| Capability tokens, secrets/env, CSP/CORS, sanitization, SSRF, rate limits, LLM grounding | [SECURITY.md](./SECURITY.md) |
+| Railway/Litestream, restore drill, RPO/RTO, migrations, incidents | [OPS_RUNBOOK.md](./OPS_RUNBOOK.md) |
+| Tiered gate, Mutation Safety Quad, Failure Mode Registry, Verification Bar | [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) |
+| Branch naming + PR/commit footers (thin stub; process lives here) | [CONTRIBUTING.md](./CONTRIBUTING.md) |
+| Redacted feedback → GitHub + intent → CRM (idea fab) | [IDEA_FAB.md](./IDEA_FAB.md) |
+| Final product/engineering calls (labor %, stack, fixtures, ratio meter) | [DECISIONS.md](./DECISIONS.md) |
+| Calibration seed engine + LibreOffice recalc gate | `reference/thrift-store-projections-skill/scripts/{generate_projection.py,recalc.py}` |
