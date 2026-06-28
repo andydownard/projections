@@ -2095,3 +2095,46 @@ body {
     animation: none;
   }
 }
+
+/* --- Penny non-obscuring push (spec §10) ------------------------------------
+   On a wide (≥1180px) screen the open Penny drawer is non-modal (380px, anchored
+   to the left edge). When it publishes `data-penny-open` on <body>, inset the page
+   main column to the RIGHT of the drawer so page content is PUSHED, never overlaid
+   — the center stays interactive. Below 1180px Penny is a modal full-screen sheet
+   and sets nothing (the page behind it is fine). */
+.app__main {
+  transition: margin-left 240ms ease;
+}
+@media (min-width: 1180px) {
+  body[data-penny-open="true"] .app__main {
+    /* 380px drawer + a small gutter; content left-aligns clear of the drawer. */
+    margin-left: calc(380px + 1.5rem);
+  }
+}
+
+/* --- Penny typewriter caret (PennyTranscript, spec §7) ----------------------
+   A blinking caret while Penny's response types in / she is thinking. Decorative:
+   the message text is fully present once the reveal settles, and the component
+   never mounts the caret under reduced-motion (this rule is belt-and-suspenders). */
+@keyframes penny-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.penny-caret {
+  animation: penny-blink 1.05s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app__main {
+    transition: none;
+  }
+  .penny-caret {
+    animation: none;
+  }
+}

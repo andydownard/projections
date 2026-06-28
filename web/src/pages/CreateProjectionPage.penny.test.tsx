@@ -122,8 +122,9 @@ describe("CreateProjectionPage — a Penny draft edit flows into the wizard fiel
         "House of Hope",
       ),
     );
-    // She narrated the edit, and it's per-field undoable (FieldChange).
-    expect(screen.getByText(/named the store house of hope/i)).toBeInTheDocument();
+    // She narrated the edit (it types in — a presentation effect over the final
+    // grounded text), and it's per-field undoable (FieldChange).
+    expect(await screen.findByText(/named the store house of hope/i)).toBeInTheDocument();
     expect(screen.getByTestId("field-change-undo")).toBeInTheDocument();
   });
 
@@ -173,8 +174,10 @@ describe("CreateProjectionPage — Generate persists a Penny-built schedule with
     await user.type(screen.getByRole("textbox", { name: /ask penny/i }), "Build my cost schedule");
     await user.keyboard("{Enter}");
     await waitFor(() => expect(bodies["/api/penny/draft"]).toBeDefined());
-    // close Penny so the wizard's Next buttons aren't under the modal scrim
-    await user.click(screen.getByRole("button", { name: /close penny/i }));
+    // close Penny (Esc — there is no header close button) so the wizard's Next
+    // buttons aren't under the modal scrim
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
     // 2. → Trade area (households resolved)
     await user.click(screen.getByRole("button", { name: /^next$/i }));
