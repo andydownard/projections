@@ -5,10 +5,11 @@
 // turns it is handed and, before the first turn, a friendly INTRO from Penny so the
 // drawer never opens to a cold, empty box.
 //
-// It computes NOTHING and formats NOTHING — turn content is rendered verbatim.
-// Decision-metric numbers only ever arrive already formatted by the server
-// (CLAUDE.md: server is the one math + formatting authority), so this component
-// never derives a figure.
+// It computes NOTHING. Assistant prose is rendered through a SAFE Markdown subset
+// (bold/italic/lists/code/links → React elements, NO raw HTML — see pennyMarkdown),
+// a PRESENTATION-only formatting of the server's final text. Decision-metric numbers
+// arrive already formatted by the server (CLAUDE.md: server is the one math +
+// formatting authority), so this component never derives or reshapes a figure.
 //
 // Presentation polish (Anthropic-style, spec §5/§7): Penny's assistant turns render
 // in a distinct "paper" bubble with a TYPEWRITER reveal + a blinking cursor, and an
@@ -17,6 +18,8 @@
 // text the server returned — it never streams a number ahead of the engine
 // (spec §5.1). `prefers-reduced-motion` → settled render (no typewriter, no blink).
 import { useEffect, useState, type ReactNode } from "react";
+
+import { markdownToPlainText, renderMarkdown } from "./pennyMarkdown";
 
 export type PennyRole = "user" | "assistant" | "tool";
 
@@ -53,7 +56,7 @@ const ROLE_LABEL: Record<PennyRole, string> = {
 
 /** ONE message font size shared with the composer textarea (PennyDrawer) so the
  *  transcript and the input read at the same comfortable size (spec §4). */
-export const PENNY_MESSAGE_FONT_SIZE = "0.9375rem";
+export const PENNY_MESSAGE_FONT_SIZE = "0.8125rem";
 
 const DEFAULT_INTRO =
   "Hi, I'm Penny. I'm happy to help you refine this projection and answer any questions about the numbers — just ask.";
@@ -100,23 +103,31 @@ function Caret() {
 }
 
 /**
- * Typewriter reveal over the FINAL grounded text (never a live number stream). The
- * complete string lands in the DOM the moment the reveal finishes, so the polite
- * live region announces the settled message and tests can find it. Reduced-motion →
- * the full text renders immediately with no caret.
+ * Penny's assistant prose: a typewriter reveal over the PLAIN text, then SETTLE to
+ * the formatted (SAFE-Markdown) render — "settle-then-format" so the reveal never
+ * flashes raw `**` / `- ` syntax. The complete message lands in the DOM the moment
+ * the reveal finishes, so the polite live region announces the settled message and
+ * tests can find it. Reduced-motion → the formatted text renders immediately, no
+ * caret.
+ *
+ * Formatting is a PRESENTATION effect over the FINAL grounded text (never a live
+ * number stream); rendering goes through {@link renderMarkdown}, which emits an
+ * allowlisted subset of React elements and NEVER injects raw HTML (rendered XSS =
+ * bearer-token theft, CLAUDE.md "No raw HTML").
  */
-function TypewriterText({ text, reduced }: { text: string; reduced: boolean }) {
-  const [count, setCount] = useState(reduced ? text.length : 0);
+function AssistantContent({ text, reduced }: { text: string; reduced: boolean }) {
+  const plain = markdownToPlainText(text);
+  const [count, setCount] = useState(reduced ? plain.length : 0);
 
   useEffect(() => {
-    const total = text.length;
+    const total = plain.length;
     if (reduced || total === 0) {
       setCount(total);
       return;
     }
     setCount(0);
     // Reveal in a small, FIXED number of steps so any length settles quickly (the
-    // complete string lands in the DOM the moment it finishes — the polite live
+    // complete message lands in the DOM the moment it finishes — the polite live
     // region announces the settled message and tests can find it).
     const steps = Math.min(total, 28);
     const stepSize = Math.ceil(total / steps);
@@ -127,21 +138,23 @@ function TypewriterText({ text, reduced }: { text: string; reduced: boolean }) {
       if (shown >= total) clearInterval(id);
     }, 16);
     return () => clearInterval(id);
-  }, [text, reduced]);
+  }, [plain, reduced]);
 
-  const done = count >= text.length;
+  // Settled → render the formatted, sanitized Markdown (the complete message is now
+  // in the DOM for the live region + tests). Mid-reveal → the typed plain text + caret.
+  if (count >= plain.length) {
+    return <div data-testid="penny-typed">{renderMarkdown(text)}</div>;
+  }
   return (
     <>
-      {/* The text lives in its OWN element so the settled string matches uniquely
-          (testing-library reads direct text children). */}
-      <span data-testid="penny-typed">{text.slice(0, count)}</span>
-      {!reduced && !done && <Caret />}
+      <span data-testid="penny-typed">{plain.slice(0, count)}</span>
+      {!reduced && <Caret />}
     </>
   );
 }
 
 /** Anthropic-style assistant bubble: a soft "paper" card, distinct from the user's
- *  brand-tinted bubble, with the typewriter reveal applied to plain-string content. */
+ *  brand-tinted bubble, with the reveal-then-format render applied to string content. */
 function AssistantBubble({
   content,
   reduced,
@@ -160,7 +173,7 @@ function AssistantBubble({
       <span style={roleLabelStyle}>{ROLE_LABEL.assistant}</span>
       <div style={assistantBubbleStyle}>
         {typeof content === "string" ? (
-          <TypewriterText text={content} reduced={reduced} />
+          <AssistantContent text={content} reduced={reduced} />
         ) : (
           // Non-string content (already-formatted nodes) renders settled — metric
           // deltas are never typed as if live (spec §5.1).

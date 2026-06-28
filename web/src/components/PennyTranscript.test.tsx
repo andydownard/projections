@@ -45,6 +45,40 @@ describe("PennyTranscript", () => {
     expect(screen.queryByTestId("penny-transcript-empty")).not.toBeInTheDocument();
   });
 
+  it("renders an assistant turn's Markdown as formatted, sanitized output", () => {
+    const mql = (q: string) => ({
+      matches: q.includes("reduce"),
+      media: q,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    });
+    vi.stubGlobal("matchMedia", vi.fn().mockImplementation(mql));
+    try {
+      render(
+        <PennyTranscript
+          turns={[
+            {
+              id: "a",
+              role: "assistant",
+              content: "Updated the **payroll** input.\n\n- one\n- two",
+            },
+          ]}
+        />,
+      );
+      // Bold renders as a real <strong> (not the literal `**` the screenshot showed).
+      expect(screen.getByText("payroll").tagName).toBe("STRONG");
+      expect(screen.getByTestId("penny-transcript").textContent).not.toContain("**");
+      // Hyphen bullets render as list items, not raw "- " text.
+      expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("renders settled (no typewriter) under prefers-reduced-motion", () => {
     const mql = (q: string) => ({
       matches: q.includes("reduce"),
