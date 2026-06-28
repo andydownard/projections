@@ -17,11 +17,14 @@ import hashlib
 import hmac
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from fastapi import Header, HTTPException
 
 from app import config
+
+if TYPE_CHECKING:
+    from app.clerk import ClerkIdentity
 
 
 def hash_token(token: str) -> str:
@@ -76,6 +79,46 @@ def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     return None
 
 
+def resolve_clerk_identity(
+    authorization: Optional[str] = Header(default=None),
+    *,
+    env: Optional[Mapping[str, str]] = None,
+) -> Optional[ClerkIdentity]:
+    """Verify the Bearer as a Clerk session JWT, returning the FULL verified identity
+    (with ``.claims``) or ``None`` — COOKIE-BLIND, fail-closed, never raising.
+
+    Returns ``None`` when: there is no Bearer, ``CLERK_ENABLED`` is off, the token is
+    not JWT-shaped, OR verification fails (wrong iss/exp/azp/sig). NO Clerk secret is
+    ever used (JWKS public-key verify only). This is the single Clerk-verify seam:
+    ``resolve_bearer_identity`` derives owner scope from it, and the feedback path
+    reads server-only creator PII (email/name/phone) from ``.claims`` (decisions
+    #6/#13) — those PII fields never reach the redacted GitHub issue.
+    """
+    token = _extract_bearer(authorization)
+    if token is None or not config.clerk_enabled(env):
+        return None
+    # Lazy import keeps `app.deps` import-light and the verifier monkeypatchable.
+    from app.clerk import (
+        ClerkVerificationError,
+        looks_like_jwt,
+        verify_clerk_session_token,
+    )
+
+    if not looks_like_jwt(token):
+        return None
+    cfg = config.clerk_config(env)
+    try:
+        return verify_clerk_session_token(
+            token,
+            issuer=cfg["issuer"],
+            authorized_parties=cfg["authorized_parties"],
+            leeway=cfg["leeway_seconds"],
+        )
+    except ClerkVerificationError:
+        # Present-but-invalid Clerk JWT → no identity, fail-closed (no 500).
+        return None
+
+
 def resolve_bearer_identity(
     authorization: Optional[str] = Header(default=None),
     *,
@@ -98,27 +141,9 @@ def resolve_bearer_identity(
     if token is None:
         return Anonymous()
 
-    if config.clerk_enabled(env):
-        # Lazy import keeps `app.deps` import-light and the verifier monkeypatchable.
-        from app.clerk import (
-            ClerkVerificationError,
-            looks_like_jwt,
-            verify_clerk_session_token,
-        )
-
-        if looks_like_jwt(token):
-            cfg = config.clerk_config(env)
-            try:
-                ident = verify_clerk_session_token(
-                    token,
-                    issuer=cfg["issuer"],
-                    authorized_parties=cfg["authorized_parties"],
-                    leeway=cfg["leeway_seconds"],
-                )
-                return ClerkOwner(ident.clerk_user_id, ident.org_id)
-            except ClerkVerificationError:
-                # Present-but-invalid Clerk JWT → fall through, fail-closed.
-                pass
+    ident = resolve_clerk_identity(authorization, env=env)
+    if ident is not None:
+        return ClerkOwner(ident.clerk_user_id, ident.org_id)
 
     return CapabilityBearer(token)
 

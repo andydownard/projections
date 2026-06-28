@@ -19,6 +19,7 @@ from app.store.migrations import (
     m0008_card_summary,
     m0009_role_links,
     m0010_clerk_owner,
+    m0011_feedback_creator,
 )
 
 # Ordered list of (name, ddl) migrations. Append-only.
@@ -33,4 +34,5 @@ MIGRATIONS = [
     ("0008_card_summary", m0008_card_summary.SQL),
     ("0009_role_links", m0009_role_links.SQL),
     ("0010_clerk_owner", m0010_clerk_owner.SQL),
+    ("0011_feedback_creator", m0011_feedback_creator.SQL),
 ]
