@@ -231,6 +231,26 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
     return years, startup, startup_total, occupancy
 
 
+def unpinned_node_values(inputs, assumptions, demand_drivers, trade_area) -> dict:
+    """Every pinnable (node, year) cell's calculated value with NO overrides.
+
+    Maps ``("share", y)`` and each expense label to its Decimal from a pure
+    recompute of the annual chain (no back-solve). The single source of "what the
+    engine derives when the pin is absent", shared by the router's
+    auto-clear-on-equal check and the Override Inspector's ``calculated`` column,
+    so the two can never drift in which cells they expose.
+    """
+    years, _startup, _startup_total, _occupancy = compute_annual(
+        inputs, assumptions, demand_drivers, trade_area, {})
+    out: dict = {}
+    for y in (1, 2, 3):
+        yr = years[y]
+        out[("share", y)] = yr.share
+        for label, val in yr.expenses.items():
+            out[(label, y)] = val
+    return out
+
+
 def startup_outflows_by_month(inputs, assumptions, occupancy_y1) -> dict:
     """Map project-month int -> one-time startup cash outflow Decimal (Spec §5/§6).
 

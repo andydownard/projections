@@ -280,16 +280,9 @@ def _unpinned_annual(result):
     """
     if not result.overrides_applied:
         return {}
-    from engine.compute import compute_annual
-    years, _startup, _st, _occ = compute_annual(
-        result.inputs, result.assumptions, None, result.trade_area, {})
-    out = {}
-    for y in (1, 2, 3):
-        yr = years[y]
-        out[("share", y)] = yr.share
-        for label, val in yr.expenses.items():
-            out[(label, y)] = val
-    return out
+    from engine.compute import unpinned_node_values
+    return unpinned_node_values(
+        result.inputs, result.assumptions, None, result.trade_area)
 
 
 def _driver_row(label, annual, attr, group, pct=False, num=False, computed=False):

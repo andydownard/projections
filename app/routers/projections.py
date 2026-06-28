@@ -44,7 +44,14 @@ from app.narrative import (
 from app.packet import build_packet, render_packet_docx, render_packet_md
 from app.store import Store, get_store
 from engine import dag
-from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute, compute_annual
+from engine.compute import (
+    Assumptions,
+    DemandDrivers,
+    Inputs,
+    TradeArea,
+    compute,
+    unpinned_node_values,
+)
 from engine.model import (
     DEFAULT_OPENING_MONTH_NUMBER,
     MODEL_VERSION,
@@ -509,14 +516,7 @@ def _calculated_unpinned(inputs_d, assumptions_d, demand_d, trade_d):
     """
     inputs, assumptions, demand, trade = _build_engine_args_from_dicts(
         inputs_d, assumptions_d, demand_d, trade_d)
-    years, _s, _st, _occ = compute_annual(inputs, assumptions, demand, trade, {})
-    out = {}
-    for y in (1, 2, 3):
-        yr = years[y]
-        out[("share", y)] = D(yr.share)
-        for label, val in yr.expenses.items():
-            out[(label, y)] = D(val)
-    return out
+    return unpinned_node_values(inputs, assumptions, demand, trade)
 
 
 def _apply_override_ops(stored: dict, ops, calc):
