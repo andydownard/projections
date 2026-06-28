@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from engine import model
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.money import D
 
@@ -198,6 +199,43 @@ def test_aggressive_fixture_triggers_margin_guardrail():
     assert res.flags["share_y1_out_of_band"]["requires_note"] is True
     assert res.flags.get("net_margin_out_of_band") is not None
     assert res.decision.reco_tag == "revise"
+
+
+def test_find_cheaper_rent_when_occupancy_is_the_binding_constraint():
+    # The `find_cheaper_rent` verdict (decision.py _recommend) is one of the six
+    # user-facing go/no-go outputs but was only ever referenced inside valid-enum
+    # set assertions — never produced by a test, so a regression that inverted its
+    # `occ_ratio > BAND AND y1.net <= 0` guard would have shipped green. Drive the
+    # branch directly: high rent share (occ_ratio > 20%) with a non-positive Year-1
+    # net, while BOTH the base and the (rent +25% / donations -25%) downside still
+    # reach monthly break-even and capital stays within funds — so the verdict is
+    # neither do_not_proceed nor raise_cash, and occupancy is the binding constraint.
+    inputs = Inputs(
+        org_name="High Rent", city="x", opening_status="pre_launch",
+        share_y1="0.07", share_y2="0.07", share_y3="0.07",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="110000", lease_type="gross", source_of_funds="900000",
+    )
+    res = compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    dec = res.decision
+    y1 = res.annual[1]
+
+    # The verdict and its explainable reason.
+    assert dec.reco_tag == "find_cheaper_rent"
+    assert dec.reco_reasons.get("rent")  # non-empty 'rent' reason string
+
+    # The exact conditions the branch fires on (so this stays a faithful guard):
+    occ_ratio = D(str(y1.expenses["Rent"])) / D(str(y1.total_rev))
+    assert occ_ratio > D(model.OCCUPANCY_RATIO_BAND_MAX)   # rent share out of band
+    assert D(str(y1.net)) <= 0                              # non-positive Year-1 net
+
+    # ... and the earlier (higher-precedence) branches must NOT have fired: both
+    # scenarios break even (else do_not_proceed) and capital is within funds (else
+    # raise_cash), proving find_cheaper_rent is reached on its own merits.
+    assert dec.sensitivity["base"]["breakeven"] is not None
+    assert dec.sensitivity["downside"]["breakeven"] is not None
+    assert D(str(dec.startup_capital_required)) <= D(inputs.source_of_funds)
 
 
 def _opening_at(opening_month_number, cost_schedule=(), labor="0.60", **kw):

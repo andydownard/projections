@@ -27,6 +27,11 @@ _RECO_HEADLINES = {
         "Occupancy is the binding constraint on viability.",
     ),
     "raise_cash": ("Raise cash.", "Capital required exceeds your committed funds."),
+    # RESERVED (documented enum, PRD reco tags): `engine.decision._recommend` does
+    # NOT currently emit "delay" — no opening-month cash-infeasibility branch exists
+    # yet. Kept as a forward-compatible contract value so the client enum->color map
+    # stays complete; if a producing branch is added it MUST land with a RED test
+    # that asserts reco_tag == "delay" before this headline is treated as live.
     "delay": ("Delay.", "The chosen opening month is cash-infeasible given the ramp."),
     "do_not_proceed": (
         "Do not proceed.",
