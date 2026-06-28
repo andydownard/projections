@@ -237,14 +237,25 @@ def _resolve_owner_repo() -> Optional[str]:
     return f"{org}/{repo}"
 
 
-def _labels_for_type(feedback_type: str) -> list[str]:
+def _labels_for_type(
+    feedback_type: str, extra_labels: object = None
+) -> list[str]:
     """Issue labels: a stable base channel label + the `type:*` taxonomy.
 
     `idea` -> the Idea-button "app-suggestion" channel; everything else -> the
     general "feedback" channel. Plus a `type:{enum}` label for board filtering.
+
+    ``extra_labels`` appends server-controlled channel labels (e.g. Penny's
+    ``filed-by-penny`` attribution, decisions #7/#12). They are static strings the
+    server picks — NEVER user content — and are de-duplicated against the base set.
     """
     base = "app-suggestion" if feedback_type == "idea" else "feedback"
-    return [base, f"type:{feedback_type}"]
+    labels = [base, f"type:{feedback_type}"]
+    if isinstance(extra_labels, (list, tuple)):
+        for label in extra_labels:
+            if isinstance(label, str) and label and label not in labels:
+                labels.append(label)
+    return labels
 
 
 def _issue_title(payload: dict) -> str:
@@ -314,9 +325,10 @@ def file_github_issue(
     issue = {
         "title": _issue_title(payload),
         "body": _issue_body(payload),
-        "labels": _labels_for_type(payload.get("type", "other")),
+        "labels": _labels_for_type(payload.get("type", "other"), payload.get("extra_labels")),
     }
     factory = _client_factory or _default_client
+    resp: Optional[httpx.Response] = None
     try:
         with factory() as client:
             resp = client.post(
@@ -332,11 +344,29 @@ def file_github_issue(
             resp.raise_for_status()
             url = resp.json().get("html_url")
     except Exception as exc:  # noqa: BLE001 — any GitHub failure degrades, never 500s.
-        # Log the failure WITHOUT the token or the issue body (SECRETS/PII).
+        # Log the failure WITHOUT the token or the issue body (SECRETS/PII). To make a
+        # future filing failure diagnosable we ALSO log GitHub's status_code and a
+        # short (~200 char) excerpt of its RESPONSE body — which is GitHub's own error
+        # text ("Bad credentials", validation messages), never our token/PAT (those
+        # live only in the request headers, which are never logged) and never the
+        # already-redacted issue body. The response is taken from the exception when
+        # present (raise_for_status carries it), else the captured response, else None
+        # (a timeout/connect error has no response at all).
+        exc_resp = getattr(exc, "response", None)
+        diag = exc_resp if exc_resp is not None else resp
+        status_code = getattr(diag, "status_code", None)
+        body_excerpt = ""
+        if diag is not None:
+            try:
+                body_excerpt = (diag.text or "")[:200]
+            except Exception:  # noqa: BLE001 — diagnostics must never raise.
+                body_excerpt = ""
         logger.warning(
-            "feedback.github_issue_failed support_id=%s err=%s",
+            "feedback.github_issue_failed support_id=%s err=%s status=%s body=%r",
             payload.get("support_id"),
             type(exc).__name__,
+            status_code,
+            body_excerpt,
         )
         return None
 

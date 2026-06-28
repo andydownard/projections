@@ -247,6 +247,29 @@ def gate_config(
     return {"gate_mode": mode, "price_usd": price_usd}
 
 
+# --- Penny → GitHub product-feedback FLAG (Epic F, decisions #7/#12) -----------
+# Penny may file a redacted GitHub issue AT HER DISCRETION when a chat surfaces a
+# real bug/opportunity. The capability ships DORMANT: the tool is only registered
+# into Penny's tool surface when this flag is truthy, so with it off (the default)
+# Penny has no way to auto-file in prod. This is NEVER a required boot secret (it is
+# absent from validate_required); a missing value resolves to OFF, not a boot refuse.
+_PENNY_GH_FEEDBACK_TRUTHY = ("1", "true", "yes", "on")
+
+
+def penny_github_feedback_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """The Penny→GitHub feedback kill switch (default OFF / dormant).
+
+    Read at call time (no caching) so flipping the env flips behavior on the next
+    request with no restart — exactly like ``clerk_enabled`` / ``gate_config``. Off
+    ⇒ ``build_registry`` does NOT register ``file_product_feedback``, so Penny can
+    never auto-file. On ⇒ the tool is registered and files via the redacted path.
+    """
+    return (
+        _env(env).get("PENNY_GITHUB_FEEDBACK_ENABLED", "").strip().lower()
+        in _PENNY_GH_FEEDBACK_TRUTHY
+    )
+
+
 def litestream_status(env: Mapping[str, str] | None = None) -> str:
     """Reported by /api/health. 'replicating' if LITESTREAM_* configured.
 
