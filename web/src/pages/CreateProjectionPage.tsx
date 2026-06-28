@@ -12,7 +12,13 @@
 // artifacts). NO client math — the server computes (PRD §13 / CLAUDE.md hard rule).
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 
-import type { PennyDraftApplied, PennyDraftState } from "../api/penny";
+import {
+  PennyError,
+  sendPennyDraftMessage,
+  uploadProposal,
+  type PennyDraftApplied,
+  type PennyDraftState,
+} from "../api/penny";
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
 import { researchRent } from "../api/research";
 import type { ViewModel } from "../api/viewModel";
@@ -71,6 +77,24 @@ function makeWizardDraftToken(): string {
   const c = globalThis.crypto as Crypto | undefined;
   if (c && typeof c.randomUUID === "function") return `wizdraft-${c.randomUUID()}`;
   return `wizdraft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** Plain-language copy for a proposal upload / parse failure (#32). The manual grid +
+ *  drag stay fully working, so this never blocks — it just tells the operator why
+ *  Penny couldn't help and to lay the schedule out by hand. */
+function friendlyProposalError(err: unknown): string {
+  if (err instanceof PennyError) {
+    if (err.kind === "ai_disabled")
+      return "Penny is unavailable right now — set the schedule out by hand below.";
+    if (err.kind === "ai_unavailable")
+      return "Penny couldn’t reach her reader just now — try again, or set the schedule below.";
+    if (err.kind === "rate_limited")
+      return "Too many requests right now — please try again in a moment.";
+    if (err.status === 413) return "That PDF is too large — try a smaller file.";
+    if (err.status === 415) return "That file isn’t a PDF — attach the proposal as a PDF.";
+    if (err.serverMessage) return err.serverMessage;
+  }
+  return "Couldn’t read that proposal — set the schedule out by hand below.";
 }
 
 /** Shape the live wizard state as the server `draft_state` Penny reads + mutates
@@ -197,6 +221,9 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
   const [busy, setBusy] = useState(false);
+  // #32 — the contextual proposal upload on the startup-costs step.
+  const [proposalBusy, setProposalBusy] = useState(false);
+  const [proposalError, setProposalError] = useState<string | null>(null);
   // One ephemeral Bearer for the whole wizard session's /penny/draft calls.
   const draftToken = useRef<string>(makeWizardDraftToken());
 
@@ -325,6 +352,33 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
     }
   }
 
+  // #32 — hand a consultant proposal PDF to Penny: upload the untrusted bytes, then ask
+  // her (DRAFT mode) to read it and lay out the cost schedule + grand-opening month. Her
+  // edits flow through the SAME draft bridge (onApplyDraft → cost_schedule +
+  // opening_month_number) onto the live grid; nothing persists until Generate. Penny is
+  // LIVE (owner Decision 1) so this is the shipped path, but it degrades gracefully — on
+  // any failure the manual grid + draggable opening stay fully usable (no crash).
+  async function handleProposalUpload(file: File) {
+    setProposalBusy(true);
+    setProposalError(null);
+    try {
+      const { proposalRef } = await uploadProposal({ token: draftToken.current, file });
+      const resp = await sendPennyDraftMessage({
+        token: draftToken.current,
+        message:
+          "I uploaded a consultant proposal PDF. Please read it and set up the timed startup " +
+          "cost schedule and the grand-opening month from it.",
+        draftState: wizardToDraftState(wiz),
+        proposalRef,
+      });
+      onApplyDraft(resp.draft, resp.applied);
+    } catch (err) {
+      setProposalError(friendlyProposalError(err));
+    } finally {
+      setProposalBusy(false);
+    }
+  }
+
   // Generate: POST the create body and land DIRECTLY on the editable detail page
   // (owner Decision 12 — no in-page result view, no "projection ready" interstitial).
   async function onGenerate(d: WizardDraft) {
@@ -448,7 +502,16 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
             {wiz.stepKey === "square-footage" && <StepSquareFootage state={wiz} />}
             {wiz.stepKey === "households" && <StepHouseholds state={wiz} />}
             {wiz.stepKey === "donor-market" && <StepDonorMarket state={wiz} />}
-            {wiz.stepKey === "startup-costs" && <StepStartupCosts state={wiz} />}
+            {wiz.stepKey === "startup-costs" && (
+              <StepStartupCosts
+                state={wiz}
+                // Penny is LIVE (Decision 1); when AI is off the affordance is omitted
+                // and the manual grid + drag is the path (graceful degradation).
+                onUploadProposal={aiOff ? undefined : handleProposalUpload}
+                proposalBusy={proposalBusy}
+                proposalError={proposalError}
+              />
+            )}
           </div>
 
           {/* Announce the new step to assistive tech on route change (#261 a11y). */}
