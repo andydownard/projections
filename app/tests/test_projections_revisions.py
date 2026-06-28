@@ -65,6 +65,9 @@ def test_revisions_list_owner_only(client):
     revs = r.json()["revisions"]
     assert len(revs) == 2
     assert {"id", "version", "change_summary", "created_at"} <= set(revs[0])
+    # the stored actor enum is returned truthfully (DATA_MODEL §4) — a manual edit
+    # reads back "user", never a hardcoded "owner" that discards the column.
+    assert {rv["actor"] for rv in revs} == {"user"}
     # newest first
     assert revs[0]["version"] >= revs[1]["version"]
     # snapshot bodies are NOT inlined (metadata only)

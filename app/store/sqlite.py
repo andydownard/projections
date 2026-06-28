@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+from app.jsonutil import loads_obj
 from app.store import revision_retention
 from app.store.card_summary import build_card_summary
 from app.store.litestream import force_pre_migration_checkpoint
@@ -259,10 +260,7 @@ class SqliteStore:
                 "WHERE summary_json = '{}' OR summary_json IS NULL"
             ).fetchall()
             for r in rows:
-                try:
-                    vm = json.loads(r["computed_json"] or "{}")
-                except json.JSONDecodeError:
-                    vm = {}
+                vm = loads_obj(r["computed_json"])
                 self._conn.execute(
                     "UPDATE projections SET summary_json = ? WHERE id = ?",
                     (json.dumps(build_card_summary(vm)), r["id"]),
@@ -417,11 +415,7 @@ class SqliteStore:
     @staticmethod
     def _summary_json(computed_json: str | None) -> str:
         """Compact owner-list card summary derived from a computed_json blob (#178)."""
-        try:
-            vm = json.loads(computed_json or "{}")
-        except json.JSONDecodeError:
-            vm = {}
-        return json.dumps(build_card_summary(vm))
+        return json.dumps(build_card_summary(loads_obj(computed_json)))
 
     def update_with_version_check(
         self, id: str, expected_version: int, patch: dict[str, Any]
