@@ -7,7 +7,8 @@
 import { useSyncExternalStore } from "react";
 
 import { TopBar } from "./components/TopBar";
-import { parseRoute } from "./router/route";
+import { PennyGeneralAssistant } from "./components/PennyDrawer";
+import { parseRoute, type Route } from "./router/route";
 import { ListPage } from "./pages/ListPage";
 import { CreateProjectionPage } from "./pages/CreateProjectionPage";
 import { ProjectionDetail } from "./pages/ProjectionDetail";
@@ -25,6 +26,21 @@ function getSnapshot() {
   return window.location.pathname + window.location.search;
 }
 
+/**
+ * Whether the App shell should mount the GENERAL-help Penny on this route (#264,
+ * Epic E #3). Penny must be openable on every primary route, but the wizard and the
+ * detail EDIT page each mount their OWN context-aware Penny (draft-mode /
+ * apply-and-narrate, with a token + view-model the shell does not have), so the shell
+ * adds a general-help Penny only where a page has none: the home/list and the
+ * read-only detail view. That general Penny offers help and never errors on a
+ * projection-less route.
+ */
+export function appProvidesGeneralPenny(route: Route): boolean {
+  if (route.kind === "home") return true;
+  if (route.kind === "detail" && !route.edit) return true;
+  return false;
+}
+
 export function App() {
   useSyncExternalStore(subscribe, getSnapshot);
   const route = parseRoute(window.location.pathname, window.location.search);
@@ -36,6 +52,13 @@ export function App() {
   // anywhere (#38) — it stays on computed_json; only the display is gone.
   const detailHeader = useDetailHeader();
   const isDetail = route.kind === "detail";
+
+  // General-help Penny is openable on home + the read-only detail view; the wizard
+  // and detail-edit pages mount their own (#264). With ?ai=off she degrades to the
+  // muted Settings FAB (never a dead-end). Honor the per-route AI opt-out where the
+  // route carries one (the detail view); home has none, so Penny is enabled there.
+  const generalPenny = appProvidesGeneralPenny(route);
+  const aiOff = route.kind === "detail" ? route.aiOff : false;
 
   return (
     <div className="app">
@@ -54,6 +77,7 @@ export function App() {
         {route.kind === "role" && <RoleView slug={route.slug} />}
         {route.kind === "notfound" && <section className="notfound">Not found</section>}
       </main>
+      {generalPenny && <PennyGeneralAssistant aiEnabled={!aiOff} />}
     </div>
   );
 }

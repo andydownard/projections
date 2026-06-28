@@ -156,6 +156,28 @@ function SendIcon() {
   );
 }
 
+/** LEFT-pointing chevron for the in-drawer back/close control: it slides the LEFT
+ *  drawer back toward the left edge (spec §5, issue #264). Decorative — the button
+ *  carries an aria-label. */
+function BackArrowIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
+  );
+}
+
 interface PennyPanelProps {
   labelId: string;
   modal: boolean;
@@ -316,8 +338,9 @@ function PennyPanel({
         onKeyDown={onTrapKeyDown}
         style={panelStyle}
       >
-        {/* Header: just the avatar + name. No provider line, info, New chat or close
-            — closing is Esc / scrim / the FAB toggle (spec §1). */}
+        {/* Header: avatar + name + a LEFT-pointing back arrow that slides the drawer
+            closed (spec §5, issue #264). Still no provider line, info or New chat —
+            and Esc / scrim continue to close too, so it is never a dead-end. */}
         <header
           style={{
             display: "flex",
@@ -328,9 +351,38 @@ function PennyPanel({
           }}
         >
           <PennyAvatar src={avatarSrc} size={32} />
-          <h2 id={labelId} style={{ margin: 0, fontSize: "1rem", lineHeight: 1.2 }}>
-            Penny
+          <h2
+            id={labelId}
+            style={{ margin: 0, fontSize: "1rem", lineHeight: 1.2, flex: "1 1 auto" }}
+          >
+            Penny AI
           </h2>
+          {/* LEFT-pointing arrow → slides the drawer back/closed; the FAB tab is
+              hidden while open, so this is the in-drawer close affordance. */}
+          <button
+            type="button"
+            data-testid="penny-back"
+            aria-label="Close Penny"
+            onClick={onClose}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flex: "0 0 auto",
+              width: modal ? TOUCH_TARGET : 36,
+              height: modal ? TOUCH_TARGET : 36,
+              minWidth: modal ? TOUCH_TARGET : undefined,
+              minHeight: modal ? TOUCH_TARGET : undefined,
+              padding: 0,
+              border: "1px solid var(--line, #e2e2e2)",
+              borderRadius: "10px",
+              background: "var(--surface, #fff)",
+              color: "var(--text, #1a1a1a)",
+              cursor: "pointer",
+            }}
+          >
+            <BackArrowIcon />
+          </button>
         </header>
 
         {/* Body slot (the transcript). */}
@@ -572,13 +624,13 @@ export function PennyDrawer({
   const body = children ?? <PennyTranscript turns={[]} />;
   const composerNode = composer ?? <DefaultComposer />;
 
-  // Keep the FAB visible while the drawer is open on the desktop (non-modal) so a
-  // re-click toggles it closed (the header has no close button). When open + desktop
-  // it sits just to the RIGHT of the 380px drawer, above the panel; otherwise it
-  // stays flush to the upper-left edge.
-  const fabOpenDesktop = open && !modal;
-  // The FAB auto-hides on scroll only when the drawer is CLOSED.
-  const hidden = fabHidden && !open;
+  // The FAB tab DISAPPEARS while the drawer is open (spec §5, issue #264): the
+  // in-drawer LEFT-pointing back arrow is the close affordance, so the tab does not
+  // sit on top of the open panel. It reappears the moment the drawer closes. It also
+  // auto-hides on scroll-down while CLOSED. It stays MOUNTED (not unmounted) while
+  // hidden so `close()` can return focus to it without dropping the user to the
+  // document top.
+  const hidden = open || fabHidden;
 
   return (
     <>
@@ -588,19 +640,20 @@ export function PennyDrawer({
         data-testid="penny-fab"
         data-state="ai-enabled"
         data-scroll-hidden={hidden}
-        aria-label="Ask Penny about this projection"
+        aria-label="Penny AI"
         aria-haspopup="dialog"
         aria-expanded={open}
+        // Hidden while open, so this toggle effectively only ever OPENS; the back
+        // arrow / Esc / scrim close it.
         onClick={() => (open ? close() : setOpen(true))}
         style={{
           position: "fixed",
           // Upper-LEFT, FLUSH against the left edge (no inset), anchored just below
           // the top bar so it never overlaps the brand / home link. The drawer it
-          // opens slides out from this same left edge (spec §5.1, #131). While open
-          // on the desktop it shifts to the drawer's right edge to stay clickable.
-          left: fabOpenDesktop ? `${PANEL_WIDTH}px` : 0,
+          // opens slides out from this same left edge (spec §5.1, #131).
+          left: 0,
           top: FAB_TOP,
-          zIndex: fabOpenDesktop ? Z.pennyPanel + 1 : 40,
+          zIndex: 40,
           display: "inline-flex",
           alignItems: "center",
           gap: "0.5rem",
@@ -613,18 +666,18 @@ export function PennyDrawer({
           color: "#fff",
           cursor: "pointer",
           boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-          // Scroll auto-hide slides UP off the top edge (the FAB is top-anchored);
-          // transition suppressed under reduced-motion.
+          // Hidden state (open OR scroll-down) slides UP off the top edge (the FAB is
+          // top-anchored); transition suppressed under reduced-motion.
           transform: hidden ? "translateY(-150%)" : "translateY(0)",
           opacity: hidden ? 0 : 1,
           pointerEvents: hidden ? "none" : "auto",
           transition: reducedMotion
             ? "none"
-            : "transform 200ms ease, opacity 200ms ease, left 200ms ease",
+            : "transform 200ms ease, opacity 200ms ease",
         }}
       >
         <PennyAvatar src={avatarSrc} size={36} />
-        <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>Ask Penny</span>
+        <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>Penny AI</span>
       </button>
 
       {open && (
@@ -1326,6 +1379,81 @@ export function PennyDraftAssistant({
       }
     >
       {body}
+    </PennyDrawer>
+  );
+}
+
+// ============================================================================
+// PennyGeneralAssistant — the GENERAL-HELP drawer mounted by the App shell on
+// routes with NO projection loaded (home/list, read-only detail view) so Penny is
+// openable on EVERY route (#264, Epic E #3). There is no view_slug and no edit
+// token here, so there is NO mutate/narrate backend to call: she greets, points the
+// user at creating or opening a projection, and answers with a fixed, code-owned
+// help reply. She NEVER fabricates a number (there is no projection to read) and she
+// NEVER errors on a projection-less route. With AI opt-out she degrades to the muted
+// Settings FAB (never a dead-end), exactly like the live drawers.
+// ============================================================================
+
+export interface PennyGeneralAssistantProps {
+  /** AI opt-out / no key → muted FAB + Settings deep-link (never a dead-end). */
+  aiEnabled?: boolean;
+  settingsHref?: string;
+  onOpenSettings?: () => void;
+  avatarSrc?: string;
+}
+
+/** Penny's greeting when no projection is loaded — general, not projection-scoped. */
+const PENNY_GENERAL_GREETING =
+  "Hi, I'm Penny. I can help you plan a thrift-store launch. Start a new projection " +
+  "or open a saved one, and I'll help you fill in the details, build a cost schedule, " +
+  "and make sense of the numbers.";
+
+/** Penny's fixed reply on a projection-less route — she points to the real flow and
+ *  is explicit that every figure comes from a saved projection (no client math). */
+const PENNY_GENERAL_REPLY =
+  "Open or start a projection and I can get to work — I'll set any field, build your " +
+  "cost schedule, and walk through every figure. I never make up numbers; they all " +
+  "come from your saved projection.";
+
+export function PennyGeneralAssistant({
+  aiEnabled = true,
+  settingsHref,
+  onOpenSettings,
+  avatarSrc,
+}: PennyGeneralAssistantProps) {
+  const [turns, setTurns] = useState<PennyTurn[]>([]);
+  const idRef = useRef(0);
+
+  const reply = useCallback((text: string) => {
+    const message = text.trim();
+    if (!message) return;
+    const userId = `penny-general-${(idRef.current += 1)}`;
+    const botId = `penny-general-${(idRef.current += 1)}`;
+    setTurns((prev) => [
+      ...prev,
+      { id: userId, role: "user", content: message },
+      { id: botId, role: "assistant", content: PENNY_GENERAL_REPLY },
+    ]);
+  }, []);
+
+  return (
+    <PennyDrawer
+      aiEnabled={aiEnabled}
+      settingsHref={settingsHref}
+      onOpenSettings={onOpenSettings}
+      avatarSrc={avatarSrc}
+      composer={
+        <LiveComposer
+          pending={false}
+          muted={false}
+          settingsHref={settingsHref}
+          onOpenSettings={onOpenSettings}
+          onSend={reply}
+          onStop={() => {}}
+        />
+      }
+    >
+      <PennyTranscript turns={turns} intro={PENNY_GENERAL_GREETING} />
     </PennyDrawer>
   );
 }
