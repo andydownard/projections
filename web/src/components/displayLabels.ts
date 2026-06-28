@@ -64,6 +64,21 @@ export function householdsSourceLabel(source: string | null | undefined): string
   return HOUSEHOLDS_SOURCE_LABELS[source] ?? titleCase(source);
 }
 
+// Sq-ft cost-assumption provenance codes → human labels (feature #245). Mirrors the
+// households-source language so the Space & rent step never shows a raw enum, and
+// an unknown future code title-cases rather than leaking verbatim (#151 pattern).
+const ASSUMPTION_SOURCE_LABELS: Record<string, string> = {
+  research: "From local research",
+  user: "Adjusted by you",
+  default: "Regional default",
+};
+
+/** Human label for a cost-assumption provenance code (presentation only). */
+export function assumptionSourceLabel(source: string | null | undefined): string {
+  if (!source) return "";
+  return ASSUMPTION_SOURCE_LABELS[source] ?? titleCase(source);
+}
+
 function titleCase(code: string): string {
   return code.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
