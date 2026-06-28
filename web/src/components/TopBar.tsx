@@ -12,8 +12,8 @@
 // comes verbatim from the server (computed_json.model_version), never derived on
 // the client, and only renders once a projection is loaded (no permanent
 // "model —" placeholder). Feedback redaction is server-enforced; this component
-// reuses FeedbackModal unchanged and never sends a view_slug/token/financial
-// field (PRD §22).
+// opens FeedbackModal in idea mode (a description, no title) and never sends a
+// view_slug/token/financial field (PRD §22).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { submitFeedback } from "../api/feedback";
@@ -132,11 +132,12 @@ export function TopBar({ modelVersion, saveState = "idle", children }: TopBarPro
 
       {showFeedback && (
         <FeedbackModal
+          kind="idea"
           onClose={closeFeedback}
           onSubmit={async (input) => {
             const res = await submitFeedback({
-              title: input.title,
               description: input.description,
+              email: input.email,
               type: "idea",
               route: window.location.pathname,
             });

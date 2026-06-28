@@ -344,11 +344,10 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
 
       <form
         className="wizard__form"
-        // #149: the express form caps at 20rem (.wizard__form) which leaves the
-        // full-page wizard's step content cramped in a ~320px column inside the
-        // 44rem panel. Override component-locally (not the shared token, which the
-        // express WizardPage still relies on) so cost rows lay out 3-up and the
-        // review list uses the panel width — reading as a real full-page wizard.
+        // #149: the shared .wizard__form caps at 20rem, which leaves the full-page
+        // wizard's step content cramped in a ~320px column inside the 44rem panel.
+        // Widen it here so cost rows lay out 3-up and the review list uses the
+        // panel width — reading as a real full-page wizard.
         style={{ maxWidth: "44rem" }}
         onSubmit={(e) => {
           e.preventDefault();

@@ -77,7 +77,9 @@ class FeedbackIn(BaseModel):
     # `type` is untrusted free-text on the wire; it is enum-normalized server
     # side before it touches either sink (#201). Never persisted/filed raw.
     type: str = "bug"
-    title: str
+    # A bug report carries a title to triage; an idea (the Idea Fab suggestion
+    # flow) is just a description, so `title` is optional and may be absent.
+    title: str = ""
     description: str = ""
     email: Optional[str] = None
     route: str = "/"
@@ -92,7 +94,14 @@ def submit_feedback(
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
 ):
-    if not body.title.strip():
+    # `type` is untrusted client free-text — normalize to the closed enum ONCE
+    # (cheap + pure) and use that value everywhere (top-level + context). The raw
+    # value never lands in a sink (#201).
+    safe_type = normalize_type(body.type)
+
+    # A bug report needs a title to triage; an idea is just a description and
+    # carries no title at all (IDEA_FAB — the Idea Fab suggestion flow).
+    if safe_type == "bug" and not body.title.strip():
         raise HTTPException(status_code=422, detail={"error": "title_required"})
 
     # 1) Rate-limit FIRST (cheapest rejection; no work past the cap).
@@ -124,11 +133,6 @@ def submit_feedback(
     # 3) Redact title/body (one redacted artifact, stored == filed).
     title = redact_text(body.title, own_slug=own_slug, cap=TITLE_CAP)
     redacted_body = redact_text(body.description, own_slug=own_slug, cap=DESCRIPTION_CAP)
-
-    # `type` is untrusted client free-text — normalize to the closed enum ONCE
-    # and use that everywhere (top-level + context). The raw value never lands in
-    # a sink (#201).
-    safe_type = normalize_type(body.type)
 
     # 4) Build the context from the SERVER allowlist — the single chokepoint for
     #    both sinks. Client `model_version`/`type` are IGNORED: model_version is

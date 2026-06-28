@@ -327,8 +327,8 @@ body {
   color: var(--text-muted);
 }
 
-/* The express create form: a calm single column of label-above-input fields, all
- * the same width so the inputs share one left AND right edge (tight alignment). */
+/* The create form: a calm single column of label-above-input fields, all the
+ * same width so the inputs share one left AND right edge (tight alignment). */
 .wizard__form {
   display: grid;
   grid-template-columns: 1fr;
