@@ -2,9 +2,9 @@
 
 **Status:** PROPOSED — **needs explicit owner sign-off (see §0 Hard-Rule override) before any code.**
 **Author:** staff-eng planning pass, 2026-06-27.
-**Scope:** add Clerk authentication to `projections` (projections.thriftly.com) using the **same Clerk instance** that rallytasks.com (the `timpager` repo) already runs, with projections configured as a **Clerk satellite domain**. **This is a planning artifact only — no auth code ships from this PR.**
+**Scope:** add Clerk authentication to `projections` (projections.thriftly.com) using the **same Clerk instance** that rallytasks.com (the `timpager` repo) already runs, with projections configured as a **cross-apex Clerk satellite domain** (`thriftly.com ≠ rallytasks.com` — the harder, `pennyai`-style case, **not** the same-apex `vibe101` case; see §2A/§2B). **This is a planning artifact only — no auth code ships from this PR.**
 
-> **Read this plan against:** [CLAUDE.md](../../CLAUDE.md) "Hard rules" + "Regression registry" #11, [SECURITY.md](../../SECURITY.md) §2 (capability-token model) / §6.2 (no-CSRF) / §8 (CSP/CORS), [DATA_MODEL.md](../../DATA_MODEL.md) (`projections` table), [API_SPEC.md](../../API_SPEC.md). The cross-app contract on the primary side lives in `timpager` at `/Users/andydownard/projects/timpager/docs/identity-contract.md`.
+> **Read this plan against:** [CLAUDE.md](../../CLAUDE.md) "Hard rules" + "Regression registry" #11, [SECURITY.md](../../SECURITY.md) §2 (capability-token model) / §6.2 (no-CSRF) / §8 (CSP/CORS), [DATA_MODEL.md](../../DATA_MODEL.md) (`projections` table), [API_SPEC.md](../../API_SPEC.md). The cross-app contract on the primary side lives in `timpager` at `/Users/andydownard/projects/timpager/docs/identity-contract.md`. **Reference daughters (researched for this plan):** `vibe101` (`learn.rallytasks.com`, a *same-apex* sibling — `lib/clerk.js`, `lib/clerk-jwt-verify.js`, `lib/session.js`, `lib/security.js`, `routes/sign-in.js`) and `pennyai`/Groflo (`groflo.io`/`deck.thrift.ly`, a *foreign-apex* daughter exactly like projections — `clerk_auth.go`, `server.go`, `middleware_timpager.go`, `DEPLOYMENT.md`). See **§2A** (reference set + cross-apex specifics) and **§2B** (congruence with Clerk's official satellite guidance).
 
 ---
 
@@ -57,7 +57,7 @@ Source repo: `/Users/andydownard/projects/timpager` (this IS rallytasks.com, the
 | Full-SDK request auth (NOT used by us) | `lib/clerk.js` — `createClerkClient({secretKey,publishableKey,jwtKey})` + `authenticateRequest(request)`, reads `__session` cookie OR `Authorization: Bearer`, `COOKIE_NAME='__session'`. | We deliberately **avoid** this path (needs `CLERK_SECRET_KEY`; reads cookie). JWKS-only, header-only. |
 | Composite resolver / kill switch | `lib/session-resolver.js` — Clerk on iff `CLERK_ENABLED==='1'`; Clerk **config/SDK error fails CLOSED** (never legacy); optional `CLERK_DUAL_ACCEPT` transitional fallback. | `app/deps.py` resolution order (§1): Clerk JWT → capability token → anonymous; Clerk verify error fails closed to capability/anonymous. `CLERK_ENABLED` kill switch. |
 | Env requirements | `lib/env-requirements.js` — `CLERK_ENABLED`, `CLERK_SECRET_KEY`*, `CLERK_PUBLISHABLE_KEY`, `CLERK_WEBHOOK_SIGNING_SECRET`*, **`CLERK_JWT_ISSUER` (mandatory, fail-closed)**, optional `CLERK_JWT_KEY`/`CLERK_DUAL_ACCEPT`/`CLERK_JWT_LEEWAY_SECONDS`. | projections env (§5): **`CLERK_JWT_ISSUER`, `CLERK_PUBLISHABLE_KEY`, `CLERK_ENABLED`, `CLERK_DOMAIN`, `CLERK_SIGN_IN_URL`, `CLERK_AUTHORIZED_PARTIES`** + optional leeway. **No `CLERK_SECRET_KEY`, no webhook secret** on projections (see *). |
-| **Frontend API / instance domain** | CSP allowlist `lib/security.js:80` → **`https://clerk.rallytasks.com`** (prod FAPI) + `https://*.clerk.accounts.dev` (dev) + clerk-js from `https://cdn.jsdelivr.net`. Avatars `https://img.clerk.com`. | projections CSP must allowlist the SAME origins (§Phase 4). `CLERK_JWT_ISSUER=https://clerk.rallytasks.com` in prod. |
+| **Frontend API / instance domain** | CSP allowlist `lib/security.js:80` → **`https://clerk.rallytasks.com`** (prod FAPI) + `https://*.clerk.accounts.dev` (dev) + clerk-js from `https://cdn.jsdelivr.net`. Avatars `https://img.clerk.com`. | projections CSP allowlists the Clerk origins (§Phase 4 + §2A.3). **Cross-apex caveat:** on a satellite the browser's FAPI is the satellite's own `https://clerk.projections.thriftly.com`, while the JWT **`iss` stays `https://clerk.rallytasks.com`** — issuer (verify) and FAPI (CSP) are **different hosts** (§2A.3). `CLERK_JWT_ISSUER=https://clerk.rallytasks.com`. |
 | Frontend mount | `public/js/auth-clerk.js` — vanilla `clerk-js@5` via CDN, `new Clerk(pk).load()`, `mountSignIn(node,{forceRedirectUrl:'/app'})`. Discovery endpoint `routes/auth-config.js` `GET /api/auth/config` returns `{auth_method, clerk_publishable_key}`. | projections is a **React SPA** → use **`@clerk/clerk-react` `<ClerkProvider isSatellite domain signInUrl>`** bundled by Vite (keeps `script-src 'self'` for our own JS; FAPI hot-load is allowlisted, §Phase 4). Publishable key served by a projections discovery endpoint `GET /api/auth/config`. |
 | Identity mapping | `users.clerk_user_id ↔ rally_user_id` (1:1); resolve order clerk→phone→email (`lib/session-resolver.js`); `POST /api/v1/identity/resolve` (gated by `ADMIN_API_KEY` + optional Bearer JWT verify) returns canonical `rally_user_id`; `cache_ttl_seconds:300`. No org support (user-only). Superadmin from `public_metadata.role` only. | v1: projections keys its own owner scope on **`clerk_user_id`** directly (no cross-call). **Optional later:** resolve to `rally_user_id` via the primary's `/api/v1/identity/resolve` (needs a shared service token). Org support: store `org_id` now, scope on it later. |
 | Security guardrail | `docs/security/2026-06-20-sso-auth-security-review.md` finding **C1: daughters/satellites never hold a Clerk secret** (JWKS-only); azp/origin enforcement gap flagged. | projections holds **no Clerk secret**; verifies JWKS-only; **enforces `azp`** (closing the gap the primary review flagged). |
@@ -67,19 +67,291 @@ Source repo: `/Users/andydownard/projects/timpager` (this IS rallytasks.com, the
 **The exact satellite contract (frontend):**
 ```tsx
 <ClerkProvider
-  publishableKey={pk}                 // SAME pk_live_… as rallytasks.com (served by /api/auth/config)
+  publishableKey={pk}                  // SAME pk_live_… as rallytasks.com (served by /api/auth/config; test vs live per env)
   isSatellite                          // REQUIRED — marks this app a satellite
   domain="projections.thriftly.com"    // this satellite's host
-  signInUrl="https://www.rallytasks.com/refer"  // primary hosts sign-in; satellites cannot
+  signInUrl="https://accounts.rallytasks.com/sign-in"  // primary Account Portal; satellites NEVER collect creds
+  allowedRedirectOrigins={[/* dev vs prod */ "https://projections.thriftly.com"]}  // Clerk-official: allowlist
+  // satelliteAutoSync={false}         // OWNER DECISION — true auto-recognizes a primary session (+1 redirect on first visit)
 >
 ```
-Unauthenticated owners are bounced to the **primary** sign-in, authenticate there, and are redirected back to projections. Per-API-call auth uses `clerk.session.getToken()` → short-lived JWT → `Authorization: Bearer`.
+Unauthenticated owners are bounced to the **primary** sign-in (Account Portal), authenticate there, and are redirected back to projections. **Build the redirect with `buildSignInUrl()`/`buildSignUpUrl()`** (they append `__clerk_synced`) — do **not** hardcode it. Per-API-call auth uses `clerk.session.getToken()` → short-lived JWT → `Authorization: Bearer`. **Disable passkeys** for this flow (registrable-domain-bound). See **§2B** for full Clerk-best-practice congruence.
 
 **The exact satellite contract (Clerk dashboard + DNS), an OPS deliverable:**
 1. In the **rallytasks.com production Clerk instance** → Domains → Satellites → add `projections.thriftly.com`.
-2. Add the **CNAME** records Clerk shows for the satellite (typically `clerk.projections.thriftly.com → <clerk FAPI target>`); verify until green.
-3. Add `https://projections.thriftly.com` to the instance's **allowed origins** and the primary sign-in **redirect allowlist** so the post-auth bounce-back is permitted.
+2. Add the Clerk-issued **CNAME** for the satellite FAPI — `clerk.projections.thriftly.com → frontend-api.clerk.services` — **DNS-only (do NOT proxy / Cloudflare orange-cloud OFF)**; verify until green.
+3. Add `https://projections.thriftly.com` to the instance's **allowed origins**, the primary sign-in **redirect allowlist**, and the SDK's **`allowedRedirectOrigins`** so the post-auth bounce-back is permitted.
 4. Reuse the **same production publishable key + same JWKS/issuer** — do **not** create a second instance.
+
+---
+
+## 2A. The full Rally reference set — same-apex (vibe101) vs foreign-apex (pennyai)
+
+projections is **not** the first daughter to reuse the rallytasks.com Clerk instance. Two existing apps bracket the problem, and **projections.thriftly.com sits on the harder side of the line.**
+
+| Reference repo | Host(s) | Apex vs rallytasks.com | How the BROWSER gets a Clerk session | How the BACKEND trusts a request |
+|---|---|---|---|---|
+| **timpager** (primary) | `www.rallytasks.com` | — (it *is* the instance) | hosts sign-in; owns `sk_…` + webhooks | full SDK + JWKS |
+| **vibe101** | `learn.rallytasks.com` | **SAME apex** (`*.rallytasks.com`) | shares the `__session` cookie set at `Domain=.rallytasks.com`; hosts its own `/sign-in` drop-in | reads `__session` cookie **or** Bearer, JWKS-only verify (no secret) + a `tp_csrf` double-submit |
+| **pennyai / Groflo** | `groflo.io`, `deck.thrift.ly`, `penny.rallytasks.com` | **FOREIGN apex** (`groflo.io`/`thrift.ly`) | cookie does **not** cross the apex → needs a Clerk **satellite handshake** (redirect to `accounts.rallytasks.com`); ships **backend-verify FIRST, handshake later** | JWKS-only verify of whatever JWT is presented, fail-closed, additive |
+| **projections** (this plan) | `projections.thriftly.com` | **FOREIGN apex** (`thriftly.com`) | **same as pennyai** — foreign apex, no shared cookie | **JWKS-Bearer only, cookie-blind** (stricter than pennyai) |
+
+**projections is the pennyai case, not the vibe101 case.** Everything below turns on that.
+
+### 2A.1 vibe101 — the `*.rallytasks.com` same-apex pattern (what projections does NOT get to use)
+
+Files (`/Users/andydownard/projects/vibe101`):
+- **`lib/clerk.js`** — JWKS-only verification; the `sk_…` secret is used *only* for session **revocation on logout**, never for verify (finding C1). The load-bearing comment: *"the `__session` cookie is set at `Domain=.rallytasks.com` and shared across subdomains."*
+- **`lib/clerk-jwt-verify.js`** — the same RS256 / `kid` / **issuer-mandatory** / `exp`+`nbf`-leeway verifier the plan already mirrors (§2). `LEEWAY_SECONDS = 60`. (Note: it does **not** enforce `azp` — see §2B.)
+- **`lib/session.js`** — `extractToken()` precedence is **`__session` cookie FIRST, then `Authorization: Bearer`** (line 94). Because the cookie spans the apex, vibe101 is genuinely **cookie-authenticated**, so it must also run a **CSRF double-submit** (`tp_csrf` cookie, *also* set at `Domain=.rallytasks.com`, non-HttpOnly, echoed as `X-CSRF-Token`). **This is exactly the CSRF surface projections refuses to re-add** — and it exists *only* because same-apex cookie-sharing is available to vibe101.
+- **`routes/sign-in.js` + `public/js/signin-init.js`** — clerk-js is the **drop-in** (`<script data-clerk-publishable-key=… src=cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js>`) → `Clerk.load()` + `mountSignIn`. **There is NO `isSatellite` / `domain` / `signInUrl` config** — vibe101 is **not a formal Clerk satellite at all.** It is a **same-instance sibling on the shared apex** that hosts its own sign-in and lets the `.rallytasks.com` cookie do the cross-subdomain work.
+- **`lib/security.js`** — the CSP Clerk allowlist projections must copy (exact origins in §2A.3).
+- **`lib/env-requirements.js`** — `CLERK_JWT_ISSUER` (`https://clerk.rallytasks.com`), `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` (revoke-only), `CLERK_WEBHOOK_SIGNING_SECRET`.
+
+**Takeaway:** the vibe101 pattern (share the apex cookie, host your own sign-in, no `isSatellite`) is **unavailable to projections** because `thriftly.com ≠ rallytasks.com`. Copy only vibe101's **JWKS verifier + CSP allowlist + "daughters hold no secret" stance** — **not** its cookie-first `extractToken` and **not** its `tp_csrf` machinery (both are same-apex affordances).
+
+### 2A.2 pennyai / Groflo — the foreign-apex pattern projections SHOULD mirror
+
+pennyai is the production proof that a **different-apex** Rally site can adopt the shared Clerk instance. Files (`/Users/andydownard/projects/pennyai`):
+- **`clerk_auth.go`** — the design note is verbatim the projections situation: *"groflo.io is a FOREIGN APEX (different eTLD+1) so it does NOT share the `.rallytasks.com` Clerk session cookie. Full apex SSO needs a Clerk SATELLITE handshake (frontend redirect to `accounts.rallytasks.com`) — a separate, larger step. THIS is only the backend foundation … verify it and map `clerk_user_id → rally_user_id`, ADDITIVELY."*
+  - `verifyClerkSession`: `jwt.WithValidMethods(["RS256"])` (no alg-confusion / `none`), `jwt.WithIssuer(CLERK_JWT_ISSUER)`, `jwt.WithExpirationRequired()`, JWKS via `keyfunc` (auto-refresh on unknown `kid`), **fails closed**, **no secret** — a second-language confirmation that the projections `app/clerk.py` checks are the right set.
+  - `extractClerkToken`: reads `__session` cookie **or** Bearer (see the divergence note in §2A.4 / §2B).
+  - `authenticateClerk` returns **`(session, present, ok)`** — a clean three-state: **no token → fall through to legacy**; **token PRESENT but invalid/resolve-failed → fail closed (401)**, never silently downgrade. **Adopt this contract** in `app/deps.py.resolve_bearer_identity`: a *malformed* Bearer falls through to capability/anonymous, but a *well-formed-but-invalid Clerk JWT on an owner route* should **401**, not silently become `anonymous`.
+- **`server.go`** — CORS is a **static origin allowlist** (`{https://vibeflourishing.com, https://deck.groflo.io, https://deck.thrift.ly}`) echoed back only on match, else a safe default; `frame-ancestors` is an explicit allowlist; `connect-src` includes the same-apex alias `https://penny.rallytasks.com`. Mirrors the plan's "CORS exact-origin, `Allow-Credentials` off."
+- **`middleware_timpager.go`** — auth precedence: timpager session → **Clerk JWT (present ⇒ authenticate-or-fail-closed)** → legacy cookie. Same ordering shape as the plan's §1.
+- **`DEPLOYMENT.md`** — `CLERK_JWT_ISSUER=https://clerk.rallytasks.com`, `IDENTITY_API_URL=http://timpager.railway.internal:8080` (resolve over the **internal** network), `IDENTITY_API_TOKEN` (service token / `X-API-Key`). Restates: *"full groflo.io APEX SSO still requires a Clerk SATELLITE handshake."*
+- **`schema.go` / `test_helpers_test.go`** — *"Session cookies live on `.groflo.io` only. No cross-domain handoff."* The foreign apex keeps its own session island; rallytasks identity arrives only as a **verified JWT**, never a shared cookie.
+
+**The concrete improvement pennyai demonstrates:** *ship the JWKS-Bearer backend FIRST; defer the satellite frontend handshake.* pennyai is **live with Clerk identity verified on a foreign apex without ever standing up the satellite handshake** — the backend simply trusts a presented JWT and falls through to legacy when none is present. **projections can do the same:** land Phases 0–4 (verify + cookie-blind deps + owner-scope columns + discovery/CSP) for a working owner-identity path the instant a Clerk JWT is presented, **before** any `isSatellite` frontend or DNS CNAME (Phases 5–6). The apex/DNS satellite registration is therefore **off the critical path** for the first useful increment.
+
+### 2A.3 Exact CSP origins (from `vibe101/lib/security.js`, adjusted for a foreign-apex satellite)
+
+| Directive | vibe101 (same-apex) Clerk origins | projections (foreign-apex satellite) must allowlist |
+|---|---|---|
+| `script-src` | `https://cdn.jsdelivr.net` (clerk-js), `https://clerk.rallytasks.com` (FAPI) | clerk-js source + the **satellite FAPI** `https://clerk.projections.thriftly.com` (confirm exact host in the Clerk dashboard, Phase 6). With `@clerk/clerk-react` bundled by Vite, our own JS stays `'self'`. |
+| `connect-src` | `https://clerk.rallytasks.com` | satellite FAPI `https://clerk.projections.thriftly.com` **and** `https://clerk.rallytasks.com` / `https://accounts.rallytasks.com` (handshake redirect). Keep `'self'` for our own API. |
+| `frame-src` | `https://clerk.rallytasks.com`, **`https://challenges.cloudflare.com`** (Clerk Turnstile bot check) | satellite FAPI + `https://challenges.cloudflare.com`. **The plan's Phase 4 list omitted Turnstile — add it**, or Clerk's bot check renders blank. |
+| `img-src` | `https://img.clerk.com`, **`https://images.clerk.dev`** | both (avatars). The plan listed only `img.clerk.com`; **add `images.clerk.dev`.** |
+
+> **Cross-apex CSP nuance the same-apex repos hide:** on a *satellite*, clerk-js talks to the **satellite's own FAPI** (`clerk.projections.thriftly.com`, via CNAME), **not** directly to `clerk.rallytasks.com` — but the session-JWT **`iss` stays the primary** (`https://clerk.rallytasks.com`). So **`CLERK_JWT_ISSUER` (verify) and the FAPI origin (CSP/browser) are different hosts.** vibe101 never hits this because its FAPI and issuer are the same `clerk.rallytasks.com`. Pin the issuer for verification; allowlist the satellite FAPI for the browser.
+
+### 2A.4 The cross-apex specifics (projections.thriftly.com is a DIFFERENT apex)
+
+Two **independent layers** — keep them separate:
+
+**Layer 1 — how the browser on `projections.thriftly.com` obtains a Clerk session (frontend).** A cookie set at `Domain=.rallytasks.com` is **never** sent to `thriftly.com` (browsers scope cookies to the registrable domain), so the vibe101 trick is impossible. To get *automatic* SSO you register projections as a **formal Clerk satellite**:
+  1. Clerk dashboard → rallytasks.com **production** instance → **Domains → Satellites → add `projections.thriftly.com`** (a *different-apex* satellite, not a subdomain).
+  2. Add the Clerk-issued **CNAME** for the satellite's own Frontend API — `clerk.projections.thriftly.com → frontend-api.clerk.services` — **DNS-only (do NOT Cloudflare-proxy / orange-cloud OFF)**; verify until green. This is what lets Clerk set a **first-party** `__session` cookie **on `thriftly.com` itself** (not on rallytasks.com).
+  3. Frontend mounts `<ClerkProvider isSatellite domain="projections.thriftly.com" signInUrl=<primary> allowedRedirectOrigins=[…]>`. A satellite **cannot host sign-in / collect credentials** — an unauthenticated owner is **redirected to the primary** (`accounts.rallytasks.com` Account Portal), authenticates there, and Clerk runs the **handshake redirect back** (the `__clerk_handshake` / `__clerk_synced` flow) which seeds the session cookie on the thriftly.com apex. **Use `buildSignInUrl()`/`buildSignUpUrl()` (which append `__clerk_synced`) rather than a hardcoded URL** (see §2B).
+  4. Add `https://projections.thriftly.com` to the instance's **allowed origins** and the primary's **redirect allowlist** (and the SDK's `allowedRedirectOrigins`), or the bounce-back is refused.
+
+**Layer 2 — how our FastAPI trusts a request (backend).** **Apex-agnostic and unchanged: JWKS-Bearer only, cookie-blind, fail-closed.** Whatever Layer 1 does (full satellite handshake, or pennyai-style "owner just presents a token"), our API only ever verifies `Authorization: Bearer <clerk JWT>` against the primary's JWKS via `clerk.session.getToken()`. It **never reads `__session`** — not even the first-party one a satellite sets on `thriftly.com`. This is what keeps Regression #11 true across the apex boundary.
+
+**Why JWKS-Bearer is the right call for a foreign apex (not merely a preference):**
+- **Cross-apex cookies don't exist for our API.** There is no `.rallytasks.com` cookie on `thriftly.com`, and we deliberately ignore the satellite's first-party `__session` too → **no ambient credential our API can be tricked into trusting → structurally no CSRF**, exactly the property the capability-token model gives us today.
+- **The satellite handshake is a frontend convenience, not an auth dependency.** Per pennyai, the verifying backend works with **zero** satellite/DNS config the instant a JWT is presented. The CNAME/handshake only buys *automatic* SSO ergonomics. ⇒ **De-couple Phase 6 (satellite DNS) from Phases 0–4.**
+
+**Cross-apex gotchas to flag for the owner:**
+- **No satellite handshake ⇒ no auto-SSO, but the backend still works** — decide v1: full handshake (Phase 6) vs pennyai-style backend-first.
+- **Issuer ≠ FAPI host on a satellite** (§2A.3) — pin `CLERK_JWT_ISSUER=https://clerk.rallytasks.com`, but CSP/browser must reach `clerk.projections.thriftly.com`.
+- **`azp` / authorized-parties:** **neither pennyai nor vibe101 enforces `azp`** — the projections plan's `CLERK_AUTHORIZED_PARTIES` enforcement is **stricter than both** and must be **kept** (a cross-apex satellite widens the set of origins that can mint JWKS-valid tokens).
+- **Don't copy pennyai's cookie read.** `extractClerkToken` reads `__session` first; harmless for pennyai only because the foreign-apex cookie never arrives. projections' **explicit cookie-blind invariant** (§3) is the cleaner guarantee the CI test must enforce.
+
+---
+
+## 2B. Congruence with Clerk's official satellite best practices + the reference apps
+
+The owner supplied Clerk's official multi-domain/satellite guidance. **Cookie-native, Clerk-native satellite (Clerk's recommendation):** primary `rallytasks.com` + satellite `thriftly.com`; CNAME `clerk.thriftly.com → frontend-api.clerk.services` (DNS-only); **all auth flows run on the PRIMARY** (the satellite only *reads* an existing session, never collects creds); mark the satellite with `isSatellite`+`domain` using the **same pk/sk** (test vs live per env, env-var only); use **`buildSignInUrl()`/`buildSignUpUrl()`** (they append `__clerk_synced`) instead of hardcoded URLs; set **`allowedRedirectOrigins`** to allowlist satellite origins (separate dev/prod); **no passkeys** (bound to one registrable domain); choose **`satelliteAutoSync`** deliberately (default `false`; `true` = auto-recognize already-signed-in primary users at the cost of a redirect on first visit). Clerk states multi-domain is **best-supported on Next.js / TanStack Start / Nuxt**; **other React frameworks work only WITHOUT SSR/hydration.**
+
+**The projections reality:** **React + Vite SPA (client-only, NO SSR) + a Python FastAPI backend.** That is precisely the "other React framework, no SSR" case — and there is **no JS server** to run Clerk's backend middleware/`authenticateRequest`.
+
+### 2B.1 Comparison (dimension × app)
+
+| Dimension | Clerk-official (cookie-native) | timpager (primary) | vibe101 (same-apex) | pennyai (foreign-apex) | **projections — recommended** |
+|---|---|---|---|---|---|
+| **API trust: cookie-native vs JWKS-Bearer** | cookie + handshake, read by a JS backend SDK | full SDK (owns instance) | cookie-first **or** Bearer; JWKS verify | **JWKS-Bearer** (also reads cookie, but it never arrives) | **JWKS-Bearer, cookie-blind** (FastAPI can't run the JS SDK; Bearer is Clerk's own API-call path via `getToken()`) |
+| **CNAME `clerk.<sat>`** | required, DNS-only → `frontend-api.clerk.services` | n/a (primary FAPI `clerk.rallytasks.com`) | **none** (same apex) | not yet (handshake deferred) | **yes — `clerk.projections.thriftly.com`, DNS-only** (Phase 6, only if auto-SSO wanted) |
+| **`isSatellite` + `domain`** | required on the satellite | n/a | **no** (not a satellite) | not yet | **yes** (`@clerk/clerk-react`) |
+| **`buildSignInUrl()` / `__clerk_synced`** | required (don't hardcode) | n/a | mounts local SignIn | n/a yet | **yes — use the SDK helpers**, not a hardcoded `/refer` |
+| **`allowedRedirectOrigins`** | required, allowlist satellite origins | n/a | n/a | n/a yet | **yes** (served via `/api/auth/config`; dev vs prod split) |
+| **`satelliteAutoSync`** | deliberate (default false) | n/a | n/a | n/a yet | **owner decision** (default false = explicit owner sign-in; true = auto-recognize primary session, +1 redirect) |
+| **Passkeys** | **disable** on satellites | (primary may use) | n/a | n/a | **disable as a factor** (cross-apex; shared-dashboard setting) |
+| **SSR-framework requirement** | Next/TanStack/Nuxt best; others **no-SSR only** | Node SSR app | Node SSR app | Go app | **Vite SPA = no SSR ⇒ in the supported "no-SSR" lane** (clerk-react does the handshake **client-side**; no JS backend needed) |
+| **Cross-apex handling** | the satellite mechanism itself | n/a | shared `.rallytasks.com` cookie | foreign apex, JWT-only, handshake deferred | **formal satellite for Layer-1 session + JWKS-Bearer for Layer-2 trust** |
+
+### 2B.2 Verdict per reference
+
+- **timpager — CONGRUENT (by role).** It *is* the primary: hosts sign-in, owns `sk`/webhooks. Nothing to reconcile.
+- **vibe101 — N/A → CONGRUENT-by-exemption.** It is **not a satellite**; it is a same-apex sibling on the primary's registrable domain, where Clerk treats `*.rallytasks.com` as one domain and the apex cookie is shared. Clerk's *satellite* rules (CNAME, `isSatellite`, "never collect creds") **don't apply**. Its hosting its own `/sign-in` would be **INCONGRUENT for a true satellite**, but is fine same-apex. **Not a template for projections.**
+- **pennyai — PARTIALLY CONGRUENT (deliberate subset).** Its **backend** JWKS-Bearer verify is the **Clerk-supported networkless pattern** (congruent, and the right call for a non-JS, foreign-apex backend). It has **not** built the official cookie-native satellite **frontend** (no CNAME / `isSatellite` / `buildSignInUrl` / `allowedRedirectOrigins`) — explicitly **deferred**, not rejected. So pennyai = "congruent backend foundation; satellite frontend not yet implemented."
+- **Our plan — CONGRUENT, with fixes.** It splits cleanly into **Clerk's official satellite *frontend* (Layer 1)** + **Clerk's networkless JWKS verify for a non-JS *backend* (Layer 2)**. The **only deliberate divergence** is that our API is **cookie-blind** (never trusts `__session`) where Clerk's *JS-backend* SDK would read the cookie — but **we have no JS backend**, and `getToken()`→Bearer is exactly the Clerk-blessed path for calling a separate API. The divergence is **justified** (cross-apex, no SSR, FastAPI, CSRF-avoidance / Regression #11) and is **invisible** to Clerk's frontend flow.
+
+### 2B.3 Where the plan as-written was INCONGRUENT with Clerk-official (fix in the implementing PRs)
+
+1. **Hardcoded `signInUrl` (`https://www.rallytasks.com/refer`).** INCONGRUENT → use **`buildSignInUrl()`/`buildSignUpUrl()`** so `__clerk_synced` round-trips; point the base at the primary **Account Portal** (`https://accounts.rallytasks.com`), not a deep app route.
+2. **`allowedRedirectOrigins` not specified.** ADD it (frontend prop + primary redirect allowlist), dev vs prod split.
+3. **`satelliteAutoSync` not chosen.** ADD as an explicit owner decision (default false).
+4. **Passkeys not addressed.** ADD: disable passkeys for the satellite flow (registrable-domain-bound).
+5. **CNAME detail.** Make it **`clerk.projections.thriftly.com → frontend-api.clerk.services`, DNS-only** (orange-cloud off) — a real footgun.
+6. **CSP gaps** — add `https://challenges.cloudflare.com` (Turnstile) and `https://images.clerk.dev` (§2A.3).
+
+These are all **frontend/dashboard refinements**; none changes the backend JWKS-Bearer/cookie-blind design.
+
+### 2B.4 Final recommendation (Vite-SPA + FastAPI + cross-apex)
+
+**Adopt Clerk's official cookie-native satellite pattern for the FRONTEND, and keep the plan's JWKS-Bearer cookie-blind design for the BACKEND — they are complementary, not competing.**
+
+- **Feasibility:** the cookie-native satellite flow **does work on a Vite SPA** *precisely because there is no SSR/hydration* — `@clerk/clerk-react` performs the handshake **client-side** against the CNAME'd satellite FAPI; **no JS backend is required** (verify against Clerk's current docs in Phase 5). This is the one Clerk constraint projections actually satisfies cleanly. (If a future Clerk release ties satellite handshakes to a JS-SSR middleware, fall back to pennyai-style **backend-first** — owner signs in on the primary, projections accepts the presented JWT — which needs no handshake at all.)
+- **Match the proven sibling pattern where it's proven:** the **backend** mirrors **pennyai** (foreign-apex JWKS-Bearer, fail-closed, additive, no secret) — the only Rally pattern actually validated on a foreign apex. The **frontend** completes what pennyai deferred, following Clerk-official (`isSatellite`/`domain`/`buildSignInUrl`/`allowedRedirectOrigins`/`satelliteAutoSync`/no-passkeys/DNS-only CNAME).
+- **Keep COEXIST + cookie-blind:** viewers (board/funder/advisor) stay **no-login capability tokens**; only the **owner** signs in via Clerk; the Clerk `__session` cookie may exist in the browser for clerk-react's own sync but **our FastAPI never trusts it** → still **no CSRF** (SECURITY.md §6.2, Regression #11).
+- **Net:** the plan **does not contradict Clerk's official guidance** — it implements the supported no-SSR satellite frontend and the supported networkless JWT verify for a non-JS backend. The fixes in §2B.3 are the concrete deltas to make it fully congruent.
+
+> **Official reference (confirmed + read).** Clerk's multi-domain demo is **Turborepo + pnpm** with a **plain React (non-Next, Vite) pair**: `apps/react/root-domain/` (primary, `:3002`) and `apps/react/satellite-domain/` (satellite, `:3003`), plus the Next.js pair (`:3000`/`:3001`) and Playwright e2e — i.e. Clerk itself demonstrates a **non-SSR React** satellite, exactly projections' stack. Repo: `https://github.com/clerk/clerk-multidomain-demo` (Next-only variant: `https://github.com/clerk/clerk-nextjs-multi-domain-example`). Docs: `https://clerk.com/docs/guides/dashboard/dns-domains/satellite-domains`. **Key shape read from the demo (mirrored below):** the **satellite** `<ClerkProvider>` sets `publishableKey` + `isSatellite` + `domain` + `signInUrl`; **`allowedRedirectOrigins` is set on the PRIMARY/root provider** (it allowlists which satellite origin the primary may bounce back to — the demo README's one explicit setup note). **This is the resolved architecture for projections** (verify exact prop names against current docs in Phase 5).
+
+---
+
+## 2C. Recommended architecture — concrete artifacts (cookie-native FRONTEND satellite ⊕ cookie-blind JWKS-Bearer BACKEND)
+
+**These two compose — not either/or.** The `@clerk/clerk-react` satellite gives the *browser* a Clerk session across the apex (Clerk-official); the FastAPI stays cookie-blind and trusts only a short-lived `Authorization: Bearer` JWT verified against JWKS (no-CSRF, no secret). Capability share-links (`view_slug`/role) are untouched for logged-out viewers. **All snippets are illustrative references for the implementing PRs — no code ships from this docs PR.**
+
+> Host note: projections serves at **`projections.thriftly.com`**; the satellite `domain` and CNAME track whatever host serves the SPA (if it were the bare apex `thriftly.com`, the values collapse accordingly). `signInUrl` may be the primary **Account Portal** (`https://accounts.rallytasks.com`) **or** a primary-app-rendered React-Router `/sign-in` route — the resolved direction uses the latter (primary renders `<SignIn/>`).
+
+### 2C.1 Env (`.env`) — VITE_ prefix on the SPA, issuer/azp on the API; per-env test vs live
+
+```dotenv
+# ── PRIMARY app (rallytasks.com / timpager) ── owns sign-in, secret, webhooks
+# JS server: CLERK_SECRET_KEY=sk_test_… (dev) / sk_live_… (prod)
+# Primary SPA (renders <SignIn/>/<SignUp/>; allowlists the satellite to redirect back):
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_…                      # pk_live_… in prod (SAME instance as satellite)
+VITE_CLERK_SIGN_IN_URL=/sign-in
+VITE_ALLOWED_REDIRECT_ORIGINS=https://projections.thriftly.com   # CSV; dev: http://localhost:5173
+
+# ── SATELLITE SPA (projections.thriftly.com) ── Vite, browser-exposed (VITE_*)
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_…                      # pk_live_… in prod — SAME instance key as primary
+VITE_CLERK_IS_SATELLITE=true
+VITE_CLERK_DOMAIN=projections.thriftly.com
+VITE_CLERK_SIGN_IN_URL=https://rallytasks.com/sign-in     # dev: http://localhost:3000/sign-in
+
+# ── SATELLITE BACKEND (projections FastAPI) ── verify-only, NO Clerk secret
+CLERK_ENABLED=1
+CLERK_JWT_ISSUER=https://clerk.rallytasks.com             # iss for JWKS verify (primary issuer, even on the satellite)
+CLERK_AUTHORIZED_PARTIES=https://projections.thriftly.com # azp allowlist (stricter than pennyai/vibe101)
+# NEVER set CLERK_SECRET_KEY or CLERK_WEBHOOK_SIGNING_SECRET on projections (finding C1; boot-refuse guardrail).
+```
+*Var names mirror `clerk-multidomain-demo` (`VITE_CLERK_IS_SATELLITE`, `VITE_CLERK_DOMAIN`, `VITE_CLERK_SIGN_IN_URL`, `VITE_ALLOWED_REDIRECT_ORIGINS`). The SPA reads `import.meta.env.VITE_*` only; the API never sees a `pk`/`sk`. Issuer pins the **primary** even though the browser FAPI is the satellite host (§2A.3). `allowedRedirectOrigins` lives on the **primary** (§2C.4).*
+
+### 2C.2 Satellite `<ClerkProvider>` (projections SPA, `web/src/main.tsx`)
+
+```tsx
+// Mirrors clerk-multidomain-demo/apps/react/satellite-domain/src/main.tsx, adapted to projections.
+import { ClerkProvider } from "@clerk/clerk-react";
+
+const pk = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+if (!pk) throw new Error("Missing Publishable Key");
+
+<ClerkProvider
+  publishableKey={pk}
+  isSatellite={import.meta.env.VITE_CLERK_IS_SATELLITE === "true"}  // demo drives this from env
+  domain={import.meta.env.VITE_CLERK_DOMAIN}            // projections.thriftly.com
+  signInUrl={import.meta.env.VITE_CLERK_SIGN_IN_URL}    // primary renders <SignIn/>
+  // allowedRedirectOrigins is set on the PRIMARY provider, NOT the satellite (§2C.4) — per the official demo.
+  // satelliteAutoSync defaults to false → session syncs on user-initiated sign-in; true auto-recognizes a primary session (+1 redirect, owner decision).
+>
+  {/* Owner app routes only. Share-link routes (/{view_slug}, /edit#…, /r/{slug}) render OUTSIDE this provider — no login. */}
+</ClerkProvider>
+```
+
+### 2C.3 Satellite sign-in button — `buildSignInUrl()` (attaches `__clerk_synced`)
+
+```tsx
+import { useClerk } from "@clerk/clerk-react";
+
+function OwnerSignInButton() {
+  const clerk = useClerk();
+  // buildSignInUrl() returns the PRIMARY sign-in URL with __clerk_synced appended,
+  // so the round-trip re-syncs the satellite session. NEVER hardcode this URL.
+  return <button onClick={() => { window.location.href = clerk.buildSignInUrl(); }}>Sign in</button>;
+  // (buildSignUpUrl() is the sign-up analogue.)
+}
+```
+
+### 2C.4 PRIMARY renders sign-in/up on React-Router routes (rallytasks.com side — reference only)
+
+```tsx
+// PRIMARY entry — verbatim shape from clerk-multidomain-demo/apps/react/root-domain/src/main.tsx:
+<ClerkProvider
+  publishableKey={publishableKey}
+  allowedRedirectOrigins={env.VITE_ALLOWED_REDIRECT_ORIGINS.split(",")}  // CSV → satellite origin(s)
+  signInUrl={env.VITE_CLERK_SIGN_IN_URL}
+>
+  <BrowserRouter><App /></BrowserRouter>
+</ClerkProvider>
+
+// …and inside <App/>, the PRIMARY renders the auth UI on path routes:
+import { SignIn, SignUp } from "@clerk/clerk-react";
+import { Routes, Route } from "react-router-dom";
+
+<Routes>
+  <Route path="/sign-in/*" element={<SignIn routing="path" path="/sign-in" />} />
+  <Route path="/sign-up/*" element={<SignUp routing="path" path="/sign-up" />} />
+</Routes>
+// allowedRedirectOrigins lives on the PRIMARY (per the demo README) — it allowlists the satellite origin
+// the primary may bounce back to: VITE_ALLOWED_REDIRECT_ORIGINS="https://projections.thriftly.com" (dev: "http://localhost:5173").
+// The SATELLITE provider does NOT set it.
+```
+
+### 2C.5 FastAPI cookie-blind JWKS-Bearer dependency (`app/clerk.py` + `app/deps.py` — reference)
+
+```python
+# app/clerk.py — networkless verify, mirrors timpager/lib/clerk-jwt-verify.js. NO Clerk secret.
+import jwt  # PyJWT
+from jwt import PyJWKClient
+
+_jwks = PyJWKClient(f"{ISSUER}/.well-known/jwks.json")  # cached; refresh on unknown kid
+
+def verify_clerk_session_token(token: str) -> dict:
+    signing_key = _jwks.get_signing_key_from_jwt(token).key
+    claims = jwt.decode(
+        token, signing_key,
+        algorithms=["RS256"],          # RS256 ONLY — no alg-confusion / "none"
+        issuer=ISSUER,                  # iss mandatory (fail-closed if ISSUER unset)
+        options={"require": ["exp", "sub"]},
+        leeway=LEEWAY_SECONDS,          # exp/nbf clock-skew
+    )
+    azp = claims.get("azp")
+    if AUTHORIZED_PARTIES and azp not in AUTHORIZED_PARTIES:   # azp allowlist (closes the gap pennyai/vibe101 leave)
+        raise InvalidToken("azp not allowed")
+    return {"clerk_user_id": claims["sub"], "org_id": claims.get("org_id"), "claims": claims}
+
+# app/deps.py — COOKIE-BLIND: reads ONLY the Authorization header, NEVER request.cookies.
+def resolve_bearer_identity(authorization: str | None = Header(default=None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        return Anonymous()                         # no header → anonymous (cookie-only request is anonymous)
+    token = authorization[7:].strip()
+    if looks_like_jwt(token):                       # 3 base64url segments, RS256 header
+        try:
+            ident = verify_clerk_session_token(token)
+            return ClerkOwner(ident["clerk_user_id"], ident["org_id"])
+        except InvalidToken:
+            raise HTTPException(401)                 # PRESENT-but-invalid Clerk JWT → 401 (pennyai's three-state)
+    return resolve_capability_token(token)          # opaque token → existing SHA-256 owner/edit/role compare
+```
+*Invariant (CI test, Regression #11): a request with a valid `__session` cookie but **no** `Authorization` header resolves to `anonymous`. The API never reads `request.cookies`.*
+
+### 2C.6 Verify-the-flow (staging checklist, Phase 6)
+
+1. Visit `https://projections.thriftly.com` signed out → owner area shows "Sign in"; **share-link routes render with no login.**
+2. Click sign-in → `buildSignInUrl()` redirects to `https://rallytasks.com/sign-in` (primary renders `<SignIn/>`); URL carries `__clerk_synced`.
+3. Authenticate on the **primary** → Clerk redirects **back** to `projections.thriftly.com` (must be in `allowedRedirectOrigins` + the dashboard redirect allowlist) → satellite now has an **active session** (first-party `__session` on `thriftly.com` via the `clerk.projections.thriftly.com` CNAME).
+4. The SPA calls the API with `Authorization: Bearer ${await clerk.session.getToken()}`; **FastAPI verifies via JWKS** and resolves owner scope on the Clerk `userId`/`orgId`.
+5. Negative: replay the same request with **only** the `__session` cookie and **no** `Authorization` header → **`anonymous`** (no-CSRF invariant holds).
+6. `satelliteAutoSync=false`: confirm an already-signed-in-on-rallytasks user is **not** auto-signed-in on projections until they click sign-in (flip to `true` only if auto-recognition is wanted, accepting the first-visit redirect).
+
+### 2C.7 Reconciliation with pennyai + vibe101 (does this match the proven pattern?)
+
+- **Backend = pennyai, proven on a foreign apex.** §2C.5 is pennyai's `clerk_auth.go` in Python: RS256-only, issuer/exp enforced, JWKS-only, fail-closed, additive, **no secret** — the single Rally pattern actually validated cross-apex. **CONGRUENT.** projections adds **`azp` enforcement** (pennyai omits it) and **cookie-blindness** (pennyai reads `__session`, harmless only because the foreign-apex cookie never arrives) → **projections is strictly stricter; the stricter side wins.**
+- **Frontend = the official Clerk satellite that pennyai deferred and vibe101 never needed.** pennyai shipped backend-first and left the handshake as "a separate, larger step"; vibe101 is same-apex and uses no satellite at all. **Neither sibling contradicts this frontend — they simply hadn't built it.** §2C.2–2C.4 complete it per Clerk-official, so the combined approach is **CONGRUENT with Clerk-official (frontend) AND with the JWKS-Bearer hardening (backend).**
+- **Where they diverge, and which wins:** vibe101's cookie-first `extractToken` + `tp_csrf` double-submit is a **same-apex** affordance that **re-introduces a CSRF surface** — **projections must NOT copy it** (Regression #11); the cookie-blind Bearer design wins. pennyai's deferral of the frontend is fine for its phasing, but projections wants owner SSO, so it builds the frontend now (or ships backend-first too — see the §12 phasing question).
 
 ---
 
@@ -125,9 +397,10 @@ Add to the single-source env module, gated on the `CLERK_ENABLED` kill switch (m
 | `CLERK_ENABLED` | optional (default off) | Kill switch. Strict truthy (`1`/`true`/`yes`). Read at call time. | Off ⇒ behavior identical to today (pure capability tokens). |
 | `CLERK_JWT_ISSUER` | **required when `CLERK_ENABLED`** (prod fail-closed) | Expected `iss`; JWKS at `<issuer>/.well-known/jwks.json`. | `https://clerk.rallytasks.com` (prod) / `https://<slug>.clerk.accounts.dev` (dev). |
 | `CLERK_PUBLISHABLE_KEY` | **required when `CLERK_ENABLED`** | `pk_live_…` shipped to browser via `GET /api/auth/config`. | SAME key as rallytasks.com. Not secret, but config-required. |
-| `CLERK_DOMAIN` | required when `CLERK_ENABLED` | Satellite host for `<ClerkProvider domain>`. | `projections.thriftly.com`. |
-| `CLERK_SIGN_IN_URL` | required when `CLERK_ENABLED` | Primary's absolute sign-in URL for `<ClerkProvider signInUrl>`. | e.g. `https://www.rallytasks.com/refer`. |
-| `CLERK_AUTHORIZED_PARTIES` | required when `CLERK_ENABLED` | `azp` allowlist for JWT verify (closes timpager's flagged gap). | CSV incl. `https://projections.thriftly.com`. |
+| `CLERK_DOMAIN` (⇒ `VITE_CLERK_DOMAIN`) | required when `CLERK_ENABLED` | Satellite host for `<ClerkProvider domain>`. | `projections.thriftly.com`. |
+| `CLERK_SIGN_IN_URL` (⇒ `VITE_CLERK_SIGN_IN_URL`) | required when `CLERK_ENABLED` | Primary's sign-in URL for `<ClerkProvider signInUrl>`; redirects built with **`buildSignInUrl()`** (§2C.3). | `https://rallytasks.com/sign-in` (or Account Portal `https://accounts.rallytasks.com`). **Not** a deep route like `/refer`. |
+| `CLERK_AUTHORIZED_PARTIES` | required when `CLERK_ENABLED` | `azp` allowlist for JWT verify (stricter than pennyai/vibe101, which omit it). | CSV incl. `https://projections.thriftly.com`. |
+| *(primary-side)* `VITE_ALLOWED_REDIRECT_ORIGINS` | on the **primary** SPA | `allowedRedirectOrigins` allowlist of satellite origins (§2C.4). | `https://projections.thriftly.com` (dev `http://localhost:5173`). **Set on rallytasks, not projections.** |
 | `CLERK_JWT_LEEWAY_SECONDS` | optional | Clock-skew leeway for `exp`/`nbf` (default 10s). | Mirrors timpager default. |
 | ~~`CLERK_SECRET_KEY`~~ | **NEVER on projections** | — | Primary-only (security finding C1). A boot check should **refuse to boot if it is set** on projections, as a guardrail. |
 | ~~`CLERK_WEBHOOK_SIGNING_SECRET`~~ | **NEVER on projections** | — | Webhooks are the primary's job. |
@@ -146,7 +419,7 @@ Add to the single-source env module, gated on the `CLERK_ENABLED` kill switch (m
 - **`app/store/base.py` + `sqlite.py` + `postgres.py` stub** — `list_by_owner` / `list_card_summaries` gain a Clerk-identity variant (or a unified `owner_ref`); `create_projection` accepts `owner_clerk_user_id`/`owner_org_id`; new `claim_projection(view_slug, owner_token, clerk_user_id/org_id)`.
 - **`app/store/migrations/00NN_clerk_owner.sql`** (NEW, additive) — `ALTER TABLE projections ADD COLUMN owner_clerk_user_id TEXT; ADD COLUMN owner_org_id TEXT;` + `CREATE INDEX idx_projections_clerk_owner ON projections(owner_clerk_user_id, status, updated_at DESC);` (and an `org` index). Pre-migration Litestream snapshot; passes `scripts/migration_lint`.
 - **`web/package.json`** — add `@clerk/clerk-react`.
-- **`web/src/main.tsx` / `App.tsx`** — wrap the owner app routes in `<ClerkProvider isSatellite domain signInUrl publishableKey>`; the publishable key/domain/sign-in URL come from `GET /api/auth/config`. **Share-link routes (`/{view_slug}`, `/edit#…`, `/r/{slug}`) stay OUTSIDE the provider / do not require sign-in.**
+- **`web/src/main.tsx` / `App.tsx` / `web/src/env.ts`** — wrap the owner app routes in the satellite `<ClerkProvider isSatellite domain signInUrl publishableKey>` (concrete code + env-typed module in **§2C.2**; `VITE_*` vars in **§2C.1**); add the `buildSignInUrl()` sign-in button (**§2C.3**). Provider values come from `import.meta.env.VITE_*` (and/or `GET /api/auth/config`). **`allowedRedirectOrigins` is configured on the PRIMARY (rallytasks) provider, not here (§2C.4).** **Share-link routes (`/{view_slug}`, `/edit#…`, `/r/{slug}`) stay OUTSIDE the provider / do not require sign-in.**
 - **`web/src/api/projections.ts` + `client`** — replace `getOwnerToken()`/`localStorage` for the owner path with `await clerk.session.getToken()` → `Authorization: Bearer`. Keep the capability-token send path for view/edit/role pages. Keep a **claim bridge**: on first sign-in, if a legacy `localStorage` owner token exists, POST it to `claim_projection`.
 - **`app/main.py`** — CSP/CORS header builder widened for Clerk origins (§Phase 4).
 - **Docs (same PR as first code):** `SECURITY.md` (§2 model amended, §4 env table, §6.2 invariant, §8 CSP), `CLAUDE.md` Hard Rules + Regression #11, `DATA_MODEL.md` (`projections` columns + claim flow), `API_SPEC.md` (`/api/auth/config`, `claim`), `OPS_RUNBOOK.md` (Clerk dashboard + DNS satellite setup), `reference/PRD.md` §20 note.
@@ -178,7 +451,7 @@ Add to the single-source env module, gated on the `CLERK_ENABLED` kill switch (m
 - **Acceptance:** migration additive + lint-green; pre-migration Litestream snapshot documented in OPS_RUNBOOK; claim is owner-only + version-checked + audited.
 
 ### Phase 4 — CSP/CORS widening + discovery endpoint
-- **RED tests** (`app/tests/test_security_headers_clerk.py`, `app/tests/test_auth_config_route.py`): (a) when `CLERK_ENABLED`, CSP `script-src`/`connect-src` include `https://clerk.rallytasks.com https://*.clerk.accounts.dev`, `frame-src` includes the FAPI, `img-src` includes `https://img.clerk.com`; **when disabled, CSP stays the strict `'self'`-only baseline** (no relaxation unless Clerk is on); (b) CORS stays exact-origin, `Allow-Credentials` off; (c) `GET /api/auth/config` returns `{clerk_enabled, clerk_publishable_key, clerk_domain, clerk_sign_in_url}` and **never** a secret; cache header present.
+- **RED tests** (`app/tests/test_security_headers_clerk.py`, `app/tests/test_auth_config_route.py`): (a) when `CLERK_ENABLED`, CSP `script-src`/`connect-src` include the **satellite FAPI** `https://clerk.projections.thriftly.com` + `https://clerk.rallytasks.com`/`https://accounts.rallytasks.com` (handshake) + `https://*.clerk.accounts.dev` (dev), `frame-src` includes the FAPI **and `https://challenges.cloudflare.com`** (Clerk Turnstile bot check), `img-src` includes `https://img.clerk.com https://images.clerk.dev` (exact origins in §2A.3); **when disabled, CSP stays the strict `'self'`-only baseline** (no relaxation unless Clerk is on); (b) CORS stays exact-origin, `Allow-Credentials` off; (c) `GET /api/auth/config` returns `{clerk_enabled, clerk_publishable_key, clerk_domain, clerk_sign_in_url}` and **never** a secret; cache header present.
 - **Files:** `app/main.py` (header builder), discovery route, `SECURITY.md` §8.
 - **Acceptance:** CSP relaxation is conditional on the kill switch and is a named, documented tradeoff; no secret in `/api/auth/config`.
 
@@ -239,7 +512,11 @@ OPS_RUNBOOK section for the Clerk satellite (dashboard + DNS + verification), th
 | **Do boards/funders/advisors EVER need accounts?** | the whole coexist-vs-replace decision | **No for v1** — they stay capability-token viewers. Confirm. |
 | **Editors:** must a shared *editor* sign in, or keep the fragment edit token? | Phase 2 + Phase 5 | Keep the **edit token** for non-owner collaborators (no login); the *owner* uses Clerk. Confirm. |
 | **Resolve to `rally_user_id` or stay on `clerk_user_id`?** | optional future | v1: stay on `clerk_user_id` (no cross-service call). Resolve to `rally_user_id` only if projections must join rallytasks data (needs a shared service token + the primary's `/api/v1/identity/resolve`). |
-| **Which primary URL hosts sign-in** for `signInUrl`? | Phase 5 | Confirm the exact rallytasks.com sign-in path (timpager mounts SignIn on `/refer`). |
+| **Which primary URL hosts sign-in** for `signInUrl`? | Phase 5 | For a *cross-apex satellite*, point at the primary **Account Portal** `https://accounts.rallytasks.com` (the host pennyai references for the handshake) and build redirects with **`buildSignInUrl()`** (`__clerk_synced`) — not a hardcoded deep route. (timpager also mounts `<SignIn>` on `/refer`.) See §2B.3. |
+| **Full satellite handshake in v1, or pennyai-style backend-first?** | Phase 6 vs Phases 0–4 | **Recommend backend-first**: ship JWKS-Bearer verify with **no** DNS/`isSatellite`; add the CNAME + handshake later. pennyai runs in production this way; only auto-SSO is deferred. |
+| **`satelliteAutoSync` — auto-recognize a primary session?** (Clerk-official) | Phase 5 | Default **false** (explicit owner sign-in). Set **true** only if "already signed in on rallytasks ⇒ signed in on projections" is wanted, accepting a redirect on first visit. Owner decision. |
+| **Passkeys** on the satellite flow | Phase 6 | **Disable** — passkeys are bound to one registrable domain and break cross-apex (Clerk-official). Shared-dashboard setting. |
+| **Vite-SPA feasibility of the cookie-native satellite** | Phase 5 | Confirmed lane: a Vite SPA is **no-SSR**, which is Clerk's supported case for non-Next/TanStack/Nuxt React; clerk-react does the handshake **client-side** (no JS backend). **Verify against Clerk's current docs in Phase 5**; fall back to backend-first if a release ties it to JS-SSR middleware. See §2B.4. |
 | **Sign-in/sign-up factors** (phone, Google OAuth) — owned by the shared Clerk dashboard | Phase 6 | Reuse the rallytasks instance's existing factors; no projections-side config. |
 
 ---
@@ -251,4 +528,3 @@ OPS_RUNBOOK section for the Clerk satellite (dashboard + DNS + verification), th
 - Resolving `rally_user_id` / cross-service identity joins (deferred; v1 keys on `clerk_user_id`).
 - Forcing any **viewer** (board/funder/advisor) to log in — never.
 - Org-scoped lists/teams UI — store `org_id`, build the UI later.
-```
