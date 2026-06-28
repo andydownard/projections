@@ -91,10 +91,10 @@ describe("coexistence ≥1180px — non-modal, both open", () => {
     await waitFor(() => expect(inspectorClose).toHaveFocus());
 
     await user.click(screen.getByTestId("penny-fab"));
-    await screen.findByTestId("penny-panel");
-    // Penny must NOT pull focus into its own panel (exactly one focus ring).
-    const pennyClose = screen.getByRole("button", { name: /close penny/i });
-    expect(pennyClose).not.toHaveFocus();
+    const pennyPanel = await screen.findByTestId("penny-panel");
+    // Penny must NOT pull focus into its own panel (exactly one focus ring). With the
+    // de-crufted header the dialog itself is the focus anchor, so assert it is unfocused.
+    expect(pennyPanel).not.toHaveFocus();
     // The Inspector stays open (coexistence, not exclusion).
     expect(screen.getByTestId("inspector-panel")).toBeInTheDocument();
   });
@@ -122,10 +122,9 @@ describe("coexistence <1180px — modal sheets, mutually exclusive", () => {
         /override inspector closed/i,
       ),
     );
-    // …and focus landed cleanly on the new sheet (not lost to the body).
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /close penny/i })).toHaveFocus(),
-    );
+    // …and focus landed cleanly on the new sheet (not lost to the body). The
+    // de-crufted header has no close button, so the dialog itself is the focus anchor.
+    await waitFor(() => expect(pennyPanel).toHaveFocus());
   });
 });
 

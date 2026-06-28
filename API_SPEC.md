@@ -390,12 +390,12 @@ Each settled mutation writes a snapshot (`monthly_json`+`computed_json`+`overrid
 ```json
 { "revisions": [
   { "id":"r_01J…", "version":7, "change_summary":"labor_pct 0.40→0.45",
-    "actor":"owner", "created_at":"2026-06-24T17:03:21Z",
+    "actor":"user", "created_at":"2026-06-24T17:03:21Z",
     "event":"edit" }
 ] }
 ```
 
-`event` ∈ `edit | override | rotate | restore | upgrade_model | export | share_access`. Bodies of snapshots are not inlined in the list (fetch via restore preview if needed); the list is metadata + `change_summary`.
+`actor` ∈ `user | penny | penny_undo | user_undo` (the stored revision `actor` enum, DATA_MODEL §4 — a Penny edit reads back `"penny"`, a manual edit `"user"`). `event` ∈ `edit | override | rotate | restore | upgrade_model | export | share_access`. Bodies of snapshots are not inlined in the list (fetch via restore preview if needed); the list is metadata + `change_summary`.
 - **Errors:** `403` (edit/view); `404`.
 
 ### 5.2 `POST /api/projections/{view_slug}/revisions/{id}/restore`
@@ -586,6 +586,8 @@ Weak/no sources → `confidence:"low"` or a labeled benchmark fallback; **always
 { "type":"bug|idea|other", "title":"…", "body":"…", "email":"optional",
   "context": { "route":"/p_8x…/edit", "app_version":"1.4.0", "model_version":"2.0.0" } }
 ```
+
+- **`title`:** required for a `bug` (it must stay triageable → `422 {"error":"title_required"}` when absent); **optional for an `idea`** — an Idea Fab suggestion is just a description, so the client omits `title` entirely.
 
 - **Redaction guarantee (PRD §22, CI-tested):** the GitHub-issue payload contains **only** non-sensitive context — `route` (with any slug stripped), `app_version`, `model_version`, the random `support_id`, and the timestamp. It **never** contains `view_slug`, any token, any resolvable projection link, or any financial field. A server-side test asserts none of these ever appear in the outbound payload — this is the product's top data-leak risk and must be impossible to regress.
 - **Behavior:** generate a random `support_id`, open a redacted GitHub issue via `GITHUB_TOKEN`/`GITHUB_REPO`, persist to `feedback` (no financial fields, no projection link).

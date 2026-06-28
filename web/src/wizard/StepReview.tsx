@@ -3,6 +3,12 @@
 // A read-back of the collected inputs before Generate. It shows NO computed
 // projection numbers (those come from the server compute on Generate, PRD §13)
 // — only the raw inputs the operator entered, plus the terms acceptance gate.
+//
+// Trade-area `basis` and the households `source` are internal enum codes; they are
+// humanized for display (basisLabel / householdsSourceLabel) so a non-finance ED
+// reads "County" / "U.S. Census" on the confirm screen, never "county"/"census_acs"
+// (#151 — keep raw enum codes off-screen).
+import { basisLabel, householdsSourceLabel } from "../components/displayLabels";
 import type { WizardState } from "./useWizardState";
 
 export function StepReview({ state }: { state: WizardState }) {
@@ -11,7 +17,7 @@ export function StepReview({ state }: { state: WizardState }) {
   return (
     <section className="wizard-step" aria-labelledby="step-review-heading">
       <h2 id="step-review-heading" className="wizard-step__heading">
-        Review
+        Review &amp; generate
       </h2>
       <p className="wizard-step__lede">
         Confirm the inputs below, then generate the projection. The numbers are
@@ -28,10 +34,10 @@ export function StepReview({ state }: { state: WizardState }) {
           <dd>{draft.city || "—"}</dd>
         </div>
         <div className="wizard-review__row">
-          <dt>Households ({draft.basis})</dt>
+          <dt>Households ({basisLabel(draft.basis)})</dt>
           <dd>
             {householdsValue ?? "—"}
-            {householdsSource ? ` (${householdsSource})` : ""}
+            {householdsSource ? ` (${householdsSourceLabel(householdsSource)})` : ""}
           </dd>
         </div>
         <div className="wizard-review__row">

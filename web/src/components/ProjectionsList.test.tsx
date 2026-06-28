@@ -7,7 +7,7 @@ import type { ProjectionListItem } from "../api/projections";
 // SLICE 2 — owner-scoped list page (PRD §19.1). Rows show name, location + basis,
 // updated, Year-1 revenue, net profit, capital required, and a recommendation
 // chip. Money is rendered VERBATIM from the server { display } (no client math).
-// Empty state is utilitarian: heading + Create + "start from example".
+// Empty state is utilitarian: heading + a single Create action.
 
 const item: ProjectionListItem = {
   view_slug: "p_8x",
@@ -25,11 +25,13 @@ const item: ProjectionListItem = {
 };
 
 describe("ProjectionsList — empty state", () => {
-  it("renders a utilitarian empty state with Create and start-from-example", () => {
+  it("renders a utilitarian empty state with a single Create action", () => {
     render(<ProjectionsList projections={[]} onCreate={() => {}} onOpen={() => {}} />);
     expect(screen.getByRole("heading", { name: /no projections yet/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /create/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /start from example/i })).toBeInTheDocument();
+    // The empty state offers ONE action — no mislabeled "Start from example"
+    // duplicate that just opened the same blank wizard (#deadcode cleanup).
+    expect(screen.queryByRole("button", { name: /start from example/i })).toBeNull();
   });
 
   it("fires onCreate when Create is clicked in the empty state", () => {

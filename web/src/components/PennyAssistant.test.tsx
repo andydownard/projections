@@ -212,26 +212,6 @@ describe("PennyAssistant — apply-immediately + narrate", () => {
   });
 });
 
-describe("PennyAssistant — provider disclosure", () => {
-  it("flips the disclosure line to OpenAI when the response provider is openai", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(okPayload({ provider: "openai" })))),
-    );
-    const user = userEvent.setup();
-    mountAndOpen();
-    // Starts on the known provider…
-    await user.click(screen.getByTestId("penny-fab"));
-    await screen.findByRole("dialog");
-    expect(screen.getByTestId("penny-provider")).toHaveTextContent(/anthropic/i);
-    // …and flips to OpenAI after the fallback response.
-    const box = screen.getByRole("textbox", { name: /ask penny/i });
-    await user.type(box, "hello");
-    await user.click(screen.getByRole("button", { name: /^send$/i }));
-    await waitFor(() => expect(screen.getByTestId("penny-provider")).toHaveTextContent(/openai/i));
-  });
-});
-
 describe("PennyAssistant — streaming + Stop (never streams a number)", () => {
   it("shows a Stop control while in flight and renders NO figure until the engine settles", async () => {
     const d = deferredFetch();

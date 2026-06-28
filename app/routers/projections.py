@@ -32,6 +32,7 @@ from starlette.background import BackgroundTask
 from app import config, narrative_provider, ratelimit
 from app.deps import hash_token, parse_if_match, token_matches
 from app.geo.client import GeoUpstreamError, static_map_bytes
+from app.jsonutil import loads_obj
 from app.narrative import (
     GroundingError,
     canonical_grounded_figures,
@@ -44,7 +45,14 @@ from app.narrative import (
 from app.packet import build_packet, render_packet_docx, render_packet_md
 from app.store import Store, get_store
 from engine import dag
-from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute, compute_annual
+from engine.compute import (
+    Assumptions,
+    DemandDrivers,
+    Inputs,
+    TradeArea,
+    compute,
+    unpinned_node_values,
+)
 from engine.model import (
     DEFAULT_OPENING_MONTH_NUMBER,
     MODEL_VERSION,
@@ -509,14 +517,7 @@ def _calculated_unpinned(inputs_d, assumptions_d, demand_d, trade_d):
     """
     inputs, assumptions, demand, trade = _build_engine_args_from_dicts(
         inputs_d, assumptions_d, demand_d, trade_d)
-    years, _s, _st, _occ = compute_annual(inputs, assumptions, demand, trade, {})
-    out = {}
-    for y in (1, 2, 3):
-        yr = years[y]
-        out[("share", y)] = D(yr.share)
-        for label, val in yr.expenses.items():
-            out[(label, y)] = D(val)
-    return out
+    return unpinned_node_values(inputs, assumptions, demand, trade)
 
 
 def _apply_override_ops(stored: dict, ops, calc):
@@ -707,10 +708,7 @@ def list_projections(
     rows = store.list_card_summaries(hash_token(owner))
     items = []
     for r in rows:
-        try:
-            summary = json.loads(r.get("summary_json") or "{}")
-        except json.JSONDecodeError:
-            summary = {}
+        summary = loads_obj(r.get("summary_json"))
         items.append({
             "view_slug": r["view_slug"],
             "name": r["name"],
@@ -746,10 +744,7 @@ def get_projection(view_slug: str, response: Response, store: Store = Depends(ge
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
-    try:
-        vm = json.loads(row.get("computed_json") or "{}")
-    except json.JSONDecodeError:
-        vm = {}
+    vm = loads_obj(row.get("computed_json"))
     stored_mv = row.get("model_version") or vm.get("model_version") or ""
     upgrade_available = bool(stored_mv) and stored_mv != MODEL_VERSION
     response.headers["ETag"] = str(row["version"])
@@ -785,10 +780,7 @@ def static_map(
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
-    try:
-        loc = json.loads(row.get("location_json") or "{}")
-    except json.JSONDecodeError:
-        loc = {}
+    loc = loads_obj(row.get("location_json"))
     lat, lng = loc.get("lat"), loc.get("lng")
     if lat is None or lng is None:
         raise HTTPException(status_code=404, detail={"error": "no_location"})
@@ -918,10 +910,7 @@ def _generate_narrative_md(vm: dict[str, Any], role: Optional[str] = None) -> st
 
 def _narrative_response(row: dict, store: Store) -> dict:
     """Assemble the GET narrative payload: stored prose + staleness + ai flag."""
-    try:
-        live_vm = json.loads(row.get("computed_json") or "{}")
-    except json.JSONDecodeError:
-        live_vm = {}
+    live_vm = loads_obj(row.get("computed_json"))
     nar = store.get_narrative(row["id"]) or {}
     body_md = nar.get("body_md") or ""
     stored_hash = nar.get("computed_hash")
@@ -982,10 +971,7 @@ def put_narrative(
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
 
     clean = sanitize_body_md(body.body_md)
-    try:
-        live_vm = json.loads(row.get("computed_json") or "{}")
-    except json.JSONDecodeError:
-        live_vm = {}
+    live_vm = loads_obj(row.get("computed_json"))
     # N4: numeric grounding is FAIL-CLOSED even for a HUMAN edit — an ungrounded
     # figure rejects the save and leaves the prior narrative untouched (the board
     # packet must never carry a hand-typed hallucinated figure, SECURITY §6.3).
@@ -1037,10 +1023,7 @@ def regenerate_narrative(
     if _ai_disabled(row):
         raise HTTPException(status_code=409, detail={"error": "ai_disabled"})
 
-    try:
-        live_vm = json.loads(row.get("computed_json") or "{}")
-    except json.JSONDecodeError:
-        live_vm = {}
+    live_vm = loads_obj(row.get("computed_json"))
 
     # Provider failover (Anthropic -> OpenAI). The local grounded builder is the
     # generator seam (also the patch point for the grounding-rejection test).
@@ -1116,10 +1099,7 @@ def export_packet(
     if not row.get("terms_accepted_at"):
         raise HTTPException(status_code=403, detail={"error": "terms_required"})
 
-    try:
-        live_vm = json.loads(row.get("computed_json") or "{}")
-    except json.JSONDecodeError:
-        live_vm = {}
+    live_vm = loads_obj(row.get("computed_json"))
     live_vm.setdefault("name", row.get("name") or "")
 
     # N11: the packet uses the CURRENT stored (possibly edited:true) sanitized
@@ -1182,17 +1162,11 @@ def apply_projection_patch(
     Returns ``(view_model, new_version, name)`` and writes ONE revision tagged
     ``actor`` (DATA_MODEL §4: the revision ``actor`` enum — user | penny | …).
     """
-    is_owner = token is not None and token_matches(token, row["owner_token_hash"])
-    is_editor = (
-        token is not None
-        and bool(row.get("edit_token_hash"))
-        and token_matches(token, row["edit_token_hash"])
-    )
-    if not (is_owner or is_editor):
+    if not (_is_owner(token, row) or _is_editor(token, row)):
         # view-only (no/invalid token) cannot mutate (SECURITY.md §2; API_SPEC §4.4).
         # A Penny mutate tool gates on capability first, but this is the real wall.
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
-    # is_owner/is_editor both imply a presented token (see checks above).
+    # _is_owner/_is_editor both imply a presented token (see checks above).
     assert token is not None
 
     # Merge the partial onto the stored source-of-truth, then recompute.
@@ -1214,10 +1188,7 @@ def apply_projection_patch(
         raise HTTPException(
             status_code=422, detail={"error": "invalid_inputs", "message": str(exc)}
         ) from exc
-    try:
-        location_d = json.loads(row.get("location_json") or "{}")
-    except json.JSONDecodeError:
-        location_d = {}
+    location_d = loads_obj(row.get("location_json"))
     _enrich_view_model(vm, location_d, trade_d)
 
     patch = {
@@ -1254,10 +1225,7 @@ def apply_projection_patch(
         row["id"], if_match, patch, revision)
     if affected == 0:
         current = store.get_projection_by_slug(row["view_slug"])
-        try:
-            cur_vm = json.loads(current["computed_json"] or "{}") if current else {}
-        except json.JSONDecodeError:
-            cur_vm = {}
+        cur_vm = loads_obj(current["computed_json"]) if current else {}
         raise HTTPException(status_code=409, detail={
             "error": "version_conflict",
             "current_version": current["version"] if current else None,
@@ -1323,27 +1291,18 @@ def preview_projection(
         # view-only (no/invalid token) cannot preview (SECURITY.md §2).
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
 
-    allowed, retry_after = ratelimit.check(
-        "preview",
-        ip=_client_ip(request),
-        token=hash_token(token) if token else None,
+    limited = _rate_limited(
+        "preview", request,
         ip_limit=_PREVIEW_IP_LIMIT,
+        token=hash_token(token) if token else None,
         token_limit=_PREVIEW_TOKEN_LIMIT,
         window_seconds=_PREVIEW_WINDOW_SECONDS,
     )
-    if not allowed:
-        return JSONResponse(
-            status_code=429,
-            content={"error": "rate_limited",
-                     "retry_after_seconds": retry_after, "scope": "ip"},
-            headers={"Retry-After": str(retry_after)},
-        )
+    if limited is not None:
+        return limited
 
     # BEFORE = the stored snapshot verbatim (no recompute on the unchanged state).
-    try:
-        before_vm = json.loads(row.get("computed_json") or "{}")
-    except json.JSONDecodeError:
-        before_vm = {}
+    before_vm = loads_obj(row.get("computed_json"))
 
     # AFTER = recompute on the merged partial. NOTHING is written.
     try:
@@ -1395,10 +1354,7 @@ def rotate_tokens(
     new_slug = secrets.token_urlsafe(16)    # ~128-bit
 
     # Re-mint role links keeping role NAMES, replacing slugs/hashes (atomic).
-    try:
-        old_roles = json.loads(row.get("role_tokens_json") or "{}")
-    except json.JSONDecodeError:
-        old_roles = {}
+    old_roles = loads_obj(row.get("role_tokens_json"))
     new_role_secrets: dict[str, str] = {}
     new_role_map: dict[str, str] = {}
     for _old_slug, role_name in old_roles.items():
@@ -1470,7 +1426,9 @@ def list_revisions(
             "id": r["id"],
             "version": r["seq"],
             "change_summary": r.get("change_summary", ""),
-            "actor": "owner",
+            # The stored actor enum (user | penny | …, DATA_MODEL §4) — defaulting
+            # to "user" only when the column is absent (older/non-SQLite rows).
+            "actor": r.get("actor") or "user",
             "event": _revision_event(r.get("change_summary", "")),
             "created_at": r["created_at"],
         }
@@ -1559,6 +1517,19 @@ def _set_status_or_conflict(store, row, if_match, status):
             "recovery": "reload | overwrite | save_as_copy"})
 
 
+def _set_status_and_respond(store, row, view_slug, response, if_match, status):
+    """Owner-only trash/restore (API_SPEC §4.8): flip status under If-Match, then
+    return the refreshed view-model envelope + new version/status. Shared by trash
+    (-> 'trashed') and restore (-> 'active') so the two never drift."""
+    _set_status_or_conflict(store, row, if_match, status)
+    current = store.get_projection_by_slug(view_slug)
+    vm = loads_obj(current["computed_json"]) if current else {}
+    new_version = if_match + 1
+    response.headers["ETag"] = str(new_version)
+    return {**vm, "view_slug": view_slug, "version": new_version,
+            "name": row["name"], "status": status}
+
+
 @router.post("/{view_slug}/trash")
 def trash_projection(
     view_slug: str,
@@ -1569,16 +1540,7 @@ def trash_projection(
 ):
     """Soft delete (API_SPEC §4.8): status -> trashed. Owner-only, If-Match required."""
     row = _require_owner(store, view_slug, authorization)
-    _set_status_or_conflict(store, row, if_match, "trashed")
-    current = store.get_projection_by_slug(view_slug)
-    try:
-        vm = json.loads(current["computed_json"] or "{}") if current else {}
-    except json.JSONDecodeError:
-        vm = {}
-    new_version = if_match + 1
-    response.headers["ETag"] = str(new_version)
-    return {**vm, "view_slug": view_slug, "version": new_version,
-            "name": row["name"], "status": "trashed"}
+    return _set_status_and_respond(store, row, view_slug, response, if_match, "trashed")
 
 
 @router.post("/{view_slug}/restore")
@@ -1591,16 +1553,7 @@ def restore_projection(
 ):
     """Restore from trash (API_SPEC §4.8): status -> active. Owner-only."""
     row = _require_owner(store, view_slug, authorization)
-    _set_status_or_conflict(store, row, if_match, "active")
-    current = store.get_projection_by_slug(view_slug)
-    try:
-        vm = json.loads(current["computed_json"] or "{}") if current else {}
-    except json.JSONDecodeError:
-        vm = {}
-    new_version = if_match + 1
-    response.headers["ETag"] = str(new_version)
-    return {**vm, "view_slug": view_slug, "version": new_version,
-            "name": row["name"], "status": "active"}
+    return _set_status_and_respond(store, row, view_slug, response, if_match, "active")
 
 
 @router.delete("/{view_slug}", status_code=204)

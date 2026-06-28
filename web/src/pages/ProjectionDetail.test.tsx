@@ -261,11 +261,30 @@ describe("ProjectionDetail — per-field change affordance (PE7, #126)", () => {
       );
       expect(patchCall).toBeTruthy();
       const opts = patchCall![1] as RequestInit;
-      expect(JSON.parse(opts.body as string)).toEqual({ inputs: { demand: { share_y1: 0.06 } } });
+      // Donor shares PATCH as a flat `inputs.share_yN` (an engine Inputs field).
+      // The old nested `inputs.demand.share_y1` shape 422'd at the real merge path
+      // (Inputs(**{demand: ...}) -> unknown kwarg), so the undo could never settle.
+      expect(JSON.parse(opts.body as string)).toEqual({ inputs: { share_y1: 0.06 } });
       expect((opts.headers as Record<string, string>)["If-Match"]).toBe("4");
     });
 
     vi.unstubAllGlobals();
+  });
+});
+
+// A subtle, keyboard-accessible "Back to projections" link returns to the owner
+// list (route "/") without a full reload.
+describe("ProjectionDetail — back-to-projections nav", () => {
+  it("renders a keyboard-accessible back link that SPA-navigates to the list", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    window.history.pushState({}, "", "/p/p_8x");
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    const back = await screen.findByTestId("back-to-projections");
+    expect(back).toHaveAttribute("href", "/");
+    expect(back).toHaveAccessibleName(/back to projections/i);
+    await user.click(back);
+    expect(window.location.pathname).toBe("/");
   });
 });
 

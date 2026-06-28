@@ -337,3 +337,85 @@ def test_proceed_case_keeps_default_breakeven_reason_and_is_consistent(design_pa
         "First month operating net turns and stays non-negative.")
     assert "downside" not in vm["reco"]["sub"].lower()
     assert_breakeven_text_consistent(vm)
+
+
+# --------------------------------------------- view-model helper unit coverage
+# These small helpers have arms the full-result path never exercises: `flags` is
+# always a dict-of-bools/dicts (so _jsonable's list/tuple + Decimal arms never
+# run), and `_row_class`'s computed fallthrough + `_milestone`'s no-reason arm
+# only occur on shapes the canonical/design fixtures don't produce. Drive them
+# directly so the engine's lone format authority is fully covered (no math).
+def test_jsonable_recurses_lists_tuples_and_floats_decimals():
+    from decimal import Decimal
+
+    from engine.viewmodel import _jsonable
+
+    out = _jsonable({"nums": [Decimal("1.5"), Decimal("2")], "pair": (Decimal("3"),),
+                     "flag": True, "name": "x"})
+    # list AND tuple recurse to lists; nested Decimals become plain floats.
+    assert out == {"nums": [1.5, 2.0], "pair": [3.0], "flag": True, "name": "x"}
+    assert all(isinstance(v, float) for v in out["nums"])
+    assert isinstance(out["pair"][0], float)
+    # passthrough for already-JSON-native scalars.
+    assert _jsonable(True) is True
+    assert _jsonable("s") == "s"
+
+
+def test_row_class_computed_fallthrough_for_derived_label():
+    from engine.viewmodel import _row_class
+
+    # A derived row (not pinnable, not pinned) classes as 'computed' — the
+    # fallthrough arm the editable/overridden rows never reach.
+    assert _row_class("Net profit", set()) == "computed"
+    # Contrast: an editable component is 'input'; a pinned one is 'overridden'.
+    assert _row_class("Payroll", set()) == "input"
+    assert _row_class("Payroll", {"Payroll"}) == "overridden"
+
+
+def test_milestone_na_without_reason_when_flag_absent():
+    from engine.viewmodel import _milestone
+
+    # Unreached milestone with NO flag entry -> bare N/A sentinel, no 'reason' key
+    # (the False arm of `if reason:`).
+    out = _milestone(None, {}, "missing_key")
+    assert out["display"] == "N/A" and out["raw"] is None
+    assert "reason" not in out
+    # With a flag present the reason is attached (the True arm).
+    assert _milestone(None, {"k": "why"}, "k")["reason"] == "why"
+
+
+def test_milestone_duration_is_singular_for_one_month():
+    from engine.viewmodel import _milestone
+
+    # opening==month -> a 1-month duration renders the singular 'month' word.
+    out = _milestone(5, {}, "k", opening_month=5)
+    assert out["duration"] == "1 month"
+    # >1 month uses the plural.
+    assert _milestone(7, {}, "k", opening_month=5)["duration"] == "3 months"
+
+
+def test_month_view_formats_reached_month_and_na_sentinel_when_none():
+    from engine.money import na_view
+    from engine.viewmodel import _month_view
+
+    # A reached project month -> dual-value {raw, display}; the "Month N" string is
+    # built here ONCE (the engine's lone format authority), never on the client (§9).
+    assert _month_view(6) == {"raw": 6, "display": "Month 6"}
+    assert _month_view(1) == {"raw": 1, "display": "Month 1"}
+    # Unreached (None) -> the explicit N/A sentinel, never a misleading 0.
+    assert _month_view(None) == na_view()
+    assert _month_view(None)["raw"] is None and _month_view(None)["display"] == "N/A"
+
+
+def test_breakeven_surfaces_all_route_through_one_month_view(canonical_result):
+    from engine.viewmodel import _month_view, to_view_model
+
+    # metrics.breakeven, the "Break-even month" KPI, and the breakEven milestone are
+    # the SAME dual-value from one helper, so the three surfaces can never disagree.
+    vm = to_view_model(canonical_result)
+    expected = _month_view(canonical_result.decision.break_even_month)
+    assert vm["metrics"]["breakeven"] == expected
+    kpi = [k for k in vm["kpis"] if k["label"] == "Break-even month"]
+    assert len(kpi) == 1 and kpi[0]["value"] == expected
+    assert vm["milestones"]["breakEven"]["raw"] == expected["raw"]
+    assert vm["milestones"]["breakEven"]["display"] == expected["display"]

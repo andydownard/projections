@@ -2,18 +2,20 @@
 //
 // A full-page route (titled "Create Projection") rather than a modal, so Spec B's
 // left-slide Penny drawer composes cleanly. One step is visible at a time with a
-// step indicator, Back/Next, and Generate on the final step; "Start from example"
-// remains available. State lives in the shared useWizardState hook (validation
-// gates Next; a future step inserts without rework). On Generate the collected
+// step indicator, Back/Next, and Generate on the final step. A subtle "Back to
+// projections" link returns to the owner list. State lives in the shared
+// useWizardState hook (validation gates Next; a future step inserts without
+// rework). On Generate the collected
 // inputs are shaped to the flat backend body and POSTed; the server computes and
 // returns the Appendix-D view-model, which renders the decision banner + KPI
 // strip + monthly cash-flow. NO client math — every figure is the server's
 // { display } string (PRD §13 / CLAUDE.md hard rule).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import type { PennyDraftApplied, PennyDraftState } from "../api/penny";
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
-import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
+import { type ViewModel, xlsxHref } from "../api/viewModel";
+import { setOwnerToken } from "../api/projections";
 import { CashflowChart } from "../components/CashflowChart";
 import { DecisionBanner } from "../components/DecisionBanner";
 import { PennyDraftAssistant } from "../components/PennyDrawer";
@@ -32,8 +34,6 @@ import { StepDonorMarket } from "../wizard/StepDonorMarket";
 import { StepCostSchedule } from "../wizard/StepCostSchedule";
 import { StepReview } from "../wizard/StepReview";
 import { useWizardState, type WizardState } from "../wizard/useWizardState";
-
-const EXAMPLE_SLUG = "example";
 
 // Human labels for the server `draft_state` field keys Penny mutates (Spec §6.2),
 // shown on each per-field FieldChange affordance in the wizard drawer.
@@ -234,7 +234,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
       const created = (await resp.json()) as ViewModel & { owner_token?: string };
       // Persist the minted owner token so the owner-scoped list (PRD §20) finds it.
       if (created.owner_token) {
-        localStorage.setItem("projections.owner_token", created.owner_token);
+        setOwnerToken(created.owner_token);
       }
       setVm(created);
     } finally {
@@ -242,16 +242,26 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
     }
   }
 
-  async function startFromExample() {
-    setBusy(true);
-    try {
-      await fetchProjection(EXAMPLE_SLUG); // warm the cache / surface fetch errors
-      const qs = aiOff ? "?ai=off" : "";
-      window.history.pushState(null, "", `/p/${EXAMPLE_SLUG}${qs}`);
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    } finally {
-      setBusy(false);
-    }
+  // Open the just-created projection's full editable surface (3-year table, evidence,
+  // trade-area map, Settings sliders) so the create → review → refine loop closes
+  // here instead of forcing a trip through Home. The owner token minted on Generate
+  // is already persisted (setOwnerToken), so /p/<slug>/edit is owner-authorized with
+  // no secret in the URL — the same path the owner list's Edit uses (#143). A modified
+  // click (new tab/window) or non-primary button falls through to the real href.
+  function openProjection(e: MouseEvent<HTMLAnchorElement>, slug: string) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    window.history.pushState(null, "", `/p/${slug}/edit`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+
+  // Subtle back-nav to the owner's projections list (route "/"). A plain left-click
+  // SPA-navigates; modified clicks (new tab/window) fall through to the real href.
+  function backToProjections(e: MouseEvent<HTMLAnchorElement>) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    window.history.pushState(null, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
   }
 
   // A polite live region kept at the SAME fragment position in BOTH the form and
@@ -316,15 +326,29 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
             milestones={vm.milestones}
           />
 
-          <a
-            className="btn"
-            role="button"
-            data-testid="download-xlsx"
-            href={xlsxHref(vm.view_slug)}
-            download
-          >
-            Download .xlsx
-          </a>
+          <div className="wizard__result-actions">
+            {/* Close the create → review → refine loop: the primary action opens the
+                full editable projection (3-year table + Settings sliders) so the ED
+                can act on a "Revise"/"Find cheaper rent" verdict without hunting the
+                Home list. The .xlsx export stays as the secondary action. */}
+            <a
+              className="btn btn--primary"
+              data-testid="open-projection"
+              href={`/p/${vm.view_slug}/edit`}
+              onClick={(e) => openProjection(e, vm.view_slug)}
+            >
+              Open full projection
+            </a>
+            <a
+              className="btn"
+              role="button"
+              data-testid="download-xlsx"
+              href={xlsxHref(vm.view_slug)}
+              download
+            >
+              Download .xlsx
+            </a>
+          </div>
           </div>
         </div>
       </>
@@ -336,6 +360,25 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
       {liveRegion}
       <div className="wizard wizard--full">
       <header className="wizard__intro">
+        {/* Subtle back-nav to the owner's projections list (route "/"). A real
+            anchor (keyboard-focusable, right-click/new-tab works); a plain left
+            click SPA-navigates so there is no full reload. */}
+        <a
+          href="/"
+          data-testid="back-to-projections"
+          onClick={backToProjections}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.25rem",
+            margin: "0 0 0.5rem",
+            fontSize: "0.8125rem",
+            color: "var(--text-muted)",
+            textDecoration: "none",
+          }}
+        >
+          <span aria-hidden="true">←</span> Back to projections
+        </a>
         <h1>Create Projection</h1>
       </header>
 
@@ -343,11 +386,10 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
 
       <form
         className="wizard__form"
-        // #149: the express form caps at 20rem (.wizard__form) which leaves the
-        // full-page wizard's step content cramped in a ~320px column inside the
-        // 44rem panel. Override component-locally (not the shared token, which the
-        // express WizardPage still relies on) so cost rows lay out 3-up and the
-        // review list uses the panel width — reading as a real full-page wizard.
+        // #149: the shared .wizard__form caps at 20rem, which leaves the full-page
+        // wizard's step content cramped in a ~320px column inside the 44rem panel.
+        // Widen it here so cost rows lay out 3-up and the review list uses the
+        // panel width — reading as a real full-page wizard.
         style={{ maxWidth: "44rem" }}
         onSubmit={(e) => {
           e.preventDefault();
@@ -393,15 +435,6 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
               Next
             </button>
           )}
-
-          <button
-            type="button"
-            className="btn"
-            disabled={busy}
-            onClick={() => void startFromExample()}
-          >
-            Start from example
-          </button>
         </div>
 
         {/* #147: state WHY the Next/Generate button is disabled, right beside it.

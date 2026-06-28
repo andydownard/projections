@@ -7,10 +7,9 @@ stored Appendix-D snapshot (never a recompute, PRD §13).
 """
 from __future__ import annotations
 
-import json
-
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+from app.jsonutil import loads_obj
 from app.store import Store, get_store
 
 router = APIRouter(prefix="/api/r", tags=["roles"])
@@ -21,10 +20,7 @@ def get_role_view(role_slug: str, response: Response, store: Store = Depends(get
     row = store.get_projection_by_role_slug(role_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
-    try:
-        vm = json.loads(row.get("computed_json") or "{}")
-    except json.JSONDecodeError:
-        vm = {}
+    vm = loads_obj(row.get("computed_json"))
     response.headers["ETag"] = str(row["version"])
     return {
         **vm,

@@ -192,3 +192,20 @@ def test_schedule_total_equals_sum_of_outflow_map():
     by_month = startup_outflows_by_month(res.inputs, Assumptions(labor_pct="0.60"),
                                          Decimal("120000"))
     assert sum(by_month.values(), Decimal("0")) == D(str(res.startup_total))
+
+
+def test_occupancy_requires_annual_or_per_sqft():
+    # Neither occupancy_annual nor rent_per_sqft -> a clean ValueError (the §4
+    # occupancy resolver has no rent to resolve), never an unguarded crash later.
+    import pytest
+
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="No Rent", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", source_of_funds="300000",
+        # occupancy_annual and rent_per_sqft both omitted (default None)
+    )
+    with pytest.raises(ValueError, match="occupancy requires"):
+        compute(inputs, Assumptions(), DemandDrivers(),
+                TradeArea(basis="city", households="31798"))

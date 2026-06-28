@@ -1,7 +1,7 @@
 // web/src/components/SettingsTab.test.tsx — SLICE 4: Settings & assumptions tab.
 //
 // Sliders for the cost %s (labor/marketing/supplies/card/payroll-tax/salvage),
-// occupancy, escalator, and the three demand shares — seeded from the server
+// escalator, and the three demand shares — seeded from the server
 // `settings` view-model ({ raw, display }) and rendered with the server's display
 // string (PRD §13: no client math). Moving a slider debounces a PATCH that
 // carries If-Match (API_SPEC §1.3). The bar shows Saving… / Saved automatically,
@@ -24,7 +24,6 @@ function settingsViewModel() {
     payrollTaxPct: sv(0.075, "7.5%"),
     salvagePct: sv(0.008, "0.8%"),
     escalator: sv(0.03, "3%"),
-    occupancyAnnual: sv(150000, "$150,000"),
     shareY1: sv(0.06, "6%"),
     shareY2: sv(0.08, "8%"),
     shareY3: sv(0.1, "10%"),
@@ -68,7 +67,7 @@ describe("SettingsTab — renders the server settings", () => {
   it("renders the server display string verbatim (no client math)", () => {
     renderTab();
     expect(screen.getByText("60%")).toBeInTheDocument();
-    expect(screen.getByText("$150,000")).toBeInTheDocument();
+    expect(screen.getByText("6%")).toBeInTheDocument();
   });
 
   it("starts in the saved state", () => {
@@ -90,6 +89,22 @@ describe("SettingsTab — debounced autosave (API_SPEC §1.3/§4.4)", () => {
     const call = onPatch.mock.calls[0][0];
     expect(call.version).toBe(7);
     expect(call.body.assumptions.labor_pct).toBeCloseTo(0.45);
+  });
+
+  it("PATCHes a donor share as a flat inputs.share_yN (the shape the merge accepts)", async () => {
+    // Regression: shares used to PATCH as nested `inputs.demand.share_yN`, which the
+    // server merge rejected with 422 (Inputs(**{demand: ...}) -> unknown kwarg), so
+    // the autosave could never settle. `share_yN` is an engine Inputs field, so the
+    // body must be a FLAT `inputs.share_yN` — assert the exact shape, not just a key.
+    const onPatch = vi.fn().mockResolvedValue({ version: 8, viewModel: {} });
+    renderTab({ onPatch });
+
+    fireEvent.change(screen.getByLabelText(/year 1 share/i), { target: { value: "0.12" } });
+    await vi.advanceTimersByTimeAsync(20);
+    await waitFor(() => expect(onPatch).toHaveBeenCalledTimes(1));
+    const call = onPatch.mock.calls[0][0];
+    expect(call.version).toBe(7);
+    expect(call.body).toEqual({ inputs: { share_y1: 0.12 } });
   });
 
   it("collapses rapid edits into one PATCH and shows Saved automatically after", async () => {

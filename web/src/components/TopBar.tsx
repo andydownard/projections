@@ -12,8 +12,8 @@
 // comes verbatim from the server (computed_json.model_version), never derived on
 // the client, and only renders once a projection is loaded (no permanent
 // "model —" placeholder). Feedback redaction is server-enforced; this component
-// reuses FeedbackModal unchanged and never sends a view_slug/token/financial
-// field (PRD §22).
+// opens FeedbackModal in idea mode (a description, no title) and never sends a
+// view_slug/token/financial field (PRD §22).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { submitFeedback } from "../api/feedback";
@@ -108,35 +108,26 @@ export function TopBar({ modelVersion, saveState = "idle", children }: TopBarPro
         <button
           ref={triggerRef}
           type="button"
+          className="idea-fab"
           data-testid="idea-fab"
           aria-label="Send feedback"
           aria-haspopup="dialog"
           aria-expanded={showFeedback}
           onClick={() => setShowFeedback(true)}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: "36px",
-            height: "36px",
-            border: "1px solid var(--line)",
-            borderRadius: "8px",
-            background: "var(--surface)",
-            color: "var(--brand-primary)",
-            cursor: "pointer",
-          }}
         >
           <LightbulbIcon />
+          <span aria-hidden="true">Idea</span>
         </button>
       </div>
 
       {showFeedback && (
         <FeedbackModal
+          kind="idea"
           onClose={closeFeedback}
           onSubmit={async (input) => {
             const res = await submitFeedback({
-              title: input.title,
               description: input.description,
+              email: input.email,
               type: "idea",
               route: window.location.pathname,
             });

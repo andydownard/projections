@@ -10,11 +10,11 @@ import { expect, test } from "@playwright/test";
 // shipped (the always-present "idea fab" in the shared top bar), so this runs for
 // real against the booted app.
 test.describe("feedback redaction", () => {
-  test("submitting feedback shows a support_id and no projection link", async ({ page }) => {
+  test("submitting an idea shows a support_id and no projection link", async ({ page }) => {
     await page.goto("/p/example");
     // The idea-fab in the shared top bar opens the FeedbackModal on every route.
     await page.getByTestId("idea-fab").click();
-    await page.getByLabel(/title/i).fill("Break-even marker off by one");
+    // An idea is just a description — no title field on this form.
     await page.getByLabel(/description/i).fill("Banner says month 5 but chart marks 6.");
     // Exact "Send" so we don't also match the "Send feedback" idea-fab trigger.
     await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -27,9 +27,13 @@ test.describe("feedback redaction", () => {
     await expect(success).not.toContainText("view_slug");
   });
 
-  test("the modal warns against pasting financial details", async ({ page }) => {
+  test("the idea form is a simple suggestion (no title, no warning)", async ({ page }) => {
     await page.goto("/p/example");
     await page.getByTestId("idea-fab").click();
-    await expect(page.getByText(/don.t (include|paste) sensitive financial/i)).toBeVisible();
+    const dialog = page.getByRole("dialog", { name: /share an idea/i });
+    await expect(dialog.getByLabel(/description/i)).toBeVisible();
+    // No title field and no financial-warning copy — redaction is server-enforced.
+    await expect(dialog.getByLabel("Title")).toHaveCount(0);
+    await expect(dialog.getByText(/sensitive financial/i)).toHaveCount(0);
   });
 });

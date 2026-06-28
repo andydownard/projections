@@ -62,6 +62,27 @@ def test_feedback_route_is_slug_stripped_when_persisted(client):
     assert "edit-secret" not in ctx
 
 
+def test_idea_needs_no_title(client):
+    # The Idea Fab suggestion flow sends a description only — no title. The server
+    # accepts it (an idea is just a thought, not a triage ticket).
+    r = client.post(
+        "/api/feedback",
+        json={"type": "idea", "description": "Add a dark mode."},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["support_id"].startswith("SUP-")
+
+
+def test_bug_still_requires_a_title(client):
+    # A bug report without a title is still rejected so it stays triageable.
+    r = client.post(
+        "/api/feedback",
+        json={"type": "bug", "description": "something is broken"},
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"]["error"] == "title_required"
+
+
 def test_feedback_persists_no_financial_fields(client):
     r = client.post(
         "/api/feedback",

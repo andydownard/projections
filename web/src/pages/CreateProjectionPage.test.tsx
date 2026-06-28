@@ -6,9 +6,10 @@ import { CreateProjectionPage } from "./CreateProjectionPage";
 import type { ViewModel } from "../api/viewModel";
 
 // W2 — the full-page Create-Projection wizard shell: one step at a time, a step
-// indicator, validation gating Next, Generate on the final step, Start-from-example,
-// and households empty-until-resolved (§4). NO client math — every figure on the
-// result screen is the server's { display } string (PRD §13).
+// indicator, validation gating Next, Generate on the final step, a subtle
+// "Back to projections" link, and households empty-until-resolved (§4). NO client
+// math — every figure on the result screen is the server's { display } string
+// (PRD §13).
 
 const VM: ViewModel = {
   reco: { tag: "proceed", headline: "Proceed.", sub: "Capital is within reach." },
@@ -66,11 +67,25 @@ afterEach(() => {
 });
 
 describe("CreateProjectionPage shell", () => {
-  it("renders the full-page title + a step indicator + Start-from-example", () => {
+  it("renders the full-page title + a step indicator (no 'Start from example')", () => {
     render(<CreateProjectionPage />);
     expect(screen.getByRole("heading", { name: /create projection/i })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: /create projection steps/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /start from example/i })).toBeInTheDocument();
+    // The dead-end "Start from example" affordance was removed entirely.
+    expect(screen.queryByRole("button", { name: /start from example/i })).toBeNull();
+  });
+
+  it("offers a subtle, keyboard-accessible 'Back to projections' link to the list (route '/')", async () => {
+    const user = userEvent.setup();
+    window.history.pushState(null, "", "/wizard");
+    render(<CreateProjectionPage />);
+    const back = screen.getByTestId("back-to-projections");
+    expect(back).toHaveAttribute("href", "/");
+    expect(back).toHaveAccessibleName(/back to projections/i);
+    // A plain left-click SPA-navigates to the list route (no full reload).
+    await user.click(back);
+    expect(window.location.pathname).toBe("/");
+    window.history.pushState(null, "", "/");
   });
 
   it("gates Next on the Store step until a name is entered", async () => {
@@ -187,14 +202,14 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
     // 3. Donor market (shares pre-seeded; Back/Next works)
-    expect(screen.getByRole("heading", { name: /donor market/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /set donor shares/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^back$/i }));
     expect(screen.getByRole("heading", { name: /trade area/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
     // 4. Cost schedule
-    expect(screen.getByRole("heading", { name: /cost schedule/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /plan your costs/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
     // 5. Review -> accept terms (explicit, #141/PRD §21) -> Generate
@@ -219,6 +234,44 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     // result screen renders the server display string verbatim (no client math)
     const kpis = within(screen.getByTestId("kpi-strip"));
     expect(kpis.getByText("$426,911")).toBeInTheDocument();
+  });
+});
+
+// The post-Generate result must offer a way INTO the full editable projection so
+// the create → review → refine loop closes here (act on a "Revise"/"Find cheaper
+// rent" verdict) instead of routing through Home. The link targets the owner-
+// authorized edit surface (/p/<slug>/edit) and SPA-navigates (no full reload).
+describe("CreateProjectionPage — open full projection link (refine loop)", () => {
+  async function stepToResult(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText(/store name/i), "House of Hope");
+    await user.type(screen.getByRole("combobox", { name: /store address/i }), "Dallas");
+    await user.click(await screen.findByRole("option", { name: /Dallas, TX/ }));
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+    await waitFor(() =>
+      expect((screen.getByLabelText(/households/i) as HTMLInputElement).value).toBe("512000"),
+    );
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> cost schedule
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> review
+    await user.click(screen.getByRole("checkbox", { name: /planning estimates/i }));
+    await user.click(screen.getByRole("button", { name: /generate/i }));
+    await waitFor(() => expect(screen.getByTestId("decision-banner")).toBeInTheDocument());
+  }
+
+  it("links the result to the editable full projection at /p/<slug>/edit", async () => {
+    window.history.pushState(null, "", "/wizard");
+    wireFetch({});
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToResult(user);
+
+    const open = screen.getByTestId("open-projection");
+    // The real href is the owner-authorized edit surface (works for new tab / right-click).
+    expect(open).toHaveAttribute("href", "/p/p_new/edit");
+    // A plain left-click SPA-navigates (no full reload) to that route.
+    await user.click(open);
+    expect(window.location.pathname).toBe("/p/p_new/edit");
+    window.history.pushState(null, "", "/");
   });
 });
 

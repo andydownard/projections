@@ -27,6 +27,11 @@ _RECO_HEADLINES = {
         "Occupancy is the binding constraint on viability.",
     ),
     "raise_cash": ("Raise cash.", "Capital required exceeds your committed funds."),
+    # RESERVED (documented enum, PRD reco tags): `engine.decision._recommend` does
+    # NOT currently emit "delay" — no opening-month cash-infeasibility branch exists
+    # yet. Kept as a forward-compatible contract value so the client enum->color map
+    # stays complete; if a producing branch is added it MUST land with a RED test
+    # that asserts reco_tag == "delay" before this headline is treated as live.
     "delay": ("Delay.", "The chosen opening month is cash-infeasible given the ramp."),
     "do_not_proceed": (
         "Do not proceed.",
@@ -58,6 +63,16 @@ def _pct_or_na(value):
     return na_view() if value is None else pct_view(value)
 
 
+def _month_view(month):
+    """A project-month value as ``{raw, display}`` ("Month 6"), or N/A when unreached.
+
+    The engine is the single formatting authority, so the "Month N" display string is
+    built here once and reused by every break-even / milestone surface — never copied
+    inline and never re-derived on the client (§9).
+    """
+    return na_view() if month is None else {"raw": month, "display": f"Month {month}"}
+
+
 def _milestone(month, flags, flag_key, opening_month=None):
     """A timeline milestone as ``{raw, display}`` (§8 / #117).
 
@@ -75,7 +90,7 @@ def _milestone(month, flags, flag_key, opening_month=None):
         if reason:
             out["reason"] = reason
         return out
-    out = {"raw": month, "display": f"Month {month}"}
+    out = _month_view(month)
     if opening_month is not None:
         n = month - opening_month + 1
         out["duration"] = f"{n} {'month' if n == 1 else 'months'}"
@@ -116,9 +131,7 @@ def to_view_model(result):
     metrics = {
         "capital": money_view(dec.startup_capital_required),
         "cashGap": money_view(dec.first_year_cash_gap),
-        "breakeven": ({"raw": dec.break_even_month,
-                       "display": f"Month {dec.break_even_month}"}
-                      if dec.break_even_month is not None else na_view()),
+        "breakeven": _month_view(dec.break_even_month),
         "reasonCapital": dec.reco_reasons.get("capital",
             "Worst-case cumulative cash trough (already includes one-time startup) plus reserve."),
         "reasonGap": dec.reco_reasons.get("gap",
@@ -147,8 +160,7 @@ def to_view_model(result):
         {"label": "Capital required", "value": money_view(dec.startup_capital_required),
          "sub": "incl. reserve", "color": "text"},
         {"label": "Break-even month",
-         "value": ({"raw": dec.break_even_month, "display": f"Month {dec.break_even_month}"}
-                   if dec.break_even_month is not None else na_view()),
+         "value": _month_view(dec.break_even_month),
          "sub": "operating net", "color": "text"},
         {"label": "Payback period", "value": milestones["payback"],
          "sub": "to recover startup", "color": "text"},
@@ -268,16 +280,9 @@ def _unpinned_annual(result):
     """
     if not result.overrides_applied:
         return {}
-    from engine.compute import compute_annual
-    years, _startup, _st, _occ = compute_annual(
-        result.inputs, result.assumptions, None, result.trade_area, {})
-    out = {}
-    for y in (1, 2, 3):
-        yr = years[y]
-        out[("share", y)] = yr.share
-        for label, val in yr.expenses.items():
-            out[(label, y)] = val
-    return out
+    from engine.compute import unpinned_node_values
+    return unpinned_node_values(
+        result.inputs, result.assumptions, None, result.trade_area)
 
 
 def _driver_row(label, annual, attr, group, pct=False, num=False, computed=False):

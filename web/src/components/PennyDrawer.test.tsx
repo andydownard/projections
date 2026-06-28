@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("PennyDrawer — collapsed FAB", () => {
-  it("renders a bottom-left FAB with dialog a11y semantics and the avatar", () => {
+  it("renders an upper-left FAB with dialog a11y semantics and the avatar", () => {
     render(<PennyDrawer />);
     const fab = screen.getByTestId("penny-fab");
     expect(fab).toHaveAttribute("aria-haspopup", "dialog");
@@ -74,15 +74,18 @@ describe("PennyDrawer — collapsed FAB", () => {
 });
 
 describe("PennyDrawer — open/close + focus management", () => {
-  it("moves focus into the drawer on open and back to the FAB on close", async () => {
+  it("moves focus into the drawer on open and back to the FAB on close (FAB toggle)", async () => {
     const user = userEvent.setup();
     render(<PennyDrawer />);
     const fab = screen.getByTestId("penny-fab");
     await user.click(fab);
-    const closeBtn = await screen.findByRole("button", { name: /close penny/i });
-    await waitFor(() => expect(closeBtn).toHaveFocus());
+    // Focus moves INTO the drawer — the dialog itself is the focus anchor (there is
+    // no header close button; closing is Esc / scrim / the FAB toggle, spec §1).
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(dialog).toHaveFocus());
 
-    await user.click(closeBtn);
+    // Re-clicking the FAB toggles the drawer closed and restores focus to the FAB.
+    await user.click(fab);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(fab).toHaveFocus();
   });
@@ -130,12 +133,18 @@ describe("PennyDrawer — body + composer shell", () => {
     expect(screen.getByTestId("custom-composer")).toBeInTheDocument();
   });
 
-  it("shows the actual provider on the disclosure line", async () => {
+  it("has a de-crufted header: just the avatar + name (no provider line, info, New chat or close)", async () => {
     const user = userEvent.setup();
-    render(<PennyDrawer provider="openai" />);
+    render(<PennyDrawer />);
     await user.click(screen.getByTestId("penny-fab"));
     await screen.findByRole("dialog");
-    expect(screen.getByTestId("penny-provider")).toHaveTextContent(/openai/i);
+    // The removed cruft is gone…
+    expect(screen.queryByTestId("penny-provider")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /about penny/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /new chat/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /close penny/i })).not.toBeInTheDocument();
+    // …leaving just the avatar + the name "Penny".
+    expect(screen.getByRole("heading", { name: "Penny" })).toBeInTheDocument();
   });
 });
 
@@ -178,7 +187,8 @@ describe("PennyDrawer — mobile-375 sheet & a11y (PE12, #131)", () => {
     await screen.findByRole("dialog");
     expect(document.body.style.overflow).toBe("hidden");
 
-    await user.click(screen.getByRole("button", { name: /close penny/i }));
+    // Esc closes (no header close button); body scroll is restored.
+    await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(document.body.style.overflow).not.toBe("hidden");
   });
@@ -192,37 +202,13 @@ describe("PennyDrawer — mobile-375 sheet & a11y (PE12, #131)", () => {
     expect(document.body.style.overflow).not.toBe("hidden");
   });
 
-  it("gives the sheet header controls a 44px touch target on the mobile sheet", async () => {
+  it("closes on a scrim tap (modal sheet) and is never a dead-end", async () => {
     const user = userEvent.setup();
     render(<PennyDrawer />);
     await user.click(screen.getByTestId("penny-fab"));
     await screen.findByRole("dialog");
-    expect(screen.getByRole("button", { name: /close penny/i })).toHaveStyle({
-      minWidth: "44px",
-      minHeight: "44px",
-    });
-    expect(screen.getByRole("button", { name: /about penny/i })).toHaveStyle({
-      minWidth: "44px",
-      minHeight: "44px",
-    });
-  });
-
-  it("makes the suggestion chips horizontally scrollable (not wrapped) on the mobile sheet", async () => {
-    const user = userEvent.setup();
-    render(<PennyDrawer />);
-    await user.click(screen.getByTestId("penny-fab"));
-    await screen.findByRole("dialog");
-    const chips = screen.getByTestId("penny-chips");
-    expect(chips).toHaveStyle({ flexWrap: "nowrap", overflowX: "auto" });
-  });
-
-  it("wraps the chips on the desktop panel (no horizontal scroll)", async () => {
-    stubMatchMedia({ "(min-width: 1180px)": true });
-    const user = userEvent.setup();
-    render(<PennyDrawer />);
-    await user.click(screen.getByTestId("penny-fab"));
-    await screen.findByRole("dialog");
-    expect(screen.getByTestId("penny-chips")).toHaveStyle({ flexWrap: "wrap" });
+    await user.click(screen.getByTestId("penny-scrim"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("gives the composer input and send a 44px touch target on the mobile sheet", async () => {
@@ -236,12 +222,53 @@ describe("PennyDrawer — mobile-375 sheet & a11y (PE12, #131)", () => {
     expect(screen.getByRole("button", { name: /send/i })).toHaveStyle({ minHeight: "44px" });
   });
 
-  it("keeps the collapsed FAB a ≥44px touch target inset bottom-left (clear of the right scrollbar)", () => {
+  it("keeps the collapsed FAB a ≥44px touch target flush to the upper-left edge", () => {
     render(<PennyDrawer />);
     const fab = screen.getByTestId("penny-fab");
-    // 48px pill ≥ the 44px minimum, anchored bottom-LEFT so it never sits over the
-    // table's right scrollbar / primary actions (spec §5.1).
-    expect(fab).toHaveStyle({ height: "48px", position: "fixed" });
+    // 48px pill ≥ the 44px minimum, anchored UPPER-LEFT and flush to the left edge
+    // (left: 0), below the top bar so it never overlaps the brand/home link.
+    expect(fab).toHaveStyle({ height: "48px", position: "fixed", left: "0px", top: "4rem" });
+  });
+});
+
+describe("PennyDrawer — non-obscuring push (spec §10)", () => {
+  it("publishes body[data-penny-open] on the wide non-modal panel and clears it on close", async () => {
+    stubMatchMedia({ "(min-width: 1180px)": true });
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    expect(document.body).not.toHaveAttribute("data-penny-open");
+
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    // tokens.css insets .app__main to the right of the 380px drawer when this is set.
+    expect(document.body).toHaveAttribute("data-penny-open", "true");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(document.body).not.toHaveAttribute("data-penny-open");
+  });
+
+  it("does NOT push the page on the modal mobile sheet (it covers the page instead)", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    expect(document.body).not.toHaveAttribute("data-penny-open");
+  });
+});
+
+describe("PennyDrawer — composer (paper-airplane send)", () => {
+  it("sends with a paper-airplane button labelled Send and a roomy multiline input", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    const input = screen.getByRole("textbox", { name: /ask penny/i });
+    // Roomy, multi-line input (≥2 rows).
+    expect(Number(input.getAttribute("rows"))).toBeGreaterThanOrEqual(2);
+    // The send affordance is an icon button with an accessible name (not text).
+    const send = screen.getByRole("button", { name: /^send$/i });
+    expect(within(send).queryByRole("img")).not.toBeInTheDocument(); // svg is aria-hidden
   });
 });
 

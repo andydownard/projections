@@ -10,7 +10,7 @@ export function StepCostSchedule({ state }: { state: WizardState }) {
   return (
     <section className="wizard-step" aria-labelledby="step-cost-heading">
       <h2 id="step-cost-heading" className="wizard-step__heading">
-        Cost schedule
+        Plan your costs
       </h2>
       <p className="wizard-step__lede">
         When does the store open, and what are the timed startup costs? Pre-opening

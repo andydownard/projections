@@ -55,9 +55,8 @@ test.describe("happy path: create -> decision -> milestones -> export -> reopen"
   });
 
   test("reopen by view_slug shows identical server numbers (no client math)", async ({ page }) => {
-    // "Start from example" opens the seeded projection at its view_slug route.
-    await page.goto("/wizard");
-    await page.getByRole("button", { name: /start from example/i }).click();
+    // Open the seeded `example` projection directly at its view_slug route.
+    await page.goto("/p/example");
     await expect(page).toHaveURL(/\/p\/example/);
 
     const revenue = page.getByTestId("kpi-revenue");

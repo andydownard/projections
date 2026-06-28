@@ -1,9 +1,9 @@
 // web/src/components/PennyDrawer.tsx — Penny LEFT slide-out drawer shell (PE1).
 //
-// This is the SHELL only: the collapsed FAB, the fly-in panel (header + body slot
-// + composer slot), and the AI-disabled fallback. NO backend is wired here — there
-// are no `/penny` calls, no streaming, no mutation. PE6/PE8 mount this into the
-// detail page / wizard and inject the live transcript + composer; this file just
+// This is the SHELL only: the collapsed FAB, the fly-in panel (a de-cruft header +
+// body slot + composer slot), and the AI-disabled fallback. NO backend is wired here
+// — there are no `/penny` calls, no streaming, no mutation. PE6/PE8 mount this into
+// the detail page / wizard and inject the live transcript + composer; this file just
 // builds the seams (spec §1, §5, §14, §15).
 //
 // Invariants honored here (CLAUDE.md / spec):
@@ -17,6 +17,16 @@
 //     additive UI.
 //   - Keyboard-first + not-color-alone: the FAB carries a text label; the muted state
 //     is announced in text ("off" + "Settings"), never by color alone.
+//
+// Header is intentionally minimal — just the avatar + "Penny". There is NO provider
+// disclosure line, NO info popover, NO "New chat" and NO "×" close button. Closing is
+// never a dead-end: Esc closes, clicking the scrim closes (modal sheet), and
+// re-clicking the Penny FAB toggles the drawer shut.
+//
+// Non-obscuring layout (spec §10): on a wide (≥1180px) non-modal screen the open
+// panel publishes `data-penny-open` on <body>; tokens.css insets the page main column
+// to the right of the 380px drawer so page content is PUSHED, never overlaid (the
+// center stays interactive). Below 1180px it is a modal full-screen sheet.
 import {
   useCallback,
   useEffect,
@@ -29,7 +39,7 @@ import {
 } from "react";
 
 import { FieldChange } from "./FieldChange";
-import { PennyTranscript, type PennyTurn } from "./PennyTranscript";
+import { PENNY_MESSAGE_FONT_SIZE, PennyTranscript, type PennyTurn } from "./PennyTranscript";
 import { ProposalUpload } from "./ProposalUpload";
 import { useCoexistenceModal, useSidePanel, Z } from "./sidePanels";
 import {
@@ -55,16 +65,12 @@ export interface PennyDrawerProps {
   settingsHref?: string;
   /** SPA-nav hook: when provided, the muted FAB calls this instead of hard-navigating. */
   onOpenSettings?: () => void;
-  /** The ACTUAL provider used, surfaced on the header disclosure line (spec §8). */
-  provider?: PennyProvider;
   /** Avatar asset (served statically from web/public). */
   avatarSrc?: string;
   /** Body content (the transcript). Defaults to an empty PennyTranscript shell. */
   children?: ReactNode;
   /** Composer override. Defaults to the built-in composer shell. */
   composer?: ReactNode;
-  /** "New chat" affordance hook (shell no-op by default). */
-  onNewChat?: () => void;
   /** Controlled open state (optional). Uncontrolled when omitted. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -72,9 +78,21 @@ export interface PennyDrawerProps {
 
 const BRAND = "#35644f";
 
+/** The desktop (non-modal) panel width — kept in sync with the page push-inset in
+ *  tokens.css (`body[data-penny-open] .app__main`) so the drawer never overlays page
+ *  content on wide screens (spec §10). */
+const PANEL_WIDTH = 380;
+
 /** Comfortable touch target for the mobile full-screen sheet's sticky controls
- *  (header + composer), per the PE12 mobile-375 / a11y pass (issue #131, spec §5). */
+ *  (composer), per the PE12 mobile-375 / a11y pass (issue #131, spec §5). */
 const TOUCH_TARGET = 44;
+
+/** The collapsed FAB is anchored to the UPPER-LEFT, flush against the left edge.
+ *  This top inset clears the sticky top bar (min-height 56px, z-index 20) so the
+ *  FAB — which renders above the bar — never sits over the brand / home link. The
+ *  drawer panel itself is anchored to the very top (`top: 0`) and slides out from
+ *  the left (`translateX(-100%)→0`). */
+const FAB_TOP = "4rem";
 
 /** Safe matchMedia probe — jsdom and SSR have no matchMedia; default to `fallback`. */
 function mediaMatches(query: string, fallback: boolean): boolean {
@@ -117,7 +135,8 @@ function PennyAvatar({ src, size }: { src: string; size: number }) {
   );
 }
 
-function CloseIcon() {
+/** Paper-airplane send glyph (decorative — the button carries an aria-label). */
+function SendIcon() {
   return (
     <svg
       width="18"
@@ -127,10 +146,12 @@ function CloseIcon() {
       stroke="currentColor"
       strokeWidth="2"
       strokeLinecap="round"
+      strokeLinejoin="round"
       aria-hidden="true"
       focusable="false"
     >
-      <path d="M6 6l12 12M18 6L6 18" />
+      <path d="M22 2L11 13" />
+      <path d="M22 2l-7 20-4-9-9-4 20-7z" />
     </svg>
   );
 }
@@ -143,37 +164,26 @@ interface PennyPanelProps {
    *  so opening Penny never steals an open sibling's focus (spec §10). */
   autoFocus: boolean;
   reducedMotion: boolean;
-  provider?: PennyProvider;
   avatarSrc: string;
   body: ReactNode;
   composer: ReactNode;
   onClose: () => void;
-  onNewChat?: () => void;
 }
 
-const PROVIDER_LABEL: Record<PennyProvider, string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-};
-
 // The fly-in panel. Mounts fresh on each open so the enter animation replays and
-// focus lands on the close button every time.
+// focus lands inside the dialog every time.
 function PennyPanel({
   labelId,
   modal,
   autoFocus,
   reducedMotion,
-  provider,
   avatarSrc,
   body,
   composer,
   onClose,
-  onNewChat,
 }: PennyPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const closeRef = useRef<HTMLButtonElement>(null);
   const [entered, setEntered] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
   // Captured once at mount: closing a coexisting sibling later must not yank focus.
   const autoFocusOnMount = useRef(autoFocus);
 
@@ -187,11 +197,13 @@ function PennyPanel({
     return () => cancelAnimationFrame(raf);
   }, [reducedMotion]);
 
-  // Focus the close button on open (focus moves into the drawer) — UNLESS the
-  // coordinator suppressed it because a sibling panel is already open beside it on
-  // the desktop (no focus steal, exactly one focus ring; spec §10).
+  // Focus moves INTO the drawer on open (the dialog itself, which is focusable via
+  // tabIndex=-1) — UNLESS the coordinator suppressed it because a sibling panel is
+  // already open beside it on the desktop (no focus steal, one focus ring; spec §10).
+  // There is no header close button to land on; the dialog is the focus anchor and
+  // Esc / scrim / the FAB toggle all close without a dead-end (spec §1).
   useEffect(() => {
-    if (autoFocusOnMount.current) closeRef.current?.focus();
+    if (autoFocusOnMount.current) panelRef.current?.focus();
   }, []);
 
   // Esc closes from anywhere within the drawer; parent restores focus to the FAB.
@@ -215,6 +227,18 @@ function PennyPanel({
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prevOverflow;
+    };
+  }, [modal]);
+
+  // Non-obscuring push (spec §10): on the wide (non-modal) desktop, publish
+  // `data-penny-open` on <body> so tokens.css insets the page main column to the
+  // RIGHT of the drawer — page content is pushed, never overlaid. The modal sheet
+  // covers the page (content behind it is fine), so it sets nothing.
+  useEffect(() => {
+    if (modal || typeof document === "undefined") return;
+    document.body.setAttribute("data-penny-open", "true");
+    return () => {
+      document.body.removeAttribute("data-penny-open");
     };
   }, [modal]);
 
@@ -250,7 +274,7 @@ function PennyPanel({
     zIndex: Z.pennyPanel,
     display: "flex",
     flexDirection: "column",
-    width: modal ? "100%" : "380px",
+    width: modal ? "100%" : `${PANEL_WIDTH}px`,
     maxWidth: "100vw",
     // Full-screen sheet uses the DYNAMIC viewport height so the composer stays above
     // the on-screen keyboard on mobile (100dvh tracks the shrunken visual viewport).
@@ -261,17 +285,7 @@ function PennyPanel({
     boxShadow: "0 0 24px rgba(0,0,0,0.18)",
     transform: entered ? "translateX(0)" : "translateX(-100%)",
     transition: reducedMotion ? "none" : "transform 240ms ease",
-  };
-
-  // On the mobile full-screen sheet the sticky header/close controls grow to a
-  // comfortable 44px touch target; the dense desktop panel keeps the compact 32px.
-  const controlSize = modal ? TOUCH_TARGET : 32;
-  const squareControlStyle: CSSProperties = {
-    ...iconBtnStyle,
-    width: controlSize,
-    height: controlSize,
-    minWidth: controlSize,
-    minHeight: controlSize,
+    outline: "none",
   };
 
   return (
@@ -298,10 +312,12 @@ function PennyPanel({
         aria-labelledby={labelId}
         data-reduced-motion={reducedMotion}
         data-modal={modal}
+        tabIndex={-1}
         onKeyDown={onTrapKeyDown}
         style={panelStyle}
       >
-        {/* Header: avatar + name + provider disclosure + info popover + New chat + close. */}
+        {/* Header: just the avatar + name. No provider line, info, New chat or close
+            — closing is Esc / scrim / the FAB toggle (spec §1). */}
         <header
           style={{
             display: "flex",
@@ -312,72 +328,10 @@ function PennyPanel({
           }}
         >
           <PennyAvatar src={avatarSrc} size={32} />
-          <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-            <h2 id={labelId} style={{ margin: 0, fontSize: "1rem", lineHeight: 1.2 }}>
-              Penny
-            </h2>
-            <p
-              data-testid="penny-provider"
-              style={{ margin: 0, fontSize: "0.6875rem", color: "var(--text-muted, #666)" }}
-            >
-              {provider
-                ? `Powered by ${PROVIDER_LABEL[provider]}`
-                : "Powered by your configured AI provider"}
-            </p>
-          </div>
-          <button
-            type="button"
-            aria-label="About Penny"
-            aria-haspopup="dialog"
-            aria-expanded={infoOpen}
-            onClick={() => setInfoOpen((v) => !v)}
-            style={squareControlStyle}
-          >
-            <span aria-hidden="true" style={{ fontWeight: 700 }}>
-              i
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={onNewChat}
-            style={{
-              ...squareControlStyle,
-              width: "auto",
-              minWidth: 0,
-              padding: "0 0.5rem",
-              fontSize: "0.8125rem",
-            }}
-          >
-            New chat
-          </button>
-          <button
-            ref={closeRef}
-            type="button"
-            aria-label="Close Penny"
-            onClick={onClose}
-            style={squareControlStyle}
-          >
-            <CloseIcon />
-          </button>
+          <h2 id={labelId} style={{ margin: 0, fontSize: "1rem", lineHeight: 1.2 }}>
+            Penny
+          </h2>
         </header>
-
-        {infoOpen && (
-          <div
-            data-testid="penny-info"
-            role="note"
-            style={{
-              padding: "0.5rem 1rem",
-              fontSize: "0.75rem",
-              color: "var(--text-muted, #666)",
-              borderBottom: "1px solid var(--line, #e2e2e2)",
-              background: "var(--surface-alt, #f7f7f5)",
-            }}
-          >
-            Penny answers and applies changes through the same save path you use — every
-            edit is undoable. She falls back to a second provider if needed, and you can
-            turn her off in Settings.
-          </div>
-        )}
 
         {/* Body slot (the transcript). */}
         {body}
@@ -389,56 +343,47 @@ function PennyPanel({
   );
 }
 
-const iconBtnStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: "32px",
-  height: "32px",
-  border: "1px solid var(--line, #e2e2e2)",
-  borderRadius: "8px",
-  background: "var(--surface, #fff)",
-  color: "var(--text, #1a1a1a)",
-  cursor: "pointer",
-  flex: "0 0 auto",
-};
-
-// Default composer shell — multiline input + send + suggestion chips. No backend.
+// Default composer shell — a comfortable multiline input + a paper-airplane Send.
+// No backend: Enter/Send are no-ops here (the live composers wire the real send),
+// but the keyboard contract is identical — Enter sends, Shift+Enter inserts a
+// newline (spec §5).
 function DefaultComposer() {
   const [draft, setDraft] = useState("");
   const modal = useCoexistenceModal();
+  const canSend = draft.trim().length > 0;
+  const submit = () => setDraft("");
   return (
     <form
       data-testid="penny-composer"
-      onSubmit={(e) => e.preventDefault()}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (canSend) submit();
+      }}
       style={composerFormStyle(modal)}
     >
-      <div data-testid="penny-chips" style={chipRowStyle(modal)}>
-        {["Explain break-even", "Lower the rent", "Build my cost schedule"].map((chip) => (
-          <button key={chip} type="button" style={chipStyle(modal, false)} onClick={() => setDraft(chip)}>
-            {chip}
-          </button>
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end" }}>
+      <div style={composerRowStyle}>
         <textarea
           aria-label="Ask Penny"
-          placeholder="Ask Penny…"
-          rows={2}
+          placeholder="Ask Penny anything…"
+          rows={3}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter sends; Shift+Enter is a newline (chat convention, keyboard-first).
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              if (canSend) submit();
+            }
+          }}
           style={composerTextareaStyle(modal)}
         />
         <button
           type="submit"
-          disabled={draft.trim().length === 0}
-          style={{
-            ...composerSendStyle(modal),
-            cursor: draft.trim().length === 0 ? "not-allowed" : "pointer",
-            opacity: draft.trim().length === 0 ? 0.6 : 1,
-          }}
+          aria-label="Send"
+          disabled={!canSend}
+          style={composerSendStyle(modal, !canSend)}
         >
-          Send
+          <SendIcon />
         </button>
       </div>
     </form>
@@ -446,48 +391,40 @@ function DefaultComposer() {
 }
 
 // ---- Shared composer styling (mobile full-screen sheet ⇄ desktop panel, PE12). ----
-// On the mobile sheet (`modal`): the composer sticks above the on-screen keyboard
-// with a safe-area inset, the suggestion chips scroll HORIZONTALLY instead of
-// wrapping (keeping the input reachable), and every control is a 44px touch target.
+// On the mobile sheet (`modal`) the composer sticks above the on-screen keyboard with
+// a safe-area inset and every control is a 44px touch target. The input is a roomy,
+// resizable, multi-line field; its font matches the transcript (spec §4).
 
 function composerFormStyle(modal: boolean): CSSProperties {
   return {
     borderTop: "1px solid var(--line, #e2e2e2)",
-    padding: "0.625rem 1rem 0.75rem",
+    padding: "0.75rem 1rem",
     // Keep the composer clear of the iOS home indicator / rounded corners.
-    paddingBottom: modal ? "max(0.75rem, env(safe-area-inset-bottom))" : "0.75rem",
+    paddingBottom: modal ? "max(0.875rem, env(safe-area-inset-bottom))" : "0.875rem",
     display: "flex",
     flexDirection: "column",
     gap: "0.5rem",
   };
 }
 
-function chipRowStyle(modal: boolean): CSSProperties {
+const composerRowStyle: CSSProperties = {
+  display: "flex",
+  gap: "0.5rem",
+  alignItems: "flex-end",
+};
+
+/** A row for an extra composer affordance (e.g. the proposal-upload control) when a
+ *  live composer provides one. The redundant wizard suggestion chips are gone — the
+ *  wizard already collects name/address/households/shares/costs (spec §3). */
+function affordanceRowStyle(modal: boolean): CSSProperties {
   return {
     display: "flex",
-    gap: "0.375rem",
+    gap: "0.5rem",
     alignItems: "center",
-    // Mobile: a single non-wrapping row that scrolls; desktop: wrap onto lines.
     flexWrap: modal ? "nowrap" : "wrap",
     overflowX: modal ? "auto" : "visible",
     WebkitOverflowScrolling: "touch",
     scrollbarWidth: "thin",
-    paddingBottom: modal ? "0.15rem" : undefined,
-  };
-}
-
-function chipStyle(modal: boolean, pending: boolean): CSSProperties {
-  return {
-    flex: "0 0 auto",
-    whiteSpace: "nowrap",
-    fontSize: "0.75rem",
-    padding: modal ? "0 0.7rem" : "0.2rem 0.55rem",
-    minHeight: modal ? TOUCH_TARGET : undefined,
-    border: "1px solid var(--line, #e2e2e2)",
-    borderRadius: "999px",
-    background: "var(--surface, #fff)",
-    color: "var(--brand-deep, #1d4733)",
-    cursor: pending ? "not-allowed" : "pointer",
   };
 }
 
@@ -495,22 +432,33 @@ function composerTextareaStyle(modal: boolean): CSSProperties {
   return {
     flex: "1 1 auto",
     resize: "vertical",
-    minHeight: modal ? TOUCH_TARGET : "2.5rem",
-    padding: "0.5rem",
+    // Roomy, multi-line, comfortable; still ≥44px touch target on the mobile sheet.
+    minHeight: modal ? TOUCH_TARGET : "5.5rem",
+    padding: "0.625rem 0.75rem",
     border: "1px solid var(--line, #e2e2e2)",
-    borderRadius: "8px",
-    font: "inherit",
+    borderRadius: "10px",
+    fontFamily: "inherit",
+    fontSize: PENNY_MESSAGE_FONT_SIZE,
+    lineHeight: 1.5,
   };
 }
 
-function composerSendStyle(modal: boolean): CSSProperties {
+function composerSendStyle(modal: boolean, disabled: boolean): CSSProperties {
   return {
-    padding: "0.5rem 0.875rem",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flex: "0 0 auto",
+    width: modal ? TOUCH_TARGET : 40,
+    height: modal ? TOUCH_TARGET : 40,
     minHeight: modal ? TOUCH_TARGET : undefined,
+    minWidth: modal ? TOUCH_TARGET : undefined,
     border: "none",
-    borderRadius: "8px",
+    borderRadius: "10px",
     background: BRAND,
     color: "#fff",
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.5 : 1,
   };
 }
 
@@ -518,11 +466,9 @@ export function PennyDrawer({
   aiEnabled = true,
   settingsHref = "/?settings=ai",
   onOpenSettings,
-  provider,
   avatarSrc = "/penny-avatar.png",
   children,
   composer,
-  onNewChat,
   open: openProp,
   onOpenChange,
 }: PennyDrawerProps) {
@@ -556,7 +502,9 @@ export function PennyDrawer({
     fabRef.current?.focus();
   }, [setOpen]);
 
-  // Collapsed-FAB scroll auto-hide/return (spec §5.1): hide on scroll-down, show on up.
+  // Collapsed-FAB scroll auto-hide/return (spec §5.1): hide on scroll-down, show on
+  // up — but never while the drawer is open (the FAB stays available to toggle it
+  // closed).
   const [fabHidden, setFabHidden] = useState(false);
   const lastScrollY = useRef(0);
   useEffect(() => {
@@ -590,16 +538,20 @@ export function PennyDrawer({
         }
         style={{
           position: "fixed",
-          left: "max(1rem, env(safe-area-inset-left))",
-          bottom: "max(1rem, env(safe-area-inset-bottom))",
+          // Upper-LEFT, flush to the left edge (mirrors the enabled FAB), anchored
+          // below the top bar so it never overlaps the brand / home link.
+          left: 0,
+          top: FAB_TOP,
           zIndex: 40,
           display: "inline-flex",
           alignItems: "center",
           gap: "0.5rem",
           height: "48px",
-          padding: "0 0.875rem",
-          borderRadius: "999px",
+          padding: "0 0.875rem 0 0.6rem",
+          // Squared off on the left so the pill reads as flush against the edge.
+          borderRadius: "0 999px 999px 0",
           border: "1px dashed var(--line, #b9b9b9)",
+          borderLeft: "none",
           background: "var(--surface-alt, #ededeb)",
           color: "var(--text-muted, #666)",
           textDecoration: "none",
@@ -620,6 +572,14 @@ export function PennyDrawer({
   const body = children ?? <PennyTranscript turns={[]} />;
   const composerNode = composer ?? <DefaultComposer />;
 
+  // Keep the FAB visible while the drawer is open on the desktop (non-modal) so a
+  // re-click toggles it closed (the header has no close button). When open + desktop
+  // it sits just to the RIGHT of the 380px drawer, above the panel; otherwise it
+  // stays flush to the upper-left edge.
+  const fabOpenDesktop = open && !modal;
+  // The FAB auto-hides on scroll only when the drawer is CLOSED.
+  const hidden = fabHidden && !open;
+
   return (
     <>
       <button
@@ -627,34 +587,40 @@ export function PennyDrawer({
         type="button"
         data-testid="penny-fab"
         data-state="ai-enabled"
-        data-scroll-hidden={fabHidden}
+        data-scroll-hidden={hidden}
         aria-label="Ask Penny about this projection"
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => (open ? close() : setOpen(true))}
         style={{
           position: "fixed",
-          // Bottom-LEFT, inset past the safe area so the FAB never sits over the
-          // table's right scrollbar / primary actions on mobile (spec §5.1, #131).
-          left: "max(1rem, env(safe-area-inset-left))",
-          bottom: "max(1rem, env(safe-area-inset-bottom))",
-          zIndex: 40,
+          // Upper-LEFT, FLUSH against the left edge (no inset), anchored just below
+          // the top bar so it never overlaps the brand / home link. The drawer it
+          // opens slides out from this same left edge (spec §5.1, #131). While open
+          // on the desktop it shifts to the drawer's right edge to stay clickable.
+          left: fabOpenDesktop ? `${PANEL_WIDTH}px` : 0,
+          top: FAB_TOP,
+          zIndex: fabOpenDesktop ? Z.pennyPanel + 1 : 40,
           display: "inline-flex",
           alignItems: "center",
           gap: "0.5rem",
           height: "48px",
-          padding: "0 0.875rem 0 0.4rem",
-          borderRadius: "999px",
+          padding: "0 0.875rem 0 0.5rem",
+          // Squared off on the left so the pill reads as flush against the edge.
+          borderRadius: "0 999px 999px 0",
           border: "none",
           background: BRAND,
           color: "#fff",
           cursor: "pointer",
           boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-          // Scroll auto-hide; transition suppressed under reduced-motion.
-          transform: fabHidden ? "translateY(150%)" : "translateY(0)",
-          opacity: fabHidden ? 0 : 1,
-          pointerEvents: fabHidden ? "none" : "auto",
-          transition: reducedMotion ? "none" : "transform 200ms ease, opacity 200ms ease",
+          // Scroll auto-hide slides UP off the top edge (the FAB is top-anchored);
+          // transition suppressed under reduced-motion.
+          transform: hidden ? "translateY(-150%)" : "translateY(0)",
+          opacity: hidden ? 0 : 1,
+          pointerEvents: hidden ? "none" : "auto",
+          transition: reducedMotion
+            ? "none"
+            : "transform 200ms ease, opacity 200ms ease, left 200ms ease",
         }}
       >
         <PennyAvatar src={avatarSrc} size={36} />
@@ -667,12 +633,10 @@ export function PennyDrawer({
           modal={modal}
           autoFocus={panel.autoFocus()}
           reducedMotion={reducedMotion}
-          provider={provider}
           avatarSrc={avatarSrc}
           body={body}
           composer={composerNode}
           onClose={close}
-          onNewChat={onNewChat}
         />
       )}
     </>
@@ -681,12 +645,12 @@ export function PennyDrawer({
 
 // ============================================================================
 // PennyAssistant — the LIVE detail-page drawer (PE6). Wires the shell above to
-// POST …/penny: apply-immediately + narrate, streaming with Stop, provider
-// disclosure, and graceful AI-off / unavailable / rate-limit handling. The
-// component still computes NOTHING: it relays the user's message and renders the
-// server's turns + narration VERBATIM. A decision-metric delta reaches the screen
-// only once the engine recomputes and the host page refetches the view-model
-// (via `onApplied`) — Penny never streams a number (spec §2/§5.1/§8, issue #125).
+// POST …/penny: apply-immediately + narrate, streaming with Stop, and graceful
+// AI-off / unavailable / rate-limit handling. The component still computes NOTHING:
+// it relays the user's message and renders the server's turns + narration VERBATIM.
+// A decision-metric delta reaches the screen only once the engine recomputes and the
+// host page refetches the view-model (via `onApplied`) — Penny never streams a
+// number (spec §2/§5.1/§8, issue #125).
 // ============================================================================
 
 export interface PennyAssistantProps {
@@ -696,7 +660,7 @@ export interface PennyAssistantProps {
   token: string;
   /** AI opt-out / no key → muted FAB + Settings deep-link (never a dead-end). */
   aiEnabled?: boolean;
-  /** Provider known up front (e.g. from a prior transcript turn); updated per turn. */
+  /** Provider seam (accepted for back-compat; no longer surfaced in the header). */
   provider?: PennyProvider;
   /** Settings deep-link for the AI-disabled / muted states. */
   settingsHref?: string;
@@ -744,7 +708,6 @@ export function PennyAssistant({
   viewSlug,
   token,
   aiEnabled = true,
-  provider: initialProvider,
   settingsHref,
   onOpenSettings,
   initialTurns = [],
@@ -752,7 +715,6 @@ export function PennyAssistant({
   avatarSrc,
 }: PennyAssistantProps) {
   const [turns, setTurns] = useState<PennyTurn[]>(initialTurns);
-  const [provider, setProvider] = useState<PennyProvider | undefined>(initialProvider);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<PennyErrorView | null>(null);
   // `muted` is the in-drawer ai_disabled state (composer → Settings note), distinct
@@ -786,7 +748,6 @@ export function PennyAssistant({
           signal: controller.signal,
         });
         setProposal(null); // consumed by this turn (one-shot attachment)
-        setProvider(res.provider);
         // Append the server's turns, skipping the user echo we already rendered.
         const appended = (res.turns_appended ?? [])
           .filter((t) => t.role !== "user")
@@ -832,11 +793,6 @@ export function PennyAssistant({
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
-  const newChat = useCallback(() => {
-    setTurns([]);
-    setError(null);
-    setProposal(null);
-  }, []);
 
   const body = (
     <>
@@ -866,11 +822,9 @@ export function PennyAssistant({
   return (
     <PennyDrawer
       aiEnabled={aiEnabled}
-      provider={provider}
       settingsHref={settingsHref}
       onOpenSettings={onOpenSettings}
       avatarSrc={avatarSrc}
-      onNewChat={newChat}
       composer={
         <LiveComposer
           pending={pending}
@@ -907,18 +861,17 @@ interface LiveComposerProps {
   onOpenSettings?: () => void;
   onSend: (text: string) => void;
   onStop: () => void;
-  /** Surface-specific suggestion chips (defaults to the detail-page set). */
-  chips?: string[];
-  /** Extra composer affordance rendered beside the chips (e.g. the wizard's
+  /** Extra composer affordance rendered above the input (e.g. the wizard's
    *  proposal-upload control, Spec §5.1/§9). Additive — omitted on the detail page. */
   extraAffordance?: ReactNode;
 }
 
-const SUGGESTION_CHIPS = ["Explain break-even", "Lower the rent", "Build my cost schedule"];
-
-// The LIVE composer: multiline input + Send, a Stop control while a turn is in
-// flight, and suggestion chips. When Penny is muted mid-chat (409 ai_disabled) it
-// degrades to a Settings deep-link note — never a dead-end (spec §1/§8).
+// The LIVE composer: a roomy multiline input + a paper-airplane Send, with a Stop
+// control while a turn is in flight. Enter sends, Shift+Enter inserts a newline.
+// When Penny is muted mid-chat (409 ai_disabled) it degrades to a Settings deep-link
+// note — never a dead-end (spec §1/§8). The redundant suggestion chips are gone (the
+// wizard already collects those inputs, spec §3); only a genuinely non-redundant
+// affordance (proposal upload) remains.
 function LiveComposer({
   pending,
   muted,
@@ -926,7 +879,6 @@ function LiveComposer({
   onOpenSettings,
   onSend,
   onStop,
-  chips = SUGGESTION_CHIPS,
   extraAffordance,
 }: LiveComposerProps) {
   const [draft, setDraft] = useState("");
@@ -969,6 +921,7 @@ function LiveComposer({
     setDraft("");
     onSend(value);
   };
+  const canSend = draft.trim().length > 0;
 
   return (
     <form
@@ -979,25 +932,16 @@ function LiveComposer({
       }}
       style={composerFormStyle(modal)}
     >
-      <div data-testid="penny-chips" style={chipRowStyle(modal)}>
-        {chips.map((chip) => (
-          <button
-            key={chip}
-            type="button"
-            disabled={pending}
-            style={chipStyle(modal, pending)}
-            onClick={() => setDraft(chip)}
-          >
-            {chip}
-          </button>
-        ))}
-        {extraAffordance}
-      </div>
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end" }}>
+      {extraAffordance && (
+        <div data-testid="penny-affordances" style={affordanceRowStyle(modal)}>
+          {extraAffordance}
+        </div>
+      )}
+      <div style={composerRowStyle}>
         <textarea
           aria-label="Ask Penny"
-          placeholder="Ask Penny…"
-          rows={2}
+          placeholder="Ask Penny anything…"
+          rows={3}
           value={draft}
           disabled={pending}
           onChange={(e) => setDraft(e.target.value)}
@@ -1015,10 +959,16 @@ function LiveComposer({
             type="button"
             onClick={onStop}
             style={{
-              padding: "0.5rem 0.875rem",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flex: "0 0 auto",
+              padding: "0 0.875rem",
+              height: modal ? TOUCH_TARGET : 40,
               minHeight: modal ? TOUCH_TARGET : undefined,
+              minWidth: modal ? TOUCH_TARGET : undefined,
               border: "1px solid var(--line, #e2e2e2)",
-              borderRadius: "8px",
+              borderRadius: "10px",
               background: "var(--surface, #fff)",
               color: "var(--text, #1a1a1a)",
               cursor: "pointer",
@@ -1029,14 +979,11 @@ function LiveComposer({
         ) : (
           <button
             type="submit"
-            disabled={draft.trim().length === 0}
-            style={{
-              ...composerSendStyle(modal),
-              cursor: draft.trim().length === 0 ? "not-allowed" : "pointer",
-              opacity: draft.trim().length === 0 ? 0.6 : 1,
-            }}
+            aria-label="Send"
+            disabled={!canSend}
+            style={composerSendStyle(modal, !canSend)}
           >
-            Send
+            <SendIcon />
           </button>
         )}
       </div>
@@ -1058,9 +1005,6 @@ function LiveComposer({
 // computes NOTHING — the returned draft is mapped/rendered verbatim (PRD §13).
 // ============================================================================
 
-/** Wizard-flavoured suggestion chips (the detail page keeps its own set). */
-const WIZARD_CHIPS = ["Name my store", "Set my donor shares", "Build my cost schedule"];
-
 export interface PennyDraftAssistantProps {
   /** Ephemeral session Bearer for /penny/draft (a rate-limit id only — there is no
    *  projection yet and NOTHING is persisted; never the URL/log). */
@@ -1077,6 +1021,7 @@ export interface PennyDraftAssistantProps {
   labelField?: (field: string) => string;
   /** AI opt-out / no key → muted FAB + Settings deep-link (never a dead-end). */
   aiEnabled?: boolean;
+  /** Provider seam (accepted for back-compat; no longer surfaced in the header). */
   provider?: PennyProvider;
   settingsHref?: string;
   onOpenSettings?: () => void;
@@ -1112,14 +1057,12 @@ export function PennyDraftAssistant({
   onRevertField,
   labelField = (f) => f,
   aiEnabled = true,
-  provider: initialProvider,
   settingsHref = "/?settings=ai",
   onOpenSettings,
   onProposalSelected,
   avatarSrc,
 }: PennyDraftAssistantProps) {
   const [turns, setTurns] = useState<PennyTurn[]>([]);
-  const [provider, setProvider] = useState<PennyProvider | undefined>(initialProvider);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<PennyErrorView | null>(null);
   // `muted` = Penny got turned off mid-session (409 ai_disabled): the composer
@@ -1154,7 +1097,6 @@ export function PennyDraftAssistant({
           draftState: sent,
           signal: controller.signal,
         });
-        setProvider(res.provider);
         // Map the mutated draft back into the wizard (host owns the field mapping).
         onApplyDraft(res.draft, res.applied);
 
@@ -1238,11 +1180,6 @@ export function PennyDraftAssistant({
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
-  const newChat = useCallback(() => {
-    setTurns([]);
-    setChanges([]);
-    setError(null);
-  }, []);
 
   const undo = useCallback(
     (change: DraftChange) => {
@@ -1337,12 +1274,13 @@ export function PennyDraftAssistant({
       data-testid="penny-proposal-upload"
       style={{
         fontSize: "0.75rem",
-        padding: "0.2rem 0.55rem",
+        padding: "0.3rem 0.6rem",
         border: "1px dashed var(--line, #b9b9b9)",
         borderRadius: "999px",
         background: "var(--surface, #fff)",
         color: "var(--brand-deep, #1d4733)",
         cursor: "pointer",
+        whiteSpace: "nowrap",
       }}
     >
       Upload proposal (PDF)
@@ -1372,11 +1310,9 @@ export function PennyDraftAssistant({
   return (
     <PennyDrawer
       aiEnabled={aiEnabled}
-      provider={provider}
       settingsHref={settingsHref}
       onOpenSettings={onOpenSettings}
       avatarSrc={avatarSrc}
-      onNewChat={newChat}
       composer={
         <LiveComposer
           pending={pending}
@@ -1385,7 +1321,6 @@ export function PennyDraftAssistant({
           onOpenSettings={onOpenSettings}
           onSend={send}
           onStop={stop}
-          chips={WIZARD_CHIPS}
           extraAffordance={uploadAffordance}
         />
       }

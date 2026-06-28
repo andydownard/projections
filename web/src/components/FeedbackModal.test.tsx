@@ -119,4 +119,59 @@ describe("FeedbackModal", () => {
     unmount();
     expect(document.body.style.overflow).toBe("");
   });
+
+  // --- idea variant (the Idea Fab suggestion: description-only) --------------
+
+  describe("kind=idea", () => {
+    it("is a simple suggestion: no title field and no financial warning", () => {
+      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
+      expect(screen.getByLabelText(/description/i)).toBeInTheDocument();
+      expect(screen.queryByLabelText("Title")).toBeNull();
+      expect(screen.queryByText(/sensitive financial/i)).toBeNull();
+    });
+
+    it("offers an optional email field", () => {
+      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
+      expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+    });
+
+    it("is a labelled dialog titled 'Share an idea'", () => {
+      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
+      const dialog = screen.getByRole("dialog", { name: /share an idea/i });
+      expect(dialog).toHaveAttribute("aria-modal", "true");
+      expect(dialog).toHaveAttribute("aria-labelledby", "feedback-modal-title");
+    });
+
+    it("disables Send until a description is entered (title is irrelevant)", () => {
+      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
+      expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+    });
+
+    it("submits description + email with NO title in the payload", async () => {
+      const onSubmit = vi.fn(async () => "SUP-IDEA9");
+      render(<FeedbackModal kind="idea" onSubmit={onSubmit} onClose={() => {}} />);
+      await userEvent.type(screen.getByLabelText(/description/i), "A donor-thanks export.");
+      await userEvent.type(screen.getByLabelText(/email/i), "ed@example.org");
+      await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+      expect(await screen.findByTestId("feedback-success")).toHaveTextContent("SUP-IDEA9");
+      // Exact-match: an idea submits ONLY description + email — never a title.
+      expect(onSubmit).toHaveBeenCalledWith({
+        description: "A donor-thanks export.",
+        email: "ed@example.org",
+      });
+    });
+
+    it("traps Tab focus inside the dialog (a11y preserved)", () => {
+      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
+      const cancel = screen.getByRole("button", { name: /cancel/i });
+      const description = screen.getByLabelText(/description/i);
+      // Send is disabled (no description), so Cancel is the last reachable control.
+      cancel.focus();
+      fireEvent.keyDown(document, { key: "Tab" });
+      expect(description).toHaveFocus();
+      fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+      expect(cancel).toHaveFocus();
+    });
+  });
 });

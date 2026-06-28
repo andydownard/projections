@@ -97,6 +97,15 @@ describe("TopBar", () => {
       expect(fab).not.toHaveAttribute("tabindex", "-1");
     });
 
+    it("reads as a button with a visible label, not a bare icon", () => {
+      render(<TopBar />);
+      const fab = screen.getByRole("button", { name: /send feedback/i });
+      // A visible text label ("Idea") sits beside the lightbulb so the control is
+      // obviously tappable — not an unlabelled glyph.
+      expect(fab).toHaveTextContent(/idea/i);
+      expect(fab).toHaveClass("idea-fab");
+    });
+
     it("the modal is closed until the lightbulb is activated", () => {
       render(<TopBar />);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -106,7 +115,8 @@ describe("TopBar", () => {
       const user = userEvent.setup();
       render(<TopBar />);
       await user.click(screen.getByRole("button", { name: /send feedback/i }));
-      expect(screen.getByRole("dialog", { name: /send feedback/i })).toBeInTheDocument();
+      // The Idea Fab opens the modal in idea mode ("Share an idea").
+      expect(screen.getByRole("dialog", { name: /share an idea/i })).toBeInTheDocument();
     });
 
     it("opens the FeedbackModal via the keyboard (focus + Enter)", async () => {
@@ -116,7 +126,7 @@ describe("TopBar", () => {
       fab.focus();
       expect(fab).toHaveFocus();
       await user.keyboard("{Enter}");
-      expect(screen.getByRole("dialog", { name: /send feedback/i })).toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: /share an idea/i })).toBeInTheDocument();
     });
 
     it("closes on Esc and restores focus to the trigger (a11y)", async () => {
@@ -145,21 +155,24 @@ describe("TopBar", () => {
       expect(fab).toHaveFocus();
     });
 
-    it("submits redacted feedback (support_id only) through the existing modal", async () => {
+    it("submits a redacted idea (description-only, support_id back)", async () => {
       const user = userEvent.setup();
       render(<TopBar />);
       await user.click(screen.getByRole("button", { name: /send feedback/i }));
-      await user.type(screen.getByLabelText(/title/i), "Great idea");
+      // Idea mode has no title — just a description.
       await user.type(screen.getByLabelText(/description/i), "Add dark mode.");
       await user.click(screen.getByRole("button", { name: /^send$/i }));
 
       const success = await screen.findByTestId("feedback-success");
       expect(success).toHaveTextContent("SUP-ABC123");
       // The body never carries a slug, token, or financial field (server also
-      // enforces this; we assert the client doesn't send them).
+      // enforces this; we assert the client doesn't send them), and an idea
+      // carries no title at all.
       const body = JSON.parse(
         (vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string,
       );
+      expect(body.type).toBe("idea");
+      expect(body).not.toHaveProperty("title");
       expect(body).not.toHaveProperty("view_slug");
       expect(body).not.toHaveProperty("token");
       expect(JSON.stringify(body)).not.toContain("/p/");

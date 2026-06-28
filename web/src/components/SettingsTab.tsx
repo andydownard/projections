@@ -1,6 +1,6 @@
 // web/src/components/SettingsTab.tsx — SLICE 4: Settings & assumptions tab.
 //
-// Sliders for the cost %s + occupancy + escalator + the three demand shares,
+// Sliders for the cost %s + escalator + the three demand shares,
 // seeded from the server `settings` view-model ({ raw, display }). The DISPLAY
 // string is the server's (PRD §13 — no client math); the slider's numeric `raw`
 // is just the control position the user PATCHes back. Every change debounces a
@@ -28,7 +28,6 @@ export interface SettingsViewModel {
   payrollTaxPct: ServerValue;
   salvagePct: ServerValue;
   escalator: ServerValue;
-  occupancyAnnual: ServerValue;
   shareY1: ServerValue;
   shareY2: ServerValue;
   shareY3: ServerValue;
@@ -79,20 +78,13 @@ const SHARE_CONTROLS: ControlDef[] = [
   //       (three explicit shares, PRD §7.1 — no auto-midpoint).
 ];
 
-const OCCUPANCY: ControlDef = {
-  field: "occupancyAnnual",
-  patchKey: "occupancy_annual",
-  label: "Annual occupancy (rent)",
-  kind: "money",
-  min: 0,
-  max: 600000,
-  step: 1000,
-};
-
-// Shares live under inputs.demand; everything else under assumptions (API_SPEC §4.4).
+// Donor shares (`share_yN`) are engine `Inputs` fields; the cost %s + escalator are
+// `Assumptions`. The merge path builds Inputs(**inputs) / Assumptions(**assumptions),
+// so each key MUST sit under its owning group — a misplaced key is an unknown kwarg
+// that 422s (invalid_inputs) and the autosave can never settle (API_SPEC §4.4).
 function buildBody(control: ControlDef, raw: number): PatchBody {
   if (control.field.startsWith("share")) {
-    return { inputs: { demand: { [control.patchKey]: raw } } };
+    return { inputs: { [control.patchKey]: raw } };
   }
   return { assumptions: { [control.patchKey]: raw } };
 }
@@ -166,7 +158,7 @@ export function SettingsTab({
     });
   }
 
-  const allControls = [...PCT_CONTROLS, OCCUPANCY, ...SHARE_CONTROLS];
+  const allControls = [...PCT_CONTROLS, ...SHARE_CONTROLS];
 
   return (
     <section className="settings-tab" aria-label="Settings & assumptions" role="region">
