@@ -2,16 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   OWNER_TOKEN_KEY,
-  createProjection,
   getOwnerToken,
   listProjections,
   setOwnerToken,
 } from "./projections";
 
-// SLICE 2 — the owner-scoped list + create calls (API_SPEC §4.1/§4.2). The list is
+// SLICE 2 — the owner-scoped list + owner-token storage (API_SPEC §4.1). The list is
 // owner-scoped: it sends Authorization: Bearer <owner_token> (PRD §20, no global
-// index). Create is anonymous and returns the freshly minted tokens, which the
-// client stores in localStorage (owner token) — never recomputing anything.
+// index). The minted owner token is stored in localStorage via setOwnerToken — never
+// recomputing anything.
 
 describe("owner token storage", () => {
   beforeEach(() => localStorage.clear());
@@ -70,47 +69,16 @@ describe("listProjections (owner-scoped)", () => {
   });
 });
 
-describe("createProjection", () => {
+describe("listProjections — error path", () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => localStorage.clear());
 
-  it("POSTs the payload and stores the minted owner token", async () => {
-    const body = {
-      view_slug: "p_NEW",
-      name: "House of Hope",
-      version: 1,
-      tokens: {
-        owner_token: "owner_minted",
-        edit_token: "edit_minted",
-        recovery_code: "REC-123",
-      },
-    };
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => body });
+  it("throws an API error when the owner-scoped GET is not ok", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401 });
     vi.stubGlobal("fetch", fetchMock);
+    setOwnerToken("owner_abc");
 
-    const payload = {
-      name: "House of Hope",
-      location: { query: "Longview, TX" },
-      trade_area: { basis: "city" as const, households: 31800 },
-      inputs: {
-        building_sqft: 10000,
-        salesfloor_pct: 0.7,
-        lease_type: "nnn" as const,
-        donation_value: 74,
-        occupancy_annual: 90000,
-        demand: { mode: "market_share" as const, share_y1: 0.06, share_y2: 0.08, share_y3: 0.1 },
-        source_of_funds: { cash: 150000, grant: 50000, loan: 0 },
-      },
-      terms_accepted: true,
-    };
-
-    const result = await createProjection(payload);
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("/api/projections");
-    expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toEqual(payload);
-    expect(result.view_slug).toBe("p_NEW");
-    // The minted owner token is persisted so the list can be fetched next.
-    expect(getOwnerToken()).toBe("owner_minted");
+    await expect(listProjections()).rejects.toThrow("API 401: /projections");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

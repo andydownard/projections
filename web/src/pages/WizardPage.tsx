@@ -11,6 +11,7 @@
 import { useState } from "react";
 
 import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
+import { setOwnerToken } from "../api/projections";
 import { DecisionBanner } from "../components/DecisionBanner";
 import { CashflowChart } from "../components/CashflowChart";
 import { PlacesAutocomplete } from "../components/PlacesAutocomplete";
@@ -132,7 +133,7 @@ export function WizardPage({ aiOff = false }: WizardPageProps) {
       const created = (await resp.json()) as ViewModel & { owner_token?: string };
       // Persist the minted owner token so the owner-scoped list (PRD §20) finds it.
       if (created.owner_token) {
-        localStorage.setItem("projections.owner_token", created.owner_token);
+        setOwnerToken(created.owner_token);
       }
       setVm(created);
     } finally {

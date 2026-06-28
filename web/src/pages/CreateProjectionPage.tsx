@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PennyDraftApplied, PennyDraftState } from "../api/penny";
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
 import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
+import { setOwnerToken } from "../api/projections";
 import { CashflowChart } from "../components/CashflowChart";
 import { DecisionBanner } from "../components/DecisionBanner";
 import { PennyDraftAssistant } from "../components/PennyDrawer";
@@ -234,7 +235,7 @@ export function CreateProjectionPage({ aiOff = false }: CreateProjectionPageProp
       const created = (await resp.json()) as ViewModel & { owner_token?: string };
       // Persist the minted owner token so the owner-scoped list (PRD §20) finds it.
       if (created.owner_token) {
-        localStorage.setItem("projections.owner_token", created.owner_token);
+        setOwnerToken(created.owner_token);
       }
       setVm(created);
     } finally {

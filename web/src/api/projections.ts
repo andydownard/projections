@@ -1,13 +1,15 @@
-// web/src/api/projections.ts — owner-scoped list + create (API_SPEC §4.1/§4.2).
+// web/src/api/projections.ts — owner-scoped list + owner-token storage (API_SPEC §4.1).
 //
 // The list is OWNER-SCOPED: every request carries Authorization: Bearer
 // <owner_token> and the server filters by owner_token_hash — there is no global
 // index (PRD §20). The owner token lives in localStorage (CLAUDE.md access model);
 // it is never put in a URL path/query and never logged. No client-side math: list
-// rows arrive as { raw, display } and are rendered verbatim.
+// rows arrive as { raw, display } and are rendered verbatim. getOwnerToken/
+// setOwnerToken are the single accessor for the localStorage owner-token key — the
+// create pages persist the minted token through setOwnerToken (see WizardPage /
+// CreateProjectionPage), and ProjectionDetail reads it via getOwnerToken.
 
 import type { ServerValue } from "./client";
-import type { CreatePayload } from "../wizard/shareHelper";
 
 export const OWNER_TOKEN_KEY = "projections.owner_token";
 
@@ -47,19 +49,6 @@ export interface ProjectionListResponse {
   projections: ProjectionListItem[];
 }
 
-export interface CreateTokens {
-  owner_token: string;
-  edit_token: string;
-  recovery_code: string;
-}
-
-export interface CreateResponse {
-  view_slug: string;
-  name: string;
-  version: number;
-  tokens: CreateTokens;
-}
-
 const BASE = "/api";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -82,14 +71,4 @@ export async function listProjections(): Promise<ProjectionListResponse> {
   return request<ProjectionListResponse>("/projections", {
     headers: { Authorization: `Bearer ${token}` },
   });
-}
-
-/** Anonymous create; persists the minted owner token for the owner-scoped list. */
-export async function createProjection(payload: CreatePayload): Promise<CreateResponse> {
-  const result = await request<CreateResponse>("/projections", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  setOwnerToken(result.tokens.owner_token);
-  return result;
 }
