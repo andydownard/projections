@@ -58,27 +58,13 @@ function jsonResponse(b: unknown) {
   );
 }
 
-// A representative server rent-research result (#245). The wizard pre-fills the rent
-// (shown on the startup-costs step) with a verified-vs-estimated badge + sources.
-const RESEARCH = {
-  rent_per_sqft: 18, estimate: 18, low: 15, high: 22,
-  rent_type: "nnn", opex: 3, basis: "$/sq ft/yr",
-  confidence: "high", verified: true, provenance: "verified",
-  sources: [{ url: "https://broker.example", title: "Longview retail lease", source_date: "2026-05" }],
-  ai_enabled: true, cached: false,
-};
-
-/** Wire fetch so autocomplete/resolve/research/create all answer; capture POST bodies. */
+/** Wire fetch so autocomplete/resolve/create all answer; capture POST bodies. */
 function wireFetch(bodies: Record<string, unknown>) {
   return vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const url = String(input);
     if (url.includes("/api/places/autocomplete"))
       return jsonResponse({ predictions: [{ description: "Dallas, TX, USA", place_id: "PID_DAL" }] });
     if (url.includes("/api/places/resolve")) return jsonResponse(RESOLVED);
-    if (url.includes("/api/research")) {
-      bodies[url] = JSON.parse(String(init?.body));
-      return jsonResponse(RESEARCH);
-    }
     bodies[url] = JSON.parse(String(init?.body));
     return jsonResponse({ ...VM, owner_token: "tok", edit_token: "edit_new" });
   });
@@ -221,12 +207,8 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 4. Startup costs — rent pre-filled from /api/research (verified badge + sources).
+    // 4. Startup costs — rent editable, prefilled with regional benchmark.
     expect(screen.getByRole("heading", { name: /set startup costs/i })).toBeInTheDocument();
-    await waitFor(() =>
-      expect((screen.getByLabelText(/rent per square foot/i) as HTMLInputElement).value).toBe("18.00"),
-    );
-    expect(screen.getByTestId("rent-badge")).toHaveAttribute("data-verified", "true");
 
     // Generate projections — no terms checkbox (implicit acceptance), no disclaimer.
     expect(screen.queryByTestId("terms-disclaimer")).not.toBeInTheDocument();
@@ -248,8 +230,8 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     expect(body.inputs.opening_month_number).toBe(1);
     expect(Array.isArray(body.inputs.cost_schedule)).toBe(true);
     expect(body.inputs.target_opening_date).toBeNull();
-    // #245: occupancy is driven by sq ft × rent — the research pre-fill ($18) flows.
-    expect(body.inputs.rent_per_sqft).toBe("18");
+    // #245: rent prefilled with regional benchmark ($12 default).
+    expect(body.inputs.rent_per_sqft).toBe("12");
     expect(body.inputs.occupancy_annual).toBeNull();
     expect(body.assumptions.utilities_per_sqft).toBe("2.23");
     expect(body.trade_area.households_source).toBe("census_acs");
@@ -303,7 +285,6 @@ describe("CreateProjectionPage — sequential creates never orphan the prior pro
       if (url.includes("/api/places/autocomplete"))
         return jsonResponse({ predictions: [{ description: "Dallas, TX, USA", place_id: "PID_DAL" }] });
       if (url.includes("/api/places/resolve")) return jsonResponse(RESOLVED);
-      if (url.includes("/api/research")) return jsonResponse(RESEARCH);
       // create (/api/projections): mirror the server — a presented owner Bearer JOINS
       // that workspace (no new token minted); an anonymous create mints a fresh token.
       const auth = new Headers(init?.headers as HeadersInit).get("Authorization");

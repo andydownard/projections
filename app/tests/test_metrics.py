@@ -117,16 +117,16 @@ def test_estimate_tokens_is_a_bounded_heuristic():
 
 
 # --------------------------------------------------------------------------- #
-# Cost-control verification counters (research/narrative caching, regen cap)
+# Cost-control verification counters (narrative caching, regen cap)
 # --------------------------------------------------------------------------- #
 def test_cache_and_regen_counters_increment():
-    metrics.incr(metrics.COUNTER_RESEARCH_CACHE_HIT)
-    metrics.incr(metrics.COUNTER_RESEARCH_CACHE_HIT)
-    metrics.incr(metrics.COUNTER_RESEARCH_CACHE_MISS)
+    metrics.incr(metrics.COUNTER_NARRATIVE_CACHE_HIT)
+    metrics.incr(metrics.COUNTER_NARRATIVE_CACHE_HIT)
+    metrics.incr(metrics.COUNTER_NARRATIVE_CACHE_MISS)
     metrics.incr(metrics.COUNTER_NARRATIVE_REGEN_BLOCKED, 3)
     counters = metrics.snapshot()["counters"]
-    assert counters[metrics.COUNTER_RESEARCH_CACHE_HIT] == 2
-    assert counters[metrics.COUNTER_RESEARCH_CACHE_MISS] == 1
+    assert counters[metrics.COUNTER_NARRATIVE_CACHE_HIT] == 2
+    assert counters[metrics.COUNTER_NARRATIVE_CACHE_MISS] == 1
     assert counters[metrics.COUNTER_NARRATIVE_REGEN_BLOCKED] == 3
 
 
@@ -352,12 +352,12 @@ def test_reset_clears_all_counters():
     metrics.record_llm_usage(
         metrics.PROVIDER_ANTHROPIC, input_tokens=100, output_tokens=10
     )
-    metrics.incr(metrics.COUNTER_RESEARCH_CACHE_HIT)
+    metrics.incr(metrics.COUNTER_NARRATIVE_CACHE_HIT)
     metrics.reset()
     snap = metrics.snapshot()
     assert snap["providers"][metrics.PROVIDER_PLACES]["calls"] == 0
     assert snap["totals"]["llm_cost_usd"] == 0.0
-    assert snap["counters"][metrics.COUNTER_RESEARCH_CACHE_HIT] == 0
+    assert snap["counters"][metrics.COUNTER_NARRATIVE_CACHE_HIT] == 0
 
 
 def test_avg_latency_is_rounded_to_three_places():

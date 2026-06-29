@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import { STEPS, useWizardState } from "./useWizardState";
 import type { TradeAreaResolved } from "../api/places";
-import type { RentResearch } from "../api/research";
 
 const LAST_STEP = STEPS.length - 1; // startup-costs
 
@@ -130,14 +129,6 @@ describe("useWizardState — households empty-until-resolved (§4)", () => {
 });
 
 describe("useWizardState — Square footage step (#245, owner Decisions 9/10)", () => {
-  const RESEARCH: RentResearch = {
-    rent_per_sqft: 18, estimate: 18, low: 15, high: 22,
-    rent_type: "nnn", opex: 3, basis: "$/sq ft/yr",
-    confidence: "high", verified: true, provenance: "verified",
-    sources: [{ url: "https://x", title: "Listing", source_date: "2026-05" }],
-    ai_enabled: true, cached: false,
-  };
-
   it("defaults to 12,500 sq ft / 80% sales floor (wizard-side; anchor stays 10k)", () => {
     const { result } = renderHook(() => useWizardState());
     expect(result.current.draft.buildingSqft).toBe(12500);
@@ -174,45 +165,6 @@ describe("useWizardState — Square footage step (#245, owner Decisions 9/10)", 
 
     act(() => result.current.setSalesfloorPct(65));
     expect(result.current.canProceed).toBe(true);
-  });
-
-  it("pre-fills rent from research (provenance 'research') and keeps the badge result", () => {
-    const { result } = renderHook(() => useWizardState());
-    act(() => result.current.onRentResearchStart());
-    expect(result.current.rentResearchLoading).toBe(true);
-
-    act(() => result.current.applyRentResearch(RESEARCH));
-    expect(result.current.draft.rentPerSqft).toBe(18);
-    expect(result.current.rentSource).toBe("research");
-    expect(result.current.rentResearch?.verified).toBe(true);
-    expect(result.current.rentResearchLoading).toBe(false);
-  });
-
-  it("a manual rent edit overrides research → provenance 'user'", () => {
-    const { result } = renderHook(() => useWizardState());
-    act(() => result.current.applyRentResearch(RESEARCH));
-    act(() => result.current.setRentPerSqft(20));
-    expect(result.current.draft.rentPerSqft).toBe(20);
-    expect(result.current.rentSource).toBe("user");
-  });
-
-  it("never clobbers a user rent edit with a later research result", () => {
-    const { result } = renderHook(() => useWizardState());
-    act(() => result.current.setRentPerSqft(25));
-    act(() => result.current.applyRentResearch(RESEARCH));
-    expect(result.current.draft.rentPerSqft).toBe(25); // user value preserved
-    expect(result.current.rentSource).toBe("user");
-    expect(result.current.rentResearch?.verified).toBe(true);
-  });
-
-  it("research failure keeps the manual benchmark and flags the degraded state", () => {
-    const { result } = renderHook(() => useWizardState());
-    act(() => result.current.onRentResearchStart());
-    act(() => result.current.onRentResearchError());
-    expect(result.current.rentResearchError).toBe(true);
-    expect(result.current.rentResearchLoading).toBe(false);
-    expect(result.current.draft.rentPerSqft).toBe(12); // anchored benchmark stays
-    expect(result.current.rentSource).toBe("default");
   });
 
   it("editing the building size re-seeds the scaled cost rows (server seed mirror)", () => {
