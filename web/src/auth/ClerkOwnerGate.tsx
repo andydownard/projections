@@ -23,6 +23,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { RallyLogo } from "../components/RallyLogo";
 import { TopBar } from "../components/TopBar";
 import { takePostSignInRedirect } from "./postSignInRedirect";
+import { signInRedirectTarget } from "./signInRedirect";
 
 // Replays a captured shared deep link AFTER sign-in (EPIC #323). Rendered inside
 // <SignedIn>, it reads-and-clears the sessionStorage destination once (a ref guard +
@@ -103,11 +104,18 @@ function LineChartGlyph() {
 
 // The signed-out screen. The Sign-in button builds its target via
 // clerk.buildSignInUrl({ redirectUrl }) — Clerk appends __clerk_synced so the
-// cross-apex satellite session round-trips, and the explicit redirectUrl returns
-// the magic-link to this satellite (SIGNIN-4). Satellite sign-in MUST redirect to
-// the primary (an embedded <SignIn> is impossible on a satellite), so this button
-// only navigates. NEVER hardcode that URL. We do NOT auto-redirect (avoids
-// redirect loops); the owner clicks to sign in.
+// cross-apex satellite session round-trips, and the explicit redirectUrl (the
+// current page, fragment stripped — see signInRedirectTarget) is carried to the
+// primary as redirect_url so it returns the owner to THIS satellite (SIGNIN-4).
+// Satellite sign-in MUST redirect to the primary (an embedded <SignIn> is
+// impossible on a satellite), so this button only navigates. NEVER hardcode that
+// URL. We do NOT auto-redirect (avoids redirect loops); the owner clicks to sign in.
+//
+// NOTE (email magic link): for the redirect_url to survive a magic-link sign-in
+// that COMPLETES on the primary, the PRIMARY (rallytasks.com) Clerk instance must
+// list https://projections.thriftly.com among its allowed redirect origins and
+// keep "Require the same device and browser" ON. That is primary/dashboard config
+// the satellite cannot set; the satellite already passes the correct redirect_url.
 function SignInGate() {
   const clerk = useClerk();
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -123,23 +131,6 @@ function SignInGate() {
       <h1 id="owner-gate-title" className="owner-gate__title">
         Sign in to continue
       </h1>
-      <p className="owner-gate__body">
-        This page is for the projection owner. Sign in to create and edit your
-        projections. Shared view and role links never need a sign-in.
-      </p>
-      <button
-        ref={btnRef}
-        type="button"
-        className="owner-gate__sign-in"
-        onClick={() =>
-          window.location.assign(
-            clerk.buildSignInUrl({ redirectUrl: window.location.href }),
-          )
-        }
-      >
-        <RallyLogo className="rally-mark" />
-        <span>Sign in with Rally</span>
-      </button>
       <ol className="owner-gate__steps">
         <li className="owner-gate__step">
           <span className="owner-gate__step-icon">
@@ -166,6 +157,25 @@ function SignInGate() {
           <span className="owner-gate__step-text">Get 5-year projections.</span>
         </li>
       </ol>
+      {/* The visible label is "Sign in with " + the Rally wordmark (which itself
+          reads "Rally"); the literal word is NOT repeated in the text. The button's
+          accessible name is supplied by aria-label so screen-reader users still hear
+          "Sign in with Rally" while the decorative wordmark stays aria-hidden — one
+          "Rally", WCAG 2.5.3 Label-in-Name satisfied. */}
+      <button
+        ref={btnRef}
+        type="button"
+        className="owner-gate__sign-in"
+        aria-label="Sign in with Rally"
+        onClick={() =>
+          window.location.assign(
+            clerk.buildSignInUrl({ redirectUrl: signInRedirectTarget() }),
+          )
+        }
+      >
+        <span>Sign in with</span>
+        <RallyLogo className="rally-mark" />
+      </button>
     </section>
   );
 }

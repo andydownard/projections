@@ -177,18 +177,15 @@ body {
   color: var(--text);
   margin: 0 0 0.75rem;
 }
-.owner-gate__body {
-  font-size: var(--text-base);
-  line-height: var(--lh-base);
-  color: var(--text-muted);
-  margin: 0 0 1.5rem;
-}
 .owner-gate__sign-in {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   /* gap leaves room for the inline Rally wordmark beside the "Sign in" text. */
   gap: 0.5rem;
+  /* The primary action now sits BELOW the 3-step explainer (#318 follow-up), so it
+     carries its own top margin to separate from the list. */
+  margin-top: 2rem;
   /* ≥44px tap target (WCAG 2.5.5 / project UI bar). */
   min-height: 44px;
   padding: 0 1.5rem;
@@ -3946,8 +3943,9 @@ td.cell-wrap {
   flex-shrink: 0;
 }
 
-/* The 3-step explainer under the sign-in action (SIGNIN-5). A semantic <ol>;
-   numbering is suppressed because each row leads with its own glyph + prose. */
+/* The 3-step explainer above the sign-in action (#318 follow-up: the button now
+   sits below the steps). A semantic <ol>; numbering is suppressed because each row
+   leads with its own glyph + prose. */
 .owner-gate__steps {
   list-style: none;
   margin: 2rem auto 0;
@@ -3960,7 +3958,9 @@ td.cell-wrap {
 }
 .owner-gate__step {
   display: flex;
-  align-items: flex-start;
+  /* Vertically center each glyph against the CENTER of its text block, so a
+     2-line description has its icon centered against both lines (#318). */
+  align-items: center;
   gap: 0.75rem;
 }
 .owner-gate__step-icon {
@@ -3979,8 +3979,6 @@ td.cell-wrap {
   font-size: var(--text-base);
   line-height: var(--lh-base);
   color: var(--text);
-  /* nudge the prose down to optically center against the round glyph. */
-  padding-top: 0.375rem;
 }
 
 /* --- owner account avatar + dropdown (Epic #319, user-avatar-dropdown) -------
