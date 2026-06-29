@@ -22,3 +22,6 @@ playwright-report/
 test-results/
 web/dist/
 web/node_modules/
+
+# Owner-private reference financials (House of Hope / Longview actuals) — local only, never commit
+thrift_projections/
