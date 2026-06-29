@@ -5,9 +5,9 @@ A server-authoritative tool that helps a first-time nonprofit thrift-store opera
 
 > **Global engineering contract:** https://github.com/rallytasks/agents/blob/main/AGENTS.md
 > Every rule there applies to this repo. Cite rules by ID — `SECRETS`, `TENANT`, `DB`, `MUTATION`, `SERVER`, `OUTBOUND`, `MONEY`, `DESTRUCTIVE`, `INJECTION`, `PLAN`, `TDD`, `VERIFY`, `GIT`, `DOCS`, `HYGIENE`, `PATTERNS`, `REGRESSIONS`, `TRACKING`, `STYLE`, `STANDARD`, `API`, `SESSION`, `PII`, `AI`, `UI`, plus the portfolio conventions (Feedback FAB, Maximum parallelization). This file adds **only** project specifics and any `Override <ID>:` line. Shared rules live in the global file **once** — they are never copied here. A `grep "Override "` of this file lists exactly where projections diverges.
-@../../agents/AGENTS.md   <!-- local-checkout convenience; projections is nested one level deeper, so two `..`. No-op in a standalone clone — the URL above is canonical. -->
+@../agents/AGENTS.md   <!-- local-checkout convenience: agents/ is a sibling of projections/ under projects/, so one `..`. No-op in a standalone clone; the URL above is canonical. -->
 
-**`CLAUDE.md` is a symlink to this file. Edit `AGENTS.md`; never edit `CLAUDE.md`.**
+**`CLAUDE.md` is a thin pointer that imports this file (`@AGENTS.md`); this file in turn loads the global contract (`@../agents/AGENTS.md`). Put all project rules in `AGENTS.md`; never in `CLAUDE.md`.**
 
 **Read first:** [reference/PRD.md](./reference/PRD.md) (authoritative requirements) → this file → [ARCHITECTURE.md](./ARCHITECTURE.md) → [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) → [BUILD_PLAN.md](./BUILD_PLAN.md) → [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) (the bar).
 
