@@ -50,7 +50,8 @@ describe("CreateProjectionPage — route ↔ step sync (#261)", () => {
     await user.click(screen.getByRole("button", { name: /^back$/i }));
     await waitFor(() => expect(window.location.pathname).toBe("/wizard/square-footage"));
     // Draft preserved across the route change — the typed building size is still there.
-    expect(screen.getByLabelText(/building size/i)).toHaveValue(9000);
+    // Building size renders comma-grouped for display consistency (#18 / QA P2).
+    expect(screen.getByLabelText(/building size/i)).toHaveValue("9,000");
   });
 
   it("deep-links straight to a step (cursor starts there, no flicker)", () => {
@@ -83,7 +84,8 @@ describe("CreateProjectionPage — route ↔ step sync (#261)", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: /set square footage/i })).toBeInTheDocument(),
     );
-    expect(screen.getByLabelText(/building size/i)).toHaveValue(9000);
+    // Building size renders comma-grouped for display consistency (#18 / QA P2).
+    expect(screen.getByLabelText(/building size/i)).toHaveValue("9,000");
   });
 
   it("moves focus to the new step heading on a step change (a11y)", async () => {

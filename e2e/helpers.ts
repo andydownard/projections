@@ -95,8 +95,9 @@ export async function createProjectionViaWizard(
   await page.getByRole("button", { name: "Next" }).click();
 
   // Step 2 — Square footage: defaults 12,500 sq ft / 80% sales floor pass straight
-  // through (the building-size assertion is the resolve synchronisation point).
-  await expect(page.getByLabel(/building size/i)).toHaveValue("12500");
+  // through (the building-size assertion is the resolve synchronisation point). The
+  // field renders comma-grouped for display consistency (QA P2).
+  await expect(page.getByLabel(/building size/i)).toHaveValue("12,500");
   await page.getByRole("button", { name: "Next" }).click();
 
   // Step 3 — Confirm # of households: the resolved count renders as static text.

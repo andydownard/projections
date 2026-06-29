@@ -104,12 +104,16 @@ const PANEL_WIDTH = 380;
  *  (composer), per the PE12 mobile-375 / a11y pass (issue #131, spec §5). */
 const TOUCH_TARGET = 44;
 
-/** The collapsed FAB is anchored to the UPPER-LEFT, flush against the left edge.
- *  This top inset clears the sticky top bar (min-height 56px, z-index 20) so the
- *  FAB — which renders above the bar — never sits over the brand / home link. The
- *  drawer panel itself is anchored to the very top (`top: 0`) and slides out from
- *  the left (`translateX(-100%)→0`). */
-const FAB_TOP = "4rem";
+/** The collapsed FAB is a left-edge PULL-TAB, flush against the left edge and
+ *  VERTICALLY CENTERED (`top: 50%`, base transform `translateY(-50%)`). Centering
+ *  keeps it clear of the page HEADER band at the top of the content column, so it
+ *  never overlaps the home "Your projections" H1, the "← Back to projections"
+ *  breadcrumb, or the top bar's "App suggestion" button at ANY viewport — a top-
+ *  anchored tab collided with that band once the centered frame gutter collapses on
+ *  narrow screens (QA P2). It mirrors the right-edge Override Inspector; the drawer
+ *  it opens still slides out from this same left edge (`translateX(-100%)→0`). On
+ *  scroll-down the tab slides off the LEFT edge (out of the way), back on scroll-up. */
+const FAB_TOP = "50%";
 
 /** Safe matchMedia probe — jsdom and SSR have no matchMedia; default to `fallback`. */
 function mediaMatches(query: string, fallback: boolean): boolean {
@@ -720,10 +724,11 @@ export function PennyDrawer({
         }
         style={{
           position: "fixed",
-          // Upper-LEFT, flush to the left edge (mirrors the enabled FAB), anchored
-          // below the top bar so it never overlaps the brand / home link.
+          // Left-edge pull-tab, VERTICALLY CENTERED (mirrors the enabled FAB) so it
+          // never overlaps the page header / breadcrumb band at any viewport.
           left: 0,
           top: FAB_TOP,
+          transform: "translateY(-50%)",
           zIndex: 40,
           display: "inline-flex",
           alignItems: "center",
@@ -778,9 +783,9 @@ export function PennyDrawer({
         onClick={() => (open ? close() : setOpen(true))}
         style={{
           position: "fixed",
-          // Upper-LEFT, FLUSH against the left edge (no inset), anchored just below
-          // the top bar so it never overlaps the brand / home link. The drawer it
-          // opens slides out from this same left edge (spec §5.1, #131).
+          // FLUSH against the left edge (no inset) and VERTICALLY CENTERED, so the
+          // tab clears the page header / breadcrumb band at every viewport. The
+          // drawer it opens slides out from this same left edge (spec §5.1, #131).
           left: 0,
           top: FAB_TOP,
           zIndex: 40,
@@ -796,9 +801,10 @@ export function PennyDrawer({
           color: "#fff",
           cursor: "pointer",
           boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-          // Hidden state (open OR scroll-down) slides UP off the top edge (the FAB is
-          // top-anchored); transition suppressed under reduced-motion.
-          transform: hidden ? "translateY(-150%)" : "translateY(0)",
+          // Centered via translateY(-50%); the hidden state (open OR scroll-down)
+          // ALSO slides the tab off the LEFT edge (it is left-anchored now, not top-
+          // anchored). Transition suppressed under reduced-motion.
+          transform: hidden ? "translate(-150%, -50%)" : "translate(0, -50%)",
           opacity: hidden ? 0 : 1,
           pointerEvents: hidden ? "none" : "auto",
           transition: reducedMotion
