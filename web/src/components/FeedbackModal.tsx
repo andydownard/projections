@@ -1,31 +1,38 @@
 // web/src/components/FeedbackModal.tsx — redacted bug/idea report (PRD §22).
 //
 // One modal, two shapes:
-//   • kind="bug"  (default) — Title + Description, plus a "don't paste financials"
-//     warning. Used by the saved-projection "Feedback" action.
-//   • kind="idea" — the Idea Fab suggestion: just a Description (+ optional email),
-//     NO title and NO warning. An idea is a one-line thought, not a triage ticket.
+//   • kind="bug"  (default) — Title + Description + "don't paste financials"
+//     warning. Used by the saved-projection "Feedback" action. On success it
+//     shows a panel with the server's random support_id (SUP-…).
+//   • kind="idea" — the App suggestion (topbar lightbulb). One unlabeled
+//     textarea with placeholder "Make the app better by…". No email field —
+//     the server derives the submitter's identity from the Clerk JWT (AS2).
+//     On success: close immediately + showToast (AS4); support_id never shown.
 //
-// The success surface shows ONLY the server's random support_id (SUP-…). The
-// outbound payload carries NO view_slug / token / financial field — redaction is
-// server-enforced (app/routers/feedback.py), so the absent warning on the idea
-// form weakens nothing.
+// The outbound payload carries NO view_slug / token / financial field —
+// redaction is server-enforced (app/routers/feedback.py).
 //
 // Rendered through a portal to <body> so it overlays the whole app (and never
-// inflates the sticky <header> that hosts the Idea Fab trigger). a11y lives in
+// inflates the sticky <header> that hosts the topbar trigger). a11y lives in
 // useDialog: focus trap, autofocus, Escape-to-close, scroll lock, and focus
 // restore to the trigger. The accessible name comes from the panel heading via
 // aria-labelledby (role=dialog).
 import { useState } from "react";
 import { createPortal } from "react-dom";
 
+import { useToast } from "./Toast";
 import { useDialog } from "./useDialog";
 import { Z } from "./sidePanels";
 
 export interface FeedbackModalProps {
-  /** "bug" (default) = Title + Description + warning; "idea" = Description + email. */
+  /** "bug" (default) = Title + Description + warning; "idea" = unlabeled textarea. */
   kind?: "bug" | "idea";
-  /** Submit handler -> returns the server support_id (SUP-…). */
+  /**
+   * Submit handler → returns the server support_id (SUP-…).
+   * For "idea": receives only { description }. email is server-derived from the
+   * Clerk JWT and never collected from the client (AS2). email? is kept in the
+   * type signature for backward compatibility with callers that introspect it.
+   */
   onSubmit: (input: {
     title?: string;
     description: string;
@@ -38,9 +45,9 @@ export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModal
   const isIdea = kind === "idea";
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [email, setEmail] = useState("");
   const [supportId, setSupportId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const { showToast } = useToast();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
 
   // An idea only needs a description; a bug report needs a title to triage.
@@ -51,10 +58,16 @@ export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModal
     try {
       const id = await onSubmit(
         isIdea
-          ? { description, email: email.trim() || undefined }
+          ? { description }              // AS2: no email — server derives from JWT
           : { title, description },
       );
-      setSupportId(id);
+      if (isIdea) {
+        // AS4: close immediately + toast. Never show support_id for the idea path.
+        onClose();
+        showToast("Thanks! Your suggestion makes the app better.");
+      } else {
+        setSupportId(id);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -79,6 +92,8 @@ export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModal
     >
       <div className="feedback-modal__panel">
         {supportId ? (
+          // Bug-path success panel. The idea path never reaches here — it
+          // calls onClose() + showToast() and lets the parent unmount the modal.
           <div data-testid="feedback-success" className="feedback-modal__success">
             <h2 id="feedback-modal-title">Feedback received</h2>
             <p>Thanks — your report was filed.</p>
@@ -102,10 +117,11 @@ export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModal
               void send();
             }}
           >
-            <h2 id="feedback-modal-title">{isIdea ? "Share an idea" : "Send feedback"}</h2>
+            {/* AS1: idea title = "App suggestion"; bug title = "Send feedback" */}
+            <h2 id="feedback-modal-title">{isIdea ? "App suggestion" : "Send feedback"}</h2>
             {!isIdea && (
               <p className="feedback-modal__warning">
-                Please don’t include sensitive financial details — this report does not
+                Please don't include sensitive financial details — this report does not
                 attach your projection.
               </p>
             )}
@@ -119,25 +135,30 @@ export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModal
                 />
               </label>
             )}
-            <label>
-              Description
+            {/*
+              AS3: idea = one unlabeled textarea with placeholder (no visible label
+              and no warning); bug = labeled "Description" textarea.
+              Both have an accessible name for WCAG 2.1 AA: the idea textarea uses
+              aria-label; the bug textarea gets its name from the wrapping <label>.
+            */}
+            {isIdea ? (
               <textarea
-                aria-label="Description"
+                aria-label="Your suggestion"
+                placeholder="Make the app better by…"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
-            </label>
-            {isIdea && (
+            ) : (
               <label>
-                Email (optional)
-                <input
-                  aria-label="Email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                Description
+                <textarea
+                  aria-label="Description"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
                 />
               </label>
             )}
+            {/* AS2: email input removed from idea path — server derives from Clerk JWT */}
             <div className="feedback-modal__actions">
               <button type="button" className="btn" onClick={onClose}>
                 Cancel

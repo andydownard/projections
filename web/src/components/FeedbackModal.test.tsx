@@ -1,9 +1,17 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FeedbackModal } from "./FeedbackModal";
 import { Z } from "./sidePanels";
+
+// Mock useToast so idea-path success tests can assert toast calls
+// without mounting a full ToastProvider tree. vi.hoisted ensures
+// mockShowToast is available when vi.mock() is hoisted to the top.
+const mockShowToast = vi.hoisted(() => vi.fn());
+vi.mock("./Toast", () => ({
+  useToast: () => ({ showToast: mockShowToast }),
+}));
 
 describe("FeedbackModal", () => {
   it("layers above both side panels (Penny + Inspector) at the documented z-order", () => {
@@ -120,56 +128,96 @@ describe("FeedbackModal", () => {
     expect(document.body.style.overflow).toBe("");
   });
 
-  // --- idea variant (the Idea Fab suggestion: description-only) --------------
+  // --- idea variant (App suggestion: AS1–AS5) --------------------------------
 
   describe("kind=idea", () => {
-    it("is a simple suggestion: no title field and no financial warning", () => {
-      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
-      expect(screen.getByLabelText(/description/i)).toBeInTheDocument();
-      expect(screen.queryByLabelText("Title")).toBeNull();
-      expect(screen.queryByText(/sensitive financial/i)).toBeNull();
+    beforeEach(() => {
+      mockShowToast.mockClear();
     });
 
-    it("offers an optional email field", () => {
+    // AS1 — title
+    it("modal title is 'App suggestion'", () => {
       render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
-      expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
-    });
-
-    it("is a labelled dialog titled 'Share an idea'", () => {
-      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
-      const dialog = screen.getByRole("dialog", { name: /share an idea/i });
+      const dialog = screen.getByRole("dialog", { name: /app suggestion/i });
       expect(dialog).toHaveAttribute("aria-modal", "true");
       expect(dialog).toHaveAttribute("aria-labelledby", "feedback-modal-title");
     });
 
-    it("disables Send until a description is entered (title is irrelevant)", () => {
+    // AS2 — no email field
+    it("no email input in the idea path", () => {
       render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
-      expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+      expect(screen.queryByLabelText(/email/i)).toBeNull();
+      // Belt-and-suspenders: no <input type="email"> anywhere in the DOM.
+      expect(document.querySelector('input[type="email"]'))
+        .toBeNull();
     });
 
-    it("submits description + email with NO title in the payload", async () => {
+    // AS3 — unlabeled textarea + placeholder, no warning
+    it("renders a textarea with placeholder 'Make the app better by…' — no visible label, no warning", () => {
+      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
+      const textarea = screen.getByPlaceholderText("Make the app better by…");
+      expect(textarea.tagName).toBe("TEXTAREA");
+      // No visible \Description\ label text.
+      expect(screen.queryByText("Description")).toBeNull();
+      // No financial warning.
+      expect(screen.queryByText(/sensitive financial/i)).toBeNull();
+    });
+
+    // AS3 — disabled/enabled gate (trimmed)
+    it("disables Send when textarea is empty, enables it when non-empty", async () => {
+      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
+      const sendBtn = screen.getByRole("button", { name: /send/i });
+      expect(sendBtn).toBeDisabled();
+      await userEvent.type(
+        screen.getByPlaceholderText("Make the app better by…"),
+        "An idea.",
+      );
+      expect(sendBtn).not.toBeDisabled();
+    });
+
+    // AS4 — success: close + toast, no support id
+    it("on success: closes the modal and shows a toast — no support id in DOM", async () => {
+      const onClose = vi.fn();
       const onSubmit = vi.fn(async () => "SUP-IDEA9");
-      render(<FeedbackModal kind="idea" onSubmit={onSubmit} onClose={() => {}} />);
-      await userEvent.type(screen.getByLabelText(/description/i), "A donor-thanks export.");
-      await userEvent.type(screen.getByLabelText(/email/i), "ed@example.org");
+      render(<FeedbackModal kind="idea" onSubmit={onSubmit} onClose={onClose} />);
+
+      await userEvent.type(
+        screen.getByPlaceholderText("Make the app better by…"),
+        "A donor-thanks export.",
+      );
       await userEvent.click(screen.getByRole("button", { name: /send/i }));
 
-      expect(await screen.findByTestId("feedback-success")).toHaveTextContent("SUP-IDEA9");
-      // Exact-match: an idea submits ONLY description + email — never a title.
-      expect(onSubmit).toHaveBeenCalledWith({
-        description: "A donor-thanks export.",
-        email: "ed@example.org",
-      });
+      await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+      expect(mockShowToast).toHaveBeenCalledWith(
+        "Thanks! Your suggestion makes the app better.",
+      );
+      // No success panel or support id ever shown in the DOM.
+      expect(screen.queryByTestId("feedback-success")).toBeNull();
+      expect(screen.queryByText("SUP-IDEA9")).toBeNull();
+      // Payload: description only — no email (server derives from JWT), no title.
+      expect(onSubmit).toHaveBeenCalledWith({ description: "A donor-thanks export." });
+    });
+
+    // AS5 — planning-estimates sentence absent
+    it("'planning estimates' sentence is absent from the idea flow", () => {
+      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
+      expect(screen.queryByText(/planning estimates/i)).toBeNull();
+    });
+
+    it("is a simple suggestion: no title field and no financial warning", () => {
+      render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
+      expect(screen.queryByLabelText("Title")).toBeNull();
+      expect(screen.queryByText(/sensitive financial/i)).toBeNull();
     });
 
     it("traps Tab focus inside the dialog (a11y preserved)", () => {
       render(<FeedbackModal kind="idea" onSubmit={async () => "SUP-X"} onClose={() => {}} />);
       const cancel = screen.getByRole("button", { name: /cancel/i });
-      const description = screen.getByLabelText(/description/i);
-      // Send is disabled (no description), so Cancel is the last reachable control.
+      const textarea = screen.getByPlaceholderText("Make the app better by…");
+      // Send is disabled (empty textarea), so Cancel is the last reachable control.
       cancel.focus();
       fireEvent.keyDown(document, { key: "Tab" });
-      expect(description).toHaveFocus();
+      expect(textarea).toHaveFocus();
       fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
       expect(cancel).toHaveFocus();
     });
