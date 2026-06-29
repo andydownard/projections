@@ -4,7 +4,7 @@
 // active route. The shell renders the server view-model; it computes NO
 // projection math (PRD §13). Routes: / (home), /wizard, /p/<slug>[/edit],
 // /r/<slug>.
-import { useSyncExternalStore } from "react";
+import { lazy, Suspense, useSyncExternalStore } from "react";
 
 import { TopBar } from "./components/TopBar";
 import { PennyGeneralAssistant } from "./components/PennyDrawer";
@@ -13,8 +13,15 @@ import { ListPage } from "./pages/ListPage";
 import { CreateProjectionPage } from "./pages/CreateProjectionPage";
 import { ProjectionDetail } from "./pages/ProjectionDetail";
 import { RoleView } from "./pages/RoleView";
+import { clerkActive } from "./auth/clerkToken";
 import { useDetailHeader } from "./state/detailHeader";
 import "./tokens.css";
+
+// The forced owner sign-in gate (Phase 0 B2) is lazy-loaded so the ship-dark path
+// (no VITE_CLERK_PUBLISHABLE_KEY ⇒ clerkActive() false) NEVER executes the Clerk
+// import. @clerk/clerk-react stays code-split out of the booted bundle, exactly as
+// ClerkAuthProvider / OwnerAuthControls do.
+const ClerkOwnerGate = lazy(() => import("./auth/ClerkOwnerGate"));
 
 // Subscribe to history changes so the SPA re-renders on navigation without a
 // router dependency.
@@ -41,6 +48,22 @@ export function appProvidesGeneralPenny(route: Route): boolean {
   return false;
 }
 
+/**
+ * Whether a route is an OWNER surface that the forced sign-in gate covers (Phase 0
+ * B2 — owner Decision 1 = REQUIRE login on owner surfaces). OWNER surfaces: the
+ * list (home), the create wizard, and the EDITABLE detail page. VIEWER surfaces are
+ * NEVER gated and stay login-free — the role share (`/r/<slug>`), the read-only
+ * detail (`/p/<slug>`), and not-found — so capability share-links keep working with
+ * no login. The gate only ever engages when clerkActive() is true (see App); with
+ * Clerk off this classification is inert.
+ */
+export function isOwnerSurface(route: Route): boolean {
+  if (route.kind === "home") return true;
+  if (route.kind === "wizard") return true;
+  if (route.kind === "detail" && route.edit) return true;
+  return false;
+}
+
 export function App() {
   useSyncExternalStore(subscribe, getSnapshot);
   const route = parseRoute(window.location.pathname, window.location.search);
@@ -60,6 +83,27 @@ export function App() {
   const generalPenny = appProvidesGeneralPenny(route);
   const aiOff = route.kind === "detail" ? route.aiOff : false;
 
+  const content = (
+    <>
+      {route.kind === "home" && <ListPage />}
+      {route.kind === "wizard" && (
+        <CreateProjectionPage aiOff={route.aiOff} step={route.step} />
+      )}
+      {route.kind === "detail" && (
+        <ProjectionDetail slug={route.slug} edit={route.edit} aiOff={route.aiOff} />
+      )}
+      {route.kind === "role" && <RoleView slug={route.slug} />}
+      {route.kind === "notfound" && <section className="notfound">Not found</section>}
+    </>
+  );
+
+  // Forced owner sign-in gate (Phase 0 B2). Only on OWNER surfaces, and only when
+  // the Clerk satellite is active — otherwise (ship dark / local / CI / tests) the
+  // content renders directly, byte-for-byte as today, and the Clerk import path is
+  // never touched. ClerkOwnerGate itself renders the content for a signed-in owner,
+  // so a signed-in owner is never trapped (fail-safe).
+  const gated = clerkActive() && isOwnerSurface(route);
+
   return (
     <div className="app">
       <a className="skip-link" href="#main">
@@ -67,15 +111,13 @@ export function App() {
       </a>
       <TopBar saveState={isDetail ? detailHeader.saveState : "idle"} />
       <main id="main" className="app__main" tabIndex={-1}>
-        {route.kind === "home" && <ListPage />}
-        {route.kind === "wizard" && (
-          <CreateProjectionPage aiOff={route.aiOff} step={route.step} />
+        {gated ? (
+          <Suspense fallback={null}>
+            <ClerkOwnerGate>{content}</ClerkOwnerGate>
+          </Suspense>
+        ) : (
+          content
         )}
-        {route.kind === "detail" && (
-          <ProjectionDetail slug={route.slug} edit={route.edit} aiOff={route.aiOff} />
-        )}
-        {route.kind === "role" && <RoleView slug={route.slug} />}
-        {route.kind === "notfound" && <section className="notfound">Not found</section>}
       </main>
       {generalPenny && <PennyGeneralAssistant aiEnabled={!aiOff} />}
     </div>

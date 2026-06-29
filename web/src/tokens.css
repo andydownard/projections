@@ -132,6 +132,62 @@ body {
   color: var(--text-muted);
 }
 
+/* --- forced owner sign-in gate (Phase 0 B2) ---------------------------------
+ * Shown INSTEAD of owner page content when the Clerk satellite is active and the
+ * owner is signed out. VIEWER routes (/r/<slug>, read-only /p/<slug>, not-found)
+ * are never gated, so this never blocks a capability share-link. Brand-primary
+ * filled button reuses the accepted "white on --brand-primary" combo (AA). */
+.owner-gate {
+  max-width: 32rem;
+  margin: 4rem auto;
+  padding: 0 1.25rem;
+  text-align: center;
+}
+.owner-gate__title {
+  font-size: var(--text-lg);
+  font-weight: var(--w-bold);
+  line-height: var(--lh-tight);
+  color: var(--text);
+  margin: 0 0 0.75rem;
+}
+.owner-gate__body {
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+  color: var(--text-muted);
+  margin: 0 0 1.5rem;
+}
+.owner-gate__sign-in {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* ≥44px tap target (WCAG 2.5.5 / project UI bar). */
+  min-height: 44px;
+  padding: 0 1.5rem;
+  border: 1px solid var(--brand-primary);
+  border-radius: 999px;
+  background: var(--brand-primary);
+  color: #ffffff;
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.owner-gate__sign-in:hover {
+  background: var(--brand-deep);
+  border-color: var(--brand-deep);
+}
+.owner-gate__sign-in:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .owner-gate__sign-in {
+    transition: none;
+  }
+}
+
 /* --- topbar: sticky, brand-led, inner row aligned to the content frame --- */
 .topbar {
   position: sticky;
