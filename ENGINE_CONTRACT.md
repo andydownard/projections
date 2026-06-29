@@ -532,6 +532,21 @@ The exported `.xlsx` and the Board Packet (`app/packet.py`) both carry a server-
 - **`.xlsx`** — a `NOTES & DISCLAIMER` text block on the `Projection` sheet with the disclaimer + `Terms v{TERMS_VERSION}` (+ acceptance date when known). **Pure text, no formulas** — it adds no recalc-error surface to the three-way golden gate.
 - **Packet** — a footer with the same disclaimer + terms version/date; when an AI narrative is present, an **AI-narrative disclosure** ("Narrative drafted with AI assistance; every figure is grounded in the model.") is prepended to the prose. Server-formatted only; no client math.
 
+### 11.8 The annual cascade guarantee (live formulas, pinned by test)
+
+The entire annual `Projection` P&L is a **live spreadsheet**, not a value dump: every blue input cell drives the whole sheet through Excel **formulas**, so a board member who opens the `.xlsx` and edits one assumption sees the P&L recompute. Concretely, **every derived annual cell is a formula** over the blue inputs and over upstream cells, across **all five year columns**:
+
+- the **driver chain**: Donor market share (`=share_yN`), Donating households (`=share×households`), Annual donations (`=hh×donations_per_hh`), Retail Sales (`=donations×donation_value`), Salvage Sales (`=retail×salvage_pct`), Total Revenue (`=retail+salvage`), Customers (`=IF(basket=0,"",retail/basket)`);
+- **every non-overridden expense line**: Payroll (`=rev×labor_pct`), Payroll taxes (`=payroll×payroll_tax_pct`), Credit card fees / Marketing / Supplies (`=rev×pct`), Rent (`=occupancy_y1×(1+escalator)^(y-1)`), Utilities (`=building_sqft×utilities_per_sqft`), and the fixed lines (`=input_cell`);
+- the **totals and bottom line**: Total Expenses (`=SUM(...)`), Net income (`=rev-exp`, with the Year-1 cell also `-Total Startup Costs`, §11.1), Net margin (`=IF(rev=0,"",net/rev)`), plus **Total Startup Costs** (`=SUM(...)`).
+
+The **only** derived annual cell that is ever a hard-coded value is an **overridden component** (orange, §11.2); even then its enclosing total stays a `=SUM(...)` so the sheet still foots (§11.4). This guarantee is **deliberately out of scope** for the `Monthly Cash Flow` tab and the `MILESTONES` block: the per-month Revenue / Operating-expenses / Scheduled-costs cells are **server VALUE snapshots** (only the monthly Net and Cumulative-cash cells are formulas), and the grand-opening / break-even / payback milestones are **server display-string snapshots** ("Month 6" / "N/A"). Those snapshots are a separate decision; do not assume they are live.
+
+Two tests in `engine/tests/test_xlsx_cascade.py` pin this contract:
+
+- **Audit** (`test_every_derived_annual_cell_is_a_formula`; runs everywhere, no `soffice` needed): asserts every derived annual cell listed above is an openpyxl formula string, never a literal. This is the regression guard so a future change can never silently hard-code a derived annual cell and break the cascade.
+- **Cascade** (`soffice`-gated exactly like the golden gate, runs in CI): edits one blue input cell, recalcs the workbook in LibreOffice, and asserts the downstream cells moved to hand-computed expectations. Editing `share_y1` moves Total Revenue, Payroll, Net income and Net margin; editing `basket` moves Customers (its only dependent) while Total Revenue stays put, proving the cascade is precise. The unedited recalc is also asserted to equal the server's resolved values.
+
 ---
 
 ## 12. Calibration & confidence (PRD §29, §6.3)
