@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   OWNER_TOKEN_KEY,
+  editTokenKey,
+  getEditToken,
   getOwnerToken,
   listProjections,
+  setEditToken,
   setOwnerToken,
 } from "./projections";
 
@@ -20,6 +23,27 @@ describe("owner token storage", () => {
     setOwnerToken("owner_abc");
     expect(localStorage.getItem(OWNER_TOKEN_KEY)).toBe("owner_abc");
     expect(getOwnerToken()).toBe("owner_abc");
+  });
+});
+
+// EPIC SHARE — the per-projection edit token (the editable share link's capability).
+// Same secrecy posture as the owner token: localStorage only, never a URL path/query.
+describe("edit token storage (EPIC SHARE)", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("round-trips the edit token per view_slug", () => {
+    expect(getEditToken("p_8x")).toBeNull();
+    setEditToken("p_8x", "edit_secret_abc");
+    expect(localStorage.getItem(editTokenKey("p_8x"))).toBe("edit_secret_abc");
+    expect(getEditToken("p_8x")).toBe("edit_secret_abc");
+  });
+
+  it("keeps each projection's edit token isolated by slug", () => {
+    setEditToken("p_8x", "edit_8x");
+    setEditToken("p_9y", "edit_9y");
+    expect(getEditToken("p_8x")).toBe("edit_8x");
+    expect(getEditToken("p_9y")).toBe("edit_9y");
+    expect(getEditToken("p_unknown")).toBeNull();
   });
 });
 

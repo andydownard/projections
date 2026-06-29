@@ -2820,7 +2820,8 @@ body {
  * no meaning; severity/choice live entirely in the panel copy and labels.
  * ========================================================================== */
 .feedback-modal,
-.conflict-modal {
+.conflict-modal,
+.share-modal {
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -2834,7 +2835,8 @@ body {
 }
 
 .feedback-modal__panel,
-.conflict-modal__panel {
+.conflict-modal__panel,
+.share-modal__panel {
   width: 100%;
   max-width: 28rem;
   max-height: calc(100vh - 3rem);
@@ -2848,6 +2850,61 @@ body {
   border-radius: 12px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
   animation: modal-panel-in 0.18s ease;
+}
+
+/* EPIC SHARE — the unified Share panel (Decision 12). Two link blocks (read-only +
+ * editable) each pairing a read-only URL field with a Copy button, plus a Close. */
+.share-modal__panel h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  color: var(--text);
+}
+.share-modal__link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+.share-modal__link-label {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text);
+}
+.share-modal__link-help {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.share-modal__link-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+.share-modal__link-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.75rem;
+  background: var(--surface-alt);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text);
+  /* The link is one continuous string; keep it on one line, scrollable. */
+  white-space: nowrap;
+  overflow-x: auto;
+}
+.share-modal__link-row .btn {
+  flex: 0 0 auto;
+}
+.share-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 /* Headings share the page type scale (calm, dense, finance-grade). */

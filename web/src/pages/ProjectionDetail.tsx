@@ -27,8 +27,9 @@ import {
   xlsxHref,
   docxHref,
 } from "../api/viewModel";
-import { getOwnerToken } from "../api/projections";
+import { getEditToken, getOwnerToken } from "../api/projections";
 import { patchProjection, PatchConflictError } from "../api/patch";
+import { ShareModal } from "../components/ShareModal";
 import { ProjectionTab, fieldChangeKey, type FieldChangeInfo } from "../components/ProjectionTab";
 import type { FieldChangeActor } from "../components/FieldChange";
 import { TradeAreaMap } from "../components/TradeAreaMap";
@@ -294,6 +295,11 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const [renaming, setRenaming] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTabId>("projection");
   const [loadError, setLoadError] = useState(false);
+  // EPIC SHARE (Decision 12): the unified Share panel. The editable link's capability
+  // (the edit token) is held in localStorage on the owner's device only — never minted
+  // here and never in a URL path/query (it rides the fragment in the link the panel
+  // builds). Absent ⇒ the panel offers the read-only link alone.
+  const [shareOpen, setShareOpen] = useState(false);
 
   // PE7: the recent per-field changes (keyed by fieldChangeKey) + the refs that
   // derive them. `prevCellsRef` is the editable-share snapshot from the last vm;
@@ -681,7 +687,8 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
               />
             )}
 
-            {/* D9: the .xlsx + .docx downloads live at the TOP, next to the name. */}
+            {/* D9: the .xlsx + .docx downloads live at the TOP, next to the name.
+                EPIC SHARE: the unified Share control sits alongside them (Decision 12). */}
             <div className="detail__downloads" data-testid="detail-downloads">
               <a
                 className="btn btn--download"
@@ -701,6 +708,15 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
               >
                 <span aria-hidden="true" className="btn__icon">▤</span> Word
               </a>
+              <button
+                type="button"
+                className="btn btn--download"
+                data-testid="share-projection"
+                aria-haspopup="dialog"
+                onClick={() => setShareOpen(true)}
+              >
+                <span aria-hidden="true" className="btn__icon">↗</span> Share
+              </button>
             </div>
           </div>
 
@@ -840,6 +856,14 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           onSaveAsCopy={resolveSaveAsCopy}
           message={conflict.message}
         />
+      )}
+
+      {/* EPIC SHARE (Decision 12): the unified Share panel. The read-only link is the
+          view_slug URL (exports authorize by slug alone — recipients pull the .xlsx +
+          .docx with no account). The editable link carries the edit token in the URL
+          FRAGMENT only, and only when this device holds it. */}
+      {shareOpen && (
+        <ShareModal slug={slug} editToken={getEditToken(slug)} onClose={() => setShareOpen(false)} />
       )}
 
       {/* Penny — the LEFT slide-out assistant (apply-immediately + narrate, Spec B
