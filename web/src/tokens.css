@@ -28,10 +28,12 @@
   /* --- type scale (#22): EXACTLY THREE sizes ---------------------------------
    * Hierarchy comes from WEIGHT / CASE / COLOR, never from extra sizes. Every
    * page holds to this budget (Home LG/BASE/SM · Wizard BASE/SM · Detail LG/
-   * BASE/SM). The ONE documented data-density exception is the dense M0–M12
-   * monthly cash-flow table (.cashflow-table), which stays at --text-sm because
-   * it scrolls (owner Decision #18). SVG chart glyphs keep their px sizing so
-   * they scale with the chart viewBox, not the document type scale. */
+   * BASE/SM). The ONE documented data-density exception is the dense first-year
+   * monthly cash-flow table (.cashflow-table), which stays at --text-sm (owner
+   * Decision #18). #320: it is transposed to months-as-rows so it fits the desktop
+   * column at that size with NO horizontal scroll (only a narrow phone scrolls the
+   * table). SVG chart glyphs keep their px sizing so they scale with the chart
+   * viewBox, not the document type scale. */
   --text-lg: 1.5rem; /* display headings + hero figures */
   --text-base: 0.9375rem; /* body copy, inputs, labels (15px) */
   --text-sm: 0.75rem; /* captions, eyebrows, micro-labels, dense table (12px) */
@@ -1640,12 +1642,15 @@ body {
 
 /* --- detail page: cash-flow dual-encoding, monthly table, shell (crown jewel) - */
 .cashflow-chart {
-  /* Shared month geometry (#40): the SVG left gutter AND the monthly table's label
-     column are both this fraction of the width, so the chart's month bands sit
-     directly above the table's month columns. The plot is wide + scrolls so the 13
-     equal columns never crush their figures; the chart scrolls WITH the table. */
+  /* --cf-label-col is the SVG left gutter (kept for the chart geometry).
+     #320: the chart spans the FULL 60-month horizon (fluid, fills its column, never
+     scrolls on desktop) while the monthly TABLE is transposed to months-as-ROWS with
+     the four line items as wide value COLUMNS. With only ~4 value columns the
+     six-figure cumulative-cash numbers fit the dense --text-sm font with NO horizontal
+     scroll on desktop; only a narrow phone falls back to --cf-table-min and scrolls
+     (just the table, via .cashflow-table__scroll, never the chart). */
   --cf-label-col: 14%;
-  --cf-plot-min: 58rem;
+  --cf-table-min: 26rem;
   margin: 0;
   display: flex;
   flex-direction: column;
@@ -1689,22 +1694,23 @@ body {
   background: var(--success);
   opacity: 0.6;
 }
-/* The chart + monthly table share ONE horizontal scroll so they stay aligned. */
+/* The chart + first-year monthly table stack in one column. #320: only the TABLE
+   may overflow-scroll (its first-year width); the chart is fluid and never forces a
+   scroll on desktop, so this container keeps min-width:0 and lets the table own its
+   own horizontal scroll below. */
 .cashflow-chart__plot {
   flex: 1 1 auto;
   min-width: 0;
-  overflow-x: auto;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 /* #196: the SVG follows its viewBox aspect (660:240) instead of a pinned 240px
-   height. The min-width keeps the 13 month bands wide enough to align with the
-   table columns (both share --cf-plot-min); on a narrow column the plot scrolls. */
+   height. #320: NO min-width, so the full 60-month line scales fluidly to fill the
+   column and never needs horizontal scroll on desktop. */
 .cashflow-chart__svg {
   display: block;
   width: 100%;
-  min-width: var(--cf-plot-min);
   height: auto;
 }
 .cashflow-chart__axis {
@@ -1787,11 +1793,14 @@ body {
   overflow-x: auto;
 }
 .cashflow-table {
-  /* table-layout:fixed + equal month columns + the shared label gutter line the
-     columns up under the chart's month bands (#40). min-width matches the chart
-     so both scroll together inside .cashflow-chart__plot. */
+  /* #320: months-as-rows (.cashflow-table--by-month). table-layout:fixed gives the
+     month label column a small share (--cf-label-col) and splits the rest across the
+     four value columns, which are then wide enough for the six-figure cumulative-cash
+     figures at --text-sm. width:100% fills the desktop column with NO horizontal
+     scroll; min-width is a small floor so only a narrow phone scrolls (and only the
+     table, inside its own .cashflow-table__scroll wrapper). */
   width: 100%;
-  min-width: var(--cf-plot-min, 58rem);
+  min-width: var(--cf-table-min, 26rem);
   table-layout: fixed;
   border-collapse: collapse;
   font-size: var(--text-sm);
@@ -1820,6 +1829,27 @@ body {
   position: sticky;
   left: 0;
   background: var(--surface);
+}
+/* #320: the small "Showing year 1 ... see the chart for the full horizon" note under
+   the first-year table. */
+.cashflow-table__note {
+  margin: 0.5rem 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+/* #320: the grand-opening month row is flagged with a background tint + an inset
+   brand accent on the sticky month cell + the visible ⚑ glyph and sr-only text, so
+   it is never told apart by color alone. */
+.cashflow-table--by-month tr[data-grand-opening="true"] td,
+.cashflow-table--by-month tr[data-grand-opening="true"] th {
+  background: var(--surface-alt);
+}
+.cashflow-table--by-month tr[data-grand-opening="true"] .cashflow-table__label {
+  box-shadow: inset 3px 0 0 var(--brand-primary);
+}
+.cashflow-table__open {
+  color: var(--brand-primary);
+  font-weight: 600;
 }
 
 .kpi__sub {
