@@ -1467,10 +1467,12 @@ def apply_projection_patch(
     # Audit actor: the presented capability token's hash on the capability path; the
     # Clerk sub's hash on the grant/clerk-owner path (a JWT bearer is NOT a stable
     # actor key). One of the two branches is always taken (the 403 above guarantees it).
-    actor_hash = (
-        hash_token(token) if is_capability
-        else hash_token(clerk_identity.clerk_user_id)  # type: ignore[union-attr]
-    )
+    if is_capability:
+        assert token is not None  # _is_owner/_is_editor are False for a None token
+        actor_hash = hash_token(token)
+    else:
+        assert clerk_identity is not None  # clerk_authorized implies a clerk identity
+        actor_hash = hash_token(clerk_identity.clerk_user_id)
 
     # Merge the partial onto the stored source-of-truth, then recompute.
     try:
