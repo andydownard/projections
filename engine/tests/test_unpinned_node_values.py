@@ -8,14 +8,14 @@ lock the helper to a pure no-override recompute of the annual chain.
 from engine.compute import compute_annual, unpinned_node_values
 
 
-def test_exposes_share_and_every_expense_for_all_three_years(canonical_inputs):
+def test_exposes_share_and_every_expense_for_all_five_years(canonical_inputs):
     inputs, assumptions, demand, trade = canonical_inputs
     values = unpinned_node_values(inputs, assumptions, demand, trade)
 
     years, _startup, _total, _occ = compute_annual(
         inputs, assumptions, demand, trade, {})
     expected_keys = set()
-    for y in (1, 2, 3):
+    for y in (1, 2, 3, 4, 5):
         expected_keys.add(("share", y))
         for label in years[y].expenses:
             expected_keys.add((label, y))
@@ -28,7 +28,7 @@ def test_values_match_the_no_override_annual_chain(canonical_inputs):
 
     years, _startup, _total, _occ = compute_annual(
         inputs, assumptions, demand, trade, {})
-    for y in (1, 2, 3):
+    for y in (1, 2, 3, 4, 5):
         assert values[("share", y)] == years[y].share
         for label, val in years[y].expenses.items():
             assert values[(label, y)] == val

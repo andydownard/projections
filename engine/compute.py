@@ -51,6 +51,8 @@ class Inputs:
     share_y1: str
     share_y2: str
     share_y3: str
+    share_y4: str
+    share_y5: str
     donation_value: str
     building_sqft: str
     salesfloor_pct: str
@@ -116,10 +118,10 @@ class AnnualYear:
 
 @dataclass
 class ComputeResult:
-    annual: dict             # {1: AnnualYear, 2: ..., 3: ...}
+    annual: dict             # {1: AnnualYear, 2: ..., 5: AnnualYear} (5-year horizon)
     startup: dict            # label -> Decimal
     startup_total: Decimal
-    occupancy: dict          # {1: Decimal, 2:..., 3:...} resolved occupancy per year
+    occupancy: dict          # {1: Decimal, ..., 5: Decimal} resolved occupancy per year
     inputs: Inputs
     assumptions: Assumptions
     trade_area: TradeArea
@@ -171,12 +173,17 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
     escalator = D(assumptions.escalator)
 
     occ1 = _occupancy_y1(inputs)
-    shares = {1: D(inputs.share_y1), 2: D(inputs.share_y2), 3: D(inputs.share_y3)}
+    shares = {
+        1: D(inputs.share_y1), 2: D(inputs.share_y2), 3: D(inputs.share_y3),
+        4: D(inputs.share_y4), 5: D(inputs.share_y5),
+    }
 
-    occupancy = {y: occ1 * (Decimal("1") + escalator) ** (y - 1) for y in (1, 2, 3)}
+    # 5-year horizon: the rent escalator compounds through Year 5 with the SAME
+    # formula occ1*(1+e)^(y-1) — no special-casing (ENGINE_CONTRACT §3/§5).
+    occupancy = {y: occ1 * (Decimal("1") + escalator) ** (y - 1) for y in (1, 2, 3, 4, 5)}
 
     years = {}
-    for y in (1, 2, 3):
+    for y in (1, 2, 3, 4, 5):
         share = _resolve_get(overrides, "share", y, shares[y])
         donating_hh = H * share
         donations = donating_hh * freq
@@ -250,7 +257,7 @@ def unpinned_node_values(inputs, assumptions, demand_drivers, trade_area) -> dic
     years, _startup, _startup_total, _occupancy = compute_annual(
         inputs, assumptions, demand_drivers, trade_area, {})
     out: dict = {}
-    for y in (1, 2, 3):
+    for y in (1, 2, 3, 4, 5):
         yr = years[y]
         out[("share", y)] = yr.share
         for label, val in yr.expenses.items():

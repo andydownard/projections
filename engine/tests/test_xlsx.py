@@ -15,7 +15,7 @@ from engine.xlsx import build_xlsx
 def _inputs():
     return Inputs(
         org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
     )
@@ -181,7 +181,7 @@ def test_milestones_block_shows_payback_month_when_recovered(tmp_path):
     # workbook shows the payback month (consistent with the view-model display).
     inputs = Inputs(
         org_name="Strong", city="x", opening_status="pre_launch",
-        share_y1="0.15", share_y2="0.20", share_y3="0.25",
+        share_y1="0.15", share_y2="0.20", share_y3="0.25", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="800000",
     )
@@ -211,7 +211,7 @@ def _preopening_inputs():
     places costs on the two pre-opening months and the opening month."""
     return Inputs(
         org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
         opening_month_number=3,
@@ -488,7 +488,7 @@ def test_post_open_scheduled_cost_extends_the_timeline(tmp_path):
     # its own month number; N extends to cover it.
     inputs = Inputs(
         org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
         opening_month_number=2,

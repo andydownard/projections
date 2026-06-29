@@ -153,7 +153,7 @@ def to_view_model(result):
     kpis = [
         {"label": "Total revenue", "value": money_view(y1.total_rev), "sub": "Year 1",
          "color": "text"},
-        {"label": "Net profit", "value": money_view(y1.net), "sub": "Year 1", "color": "text"},
+        {"label": "Net income", "value": money_view(y1.net), "sub": "Year 1", "color": "text"},
         {"label": "Net margin", "value": _pct_or_na(y1.margin), "sub": "Year 1", "color": "text"},
         {"label": "Sales / sq ft", "value": _money_or_na(sales_per_sqft),
          "sub": "Year 1", "color": "text"},
@@ -169,10 +169,10 @@ def to_view_model(result):
         {"label": "Labor ratio", "value": _pct_or_na(labor_ratio),
          "sub": "payroll / revenue", "color": "text"},
         {"label": "Revenue CAGR", "value": _pct_or_na(dec.revenue_cagr),
-         "sub": "Y1->Y3", "color": "text"},
+         "sub": "Y1->Y5", "color": "text"},
     ]
 
-    # ---- 3-year rows
+    # ---- 5-year rows (each annual line carries y1..y5)
     rows = []
     rows.append(_driver_row("Donor market share", annual, "share", pct=True, group="drivers"))
     rows.append(
@@ -192,15 +192,18 @@ def to_view_model(result):
             "y1": money_view(annual[1].expenses[label]),
             "y2": money_view(annual[2].expenses[label]),
             "y3": money_view(annual[3].expenses[label]),
+            "y4": money_view(annual[4].expenses[label]),
+            "y5": money_view(annual[5].expenses[label]),
             "class": _row_class(label, pinned_by_label),
             "editable": label in _EDITABLE_ROWS and label not in pinned_by_label,
         })
     rows.append(_driver_row("Total Expenses", annual, "total_exp", group="expenses", computed=True))
-    rows.append(_driver_row("Net profit", annual, "net", group="expenses", computed=True))
+    rows.append(_driver_row("Net income", annual, "net", group="expenses", computed=True))
     rows.append({
         "label": "Net margin", "group": "expenses",
         "y1": _pct_or_na(annual[1].margin), "y2": _pct_or_na(annual[2].margin),
-        "y3": _pct_or_na(annual[3].margin), "class": "computed", "editable": False,
+        "y3": _pct_or_na(annual[3].margin), "y4": _pct_or_na(annual[4].margin),
+        "y5": _pct_or_na(annual[5].margin), "class": "computed", "editable": False,
     })
 
     # ---- monthly (project months 1..N; the SAME columns the .xlsx tab renders, so
@@ -249,13 +252,26 @@ def to_view_model(result):
         ),
         "basket": float(D(a.basket)),
         "donationsPerHh": a.donations_per_hh,
+        # Editable donation drivers (E2). donationValue (Inputs.donation_value) and
+        # donationsPerHouseholdPerYear (the donations/hh/yr driver) join the already
+        # exposed basket so the wizard/settings can edit retail = donations × value
+        # and customers = retail / basket. donationsPerHh is retained as an alias.
+        "donationValue": float(D(result.inputs.donation_value)),
+        "donationsPerHouseholdPerYear": a.donations_per_hh,
         "shareY1": float(D(result.inputs.share_y1)),
         "shareY2": float(D(result.inputs.share_y2)),
         "shareY3": float(D(result.inputs.share_y3)),
+        "shareY4": float(D(result.inputs.share_y4)),
+        "shareY5": float(D(result.inputs.share_y5)),
         "reserveBuffer": a.reserve_buffer,
         "leaseType": result.inputs.lease_type,
         "salesfloorSqft": float(D(result.inputs.building_sqft) * D(result.inputs.salesfloor_pct)),
     }
+
+    # ---- annual net-income series Y1..Y5 ({raw,display}) — feeds the list/detail
+    # sparkline. The engine/server is the single format authority, so the client
+    # renders these display strings and never re-derives the trend line.
+    income_series = [money_view(annual[y].net) for y in (1, 2, 3, 4, 5)]
 
     return {
         "reco": reco,
@@ -264,6 +280,8 @@ def to_view_model(result):
         "kpis": kpis,
         "monthly": monthly,
         "breakevenMonth": result.monthly_breakeven,
+        "incomeSeries": income_series,
+        "year5Income": money_view(annual[5].net),
         "rows": rows,
         "overrides": ov_list,
         "settings": settings,
@@ -300,7 +318,7 @@ def _driver_row(label, annual, attr, group, pct=False, num=False, computed=False
         return money_view(v)
     return {
         "label": label, "group": group,
-        "y1": cell(1), "y2": cell(2), "y3": cell(3),
+        "y1": cell(1), "y2": cell(2), "y3": cell(3), "y4": cell(4), "y5": cell(5),
         "class": "computed" if computed else "input",
         "editable": (not computed) and attr == "share",
     }

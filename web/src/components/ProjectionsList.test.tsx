@@ -5,7 +5,7 @@ import { ProjectionsList } from "./ProjectionsList";
 import type { ProjectionListItem } from "../api/projections";
 
 // SLICE 2 — owner-scoped list page (PRD §19.1). Rows show name, location + basis,
-// updated, Year-1 revenue, net profit, capital required, and a recommendation
+// updated, Year-1 revenue, net income, capital required, and a recommendation
 // chip. Money is rendered VERBATIM from the server { display } (no client math).
 // Empty state is utilitarian: heading + a single Create action.
 

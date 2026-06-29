@@ -244,6 +244,12 @@ class InputsIn(BaseModel):
     share_y1: str
     share_y2: str
     share_y3: str
+    # 5-year horizon (#redesign-v2): Year 4 / Year 5 donor shares. Optional with the
+    # decelerating-plateau defaults so the current 3-year wizard POST keeps working
+    # (the year-count-agnostic frontend is a later epic) and new projections carry the
+    # full 5-year curve. The engine treats them like share_y1..3 (same driver chain).
+    share_y4: str = "0.11"
+    share_y5: str = "0.12"
     donation_value: str
     building_sqft: str
     salesfloor_pct: str
@@ -313,6 +319,12 @@ class AssumptionsIn(BaseModel):
     # (and the golden fixtures) keep the model default ($2.23/sq ft) untouched.
     utilities_per_sqft: Optional[str] = None
     basket: Optional[str] = None
+    # Editable donation driver (E2): donations per household per year (engine default
+    # 3). donation_value lives on InputsIn and basket is just above — together these
+    # make the donation chain (retail = donations × value; customers = retail / basket)
+    # fully editable. Optional + None-default so existing callers keep the model
+    # default. Typed int so a PATCH value flows straight into the engine constant.
+    donations_per_hh: Optional[int] = None
 
 
 class LocationIn(BaseModel):
@@ -434,6 +446,15 @@ def _build_engine_args_from_dicts(
     engine_inputs_d = {
         k: v for k, v in inputs_d.items() if k not in _NON_ENGINE_INPUT_KEYS
     }
+    # 5-year auto-extend (#redesign-v2 upgrade path): a legacy 3-year snapshot stored
+    # under model_version 2.5.0 has no share_y4/share_y5. When that snapshot is
+    # recomputed (PATCH / .xlsx export / upgrade-model -> 2.6.0) default the missing
+    # late-year shares to the decelerating-plateau values so the upgrade is
+    # non-destructive (upgrade-model writes a NEW revision; the prior 2.5.0 bytes are
+    # preserved verbatim by get_projection). New revisions persist these, so the
+    # default only ever fills a gap left by a pre-5-year save.
+    engine_inputs_d.setdefault("share_y4", "0.11")
+    engine_inputs_d.setdefault("share_y5", "0.12")
     inputs = Inputs(**engine_inputs_d)
     akw = {k: v for k, v in (assumptions_d or {}).items() if v is not None}
     assumptions = Assumptions(**akw)
@@ -976,7 +997,7 @@ def export_xlsx(
     build_xlsx(result, path, terms_accepted_at=row.get("terms_accepted_at"))
 
     stem = _safe_filename_stem(row.get("name") or "")
-    filename = f"{stem} 3-Year Projection.xlsx"
+    filename = f"{stem} 5-Year Projection.xlsx"
     return FileResponse(
         path,
         media_type=XLSX_CONTENT_TYPE,
