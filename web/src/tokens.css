@@ -449,6 +449,57 @@ body {
   }
 }
 
+/* v2 redesign (EPIC L): whole-row click target + new column cells. */
+
+/* Clickable row: pointer cursor + hover highlight (WCAG 2.1 AA focus ring via
+   :focus-visible). The row has role="button" + tabIndex=0 for keyboard access. */
+.list__row {
+  cursor: pointer;
+}
+.list__row:hover {
+  background: var(--surface);
+}
+.list__row:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: -2px;
+}
+
+/* Location cell: 2-line flex column (name on top, date below in --text-muted). */
+.list__location {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+.list__name {
+  font-weight: 600;
+  color: var(--brand-deep);
+}
+.list__date {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* Income sparkline cell: vertically centered. */
+.list__income-cell {
+  vertical-align: middle;
+}
+
+/* Capital required cell: red (--error) for "money you must raise". */
+.list__capital {
+  color: var(--error);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Caret column: minimal width; the glyph is the only affordance. */
+.list__caret-col {
+  width: 1.5rem;
+}
+.list__caret {
+  color: var(--text-muted);
+  font-size: var(--text-lg);
+  text-align: center;
+}
+
 .reco-chip {
   display: inline-block;
   font-size: var(--text-sm);

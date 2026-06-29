@@ -30,20 +30,33 @@ export type RecoTag =
   | "delay"
   | "do_not_proceed";
 
+/** A milestone display value from the server — `raw` is the project-month number
+ *  or null when the milestone is unreached; `display` is the server-formatted string
+ *  ("Month 12" / "N/A"). The client renders `display` verbatim (no client math). */
+export interface MilestoneValue {
+  raw: number | null;
+  display: string;
+}
+
 export interface ProjectionListItem {
   view_slug: string;
   name: string;
+  /** City / geography name for the location column (server-formatted). */
   location: string;
-  basis: string;
-  y1_revenue: ServerValue;
-  y1_net: ServerValue;
+  /** Annual net income Y1..Y5 — 5-element array of {raw, display} from the server.
+   *  Powers the list row sparkline (no client math). */
+  income_series: ServerValue[];
+  /** Year-5 net income {raw, display} — shown as the sparkline's Y5 label. */
+  y5_income: ServerValue;
+  /** Capital required {raw, display} — shown in red (the money you must raise). */
   capital_required: ServerValue;
-  reco_tag: RecoTag;
+  /** Payback period — server-formatted display string (e.g. "Month 25" / "N/A"). */
+  payback: MilestoneValue;
+  /** Break-even month — server-formatted display string (e.g. "Month 5" / "N/A"). */
+  breakeven: MilestoneValue;
   status: string;
   version: number;
   updated_at: string;
-  /** lat/lng for the row mini-map; null/undefined when no address was resolved. */
-  coords?: { lat: number; lng: number } | null;
 }
 
 export interface ProjectionListResponse {

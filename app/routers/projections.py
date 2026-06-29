@@ -867,8 +867,15 @@ def list_projections(
             "basis": summary.get("basis", ""),
             "y1_revenue": summary.get("y1_revenue") or {"raw": 0, "display": "—"},
             "y1_net": summary.get("y1_net") or {"raw": 0, "display": "—"},
+            # v2 redesign (L3): sparkline series + milestone display strings.
+            # The server emits {raw, display} and the client renders display verbatim
+            # (no client math — PRD §13). income_series is a list of 5 {raw,display}.
+            "income_series": summary.get("income_series") or [],
+            "y5_income": summary.get("y5_income") or {"raw": 0, "display": "—"},
             "capital_required": summary.get("capital_required")
                                 or {"raw": 0, "display": "—"},
+            "payback": summary.get("payback") or {"raw": None, "display": "N/A"},
+            "breakeven": summary.get("breakeven") or {"raw": None, "display": "N/A"},
             "reco_tag": summary.get("reco_tag") or "revise",
             # lat/lng for the list-row mini-map; null when location was never resolved.
             "coords": summary.get("coords"),

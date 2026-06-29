@@ -1,9 +1,10 @@
-"""5-year horizon + editable donation drivers — server surface (E1/E2).
+"""5-year horizon + editable donation drivers — server surface (E1/E2/L).
 
 Pins the NEW server behaviour: the current 3-year wizard POST (no share_y4/y5) still
 produces a full 5-year projection with the decelerating-plateau defaults; the legacy
 3-year -> 5-year engine-args mapping auto-extends absent shares; the donation drivers
-are PATCH-able; the owner-list card summary carries the income series for the sparkline.
+are PATCH-able; the owner-list card summary carries the income series for the sparkline
+AND the v2 list column fields (income_series, y5_income, payback, breakeven — EPIC L).
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -122,3 +123,45 @@ def test_card_summary_carries_income_series_and_year5_income(client):
     # y1_net reads the renamed "Net income" KPI (not the retired "Net profit").
     net_kpi = next(k for k in created["kpis"] if k["label"] == "Net income")
     assert summary["y1_net"] == net_kpi["value"]
+
+
+def test_card_summary_carries_payback_and_breakeven(client):
+    # EPIC L (list-column contract): build_card_summary must denormalize payback and
+    # breakeven from the view-model milestones so list_projections can surface them
+    # without touching the full computed_json blob.
+    created = _create(client)
+    summary = build_card_summary(created)
+    assert "payback" in summary, "card summary must carry payback for the list column"
+    assert "breakeven" in summary, "card summary must carry breakeven for the list column"
+    # Both are {raw, display} objects (the server's formatting authority).
+    assert "display" in summary["payback"]
+    assert "display" in summary["breakeven"]
+
+
+def test_list_endpoint_carries_v2_list_columns(client):
+    # EPIC L: GET /api/projections must return income_series, y5_income, payback,
+    # and breakeven on every item — these power the v2 list column set.
+    # No client math: the list renders display strings verbatim (PRD §13).
+    created = _create(client)
+    owner = created["owner_token"]
+    r = client.get("/api/projections", headers={"Authorization": f"Bearer {owner}"})
+    assert r.status_code == 200, r.text
+    items = r.json()["projections"]
+    assert len(items) == 1
+    item = items[0]
+    # income_series: 5-element list of {raw, display}
+    assert "income_series" in item, "list item must carry income_series for sparkline"
+    assert len(item["income_series"]) == 5
+    assert all("display" in v for v in item["income_series"])
+    # y5_income: Year-5 net income {raw, display}
+    assert "y5_income" in item, "list item must carry y5_income for sparkline Y5 label"
+    assert "display" in item["y5_income"]
+    # payback: {raw, display}
+    assert "payback" in item, "list item must carry payback for the Payback column"
+    assert "display" in item["payback"]
+    # breakeven: {raw, display}
+    assert "breakeven" in item, "list item must carry breakeven for the Breakeven column"
+    assert "display" in item["breakeven"]
+    # capital_required: still present
+    assert "capital_required" in item
+    assert item["capital_required"]["display"] != ""
