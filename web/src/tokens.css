@@ -62,6 +62,31 @@
   /* Toast: success surface + text */
   --toast-bg: #1d4733;      /* brand-deep — intentionally prominent */
   --toast-text: #ffffff;
+
+  /* --- EPIC X2 spacing + control scale (4px base grid) ----------------------
+   * All page gutters, gaps, and control heights anchor to this scale. The token
+   * names are intentionally ordinal (space-1…6) rather than semantic (sm/md/lg)
+   * so the mapping stays obvious: 1 unit = 4 px. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Control heights: standard and compact input/button heights. */
+  --control-h: 34px;
+  --control-h-sm: 28px;
+
+  /* Field horizontal padding: shared by inputs and their inline editors so numbers
+   * never shift on click (the edit-in-place rule). */
+  --field-pad-x: 10px;
+
+  /* Label-to-value gap (used in metric-bar cells, KPI grid, etc.). */
+  --label-gap: 4px;
+
+  /* Standard border-radius for inputs, buttons, and cards. */
+  --radius: 8px;
 }
 
 * {
@@ -3275,6 +3300,7 @@ body {
 }
 .cost-matrix__month--right {
   text-align: right;
+}
 /* ============================================================================
    EPIC D — detail-page redesign (additive). Header title row + inline pencil
    rename + top downloads (D1/D9), the 4-cell metric bar (D1), the merged
@@ -3361,8 +3387,13 @@ body {
 .metric-bar__cell {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
-  min-width: 6rem;
+  gap: var(--label-gap);
+  padding: var(--space-1) var(--space-5);
+  border-right: 1px solid var(--line);
+  min-width: 7rem;
+}
+.metric-bar__cell:last-child {
+  border-right: none;
 }
 .metric-bar__label {
   font-size: var(--text-sm);
@@ -3484,4 +3515,75 @@ td.cell-wrap {
   fill: var(--text);
   font-size: 11px;
   font-weight: 600;
+}
+
+/* ============================================================================
+ * EPIC X2 — Pixel-perfect alignment standard
+ * Horizontal: shared right edge on all numeric columns (.num already enforces
+ *   text-align:right + tabular-nums; this section extends it to contextual
+ *   overrides and ensures consistent padding).
+ * Vertical: 4px grid; label→value gap = --label-gap; baseline alignment.
+ * Edit-in-place: cell display padding == editor padding so numbers never shift.
+ * ========================================================================== */
+
+/* Ensure all numeric cells in the 3/5-year table, the monthly table, the KPI
+   grid, the metric bar, and the list share ONE right padding (--field-pad-x).
+   The padding in cell-wrap + the inline editor both use --field-pad-x so the
+   number never shifts 1px on click (D6 edit-in-place rule). */
+.three-year-table td.cell-wrap .cell,
+.cashflow-table td {
+  padding-right: var(--field-pad-x);
+}
+
+/* Inline editor in the 3/5-year table: matching horizontal padding so the
+   displayed number and the input are flush to the same right edge. */
+.cell-wrap input {
+  padding: var(--space-1) var(--field-pad-x);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* List numeric columns: Capital required + Payback + Breakeven share one right
+   edge (already text-align:right from .num; add padding-right consistency). */
+.list__table td.num,
+.list__capital {
+  padding-right: var(--field-pad-x);
+}
+
+/* KPI grid alignment: labels left, values right-aligned with tabular-nums. */
+.kpis-grid__value {
+  text-align: right;
+}
+
+/* Wizard startup-cost amount cells: align right edge to Total column. */
+.cost-matrix th,
+.cost-matrix td {
+  /* tabular-nums already set globally; enforce right-edge via padding-right */
+}
+.cost-matrix__total-col,
+.cost-matrix td:last-child {
+  padding-right: var(--field-pad-x);
+}
+
+/* Wizard cost-amount editable inputs: match the Total column right edge. */
+.cost-matrix__amount-input {
+  text-align: right;
+  padding-right: var(--field-pad-x);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Breadcrumb vertical rhythm: consistent top-bottom padding on the step items. */
+.wizard-breadcrumb__item {
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+/* Metric bar top-edge alignment: all cells share the same top padding
+   (already set via padding: var(--space-1) var(--space-5) on each cell above). */
+
+/* KPI strip: label→value gap uses label-gap. */
+.kpi {
+  gap: var(--label-gap);
 }
