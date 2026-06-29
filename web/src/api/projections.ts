@@ -47,6 +47,25 @@ export function setEditToken(viewSlug: string, token: string): void {
   localStorage.setItem(editTokenKey(viewSlug), token);
 }
 
+/**
+ * Every locally-stored per-projection edit token as [{ viewSlug, token }] (EPIC
+ * #323). The ClaimSharedToken bridge walks these on the first sign-in and POSTs each
+ * (slug + token) to /claim-share so the recipient's editable shares FOLLOW their
+ * Clerk account. The token never leaves the body — it is read here from localStorage,
+ * the same store the share-link fragment scrub wrote it into.
+ */
+export function listEditTokenEntries(): { viewSlug: string; token: string }[] {
+  const out: { viewSlug: string; token: string }[] = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith(EDIT_TOKEN_PREFIX)) continue;
+    const token = localStorage.getItem(key);
+    if (!token) continue;
+    out.push({ viewSlug: key.slice(EDIT_TOKEN_PREFIX.length), token });
+  }
+  return out;
+}
+
 export type RecoTag =
   | "proceed"
   | "revise"
@@ -82,6 +101,14 @@ export interface ProjectionListItem {
   status: string;
   version: number;
   updated_at: string;
+  /** True when the caller OWNS this row (owner-only affordances apply). Absent on
+   *  older server responses ⇒ treated as owner (today's behavior). EPIC #323. */
+  owner?: boolean;
+  /** True for a "Shared with me" row — another owner granted the caller editable
+   *  access (no owner-only affordances). EPIC #323. */
+  shared?: boolean;
+  /** Whether the caller may edit this row (owner or grantee). EPIC #323. */
+  editable?: boolean;
 }
 
 export interface ProjectionListResponse {

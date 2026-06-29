@@ -68,10 +68,10 @@ def test_migration_is_registered_and_not_destructive():
 
 
 def test_migration_ordering():
-    """m0013 is the last entry and follows m0012 immediately."""
+    """m0013 follows m0012 immediately (append-only; later migrations may follow)."""
     names = [n for n, _ in MIGRATIONS]
-    assert names[-1] == "0013_rebind_longview_clerk_sub"
-    assert names[-2] == "0012_recover_longview"
+    i = names.index("0013_rebind_longview_clerk_sub")
+    assert names[i - 1] == "0012_recover_longview"
 
 
 # ---------------------------------------------------------------------------

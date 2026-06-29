@@ -35,6 +35,7 @@ import {
   LifecycleConflictError,
 } from "../api/projections";
 import { patchProjection, PatchConflictError } from "../api/patch";
+import { clerkActive, getClerkToken } from "../auth/clerkToken";
 import { ShareModal } from "../components/ShareModal";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
@@ -631,10 +632,23 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       });
   }
 
+  // Resolve the PATCH bearer: the per-device capability token (edit/owner) is
+  // preferred — byte-for-byte today's behavior. When this device has NONE (a grantee
+  // who opened their "Shared with me" row on a second device, EPIC #323) fall back to
+  // the short-lived Clerk JWT; the server's share-grant auth authorizes the edit.
+  async function resolvePatchBearer(): Promise<string> {
+    if (token.current) return token.current;
+    if (clerkActive()) {
+      const jwt = await getClerkToken();
+      if (jwt) return jwt;
+    }
+    return "";
+  }
+
   async function doPatch(body: Record<string, unknown>, ver: number) {
     const res = await patchProjection({
       viewSlug: slug,
-      token: token.current ?? "",
+      token: await resolvePatchBearer(),
       version: ver,
       body,
     });

@@ -22,6 +22,28 @@ import { useEffect, useRef, type ReactNode } from "react";
 
 import { RallyLogo } from "../components/RallyLogo";
 import { TopBar } from "../components/TopBar";
+import { takePostSignInRedirect } from "./postSignInRedirect";
+
+// Replays a captured shared deep link AFTER sign-in (EPIC #323). Rendered inside
+// <SignedIn>, it reads-and-clears the sessionStorage destination once (a ref guard +
+// the clear-on-read make it fire a single time, so it never loops). If the recipient
+// is not already there it SPA-navigates to the shared projection — handling the case
+// where Clerk's redirect landed them on the home list instead of the share link.
+function PostSignInRedirect() {
+  const fired = useRef(false);
+  useEffect(() => {
+    if (fired.current) return;
+    fired.current = true;
+    const dest = takePostSignInRedirect();
+    if (!dest) return;
+    const current = window.location.pathname + window.location.search;
+    if (dest !== current) {
+      window.history.pushState(null, "", dest);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  }, []);
+  return null;
+}
 
 // 3-step explainer glyphs (SIGNIN-5). Hand-inlined Lucide geometry, currentColor,
 // aria-hidden (the step text carries the meaning) — matches the project's
@@ -160,6 +182,7 @@ export default function ClerkOwnerGate({
   return (
     <>
       <SignedIn>
+        <PostSignInRedirect />
         {topBar}
         <main id="main" className="app__main" tabIndex={-1}>
           {children}

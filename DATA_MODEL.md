@@ -32,6 +32,7 @@ This document is the canonical schema and data-access contract for the projectio
 | `actuals` | many per projection | **Post-launch (M7), schema only in v1.** Monthly forecast-vs-actual + opt-in benchmarks. | §6.3, §24 |
 | `penny_transcripts` | 0..1 per projection | Persisted per-project Penny conversation (Spec B §7). Wizard-draft transcripts (no projection) are **never** persisted. | Spec B §7 |
 | `role_links` | many per projection | Indexed role-share links (board/funder/advisor): slug PK → projection + role, for O(1) exact-match resolution of `/api/r/{slug}` (#180). | §6.2, §20 |
+| `share_grants` | many per projection | Editable shares that FOLLOW a Clerk account (#323): one row per (projection, grantee Clerk sub), minted only from a verified edit-token presentation. Scopes the "Shared with me" list + the grant-based PATCH path. | §20 |
 | `schema_migrations` | global | Applied-migration ledger (timpager pattern). | §26 |
 
 ```
@@ -41,6 +42,7 @@ projections ──1:N── revisions
             ──1:N── actuals        (post-launch)
             ──1:1── penny_transcripts  (NULL projection_id => never persisted)
             ──1:N── role_links     (slug PK; indexed role-share resolution)
+            ──1:N── share_grants   (editable shares keyed on the grantee's Clerk sub, #323)
 research_cache  (independent, global, TTL)
 feedback        (independent, global, no FK to projections)
 schema_migrations (global)
@@ -347,6 +349,29 @@ Added in migration `0009_role_links`. This is the **canonical, indexed home** fo
 - **Kept in sync from `role_tokens_json`.** `SqliteStore` rebuilds a projection's `role_links` rows on every write that carries `role_tokens_json` (`create_projection`, `rotate_tokens` — in the **same transaction** as the rotation, so an old role slug stops resolving the moment it rotates), via the tolerant `parse_role_tokens` (both the documented and legacy shapes). A one-time `_backfill_role_links` populates existing rows on the boot that applies `0009`.
 - The `idx_role_links_projection` index backs the per-projection cascade erased by the hard purge (§5.4, #202).
 
+### 3.11 `share_grants` (editable shares that follow a Clerk account — #323)
+
+```sql
+CREATE TABLE IF NOT EXISTS share_grants (
+  id                       TEXT PRIMARY KEY,                        -- app-generated string PK (sg_…)
+  projection_id            TEXT NOT NULL REFERENCES projections(id),
+  role                     TEXT NOT NULL DEFAULT 'editor',          -- v1: 'editor' only (the shared-write role)
+  grantee_clerk_user_id    TEXT,                                    -- the Clerk sub the grant FOLLOWS (v1 key)
+  grantee_owner_token_hash TEXT,                                    -- reserved (nullable) for a future token-keyed grant
+  created_at               TEXT NOT NULL,                           -- ISO-8601 UTC TEXT (§2; app-set, no DB default)
+  UNIQUE(projection_id, grantee_clerk_user_id)                      -- one grant per (projection, grantee); idempotency backstop
+);
+CREATE INDEX IF NOT EXISTS idx_share_grants_grantee    ON share_grants(grantee_clerk_user_id);
+CREATE INDEX IF NOT EXISTS idx_share_grants_projection ON share_grants(projection_id);
+```
+
+Added in migration `0014_share_grants`. **Owner decision (#323): shared *edit* access FOLLOWS the recipient's Clerk account, not a per-device capability token.** A `share_grant` is the server-side home for that relationship — keyed on the grantee's Clerk `sub` (Override TENANT / PRD §20), it is owner-scoped, never global.
+
+- **Created ONLY from a verified edit-token presentation.** `POST /api/projections/{slug}/claim-share` mints a grant **iff** a signed-in Clerk user presents an edit token whose hash matches **that slug's** `edit_token_hash` (constant-time compare). A wrong/foreign edit token → 403 and **no grant** — possession of some other projection's edit token grants nothing here (the cross-owner wall). The edit token rides the request **body**, never the path/query/log (Regression #10).
+- **Idempotent.** `create_share_grant` does a portable SELECT-then-INSERT under the single-writer lock (no SQLite-only upsert above the `Store` interface), with `UNIQUE(projection_id, grantee_clerk_user_id)` as the backstop — a re-claim writes nothing and returns `{ "granted": false }`.
+- **Scopes two surfaces, both grantee-keyed:** the **"Shared with me"** list (`list_shared_card_summaries_by_clerk_owner` — joins `share_grants` to the live projection, excluding trashed/deleted rows and rows the grantee already owns) and the **grant-based PATCH** path (a Clerk grantee may edit via their JWT on any device — `apply_projection_patch` authorizes when `has_share_grant` is true). `idx_share_grants_grantee` backs the list; `idx_share_grants_projection` backs the per-projection cascade erased by the hard purge (§5.4, #202 — `share_grants` is in the cascade list).
+- **`role`** is `'editor'` in v1 (the only shared-write role). **`grantee_owner_token_hash`** is reserved (nullable, NULL in v1) for a future token-keyed grant (a viewer who has not signed in).
+
 ---
 
 ## 4. JSON blob shapes
@@ -631,7 +656,7 @@ SQLite is a single writer under WAL with `busy_timeout` (§10). **Writes** all g
 `computed_json`/`monthly_json` are stored with `model_version`. On read, if `model_version != current_engine_version`, the API returns the stored snapshot verbatim plus an `upgrade_available: true` flag — **never recompute silently** (PRD §13). `POST …/upgrade-model` recomputes under the new engine and writes a **new revision**, preserving the prior. `compute_schema_version` is tracked separately so a view-model shape change is distinguishable from a math change.
 
 ### 5.4 Trash (soft delete) vs purge (hard delete + cascade)
-`status = 'trashed'` is the user-visible **Trash** — recoverable (PRD §19.1). **Purge** (`DELETE /api/projections/{view_slug}`, owner-only, permitted only when already trashed) is a **true, irreversible hard delete** (#202): `purge_projection` does a version-checked `DELETE FROM projections` **and cascades** to every child the projection owns — `revisions`, `narratives`, `evidence`, `penny_transcripts`, `actuals`, `role_links` — in one transaction (children deleted before the parent, since the FKs carry no `ON DELETE CASCADE` and `PRAGMA foreign_keys = ON`). A version mismatch returns 0 (HTTP 409) and erases nothing.
+`status = 'trashed'` is the user-visible **Trash** — recoverable (PRD §19.1). **Purge** (`DELETE /api/projections/{view_slug}`, owner-only, permitted only when already trashed) is a **true, irreversible hard delete** (#202): `purge_projection` does a version-checked `DELETE FROM projections` **and cascades** to every child the projection owns — `revisions`, `narratives`, `evidence`, `penny_transcripts`, `actuals`, `role_links`, `share_grants` — in one transaction (children deleted before the parent, since the FKs carry no `ON DELETE CASCADE` and `PRAGMA foreign_keys = ON`). A version mismatch returns 0 (HTTP 409) and erases nothing.
 
 This is a deliberate, scoped exception to timpager's NEVER-physically-delete discipline: a privacy "purge" of a tool holding a nonprofit's confidential financials **and** the user's Penny conversation must actually erase the data and stop propagating it, not merely hide it behind `deleted_at` (a misleading contract + data-minimization gap). The NEVER-DROP discipline still governs **migrations** (no `DROP TABLE`/`DROP COLUMN`); this is a row-level data-subject erasure in app code, not a schema change. The legacy `deleted_at` soft-delete marker (`soft_delete`) is retained for backward-compatibility and reads still filter `deleted_at IS NULL`, but the purge path no longer uses it.
 
@@ -712,6 +737,14 @@ class Store(Protocol):
     # Clerk identity instead of the hashed capability token. NEVER global (Override TENANT).
     def list_by_clerk_owner(self, clerk_user_id: str, *, include_trashed: bool = False) -> list[Projection]: ...
     def list_card_summaries_by_clerk_owner(self, clerk_user_id: str, *, include_trashed: bool = False) -> list[dict]: ...
+    # 0014 share grants (#323): editable shares that follow a Clerk account. A grant is
+    # minted ONLY from a verified edit-token presentation at the router boundary; these
+    # scope the "Shared with me" list + the grant-based PATCH path. NEVER global (TENANT).
+    def create_share_grant(self, projection_id: str, grantee_clerk_user_id: str, *,
+                           role: str = "editor",
+                           grantee_owner_token_hash: str | None = None) -> bool: ...  # True iff NEW; idempotent
+    def has_share_grant(self, projection_id: str, grantee_clerk_user_id: str) -> bool: ...  # PATCH-grant auth check
+    def list_shared_card_summaries_by_clerk_owner(self, clerk_user_id: str, *, include_trashed: bool = False) -> list[dict]: ...
     def create_projection(self, p: Projection) -> Projection: ...        # app-generated ULID + view_slug
     def update_with_version_check(self, id: str, expected_version: int,
                                   patch: ProjectionPatch) -> int: ...     # rows-affected; 0 -> 409
@@ -810,6 +843,7 @@ Single-writer SQLite serializes all writes; high autosave write-amplification ac
 | `feedback` | PK `(support_id)` | Support-ID resolution (staff). |
 | `penny_transcripts` | PK `(id)`, `(projection_id)` | Per-project transcript read by projection. |
 | `role_links` | PK `(slug)`, `(projection_id)` | O(1) exact-match role-share resolution (0009, #180); per-projection cascade on purge. |
+| `share_grants` | PK `(id)`, `UNIQUE(projection_id, grantee_clerk_user_id)`, `(grantee_clerk_user_id)`, `(projection_id)` | Editable shares that follow a Clerk account (0014, #323): UNIQUE = idempotency; grantee index backs the "Shared with me" list; projection index backs the per-projection cascade on purge. |
 
 ---
 
@@ -978,6 +1012,18 @@ CREATE TABLE IF NOT EXISTS role_links (             -- 0009: indexed role-share 
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_role_links_projection ON role_links(projection_id);
+
+CREATE TABLE IF NOT EXISTS share_grants (          -- 0014: editable shares that follow a Clerk account (#323)
+  id TEXT PRIMARY KEY,                             -- app-generated string PK (sg_…)
+  projection_id TEXT NOT NULL REFERENCES projections(id),
+  role TEXT NOT NULL DEFAULT 'editor',             -- v1: 'editor' only
+  grantee_clerk_user_id TEXT,                      -- the Clerk sub the grant follows (v1 key)
+  grantee_owner_token_hash TEXT,                   -- reserved (nullable) for a future token-keyed grant
+  created_at TEXT NOT NULL,
+  UNIQUE(projection_id, grantee_clerk_user_id)     -- one grant per (projection, grantee)
+);
+CREATE INDEX IF NOT EXISTS idx_share_grants_grantee    ON share_grants(grantee_clerk_user_id);
+CREATE INDEX IF NOT EXISTS idx_share_grants_projection ON share_grants(projection_id);
 ```
 
 ---

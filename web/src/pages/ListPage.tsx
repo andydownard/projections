@@ -83,10 +83,16 @@ export function ListPage() {
     );
   }
 
+  // EPIC #323: split the owner-scoped rows from the "Shared with me" rows (another
+  // owner granted editable access). Owner-only affordances (trash menu, the New
+  // button) render ONLY on the owner section; shared rows are edit-only.
+  const owned = projections.filter((p) => p.shared !== true);
+  const shared = projections.filter((p) => p.shared === true);
+
   return (
     <>
       <ProjectionsList
-        projections={projections}
+        projections={owned}
         onCreate={() => navigate("/wizard")}
         // v2 (L2): the entire row is the click target; always routes to the editable
         // detail (/p/<slug>/edit). No secret in the URL — the owner token in
@@ -95,6 +101,18 @@ export function ListPage() {
         onTrash={(item) => setPendingTrash(item)}
         onOpenTrash={() => navigate("/trash")}
       />
+      {shared.length > 0 && (
+        <ProjectionsList
+          projections={shared}
+          heading="Shared with me"
+          headingId="shared-with-me-heading"
+          showCreate={false}
+          onCreate={() => navigate("/wizard")}
+          // Edit-only: the grant authorizes the PATCH via the Clerk JWT on any device.
+          onRowClick={(slug) => navigate(`/p/${slug}/edit`)}
+          // No onTrash / onOpenTrash → no owner-only affordances on a shared row.
+        />
+      )}
       {pendingTrash && (
         <TrashConfirmDialog
           name={pendingTrash.name}

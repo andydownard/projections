@@ -94,6 +94,18 @@ _CREATE_WINDOW_SECONDS = 3600
 # JWT verification is crypto work — cap per IP so a flood is rejected before either.
 _CLAIM_IP_LIMIT = 60
 _CLAIM_WINDOW_SECONDS = 3600
+# claim-share (editable shares follow a Clerk account, #323) verifies a JWT, does a
+# constant-time edit-token compare, and a durable write — all crypto/DB work, so it
+# carries the Mutation Safety Quad's (d) per-IP + per-token cap (own bucket).
+_CLAIM_SHARE_IP_LIMIT = 60
+_CLAIM_SHARE_TOKEN_LIMIT = 120
+_CLAIM_SHARE_WINDOW_SECONDS = 3600
+# autosave PATCH (incl. the grant-based edit path, #323) is the shared write surface
+# (manual + Penny). Generous caps — autosave settles are debounced — but the
+# Mutation Safety Quad's (d) per-IP + per-token brake on the abuse path is real.
+_PATCH_IP_LIMIT = 600
+_PATCH_TOKEN_LIMIT = 600
+_PATCH_WINDOW_SECONDS = 300
 _EXPORT_IP_LIMIT = 30  # xlsx + packet, per IP
 _EXPORT_TOKEN_LIMIT = 60  # xlsx + packet, per token when a bearer is presented
 _EXPORT_WINDOW_SECONDS = 3600
@@ -839,6 +851,122 @@ def claim_projections(
     return {"linked": linked}
 
 
+class ClaimShareIn(BaseModel):
+    """The edit token a recipient presents to claim editable access (#323).
+
+    The token rides the BODY, never the path/query/log (Regression #10) — the path
+    carries only the public ``view_slug``."""
+    edit_token: str = Field(min_length=1)
+
+    class Config:
+        extra = "forbid"
+
+
+@router.post("/{view_slug}/claim-share")
+def claim_share(
+    view_slug: str,
+    body: ClaimShareIn,
+    request: Request,
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
+):
+    """Bind editable access to a signed-in Clerk account from a verified edit-token
+    presentation (the OWNER decision: shared edit FOLLOWS the account — epic #323).
+
+    A recipient who opened a share link (``/p/<slug>/edit#<edit-token>``) signs in and
+    calls this once per shared projection. When the presented edit token matches THIS
+    slug's ``edit_token_hash`` (constant-time), a ``share_grant`` is written on their
+    Clerk ``sub``. From then on the projection shows in their "Shared with me" list and
+    they may edit it via their JWT on ANY device (the PATCH-grant path) — no edit token
+    in localStorage required.
+
+    Mutation Safety Quad (each its own test):
+      - **(a) auth:** the Bearer MUST resolve to a verified ``ClerkOwner``; an opaque
+        capability token or no bearer → **401**. A capability token cannot bind a grant
+        to an arbitrary Clerk identity.
+      - **(b) verified-token-only:** the grant is created ONLY from a VALID edit token
+        for THIS slug — an unknown slug → **404**, a wrong/foreign edit token → **403**;
+        NEVER a grant (no cross-owner leak). The edit token is in the BODY, never the
+        path/query/log.
+      - **(c) idempotency:** ``UNIQUE(projection_id, grantee)`` + insert-or-ignore — a
+        second claim returns ``{"granted": false}`` and writes no duplicate.
+      - **(d) rate limit:** per-IP + per-token cap (own bucket) BEFORE the JWT verify +
+        the constant-time compare + the write.
+      - **Ship dark:** with ``CLERK_ENABLED`` off the path does not exist → **404**.
+    """
+    # Ship-dark: with Clerk off there is no Clerk identity for a grant to follow.
+    if not config.clerk_enabled():
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    # §10/Quad(d): cap per IP + per presented edit token BEFORE the JWT verify (crypto),
+    # the constant-time compare, and the durable write.
+    limited = _rate_limited(
+        "claim_share", request,
+        ip_limit=_CLAIM_SHARE_IP_LIMIT,
+        token=hash_token(body.edit_token),
+        token_limit=_CLAIM_SHARE_TOKEN_LIMIT,
+        window_seconds=_CLAIM_SHARE_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
+    # Cookie-blind: identity resolves from the Authorization header only. Only a
+    # verified Clerk owner may claim a share onto their account.
+    identity = resolve_bearer_identity(authorization)
+    if not isinstance(identity, ClerkOwner):
+        raise HTTPException(status_code=401, detail={"error": "clerk_identity_required"})
+
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    # The grant is minted ONLY from a VALID edit token for THIS slug (constant-time;
+    # a row with no edit token, or a wrong/foreign token, never grants → 403). This is
+    # the cross-owner wall: possession of some other projection's edit token grants
+    # nothing here.
+    if not _is_editor(body.edit_token, row):
+        raise HTTPException(status_code=403, detail={"error": "invalid_edit_token"})
+
+    granted = store.create_share_grant(row["id"], identity.clerk_user_id)
+    return {"granted": granted, "view_slug": view_slug, "role": "editor"}
+
+
+def _list_item(r: dict, *, owner: bool, shared: bool, editable: bool) -> dict:
+    """One list-card item from a denormalized summary row (#178), tagged with its
+    relationship to the caller (owner vs shared). The server emits {raw, display} and
+    the client renders display verbatim (no client math — PRD §13)."""
+    summary = loads_obj(r.get("summary_json"))
+    return {
+        "view_slug": r["view_slug"],
+        "name": r["name"],
+        "status": r.get("status") or "active",
+        "version": r["version"],
+        "updated_at": r["updated_at"],
+        # Relationship tags (#323): owner rows keep owner:true; a "Shared with me" row
+        # is shared:true + editable:true + owner:false (owner-only affordances —
+        # trash/rotate/delete — are server-side owner-only regardless of this flag).
+        "owner": owner,
+        "shared": shared,
+        "editable": editable,
+        # card fields denormalized at write time (build_card_summary)
+        "location": summary.get("location", ""),
+        "basis": summary.get("basis", ""),
+        "y1_revenue": summary.get("y1_revenue") or {"raw": 0, "display": "—"},
+        "y1_net": summary.get("y1_net") or {"raw": 0, "display": "—"},
+        # v2 redesign (L3): sparkline series + milestone display strings.
+        # income_series is a list of 5 {raw,display}.
+        "income_series": summary.get("income_series") or [],
+        "y5_income": summary.get("y5_income") or {"raw": 0, "display": "—"},
+        "capital_required": summary.get("capital_required")
+                            or {"raw": 0, "display": "—"},
+        "payback": summary.get("payback") or {"raw": None, "display": "N/A"},
+        "breakeven": summary.get("breakeven") or {"raw": None, "display": "N/A"},
+        "reco_tag": summary.get("reco_tag") or "revise",
+        # lat/lng for the list-row mini-map; null when location was never resolved.
+        "coords": summary.get("coords"),
+    }
+
+
 @router.get("")
 def list_projections(
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
@@ -854,6 +982,11 @@ def list_projections(
     ``?trashed=true`` returns ONLY this owner's trashed projections (the Trash view,
     API_SPEC §4.1/§4.8); the default (active) list excludes them. Owner-scoped in
     both modes — the store query is always keyed on the owner, never global.
+
+    For a verified Clerk owner the active list ALSO UNIONs their "Shared with me"
+    rows (#323) — projections another owner granted them editable access to, scoped
+    STRICTLY to the caller's grants (never global, Override TENANT / PRD §20) and
+    tagged ``{shared:true, editable:true, owner:false}``. Trash stays owner-only.
     """
     identity = resolve_bearer_identity(authorization)
     # #178: read the small denormalized card columns (summary_json) only — the store
@@ -869,33 +1002,16 @@ def list_projections(
     # include_trashed=True returns active + trashed; the Trash view wants trashed-only.
     if trashed:
         rows = [r for r in rows if (r.get("status") or "active") == "trashed"]
-    items = []
-    for r in rows:
-        summary = loads_obj(r.get("summary_json"))
-        items.append({
-            "view_slug": r["view_slug"],
-            "name": r["name"],
-            "status": r.get("status") or "active",
-            "version": r["version"],
-            "updated_at": r["updated_at"],
-            # card fields denormalized at write time (build_card_summary)
-            "location": summary.get("location", ""),
-            "basis": summary.get("basis", ""),
-            "y1_revenue": summary.get("y1_revenue") or {"raw": 0, "display": "—"},
-            "y1_net": summary.get("y1_net") or {"raw": 0, "display": "—"},
-            # v2 redesign (L3): sparkline series + milestone display strings.
-            # The server emits {raw, display} and the client renders display verbatim
-            # (no client math — PRD §13). income_series is a list of 5 {raw,display}.
-            "income_series": summary.get("income_series") or [],
-            "y5_income": summary.get("y5_income") or {"raw": 0, "display": "—"},
-            "capital_required": summary.get("capital_required")
-                                or {"raw": 0, "display": "—"},
-            "payback": summary.get("payback") or {"raw": None, "display": "N/A"},
-            "breakeven": summary.get("breakeven") or {"raw": None, "display": "N/A"},
-            "reco_tag": summary.get("reco_tag") or "revise",
-            # lat/lng for the list-row mini-map; null when location was never resolved.
-            "coords": summary.get("coords"),
-        })
+    items = [_list_item(r, owner=True, shared=False, editable=True) for r in rows]
+    # "Shared with me" (#323): a Clerk owner's active list UNIONs the rows granted to
+    # them. Owner-scoped to the caller's Clerk sub via the grant join — never global,
+    # and never on the owner-only Trash view.
+    if isinstance(identity, ClerkOwner) and not trashed:
+        shared_rows = store.list_shared_card_summaries_by_clerk_owner(
+            identity.clerk_user_id)
+        items += [
+            _list_item(r, owner=False, shared=True, editable=True) for r in shared_rows
+        ]
     return {"projections": items}
 
 
@@ -1316,6 +1432,7 @@ def apply_projection_patch(
     if_match: int,
     actor: str = "user",
     change_summary: str = "autosave",
+    clerk_identity: Optional[ClerkOwner] = None,
 ) -> tuple[dict[str, Any], int, str]:
     """The single server-authoritative mutation/recompute write path (API_SPEC §4.4).
 
@@ -1326,18 +1443,36 @@ def apply_projection_patch(
     therefore IDENTICAL for an AI edit and a human edit — Penny carries intents
     through exactly the same wall the manual UI hits.
 
-    Auth: requires the owner OR this projection's edit token; a view-only/absent
-    token -> 403 forbidden. Raises HTTPException(403 forbidden | 422 node_not_pinnable
-    | 422 invalid_inputs | 409 version_conflict) exactly as the manual PATCH does.
-    Returns ``(view_model, new_version, name)`` and writes ONE revision tagged
-    ``actor`` (DATA_MODEL §4: the revision ``actor`` enum — user | penny | …).
+    Auth (COOKIE-BLIND, from the Authorization Bearer only — never ``request.cookies``):
+    the caller must be one of —
+      - the OWNER or this projection's EDIT token (the capability path, unchanged), OR
+      - a verified Clerk identity that OWNS the row (``_clerk_owns``), OR
+      - a verified Clerk identity holding a ``share_grant`` for the row (editable
+        shares that FOLLOW the account, #323).
+    Anyone else (view-only / no usable bearer / a Clerk user with no grant) -> 403
+    forbidden. Raises HTTPException(403 forbidden | 422 node_not_pinnable | 422
+    invalid_inputs | 409 version_conflict) exactly as the manual PATCH does. Returns
+    ``(view_model, new_version, name)`` and writes ONE revision tagged ``actor``
+    (DATA_MODEL §4: the revision ``actor`` enum — user | penny | …).
     """
-    if not (_is_owner(token, row) or _is_editor(token, row)):
+    is_capability = _is_owner(token, row) or _is_editor(token, row)
+    clerk_authorized = clerk_identity is not None and (
+        _clerk_owns(row, clerk_identity)
+        or store.has_share_grant(row["id"], clerk_identity.clerk_user_id)
+    )
+    if not (is_capability or clerk_authorized):
         # view-only (no/invalid token) cannot mutate (SECURITY.md §2; API_SPEC §4.4).
         # A Penny mutate tool gates on capability first, but this is the real wall.
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
-    # _is_owner/_is_editor both imply a presented token (see checks above).
-    assert token is not None
+    # Audit actor: the presented capability token's hash on the capability path; the
+    # Clerk sub's hash on the grant/clerk-owner path (a JWT bearer is NOT a stable
+    # actor key). One of the two branches is always taken (the 403 above guarantees it).
+    if is_capability:
+        assert token is not None  # _is_owner/_is_editor are False for a None token
+        actor_hash = hash_token(token)
+    else:
+        assert clerk_identity is not None  # clerk_authorized implies a clerk identity
+        actor_hash = hash_token(clerk_identity.clerk_user_id)
 
     # Merge the partial onto the stored source-of-truth, then recompute.
     try:
@@ -1386,7 +1521,7 @@ def apply_projection_patch(
         "monthly_json": "{}",
         "computed_json": patch["computed_json"],
         "model_version": patch["model_version"],
-        "actor_token_hash": hash_token(token),
+        "actor_token_hash": actor_hash,
         "actor": actor,
         "change_summary": change_summary,
         "created_at": _utcnow(),
@@ -1411,6 +1546,7 @@ def apply_projection_patch(
 def patch_projection(
     view_slug: str,
     body: PatchProjectionIn,
+    request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
@@ -1418,19 +1554,37 @@ def patch_projection(
 ):
     """Autosave (API_SPEC §4.4): merge patch -> recompute server-side -> persist.
 
-    Requires Authorization: Bearer (owner OR this projection's edit token) and
+    Requires Authorization: Bearer (the owner OR this projection's edit token OR — when
+    ``CLERK_ENABLED`` — a verified Clerk owner/grantee of the row, #323) and
     If-Match: <version>. Optimistic concurrency: a stale version writes 0 rows and
     returns HTTP 409 with the current server state. One revision snapshot per settle.
-    The merge/recompute/persist/audit body lives in :func:`apply_projection_patch`
-    so the Penny tool loop converges on the exact same write path (actor:penny).
+    A per-IP + per-token cap (Mutation Safety Quad (d)) brakes the abuse path before
+    the recompute + write. The merge/recompute/persist/audit body lives in
+    :func:`apply_projection_patch` so the Penny tool loop converges on the exact same
+    write path (actor:penny).
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
 
     token = _bearer(authorization)
+    # Quad (d): cap per IP + per presented token BEFORE the recompute + durable write.
+    limited = _rate_limited(
+        "patch_projection", request,
+        ip_limit=_PATCH_IP_LIMIT,
+        token=hash_token(token) if token else None,
+        token_limit=_PATCH_TOKEN_LIMIT, window_seconds=_PATCH_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+    # Cookie-blind: a verified Clerk identity (owner or grantee, #323) is resolved from
+    # the Authorization header only — never request.cookies (Regression #11). With
+    # Clerk off this is None and the capability path is byte-for-byte unchanged.
+    identity = resolve_bearer_identity(authorization)
+    clerk_identity = identity if isinstance(identity, ClerkOwner) else None
     vm, new_version, name = apply_projection_patch(
-        row=row, body=body, store=store, token=token, if_match=if_match)
+        row=row, body=body, store=store, token=token, if_match=if_match,
+        clerk_identity=clerk_identity)
     response.headers["ETag"] = str(new_version)
     return {**vm, "view_slug": view_slug, "version": new_version, "name": name}
 
