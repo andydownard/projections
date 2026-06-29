@@ -173,6 +173,9 @@ Every read or mutation of a projection returns the **same** view-model — the e
   "breakevenMonth": 5,
   "incomeSeries": [ {"raw":46900,"display":"$46,900"}, {"...":"... y2..y5 ..."} ],
   "year5Income": {"raw":110000,"display":"$110,000"},
+  "startupCosts": [ {"category":"Thrift Store Consultant","amount":{"raw":100000,"display":"$100,000"}},
+                    {"category":"Lease Deposit + First Month Rent","amount":{"raw":30000,"display":"$30,000"}} ],
+  "startupTotal": {"raw":238500,"display":"$238,500"},
 
   "rows": [
     { "label":"Donor market share", "group":"drivers",
@@ -583,7 +586,7 @@ Decision #15: keep the **summing and formatting authority server-side** for the 
   ],
   "grandTotal": { "raw": 95000.0, "display": "$95,000" },
   "modelVersion": "2.6.0",
-  "computeSchemaVersion": "1.4.0"
+  "computeSchemaVersion": "1.5.0"
 }
 ```
 - **Errors:** `429 rate_limited` (`{ "error":"rate_limited", "retry_after_seconds": N, "scope":"ip" }` + `Retry-After`); `422` validation (a malformed row).

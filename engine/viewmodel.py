@@ -273,6 +273,16 @@ def to_view_model(result):
     # renders these display strings and never re-derives the trend line.
     income_series = [money_view(annual[y].net) for y in (1, 2, 3, 4, 5)]
 
+    # ---- one-time startup costs (schema 1.5.0) — the per-category line items + the
+    # total, surfaced as {raw,display} so the Board Packet .docx (EPIC DOCX) renders a
+    # grounded startup-costs table from the SAME format authority. result.startup
+    # already includes the computed "Lease Deposit + First Month Rent" line; order is
+    # preserved so the table reads the way the engine assembled it.
+    startup_costs = [
+        {"category": label, "amount": money_view(amount)}
+        for label, amount in result.startup.items()
+    ]
+
     return {
         "reco": reco,
         "metrics": metrics,
@@ -282,6 +292,8 @@ def to_view_model(result):
         "breakevenMonth": result.monthly_breakeven,
         "incomeSeries": income_series,
         "year5Income": money_view(annual[5].net),
+        "startupCosts": startup_costs,
+        "startupTotal": money_view(result.startup_total),
         "rows": rows,
         "overrides": ov_list,
         "settings": settings,

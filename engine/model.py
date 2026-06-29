@@ -34,8 +34,11 @@ MODEL_VERSION = "2.6.0"          # math/shape change => bump (2.6.0: the ANNUAL 
 # 1.4.0: every annual row carries y4/y5 cells; settings gain shareY4/shareY5 plus the
 # editable donation drivers donationValue/basket/donationsPerHouseholdPerYear; the KPI
 # strip + xlsx line read "Net income" (was "Net profit"); +incomeSeries (annual net
-# income Y1..Y5 {raw,display}) and +year5Income for the list/detail sparkline)
-COMPUTE_SCHEMA_VERSION = "1.4.0"
+# income Y1..Y5 {raw,display}) and +year5Income for the list/detail sparkline;
+# 1.5.0: +startupCosts (one-time startup line items as [{category, amount{raw,display}}])
+# and +startupTotal {raw,display} for the Board Packet .docx startup-costs table (EPIC
+# DOCX) — additive shape change, no math change (MODEL_VERSION stays 2.6.0))
+COMPUTE_SCHEMA_VERSION = "1.5.0"
 
 # --- export trust copy (#192). Single source for the "planning estimates, not
 # advice" disclaimer + AI-narrative disclosure that the terms gate exists to

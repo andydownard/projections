@@ -28,7 +28,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl bleach \
+          pip install "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl "python-docx>=1.1" bleach \
                       "pyjwt[crypto]>=2.8" \
                       pytest pytest-cov ruff mypy hypothesis
       - name: Lint (ruff)
@@ -154,7 +154,7 @@ jobs:
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
-          pip install "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl bleach
+          pip install "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl "python-docx>=1.1" bleach
       - name: Install web deps (Vite webServer runs from ../web)
         working-directory: web
         run: npm install --no-audit --no-fund

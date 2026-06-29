@@ -122,11 +122,31 @@ def test_view_model_is_json_serializable(canonical_result):
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
     assert vm["model_version"] == "2.6.0"
-    # 1.4.0: rows carry y4/y5; settings gained shareY4/Y5 + editable donation drivers;
-    # +incomeSeries/year5Income (additive shape change).
-    assert vm["compute_schema_version"] == "1.4.0"
+    # 1.5.0: +startupCosts/startupTotal (Board Packet .docx startup table). 1.4.0 had
+    # added y4/y5 row cells, shareY4/Y5 + editable donation drivers, incomeSeries/
+    # year5Income. Additive shape change.
+    assert vm["compute_schema_version"] == "1.5.0"
     assert "utilitiesPerSqft" in vm["settings"]
     assert "rentPerSqft" in vm["settings"]
+
+
+def test_startup_costs_exposed_dual_value(canonical_result):
+    # schema 1.5.0: startupCosts is the per-category one-time startup line items as
+    # {raw, display}, and startupTotal is their sum — the SAME format authority the
+    # Board Packet .docx renders so the packet can never invent a startup figure.
+    vm = to_view_model(canonical_result)
+    assert vm["startupCosts"], "startupCosts must be non-empty"
+    for item in vm["startupCosts"]:
+        assert set(item) == {"category", "amount"}
+        assert item["amount"]["display"].startswith("$")
+    # The computed lease-deposit line is included (engine adds it on top of STARTUP).
+    cats = [c["category"] for c in vm["startupCosts"]]
+    assert "Lease Deposit + First Month Rent" in cats
+    # startupTotal foots to the sum of the line items.
+    assert "raw" in vm["startupTotal"] and "display" in vm["startupTotal"]
+    assert vm["startupTotal"]["display"].startswith("$")
+    total = round(sum(c["amount"]["raw"] for c in vm["startupCosts"]))
+    assert round(vm["startupTotal"]["raw"]) == total
 
 
 # ----------------------------------------------------- three milestones (§8, #117)
