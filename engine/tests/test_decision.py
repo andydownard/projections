@@ -186,20 +186,28 @@ def test_canonical_60_labor_is_not_proceed(canonical_result):
 
 
 def test_aggressive_fixture_triggers_margin_guardrail():
-    # shares 15/20/25 -> high margin. The >30% net-margin guardrail is a design
-    # headline computed at the labor band's low end (40%, the prototype value);
-    # the share>8% guardrail fires regardless of labor.
+    # §12.2 net-margin guardrail now runs on the DISPLAYED (cash) margin (epic #321), so
+    # the flag the board sees matches the margin the board sees. A genuinely implausible
+    # margin for a NEW store still trips it: a very high donor share + low labor pushes
+    # the Year-1 CASH margin ((operating net − startup_total) / revenue) past 30%. The
+    # share>8% guardrail fires regardless of labor. (The legacy 15/20/25 @40% case still
+    # trips the SHARE guardrail — see test_aggressive_share_guardrail_fires_at_canonical_labor
+    # — but its Year-1 cash margin is depressed below 30% by the one-time startup hit, the
+    # honest cash-basis signal.)
+    from engine.compute import cash_margin
     inputs = Inputs(
         org_name="Aggressive", city="x", opening_status="pre_launch",
-        share_y1="0.15", share_y2="0.20", share_y3="0.25", share_y4="0.11", share_y5="0.12",
+        share_y1="0.25", share_y2="0.30", share_y3="0.35", share_y4="0.30", share_y5="0.30",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
-        occupancy_annual="120000", lease_type="nnn", source_of_funds="800000",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="1500000",
     )
-    res = compute(inputs, Assumptions(labor_pct="0.40"), DemandDrivers(),
+    res = compute(inputs, Assumptions(labor_pct="0.25"), DemandDrivers(),
                   TradeArea(basis="city", households="31798"), overrides={})
+    assert cash_margin(res, 1) > D(model.NET_MARGIN_FLAG_MAX)   # displayed (cash) margin
+    assert res.flags.get("net_margin_out_of_band") is not None
+    assert res.flags["net_margin_out_of_band"]["requires_note"] is True
     assert res.flags.get("share_y1_out_of_band") is not None
     assert res.flags["share_y1_out_of_band"]["requires_note"] is True
-    assert res.flags.get("net_margin_out_of_band") is not None
     assert res.decision.reco_tag == "revise"
 
 

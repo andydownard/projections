@@ -143,7 +143,9 @@ Three named projections pinned to `model_version` drive design, edge-case math, 
 | 12 | Silent recompute on new engine | Return stored snapshot; upgrade = new revision | §13 |
 | 13 | Litestream replicating `/app` (timpager bug) | Replicate **`/data/projections.db`** | §26 |
 | 14 | Boot with missing secret / fallback chain | Refuse to boot in prod; single-source env requirements | §20 |
-| 15 | Annual P&L drifts from monthly | Year-1 annual = roll-up of M0–M12; golden asserts equality | §10.2 |
+| 15 | Annual P&L drifts from monthly | **Each year's** annual = roll-up of its 12 operating months (60-month horizon); Year-1 **cash** net == Σ monthly cash nets over project months `1..G+11` (incl. startup); golden asserts equality | §10.2 |
+| 16 | Confusing operating loss with cash recovery (payback never resolves) | Payback = first project-month `cumulativeCash ≥ 0` after going negative, over the **60-month** series ("Month N"); a positive-operating-net (Aurora-class) projection MUST resolve to a real month, not N/A | §12.1 |
+| 17 | A second / incongruent margin | Displayed Net income **and** Net margin are BOTH cash-based (Year-1 subtracts `startup_total`); `margin == net / revenue` exactly — no operating-margin twin, no footnote; internal operating net still drives the verdict | §12 |
 
 ---
 

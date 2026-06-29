@@ -5,15 +5,15 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    # 2.6.0: the annual P&L extends to a 5-year horizon (share_y4/share_y5 drivers +
-    # the compounding escalator through Y5); CAGR is Y1->Y5; the §12.2 guardrails also
-    # check Y4/Y5; "Net profit" is renamed "Net income". Decision metrics stay
-    # Year-1-anchored (capital/break-even/cash-gap byte-unchanged).
-    assert model.MODEL_VERSION == "2.6.0"
-    # 1.5.0: +startupCosts/startupTotal for the Board Packet .docx startup-costs table
-    # (EPIC DOCX). 1.4.0 had added y4/y5 row cells, shareY4/Y5 + editable donation
-    # drivers, and incomeSeries/year5Income. Additive shape change, no math change.
-    assert model.COMPUTE_SCHEMA_VERSION == "1.5.0"
+    # 2.7.0: the projection is CASH-based — the displayed Net income + Net margin are
+    # cash-based and congruent (Year-1 subtracts the one-time startup); the monthly model
+    # spans the full 60-month horizon so payback resolves across years as a Month-N cash
+    # recovery. Internal operating net (and the verdict it drives) is unchanged; capital,
+    # break-even and first-year cash gap stay Year-1-anchored.
+    assert model.MODEL_VERSION == "2.7.0"
+    # 1.6.0: the income/margin display surfaces are cash-based and monthly[] grows 12->60;
+    # same field shapes, the NUMBERS change with model 2.7.0.
+    assert model.COMPUTE_SCHEMA_VERSION == "1.6.0"
 
 
 def test_demand_constants():

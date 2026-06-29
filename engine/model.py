@@ -6,7 +6,24 @@ the point of use; these module constants name the *default* assumption values.
 """
 from __future__ import annotations
 
-MODEL_VERSION = "2.6.0"          # math/shape change => bump (2.6.0: the ANNUAL P&L
+MODEL_VERSION = "2.7.0"          # math/shape change => bump (2.7.0: the projection is
+# CASH-BASED — no amortization, no capitalization. The one-time startup is a CASH outflow
+# that hits when paid (Year 1, at/around opening). The DISPLAYED Net income and Net margin
+# are BOTH cash-based and therefore congruent (no footnote, no second margin): displayed
+# cash_net[1] = operating_net[1] − startup_total, cash_net[y] = operating_net[y] for y>=2,
+# and displayed net_margin[y] = cash_net[y] / total_rev[y]. The INTERNAL operating net
+# (AnnualYear.net = total_rev − total_exp) is UNCHANGED and still drives the go/no-go verdict
+# (the _recommend gates, simple_payback, sensitivity re-runs, and the monthly operating
+# roll-up) so a startup is not "do not proceed" merely because Year-1 cash is negative —
+# capital_required + payback carry the funding story. The monthly model now spans the full
+# 60-month horizon (was 12) so PAYBACK resolves across years: payback = first project-month
+# where cumulative cash >= 0 AFTER going negative ("Month N"); N/A-with-reason if never
+# reached. Year-1 OPERATING ramp + capital + break-even + first-year cash gap stay
+# Year-1-anchored and byte-unchanged. The §12.2 net-margin guardrail now runs on the
+# DISPLAYED (cash) margin. The .xlsx Net income Year-1 cell subtracts the Total Startup
+# Costs cell; the "Simple payback (years)" cell is removed (payback is surfaced via the
+# MILESTONES "Payback" Month-N row).
+# 2.6.0: the ANNUAL P&L
 # extends from a 3-year to a 5-year horizon — Year 4 / Year 5 are driven by their own
 # explicit donor-share inputs (share_y4 / share_y5) through the SAME driver chain and
 # the existing compounding rent escalator; the revenue CAGR is now Y1->Y5 and the
@@ -37,8 +54,13 @@ MODEL_VERSION = "2.6.0"          # math/shape change => bump (2.6.0: the ANNUAL 
 # income Y1..Y5 {raw,display}) and +year5Income for the list/detail sparkline;
 # 1.5.0: +startupCosts (one-time startup line items as [{category, amount{raw,display}}])
 # and +startupTotal {raw,display} for the Board Packet .docx startup-costs table (EPIC
-# DOCX) — additive shape change, no math change (MODEL_VERSION stays 2.6.0))
-COMPUTE_SCHEMA_VERSION = "1.5.0"
+# DOCX) — additive shape change, no math change (MODEL_VERSION stays 2.6.0);
+# 1.6.0: the displayed Net income (row + KPI + incomeSeries[0] + year5Income + card y1_net)
+# and Net margin (row + KPI) are CASH-based (Year-1 subtracts the one-time startup total);
+# monthly[] grows from 12 to 60 rows (full horizon) so the cash-flow series spans the
+# payback crossing; payback is the Month-N cash-recovery milestone. Same field shapes —
+# the NUMBERS change with model 2.7.0, so this rides the same regeneration)
+COMPUTE_SCHEMA_VERSION = "1.6.0"
 
 # --- export trust copy (#192). Single source for the "planning estimates, not
 # advice" disclaimer + AI-narrative disclosure that the terms gate exists to

@@ -75,9 +75,15 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
     years, startup, startup_total, occupancy = compute_annual(
         new_inputs, assumptions, demand, trade, overrides)
     startup_by_month = startup_outflows_by_month(new_inputs, assumptions, occupancy[1])
-    rows, be = build_monthly(years[1], assumptions, new_inputs.opening_month_number,
+    rows, be = build_monthly(years, assumptions, new_inputs.opening_month_number,
                              startup_by_month)
-    trough = min((D(str(m.cumulative_cash)) for m in rows), default=Decimal("0"))
+    # Scope the trough to the launch window (months <= G+11) — the SAME scoping as the
+    # headline `capital` in build_decision — so the 60-month extension cannot drift a
+    # later-year operating dip into the launch-capital figure (and so base-scenario
+    # capital equals startup_capital_required to the penny).
+    g2 = int(new_inputs.opening_month_number)
+    launch = [D(str(m.cumulative_cash)) for m in rows if m.index <= g2 + 11]
+    trough = min(launch, default=Decimal("0"))
     peak = abs(min(Decimal("0"), trough))
     # `peak` already embeds the timed startup outflow (monthly.py) — do NOT add
     # startup_total again (that double-count is the §6.1 capital bug).
@@ -108,12 +114,15 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
     monthly = result.monthly
     g = int(inputs.opening_month_number)
 
-    # Capital required: peak cumulative cash deficit across the WHOLE timeline
-    # (it begins accumulating in pre-opening). The trough already embeds the timed
-    # startup outflows, so startup_total is NEVER added again (the ~$518k-vs-$277,990
-    # §6.1 double-count bug).
-    cumulative_all = [D(str(m.cumulative_cash)) for m in monthly]
-    trough = min(cumulative_all) if cumulative_all else Decimal("0")
+    # Capital required: peak cumulative cash deficit over the LAUNCH window (months
+    # <= G+11 — pre-opening accumulation through the Year-1 operating window). The trough
+    # already embeds the timed startup outflows, so startup_total is NEVER added again
+    # (the ~$518k-vs-$277,990 §6.1 double-count bug). Scoped to the launch window so the
+    # 60-month horizon (added for payback) cannot drift a later-year operating dip into
+    # the launch-capital headline; for the canonical G=1 fixtures this is byte-identical
+    # to the prior whole-timeline min (the 12-month model was exactly this window).
+    launch_cumulative = [D(str(m.cumulative_cash)) for m in monthly if m.index <= g + 11]
+    trough = min(launch_cumulative) if launch_cumulative else Decimal("0")
     peak_shortfall = abs(min(Decimal("0"), trough))
     capital = peak_shortfall + D(assumptions.reserve_buffer)
 
@@ -133,17 +142,21 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
             "break_even_month",
             "N/A — operating net never turns sustainably positive within the horizon")
 
-    # Payback milestone: first operating month where cumulative operating profit
-    # since opening >= total startup costs (the investment is recovered). Project-
-    # month numbered; N/A-with-reason when unreached within the horizon (never a 0).
+    # Payback milestone (CASH basis, epic #321): the first project-month where cumulative
+    # cash returns to >= 0 AFTER having gone negative — i.e. the one-time startup outlay
+    # is fully recovered. Cash basis over the full 60-month horizon, so payback can resolve
+    # across years (the Aurora-class positive-operating-net case lands a real Month N). The
+    # "after going negative" guard means the leading zero-cost pre-opening months are not
+    # read as "recovered at month 1". Project-month numbered; N/A-with-reason when
+    # unreached within the horizon (never a 0). For the all-startup-at-opening case this is
+    # arithmetically identical to "cumulative operating profit since opening >= startup".
     payback_month = None
-    cum_op_profit = Decimal("0")
-    startup_total_d = D(str(result.startup_total))
+    gone_negative = False
     for m in monthly:
-        if m.kind != "operating":
-            continue
-        cum_op_profit += D(str(m.net))
-        if cum_op_profit >= startup_total_d:
+        cc = D(str(m.cumulative_cash))
+        if cc < 0:
+            gone_negative = True
+        elif gone_negative and cc >= 0:
             payback_month = m.index
             break
     if payback_month is None:
@@ -275,15 +288,24 @@ def build_flags(result, assumptions, demand):
         if share_y > D(model.SHARE_Y1_BAND_MAX):
             flags[key] = {"value": float(share_y), "band": "≤ ~8%", "requires_note": True}
 
-    # net-margin guardrail (> ~30% unusual for a new store) — also checked on Y4/Y5.
-    if y1.margin is not None and D(str(y1.margin)) > D(model.NET_MARGIN_FLAG_MAX):
+    # net-margin guardrail (> ~30% unusual for a new store). Runs on the DISPLAYED
+    # (cash) margin (epic #321) so the flag the board sees matches the margin the board
+    # sees: Year-1 cash margin = (operating net − startup_total) / revenue; Years 2-5 the
+    # cash margin equals the operating margin (no startup), so Y4/Y5 are unchanged. The
+    # Year-1 startup hit depresses the cash margin, so it rarely trips in Year 1 — a real
+    # implausibly-high margin now surfaces on the late (steady-state) years, which is the
+    # honest signal for a new store.
+    from engine.compute import cash_margin
+
+    cm1 = cash_margin(result, 1)
+    if cm1 is not None and cm1 > D(model.NET_MARGIN_FLAG_MAX):
         flags["net_margin_out_of_band"] = {
-            "value": float(D(str(y1.margin))), "band": "≤ ~30%", "requires_note": True}
+            "value": float(cm1), "band": "≤ ~30%", "requires_note": True}
     for y, key in ((4, "net_margin_y4_out_of_band"), (5, "net_margin_y5_out_of_band")):
-        margin_y = annual[y].margin
-        if margin_y is not None and D(str(margin_y)) > D(model.NET_MARGIN_FLAG_MAX):
+        margin_y = cash_margin(result, y)
+        if margin_y is not None and margin_y > D(model.NET_MARGIN_FLAG_MAX):
             flags[key] = {
-                "value": float(D(str(margin_y))), "band": "≤ ~30%", "requires_note": True}
+                "value": float(margin_y), "band": "≤ ~30%", "requires_note": True}
 
     # revenue == 0 -> margin/per-unit KPIs null
     if y1.total_rev == 0:
