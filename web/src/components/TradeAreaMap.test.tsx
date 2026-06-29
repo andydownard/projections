@@ -21,12 +21,14 @@ describe("TradeAreaMap — detail (#266)", () => {
   it("renders the server-proxied static map when the proxy returns 200", async () => {
     stubFetch(200);
     render(
-      <TradeAreaMap slug="abc" location={LONGVIEW} basis="city" geography="Longview city" size="detail" />,
+      <TradeAreaMap slug="abc" location={LONGVIEW} geography="Longview city" size="detail" />,
     );
     const img = await screen.findByRole("img", { name: /Map of Longview city/i });
     expect(img).toHaveAttribute("src", "/api/projections/abc/staticmap?size=detail");
     expect(img).toHaveAttribute("loading", "lazy");
-    expect(screen.getByText(/city trade area/i)).toBeInTheDocument();
+    // #320: the visible "… trade area" caption is removed; the geography stays in the
+    // descriptive alt text (asserted above), so no separate caption element renders.
+    expect(screen.queryByText(/trade area/i)).not.toBeInTheDocument();
   });
 
   it("shows 'No mapped location' when the proxy 404s (a true no-location)", async () => {

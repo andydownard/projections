@@ -56,6 +56,10 @@ export interface ProjectionTabProps {
   /** Per-field undo: revert THAT cell to its previous value via a forward PATCH
    *  (the parent issues it → a new revision). Omit to render the change display-only. */
   onUndoField?: (node: string, year: number) => void;
+  /** I4 (#322): clear a pin straight from the cell (PATCH overrides.clear → recompute
+   *  → new revision). When wired, an overridden cell shows a small "reset to calculated"
+   *  affordance so a pin can be cleared without the (flag-gated) override audit UI. */
+  onResetCell?: (node: string, year: number) => void;
 }
 
 const LEGEND: Array<{ cls: string; label: string }> = [
@@ -81,6 +85,7 @@ export function ProjectionTab({
   onEditCell,
   fieldChanges,
   onUndoField,
+  onResetCell,
 }: ProjectionTabProps) {
   const { monthly, breakevenMonth, rows } = vm;
 
@@ -89,6 +94,15 @@ export function ProjectionTab({
   // SAME table renders 3 or 5 years with no recompute (Decision 5 / E1).
   const years = presentYears(rows);
   const horizonLabel = `${years.length}-year projection`;
+
+  // I2 (#322): the orange "overridden" highlight is derived CLIENT-SIDE from
+  // vm.overrides per (node,year) — a pure presentational set lookup, no viewmodel
+  // change. Keying on "{node}#{year}" means only the pinned cell lights up, never
+  // the whole row (the server marks the WHOLE row class "overridden" when any year
+  // is pinned; we narrow it here so the orange doesn't bleed across the row).
+  const overrideKeys = new Set(
+    (vm.overrides ?? []).map((o) => fieldChangeKey(o.node, o.year)),
+  );
 
   return (
     <div className="projection-tab" data-testid="projection-tab">
@@ -138,6 +152,8 @@ export function ProjectionTab({
                   onEditCell={onEditCell}
                   fieldChanges={fieldChanges}
                   onUndoField={onUndoField}
+                  onResetCell={onResetCell}
+                  overrideKeys={overrideKeys}
                 />
               ))}
             </tbody>
@@ -162,12 +178,16 @@ function ThreeYearRow({
   onEditCell,
   fieldChanges,
   onUndoField,
+  onResetCell,
+  overrideKeys,
 }: {
   row: Row;
   years: number[];
   onEditCell?: (node: string, year: number, value: string) => void;
   fieldChanges?: Record<string, FieldChangeInfo>;
   onUndoField?: (node: string, year: number) => void;
+  onResetCell?: (node: string, year: number) => void;
+  overrideKeys: Set<string>;
 }) {
   return (
     <tr>
@@ -182,6 +202,8 @@ function ThreeYearRow({
           onEditCell={onEditCell}
           fieldChanges={fieldChanges}
           onUndoField={onUndoField}
+          onResetCell={onResetCell}
+          overrideKeys={overrideKeys}
         />
       ))}
     </tr>
@@ -194,16 +216,33 @@ function Cell({
   onEditCell,
   fieldChanges,
   onUndoField,
+  onResetCell,
+  overrideKeys,
 }: {
   row: Row;
   year: number;
   onEditCell?: (node: string, year: number, value: string) => void;
   fieldChanges?: Record<string, FieldChangeInfo>;
   onUndoField?: (node: string, year: number) => void;
+  onResetCell?: (node: string, year: number) => void;
+  overrideKeys: Set<string>;
 }) {
   const value = row[`y${year}` as YearKey];
   const display = value ? value.display : "—";
-  const cls = `cell cell--${row.class} num`;
+  // PE7: the node identity matches onEditCell (row.node ?? row.label).
+  const nodeId = row.node ?? row.label;
+  // I2 (#322): the orange "overridden" highlight is per (node,year) from vm.overrides,
+  // NOT the row-level server class — so it never bleeds across the whole row. A cell
+  // the server marked row-level "overridden" but that is NOT the pinned (node,year)
+  // falls back to its natural pinnable "input" class (a pin only ever lands on a
+  // pinnable component cell, whose un-pinned class is "input").
+  const isOverridden = overrideKeys.has(fieldChangeKey(nodeId, year));
+  const effClass = isOverridden
+    ? "overridden"
+    : row.class === "overridden"
+      ? "input"
+      : row.class;
+  const cls = `cell cell--${effClass} num`;
   // #148: flag losses (server raw < 0) for the error-color cue, kept PAIRED with
   // the server's parentheses so meaning is never carried by color alone.
   const negative = isNegative(value) ? "true" : undefined;
@@ -213,8 +252,7 @@ function Cell({
 
   // PE7: a recent change on this editable cell (Penny or manual). The cell's own
   // value stays prominent (the button); FieldChange adds the badge + subtle "was X"
-  // + per-field undo. The node identity matches onEditCell (row.node ?? row.label).
-  const nodeId = row.node ?? row.label;
+  // + per-field undo.
   const change = row.editable ? fieldChanges?.[fieldChangeKey(nodeId, year)] : undefined;
 
   // Editable (input/overridable component) cells are real buttons: keyboard
@@ -239,8 +277,10 @@ function Cell({
         negative={negative}
         change={change}
         canEdit={editable}
+        isOverridden={isOverridden}
         onEditCell={onEditCell}
         onUndoField={onUndoField}
+        onResetCell={onResetCell}
       />
     );
   }
@@ -282,8 +322,10 @@ function EditableCell({
   negative,
   change,
   canEdit,
+  isOverridden,
   onEditCell,
   onUndoField,
+  onResetCell,
 }: {
   nodeId: string;
   label: string;
@@ -295,8 +337,10 @@ function EditableCell({
   negative?: "true";
   change?: FieldChangeInfo;
   canEdit: boolean;
+  isOverridden: boolean;
   onEditCell?: (node: string, year: number, value: string) => void;
   onUndoField?: (node: string, year: number) => void;
+  onResetCell?: (node: string, year: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
   // Guards a single edit session so an Enter-commit immediately followed by the
@@ -374,6 +418,22 @@ function EditableCell({
       >
         {display}
       </button>
+      {/* I4 (#322): a small inline "reset to calculated" on an OVERRIDDEN cell clears
+          the pin without the (flag-gated) override audit UI. Shown only when the host
+          wires onResetCell (edit mode). A sibling button (never nested in the cell
+          button), so a click resets without opening the inline editor. */}
+      {isOverridden && onResetCell && (
+        <button
+          type="button"
+          className="cell-reset"
+          data-testid={`cell-reset-${nodeId}-y${year}`}
+          aria-label={`Reset ${label}, Year ${year} to the calculated value`}
+          title="Reset to calculated"
+          onClick={() => onResetCell(nodeId, year)}
+        >
+          <span aria-hidden="true">↺</span>
+        </button>
+      )}
       {change && (
         <FieldChange
           label={`${label}, Year ${year}`}

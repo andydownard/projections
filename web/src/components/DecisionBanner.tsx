@@ -67,7 +67,9 @@ export function DecisionBanner({ reco, metrics, milestones }: DecisionBannerProp
   const breakevenReason = milestones ? milestones.breakEven.reason : undefined;
 
   const cells: MetricCell[] = [
-    { testid: "metric-capital", label: "Startup capital required", value: metrics.capital },
+    // #324: one capital label across the app — "Capital required" (MetricBar / KPI /
+    // list all use it), so the board never sees two names for the same figure.
+    { testid: "metric-capital", label: "Capital required", value: metrics.capital },
     {
       testid: "metric-breakeven",
       label: "Break-even",

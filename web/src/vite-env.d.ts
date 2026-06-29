@@ -13,6 +13,10 @@ interface ImportMetaEnv {
   readonly VITE_CLERK_SIGN_IN_URL?: string;
   /** CSV of origins the satellite may redirect back to (allowedRedirectOrigins). */
   readonly VITE_ALLOWED_REDIRECT_ORIGINS?: string;
+  /** "true" enables the overrides AUDIT apparatus (audit list + justification capture
+   *  in Penny). Default OFF (#322 I4) — inline cell editing + the per-cell highlight +
+   *  the inline reset stay on regardless. */
+  readonly VITE_OVERRIDES_UI?: string;
 }
 
 interface ImportMeta {

@@ -20,6 +20,12 @@ import {
 import { ConfirmPurgeDialog } from "../components/ConfirmPurgeDialog";
 import { useToast } from "../components/Toast";
 import { formatListDate } from "../components/displayLabels";
+import {
+  TRASH_CONFLICT,
+  TRASH_PURGED,
+  TRASH_RESTORED,
+  trashCouldNot,
+} from "../api/trashMessages";
 
 function navigate(path: string) {
   window.history.pushState(null, "", path);
@@ -56,9 +62,9 @@ export function TrashPage() {
 
   function reportError(err: unknown, retryVerb: string) {
     if (err instanceof LifecycleConflictError) {
-      showToast("This projection changed in another tab. Refresh and try again.");
+      showToast(TRASH_CONFLICT);
     } else {
-      showToast(`Could not ${retryVerb}. Try again.`);
+      showToast(trashCouldNot(retryVerb));
     }
   }
 
@@ -67,7 +73,7 @@ export function TrashPage() {
     try {
       await restoreProjection({ viewSlug: item.view_slug, version: item.version });
       drop(item.view_slug);
-      showToast("Restored");
+      showToast(TRASH_RESTORED);
     } catch (err) {
       reportError(err, "restore");
     } finally {
@@ -82,7 +88,7 @@ export function TrashPage() {
     try {
       await purgeProjection({ viewSlug: target.view_slug, version: target.version });
       drop(target.view_slug);
-      showToast("Permanently deleted");
+      showToast(TRASH_PURGED);
     } catch (err) {
       reportError(err, "delete");
     } finally {

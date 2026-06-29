@@ -44,8 +44,13 @@ function vm(overrides: Partial<ViewModel> = {}): ViewModel {
       { label: "Donor market share", group: "drivers", y1: { raw: 0.06, display: "6.0%" }, y2: { raw: 0.08, display: "8.0%" }, y3: { raw: 0.1, display: "10.0%" }, class: "input", editable: true },
       { label: "Total Revenue", group: "revenue", y1: { raw: 426911, display: "$426,911" }, y2: { raw: 560000, display: "$560,000" }, y3: { raw: 700000, display: "$700,000" }, class: "computed", editable: false },
       { label: "Rent", group: "expenses", y1: { raw: 90000, display: "$90,000" }, y2: { raw: 92700, display: "$92,700" }, y3: { raw: 95481, display: "$95,481" }, class: "estimated", editable: true },
-      { label: "Payroll", group: "expenses", y1: { raw: 256146, display: "$256,146" }, y2: { raw: 280000, display: "$280,000" }, y3: { raw: 300000, display: "$300,000" }, class: "overridden", editable: false },
+      // I3 (#322): a pinned component row stays editable; the orange highlight is driven
+      // by vm.overrides per (node,year) (I2), NOT the row-level class.
+      { label: "Payroll", group: "expenses", y1: { raw: 256146, display: "$256,146" }, y2: { raw: 280000, display: "$280,000" }, y3: { raw: 300000, display: "$300,000" }, class: "overridden", editable: true },
       { label: "Net income", group: "expenses", y1: { raw: 46000, display: "$46,000" }, y2: { raw: 60000, display: "$60,000" }, y3: { raw: 80000, display: "$80,000" }, class: "computed", editable: false },
+    ],
+    overrides: [
+      { node: "Payroll", year: 1, value: { raw: 256146, display: "$256,146" }, calculated: { raw: 240000, display: "$240,000" } },
     ],
     settings: {},
     version: 3,
@@ -144,6 +149,17 @@ describe("ProjectionTab — table + chart", () => {
     expect(screen.getByTestId("cell-Payroll-y1")).toHaveClass("cell--overridden");
     expect(screen.getByTestId("cell-Total Revenue-y1")).toHaveClass("cell--computed");
     expect(screen.getByTestId("cell-Donor market share-y1")).toHaveClass("cell--input");
+  });
+
+  // I2 (#322): the orange "overridden" highlight is per (node,year) from vm.overrides —
+  // it must NOT bleed across the whole row. Only Payroll Y1 is pinned, so Y2/Y3 of the
+  // same row read as their natural editable (input) cells, not orange.
+  it("highlights ONLY the pinned (node,year) cell, not the whole overridden row", () => {
+    render(<ProjectionTab vm={vm()} />);
+    expect(screen.getByTestId("cell-Payroll-y1")).toHaveClass("cell--overridden");
+    expect(screen.getByTestId("cell-Payroll-y2")).not.toHaveClass("cell--overridden");
+    expect(screen.getByTestId("cell-Payroll-y3")).not.toHaveClass("cell--overridden");
+    expect(screen.getByTestId("cell-Payroll-y2")).toHaveClass("cell--input");
   });
 
   it("renders server display strings verbatim (no client math)", () => {
@@ -276,5 +292,30 @@ describe("ProjectionTab — per-field change affordance (PE7, #126)", () => {
     );
     await user.click(screen.getByTestId("field-change-undo"));
     expect(onUndoField).toHaveBeenCalledWith("Donor market share", 1);
+  });
+});
+
+// I4 (#322): a small inline "reset to calculated" affordance lets a pin be cleared
+// straight from the cell — without the (now flag-gated) override audit UI.
+describe("ProjectionTab — inline reset-to-calculated (I4, #322)", () => {
+  it("shows a reset affordance on an overridden cell that clears the pin via onResetCell", async () => {
+    const onResetCell = vi.fn();
+    const user = userEvent.setup();
+    render(<ProjectionTab vm={vm()} onEditCell={() => {}} onResetCell={onResetCell} />);
+    const reset = screen.getByTestId("cell-reset-Payroll-y1");
+    await user.click(reset);
+    expect(onResetCell).toHaveBeenCalledWith("Payroll", 1);
+  });
+
+  it("shows NO reset affordance on a non-overridden editable cell", () => {
+    render(<ProjectionTab vm={vm()} onEditCell={() => {}} onResetCell={() => {}} />);
+    // Payroll Y2 is editable but not pinned → no reset; Donor share (not pinned) → none.
+    expect(screen.queryByTestId("cell-reset-Payroll-y2")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cell-reset-Donor market share-y1")).not.toBeInTheDocument();
+  });
+
+  it("renders no reset affordance when onResetCell is not wired (read-only)", () => {
+    render(<ProjectionTab vm={vm()} onEditCell={() => {}} />);
+    expect(screen.queryByTestId("cell-reset-Payroll-y1")).not.toBeInTheDocument();
   });
 });

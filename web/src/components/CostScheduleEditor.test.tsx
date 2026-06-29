@@ -144,6 +144,15 @@ describe("CostScheduleEditor — grand-opening column (#34)", () => {
     expect(h.onChangeOpeningMonth).toHaveBeenCalledWith(7);
   });
 
+  // #320: the FULL column header accepts the drop — the go-row cell above each month
+  // header (where the handle visibly lives) is a drop target too, not just Row-2.
+  it("dropping the handle anywhere in the column header row (the go-row cell) sets openingMonthNumber", () => {
+    const h = setup({ openingMonthNumber: 1 });
+    fireEvent.dragStart(screen.getByTestId("grand-opening-handle"));
+    fireEvent.drop(screen.getByTestId("go-col-7"));
+    expect(h.onChangeOpeningMonth).toHaveBeenCalledWith(7);
+  });
+
   it("exposes the handle as an accessible slider with the opening month value", () => {
     setup({ openingMonthNumber: 4 });
     const handle = screen.getByTestId("grand-opening-handle");

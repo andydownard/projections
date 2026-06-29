@@ -316,15 +316,22 @@ export function CashflowChart({
               accessible data table. table-layout:fixed + the shared label gutter
               keep the columns under the chart's month bands. */}
           <table className="cashflow-table" data-testid="cashflow-table">
-            <caption className="sr-only">Monthly cash-flow, months 0 to 12</caption>
+            <caption className="sr-only">
+              {`Monthly cash-flow, months ${monthly[0]?.month ?? 1} to ${
+                monthly[monthly.length - 1]?.month ?? monthly.length
+              }`}
+            </caption>
             <thead>
               <tr>
                 <th scope="col" className="cashflow-table__label">
                   Line item
                 </th>
                 {monthly.map((m) => (
+                  // #320: abbreviate the month headers ("Mo. 5" to "M5") so the dense
+                  // monthly table stays compact; the sr caption carries the full
+                  // project-month range.
                   <th scope="col" key={m.month} className="num">
-                    Mo. {m.month}
+                    M{m.month}
                   </th>
                 ))}
               </tr>

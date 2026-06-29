@@ -200,7 +200,12 @@ def to_view_model(result):
             "y4": money_view(annual[4].expenses[label]),
             "y5": money_view(annual[5].expenses[label]),
             "class": _row_class(label, pinned_by_label),
-            "editable": label in _EDITABLE_ROWS and label not in pinned_by_label,
+            # I3 (#322): a pinnable component row stays editable even when pinned, so
+            # the owner can re-edit the pin in place (the cell is the override entry
+            # point). The "overridden" class drives the orange highlight; editability
+            # is independent of the pin. Goldens are override-free, so this is a no-op
+            # for them (nothing is in `pinned_by_label`).
+            "editable": label in _EDITABLE_ROWS,
         })
     rows.append(_driver_row("Total Expenses", annual, "total_exp", group="expenses", computed=True))
     # Net income + Net margin rows are CASH-based (epic #321). The label stays "Net
