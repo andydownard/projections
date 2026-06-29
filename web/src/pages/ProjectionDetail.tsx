@@ -9,7 +9,7 @@
 // autosave PATCH (If-Match: version) — for the OWNER the fallback owner token in
 // localStorage authorizes it, so the editable surface is reachable from the list
 // with no secret in the URL (issue #143). A stale save → the 409 SaveConflictModal
-// (reload / overwrite / save-as-copy). Net profit is a derived total — its cell
+// (reload / overwrite / save-as-copy). Net income is a derived total — its cell
 // is non-pinnable (aria-disabled), enforced server-side too (PRD §14).
 //
 // A 404 (bad/expired/removed slug) rejects the load; we render a load-failed
@@ -20,24 +20,28 @@
 // NO client math: every figure is the server's { display } string.
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
-import { fetchProjection, type ViewModel, type OverrideEntry, xlsxHref } from "../api/viewModel";
+import {
+  fetchProjection,
+  type ViewModel,
+  type OverrideEntry,
+  xlsxHref,
+  docxHref,
+} from "../api/viewModel";
 import { getOwnerToken } from "../api/projections";
 import { patchProjection, PatchConflictError } from "../api/patch";
-import { submitFeedback } from "../api/feedback";
 import { ProjectionTab, fieldChangeKey, type FieldChangeInfo } from "../components/ProjectionTab";
 import type { FieldChangeActor } from "../components/FieldChange";
 import { TradeAreaMap } from "../components/TradeAreaMap";
 import { EvidencePanel } from "../components/EvidencePanel";
-import { FeedbackModal } from "../components/FeedbackModal";
 import { SaveConflictModal } from "../components/SaveConflictModal";
 import { SettingsTab } from "../components/SettingsTab";
 import { KpiStrip } from "../components/KpiStrip";
+import { Sparkline } from "../components/Sparkline";
 import { DegradedState } from "../components/DegradedState";
 import { PennyAssistant } from "../components/PennyDrawer";
-import {
-  OverrideAudit,
-  type OverrideAuditItem,
-  type OverrideCommentTarget,
+import type {
+  OverrideAuditItem,
+  OverrideCommentTarget,
 } from "../components/OverrideAudit";
 import type { SaveState } from "../components/TopBar";
 import type { ConflictBody } from "../state/autosaveReducer";
@@ -103,14 +107,16 @@ interface TrackedCell {
   patchKey: string; // share_y1 | share_y2 | share_y3
 }
 
-/** The editable donor-share cells of a view-model, snapshotted for diffing. */
+/** The editable donor-share cells of a view-model, snapshotted for diffing. Iterates
+ *  Y1..Y5 so a 2.6.0 snapshot tracks all five shares; a legacy 3-year snapshot simply
+ *  has no y4/y5 cell and skips them (year-count-agnostic). */
 function shareCells(vm: ViewModel): TrackedCell[] {
   const out: TrackedCell[] = [];
   const row = vm.rows.find((r) => r.editable && r.group === "drivers" && /share/i.test(r.label));
   if (!row) return out;
   const node = row.node ?? row.label;
-  for (const year of [1, 2, 3] as const) {
-    const cell = row[`y${year}` as "y1" | "y2" | "y3"];
+  for (const year of [1, 2, 3, 4, 5] as const) {
+    const cell = row[`y${year}` as "y1" | "y2" | "y3" | "y4" | "y5"];
     if (!cell) continue;
     out.push({
       key: fieldChangeKey(node, year),
@@ -177,8 +183,12 @@ function auditItems(vm: ViewModel): OverrideAuditItem[] {
   });
 }
 
-/** Build the SettingsTab view-model from the server settings map. */
+/** Build the SettingsTab view-model from the server settings map. The 2.6.0 / E2
+ *  drivers (shareY4/Y5, donationValue, basket, donationsPerHouseholdPerYear) are
+ *  included ONLY when the snapshot carries them, so a legacy 3-year snapshot renders
+ *  just the drivers it actually has (the merged grid filters on presence). */
 function settingsVm(s: ViewModel["settings"]) {
+  const has = (k: string) => s[k] !== undefined && s[k] !== null;
   return {
     laborPct: sv(s.laborPct),
     marketingPct: sv(s.marketingPct),
@@ -190,7 +200,86 @@ function settingsVm(s: ViewModel["settings"]) {
     shareY1: sv(s.shareY1),
     shareY2: sv(s.shareY2),
     shareY3: sv(s.shareY3),
+    ...(has("shareY4") ? { shareY4: sv(s.shareY4) } : {}),
+    ...(has("shareY5") ? { shareY5: sv(s.shareY5) } : {}),
+    ...(has("donationValue") ? { donationValue: sv(s.donationValue) } : {}),
+    ...(has("basket") ? { basket: sv(s.basket) } : {}),
+    ...(has("donationsPerHouseholdPerYear")
+      ? { donationsPerHouseholdPerYear: sv(s.donationsPerHouseholdPerYear) }
+      : {}),
   };
+}
+
+/** Format an ISO timestamp as a short "Updated MMM D, YYYY" string for the header.
+ *  Display only; rendered ONLY when the server provides `updated_at` (never a
+ *  fabricated date). Returns null for a missing/unparseable value. */
+function updatedLabel(iso?: string): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return `Updated ${d.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  })}`;
+}
+
+/** The 4-cell header metric bar (D1): Income sparkline · Capital required (RED) ·
+ *  Payback · Break-even. Carries the e2e/detail `metric-*` + `decision-banner`
+ *  testids the rest of the app reads. Every figure is the server's display string
+ *  (no client math); the sparkline geometry comes from the server's incomeSeries. */
+function MetricBar({ vm }: { vm: ViewModel }) {
+  const { metrics, milestones, incomeSeries, year5Income } = vm;
+  const breakeven = milestones?.breakEven ?? metrics.breakeven;
+  const payback = milestones?.payback;
+  const points = (incomeSeries ?? []).map((s) => s.raw);
+  return (
+    <section
+      className="metric-bar decision-banner"
+      data-testid="decision-banner"
+      aria-label="Key decision metrics"
+    >
+      {incomeSeries && incomeSeries.length > 0 && (
+        <div className="metric-bar__cell metric-bar__cell--income" data-testid="metric-income">
+          <span className="metric-bar__label">Income</span>
+          <Sparkline
+            points={points}
+            y5Label={year5Income?.display}
+            aria-label={`Annual net income Year 1 to Year ${points.length}${
+              year5Income ? `, ending at ${year5Income.display}` : ""
+            }`}
+          />
+        </div>
+      )}
+      <div className="metric-bar__cell">
+        <span className="metric-bar__label">Capital required</span>
+        <span
+          className="metric-bar__value metric-bar__value--capital num"
+          data-testid="metric-capital"
+        >
+          {metrics.capital.display}
+        </span>
+        <span className="metric-bar__sub">money to raise</span>
+      </div>
+      {payback && (
+        <div className="metric-bar__cell">
+          <span className="metric-bar__label">Payback</span>
+          <span className="metric-bar__value num" data-testid="metric-payback">
+            {payback.display}
+          </span>
+          {payback.raw == null && payback.reason && (
+            <span className="metric-bar__sub">{payback.reason}</span>
+          )}
+        </div>
+      )}
+      <div className="metric-bar__cell">
+        <span className="metric-bar__label">Break-even</span>
+        <span className="metric-bar__value num" data-testid="metric-breakeven">
+          {breakeven.display}
+        </span>
+      </div>
+    </section>
+  );
 }
 
 export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetailProps) {
@@ -199,7 +288,10 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const [name, setName] = useState("");
   const [saveLabel, setSaveLabel] = useState<SaveLabel>("");
   const [conflict, setConflict] = useState<ConflictBody | null>(null);
-  const [showFeedback, setShowFeedback] = useState(false);
+  // D1 / Decision 13: the always-on "Store name" input is replaced by an inline
+  // pencil-to-rename. `renaming` reveals the inline input; committing returns to the
+  // heading. The input keeps aria-label "Store name" so it stays addressable.
+  const [renaming, setRenaming] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTabId>("projection");
   const [loadError, setLoadError] = useState(false);
 
@@ -550,28 +642,84 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
         <span aria-hidden="true">←</span> Back to projections
       </a>
 
-      {/* Page header (#266): the projection name (h1, plus the edit-name input in
-          edit mode) on the LEFT, the trade-area map in the upper-RIGHT as a roughly
-          square box (not a stretched full-width banner). */}
+      {/* Page header (D1): the projection name (h1) with an inline pencil-to-rename
+          in edit mode, the address (muted), the updated date, then the 4-cell metric
+          bar — all on the LEFT; the trade-area map in the upper-RIGHT as a roughly
+          square box. The header/metric-bar/map/downloads sit OUTSIDE the tab panels
+          so toggling Projection ↔ KPIs re-renders only the panel (D13). */}
       <div className="detail__header">
         <div className="detail__header-main">
-          {/* #203 — a visible top-level page heading naming the projection (WCAG
-              1.3.1 / 2.4.6). Inline style only (tokens.css owned elsewhere). */}
-          <h1 style={{ margin: 0, fontSize: "var(--text-lg)", lineHeight: 1.25 }}>
-            {(name || vm.name || "").trim() || "Thrift store projection"}
-          </h1>
-          {/* The autosave status is a header chip in the shared TopBar (#150);
-              ProjectionTab keeps its own recompute live-region for SR users. */}
-          {edit && (
-            <label className="detail__name">
-              Store name
+          <div className="detail__title-row">
+            {/* #203 — a visible top-level page heading naming the projection (WCAG
+                1.3.1 / 2.4.6). */}
+            <h1 className="detail__name-heading">
+              {(name || vm.name || "").trim() || "Thrift store projection"}
+            </h1>
+            {edit && !renaming && (
+              <button
+                type="button"
+                className="detail__rename-btn"
+                data-testid="rename-projection"
+                aria-label="Rename projection"
+                onClick={() => setRenaming(true)}
+              >
+                <span aria-hidden="true">✎</span>
+              </button>
+            )}
+            {edit && renaming && (
               <input
+                className="detail__name-input"
                 aria-label="Store name"
                 value={name}
+                // eslint-disable-next-line jsx-a11y/no-autofocus
+                autoFocus
                 onChange={(e) => onNameChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === "Escape") setRenaming(false);
+                }}
+                onBlur={() => setRenaming(false)}
               />
-            </label>
+            )}
+
+            {/* D9: the .xlsx + .docx downloads live at the TOP, next to the name. */}
+            <div className="detail__downloads" data-testid="detail-downloads">
+              <a
+                className="btn btn--download"
+                role="button"
+                data-testid="download-xlsx"
+                href={xlsxHref(slug)}
+                download
+              >
+                <span aria-hidden="true" className="btn__icon">▦</span> Excel
+              </a>
+              <a
+                className="btn btn--download"
+                role="button"
+                data-testid="download-docx"
+                href={docxHref(slug)}
+                download
+              >
+                <span aria-hidden="true" className="btn__icon">▤</span> Word
+              </a>
+            </div>
+          </div>
+
+          {/* Address (muted) — the server's resolved formatted address. */}
+          {vm.location?.formatted_address && (
+            <p className="detail__address" data-testid="detail-address">
+              {vm.location.formatted_address}
+            </p>
           )}
+          {/* Updated date — rendered ONLY when the server provides it (never a
+              fabricated date). */}
+          {updatedLabel(vm.updated_at) && (
+            <p className="detail__updated" data-testid="detail-updated">
+              {updatedLabel(vm.updated_at)}
+            </p>
+          )}
+
+          {/* The 4-cell metric bar (D1). */}
+          <MetricBar vm={vm} />
         </div>
         <div className="detail__map" data-testid="detail-map">
           <TradeAreaMap
@@ -646,24 +794,17 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
             >
               {/* a11y: a section heading so the KPIs panel keeps the h1→h2 chain. */}
               <h2 className="detail__panel-heading">Key metrics &amp; settings</h2>
-              <KpiStrip kpis={vm.kpis} />
+              {/* D11: the KPI strip + the settings sliders are MERGED into ONE compact
+                  grid — derived KPIs read-only, drivers editable. D10: the standalone
+                  "Pinned overrides" audit block is removed (override justification
+                  lives in Penny's drawer). */}
               <div data-testid="settings-tab">
                 <SettingsTab
+                  kpis={vm.kpis}
                   settings={settingsVm(vm.settings)}
                   version={version}
                   onPatch={onSettingsPatch}
                   onSaveAsCopy={resolveSaveAsCopy}
-                />
-              </div>
-              {/* Epic G2 (#42): the relocated "what's currently overridden" audit at a
-                  glance — reset a pin or jump to Penny to add/edit its justification.
-                  The focused comment prompt itself lives in Penny's drawer. */}
-              <div data-testid="kpis-override-audit">
-                <OverrideAudit
-                  overrides={auditItems(vm)}
-                  onResetPin={onResetPin}
-                  onComment={openComment}
-                  title="Pinned overrides"
                 />
               </div>
             </div>
@@ -688,22 +829,9 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
         </section>
       )}
 
-      <div className="detail__actions">
-        <a
-          className="btn"
-          role="button"
-          data-testid="download-xlsx"
-          href={xlsxHref(slug)}
-          download
-        >
-          Download .xlsx
-        </a>
-        {edit && (
-          <button type="button" onClick={() => setShowFeedback(true)}>
-            Feedback
-          </button>
-        )}
-      </div>
+      {/* D8: the bottom Feedback button is REMOVED (app-suggestion lives only in the
+          topbar). D9: the .xlsx/.docx downloads moved to the header (next to the
+          name), so the bottom actions row is gone too. */}
 
       {conflict && (
         <SaveConflictModal
@@ -711,20 +839,6 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           onOverwrite={resolveOverwrite}
           onSaveAsCopy={resolveSaveAsCopy}
           message={conflict.message}
-        />
-      )}
-
-      {showFeedback && (
-        <FeedbackModal
-          onClose={() => setShowFeedback(false)}
-          onSubmit={async (input) => {
-            const res = await submitFeedback({
-              title: input.title,
-              description: input.description,
-              route: window.location.pathname,
-            });
-            return res.support_id;
-          }}
         />
       )}
 

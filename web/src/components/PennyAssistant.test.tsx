@@ -281,7 +281,7 @@ describe("PennyAssistant — graceful failure (chat is never the only path)", ()
       vi.fn(() =>
         Promise.resolve(
           jsonResponse(
-            { error: "node_not_pinnable", message: "Net profit is a total I can't pin." },
+            { error: "node_not_pinnable", message: "Net income is a total I can't pin." },
             422,
           ),
         ),
@@ -289,8 +289,8 @@ describe("PennyAssistant — graceful failure (chat is never the only path)", ()
     );
     const user = userEvent.setup();
     mountAndOpen();
-    await send(user, "pin net profit");
-    expect(await screen.findByText(/net profit is a total i can't pin/i)).toBeInTheDocument();
+    await send(user, "pin net income");
+    expect(await screen.findByText(/net income is a total i can't pin/i)).toBeInTheDocument();
   });
 
   it("409 ai_disabled → mutes the composer and offers a Settings deep-link (never a dead-end)", async () => {

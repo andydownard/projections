@@ -13,7 +13,7 @@ from engine.money import D
 def _inputs():
     return Inputs(
         org_name="DAG", city="x", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
     )

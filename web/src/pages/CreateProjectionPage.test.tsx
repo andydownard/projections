@@ -6,6 +6,13 @@ import { CreateProjectionPage } from "./CreateProjectionPage";
 import type { ViewModel } from "../api/viewModel";
 import { OWNER_TOKEN_KEY } from "../api/projections";
 
+// Mock the toast hook so CreateProjectionPage can call showToast after Generate.
+const mockShowToast = vi.fn();
+vi.mock("../components/Toast", () => ({
+  useToast: () => ({ showToast: mockShowToast }),
+  ToastProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 // Phase 2 (Epics B/C) — the full-page Create-Projection wizard: one step at a time
 // over a prominent breadcrumb under a subtle "CREATE PROJECTION" eyebrow, the revised
 // order Address → Square footage → Households → Donor market share → Startup costs,
@@ -88,6 +95,7 @@ async function resolveAddress(user: ReturnType<typeof userEvent.setup>) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  mockShowToast.mockClear();
   localStorage.clear();
   // The wizard is route-driven (each step is /wizard/<slug>, Epic B #261) — reset it
   // between tests so each starts fresh on the first step (Address).
@@ -152,7 +160,7 @@ describe("CreateProjectionPage — confirm # of households (§4, owner Decision 
 
     await resolveAddress(user);
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> households
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> configure-donations
 
     expect(screen.getByTestId("households-confirm")).toHaveTextContent(/512,000 households/i);
     // No input on load — the pencil reveals it.
@@ -179,7 +187,7 @@ describe("CreateProjectionPage — confirm # of households (§4, owner Decision 
     await user.click(await screen.findByRole("option", { name: /Nowhere/ }));
     await waitFor(() => expect(screen.getByRole("button", { name: /^next$/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> households
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> configure-donations
 
     const hh = screen.getByLabelText(/^households$/i) as HTMLInputElement;
     await waitFor(() => expect(hh).toBeEnabled());
@@ -206,26 +214,22 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     expect((screen.getByLabelText(/building size/i) as HTMLInputElement).value).toBe("12,500");
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 3. Confirm # of households (resolved static)
+    // 3. Configure donations — households confirmed static, Back/Next works.
     expect(screen.getByTestId("households-confirm")).toHaveTextContent(/512,000 households/i);
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
-
-    // 4. Donor market share (shares pre-seeded; Back/Next works)
-    expect(screen.getByRole("heading", { name: /set donor market share/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^back$/i }));
-    expect(screen.getByTestId("households-confirm")).toHaveTextContent(/512,000 households/i);
+    expect(screen.getByRole("heading", { name: /set square footage/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 5. Startup costs — rent pre-filled from /api/research (verified badge + sources)
+    // 4. Startup costs — rent pre-filled from /api/research (verified badge + sources).
     expect(screen.getByRole("heading", { name: /set startup costs/i })).toBeInTheDocument();
     await waitFor(() =>
-      expect((screen.getByLabelText(/rent \(\$\/sq ft/i) as HTMLInputElement).value).toBe("18"),
+      expect((screen.getByLabelText(/rent per square foot/i) as HTMLInputElement).value).toBe("18.00"),
     );
     expect(screen.getByTestId("rent-badge")).toHaveAttribute("data-verified", "true");
 
-    // Generate projections — no terms checkbox (implicit acceptance), the disclaimer shows.
-    expect(screen.getByTestId("terms-disclaimer")).toBeInTheDocument();
+    // Generate projections — no terms checkbox (implicit acceptance), no disclaimer.
+    expect(screen.queryByTestId("terms-disclaimer")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /generate projections/i }));
 
     await waitFor(() => expect(window.location.pathname).toBe("/p/p_new/edit"));
@@ -258,8 +262,7 @@ describe("CreateProjectionPage — Generate lands on the editable detail (owner 
   async function stepToLast(user: ReturnType<typeof userEvent.setup>) {
     await resolveAddress(user);
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> households
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> configure-donations
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> startup costs
   }
 
@@ -311,8 +314,7 @@ describe("CreateProjectionPage — sequential creates never orphan the prior pro
   async function runWizardToGenerate(user: ReturnType<typeof userEvent.setup>) {
     await resolveAddress(user);
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> households
-    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> configure-donations
     await user.click(screen.getByRole("button", { name: /^next$/i })); // -> startup costs
     await user.click(screen.getByRole("button", { name: /generate projections/i }));
     await waitFor(() => expect(window.location.pathname).toBe("/p/p_new/edit"));
@@ -339,5 +341,23 @@ describe("CreateProjectionPage — sequential creates never orphan the prior pro
     expect(creates[0]).toBeNull(); // create #1 went out anonymous
     expect(creates[1]).toBe("Bearer minted-1"); // create #2 carried create #1's token
     expect(localStorage.getItem(OWNER_TOKEN_KEY)).toBe("minted-1"); // slot NOT overwritten
+  });
+});
+
+describe("CreateProjectionPage — W8 terms/toast", () => {
+  it("does NOT show the planning-estimates disclaimer (W8 — implicit accept)", () => {
+    render(<CreateProjectionPage />);
+    expect(screen.queryByTestId("terms-disclaimer")).not.toBeInTheDocument();
+  });
+
+  it("shows the disclaimer nowhere — not even on the last step", async () => {
+    wireFetch({});
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await resolveAddress(user);
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> configure-donations
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> startup costs (last)
+    expect(screen.queryByTestId("terms-disclaimer")).not.toBeInTheDocument();
   });
 });

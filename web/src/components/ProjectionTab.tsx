@@ -23,8 +23,7 @@ import { useRef, useState, type KeyboardEvent } from "react";
 import { CashflowChart } from "./CashflowChart";
 import { FieldChange, type FieldChangeActor } from "./FieldChange";
 import { isNegative } from "./displayLabels";
-import type { ServerValue } from "../api/client";
-import type { Milestone, Row, ViewModel } from "../api/viewModel";
+import { presentYears, type Row, type YearKey, type ViewModel } from "../api/viewModel";
 
 /** A recent change on one editable cell (PE7, #126). `previous` is the SERVER's
  *  prior display string (from the changed[] was→now diff / prior revision) —
@@ -59,64 +58,6 @@ export interface ProjectionTabProps {
   onUndoField?: (node: string, year: number) => void;
 }
 
-/** One high-level decision tile, resolved from the server view-model. `value` is a
- *  server `{raw,display}` (money/month milestone) rendered verbatim — never
- *  re-derived. The downside/confidence "Why?" reason is SUPPRESSED on the owner
- *  detail page (#40) — only the explicit N/A-with-reason for an unreached milestone
- *  survives (#117). */
-interface TileVM {
-  testid: string;
-  /** Back-compat alias kept for the existing e2e/detail contract. */
-  metricTestid: string;
-  label: string;
-  value: ServerValue | Milestone;
-  /** Always-visible N/A explanation when the milestone is unreached (raw == null);
-   *  never a bare, misleading "N/A" or a phantom 0 (#117). */
-  naReason?: string;
-  /** Apply the #148 negative color cue by the SIGN of server raw (money tiles). */
-  negativeAware?: boolean;
-}
-
-/** Build the 3 high-level decision tiles from the view-model (Epic G #39). The
- *  first-year cash-gap tile is intentionally OMITTED — metrics.cashGap stays in
- *  computed_json (packet / role view / narrative) but is not a tile here. Break-even
- *  and Payback are DISTINCT milestones and are never conflated (#193). */
-function buildTiles(vm: ViewModel): TileVM[] {
-  const { metrics, milestones } = vm;
-  const tiles: TileVM[] = [
-    {
-      testid: "tile-capital",
-      metricTestid: "metric-capital",
-      // #39: drop "required" — the tile reads "Startup capital".
-      label: "Startup capital",
-      value: metrics.capital,
-      negativeAware: true,
-    },
-    {
-      testid: "tile-breakeven",
-      metricTestid: "metric-breakeven",
-      label: "Break-even",
-      // Prefer the milestone (carries its N/A-with-reason) when present; else the
-      // legacy break-even MONTH metric. Either way this is break-even only.
-      value: milestones ? milestones.breakEven : metrics.breakeven,
-      naReason: milestones?.breakEven.reason,
-    },
-  ];
-
-  // Payback is a separate milestone (#193) — only when the server emits milestones.
-  if (milestones) {
-    tiles.push({
-      testid: "tile-payback",
-      metricTestid: "metric-payback",
-      label: "Payback",
-      value: milestones.payback,
-      naReason: milestones.payback.reason,
-    });
-  }
-
-  return tiles;
-}
-
 const LEGEND: Array<{ cls: string; label: string }> = [
   { cls: "input", label: "Input" },
   { cls: "computed", label: "Computed" },
@@ -124,7 +65,7 @@ const LEGEND: Array<{ cls: string; label: string }> = [
   { cls: "estimated", label: "Estimated" },
 ];
 
-/** Stable, slugified node id for a row (e.g. "Net profit" -> "net_profit").
+/** Stable, slugified node id for a row (e.g. "Net income" -> "net_income").
  *  Used for the back-compat `row-<slug>-y<year>` testid the detail/e2e read. */
 function rowSlug(label: string): string {
   return label
@@ -132,13 +73,6 @@ function rowSlug(label: string): string {
     .replace(/&/g, "")
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-}
-
-/** Pull the per-year share for the table header sub-label (display string only). */
-function shareFor(rows: Row[], year: 1 | 2 | 3): string | null {
-  const r = rows.find((row) => /share/i.test(row.label) && row.group === "drivers");
-  const cell = r ? r[`y${year}` as "y1" | "y2" | "y3"] : null;
-  return cell ? cell.display : null;
 }
 
 export function ProjectionTab({
@@ -149,50 +83,12 @@ export function ProjectionTab({
   onUndoField,
 }: ProjectionTabProps) {
   const { monthly, breakevenMonth, rows } = vm;
-  const tiles = buildTiles(vm);
 
-  const tilesStrip = (
-    // The high-level decision tiles. The `decision-banner` testid is preserved (the
-    // detail/e2e contract reads it), but the verdict chip/headline/sub are GONE —
-    // the decision is no longer repeated on the owner detail page (#39/#40).
-    <section
-      className="decision-banner decision-banner--tiles-only"
-      data-testid="decision-banner"
-      aria-label="Key decision metrics"
-    >
-      <dl className="decision-tiles" data-testid="decision-tiles">
-        {tiles.map((t) => {
-          // An unreached milestone (raw == null) is N/A — show its reason inline,
-          // never a bare "N/A" or a misleading 0 (#117). data-negative is by SIGN.
-          const isNa = t.value.raw == null;
-          const negative =
-            t.negativeAware && isNegative(t.value as ServerValue) ? "true" : undefined;
-          return (
-            <div
-              key={t.testid}
-              className="decision-tile metric"
-              data-testid={t.testid}
-              data-metric={t.metricTestid}
-            >
-              {/* Back-compat hook: the existing detail/e2e contract reads
-                  metric-capital / metric-breakeven / metric-payback. */}
-              <span data-testid={t.metricTestid} className="sr-only">
-                {t.value.display}
-              </span>
-              <dt className="decision-tile__label">{t.label}</dt>
-              {/* #148: a loss (server raw < 0) gets the error color, PAIRED with
-                  the server's parentheses (the non-color cue) — never color alone. */}
-              <dd className="decision-tile__value num" data-negative={negative}>
-                {t.value.display}
-              </dd>
-              {/* Explicit N/A-with-reason (never a misleading 0) — always visible. */}
-              {isNa && t.naReason && <p className="metric__reason">{t.naReason}</p>}
-            </div>
-          );
-        })}
-      </dl>
-    </section>
-  );
+  // Year-count-agnostic: a stored 3-year snapshot carries only y1..y3; a 2.6.0
+  // snapshot carries y1..y5. Derive the columns to render from the rows so the
+  // SAME table renders 3 or 5 years with no recompute (Decision 5 / E1).
+  const years = presentYears(rows);
+  const horizonLabel = `${years.length}-year projection`;
 
   return (
     <div className="projection-tab" data-testid="projection-tab">
@@ -201,10 +97,10 @@ export function ProjectionTab({
         {recomputeStatus}
       </span>
 
-      {/* (1) 3-year projection — moved to the TOP (#40). */}
-      <section className="projection-tab__rows" aria-label="3-year projection">
+      {/* The annual projection — Year 1 … Year N (N = 3 or 5). */}
+      <section className="projection-tab__rows" aria-label={horizonLabel}>
         <div className="projection-tab__rows-head">
-          <h2 className="projection-tab__heading">3-year projection</h2>
+          <h2 className="projection-tab__heading">{horizonLabel}</h2>
           <ul className="table-legend" data-testid="table-legend" aria-label="Cell legend">
             {LEGEND.map((l) => (
               <li key={l.cls} className={`table-legend__item table-legend__item--${l.cls}`}>
@@ -216,24 +112,21 @@ export function ProjectionTab({
         </div>
 
         {/* A relative wrap so a right-edge scroll-hint fade can pin to the scroll
-            viewport on narrow screens where Year 2/3 don't fit — paired with sticky
-            row labels so the horizontal scroll reads clearly, not "clipped" (QA P2). */}
+            viewport on narrow screens where later years don't fit — paired with
+            sticky row labels so the horizontal scroll reads clearly (QA P2). */}
         <div className="projection-tab__scroll-wrap">
           <div className="projection-tab__scroll">
             <table className="three-year-table" data-testid="three-year-table">
-              <caption className="sr-only">3-year projection</caption>
+              <caption className="sr-only">{horizonLabel}</caption>
             <thead>
               <tr>
                 <th scope="col">Line item</th>
-                {([1, 2, 3] as const).map((y) => {
-                  const share = shareFor(rows, y);
-                  return (
-                    <th scope="col" key={y} className="num">
-                      Year {y}
-                      {share && <span className="three-year-table__share">{share} share</span>}
-                    </th>
-                  );
-                })}
+                {/* D7: the "% share" sub-label under each year header is REMOVED. */}
+                {years.map((y) => (
+                  <th scope="col" key={y} className="num">
+                    Year {y}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -241,6 +134,7 @@ export function ProjectionTab({
                 <ThreeYearRow
                   key={row.label}
                   row={row}
+                  years={years}
                   onEditCell={onEditCell}
                   fieldChanges={fieldChanges}
                   onUndoField={onUndoField}
@@ -252,11 +146,8 @@ export function ProjectionTab({
         </div>
       </section>
 
-      {/* (2) High-level decision tiles — below the 3-year summary (#40). */}
-      {tilesStrip}
-
-      {/* (3) First-year cash-flow detail — below the 3-year (#40). The chart's
-          months align to the monthly table's columns (see CashflowChart). */}
+      {/* First-year cash-flow detail. The chart's months align to the monthly
+          table's columns (see CashflowChart). */}
       <section className="projection-tab__cashflow" aria-label="First-year cash flow">
         <h2 className="projection-tab__heading">First-year cash flow</h2>
         <CashflowChart monthly={monthly} breakevenMonth={breakevenMonth} milestones={vm.milestones} />
@@ -267,11 +158,13 @@ export function ProjectionTab({
 
 function ThreeYearRow({
   row,
+  years,
   onEditCell,
   fieldChanges,
   onUndoField,
 }: {
   row: Row;
+  years: number[];
   onEditCell?: (node: string, year: number, value: string) => void;
   fieldChanges?: Record<string, FieldChangeInfo>;
   onUndoField?: (node: string, year: number) => void;
@@ -281,7 +174,7 @@ function ThreeYearRow({
       <th scope="row" className="three-year-table__label">
         {row.label}
       </th>
-      {([1, 2, 3] as const).map((year) => (
+      {years.map((year) => (
         <Cell
           key={year}
           row={row}
@@ -303,19 +196,19 @@ function Cell({
   onUndoField,
 }: {
   row: Row;
-  year: 1 | 2 | 3;
+  year: number;
   onEditCell?: (node: string, year: number, value: string) => void;
   fieldChanges?: Record<string, FieldChangeInfo>;
   onUndoField?: (node: string, year: number) => void;
 }) {
-  const value = row[`y${year}` as "y1" | "y2" | "y3"];
+  const value = row[`y${year}` as YearKey];
   const display = value ? value.display : "—";
   const cls = `cell cell--${row.class} num`;
   // #148: flag losses (server raw < 0) for the error-color cue, kept PAIRED with
   // the server's parentheses so meaning is never carried by color alone.
   const negative = isNegative(value) ? "true" : undefined;
   const testid = `cell-${row.label}-y${year}`;
-  // Back-compat alias the detail page / e2e read (e.g. row-net_profit-y1).
+  // Back-compat alias the detail page / e2e read (e.g. row-net_income-y1).
   const rowTestid = `row-${rowSlug(row.label)}-y${year}`;
 
   // PE7: a recent change on this editable cell (Penny or manual). The cell's own
@@ -394,7 +287,7 @@ function EditableCell({
 }: {
   nodeId: string;
   label: string;
-  year: 1 | 2 | 3;
+  year: number;
   display: string;
   raw: number;
   cls: string;
@@ -462,11 +355,16 @@ function EditableCell({
   };
   return (
     <td className="cell-wrap" data-changed={change ? "true" : undefined}>
+      {/* D6: the hand cursor + hover edit-icon appear ONLY when the cell is actually
+          editable (`cell--editable`); a read-only editable-typed cell (no commit seam)
+          stays a focusable button but gets cursor:default + aria-disabled so it never
+          looks clickable when it can't be (the dead-hand bug). */}
       <button
         type="button"
         data-testid={testid}
-        className={cls}
+        className={canEdit ? `${cls} cell--editable` : cls}
         data-negative={negative}
+        aria-disabled={canEdit ? undefined : "true"}
         // Recent-change prominence (not color alone — the FieldChange badge carries
         // icon + text). Inline so it never collides with tokens.css.
         style={change ? { fontWeight: 700, outline: "2px solid #35644f", outlineOffset: 1 } : undefined}

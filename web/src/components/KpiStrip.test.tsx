@@ -8,7 +8,7 @@ import type { Kpi } from "../api/viewModel";
 // Pure presentation: server display strings verbatim; the negative cue is by SIGN.
 const kpis: Kpi[] = [
   { label: "Total revenue", value: { raw: 426911, display: "$426,911" }, sub: "Year 1" },
-  { label: "Net profit", value: { raw: -44433, display: "($44,433)" }, sub: "Year 1" },
+  { label: "Net income", value: { raw: -44433, display: "($44,433)" }, sub: "Year 1" },
   { label: "Labor ratio", value: { raw: 0.6, display: "60.0%" } },
 ];
 

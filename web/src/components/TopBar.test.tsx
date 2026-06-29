@@ -117,8 +117,8 @@ describe("TopBar", () => {
       const user = userEvent.setup();
       render(<TopBar />);
       await user.click(screen.getByRole("button", { name: /app suggestion/i }));
-      // The Idea Fab opens the modal in idea mode ("Share an idea").
-      expect(screen.getByRole("dialog", { name: /share an idea/i })).toBeInTheDocument();
+      // The Idea Fab opens the modal in idea mode — title is "App suggestion" (AS1).
+      expect(screen.getByRole("dialog", { name: /app suggestion/i })).toBeInTheDocument();
     });
 
     it("opens the FeedbackModal via the keyboard (focus + Enter)", async () => {
@@ -128,7 +128,7 @@ describe("TopBar", () => {
       fab.focus();
       expect(fab).toHaveFocus();
       await user.keyboard("{Enter}");
-      expect(screen.getByRole("dialog", { name: /share an idea/i })).toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: /app suggestion/i })).toBeInTheDocument();
     });
 
     it("closes on Esc and restores focus to the trigger (a11y)", async () => {
@@ -157,24 +157,28 @@ describe("TopBar", () => {
       expect(fab).toHaveFocus();
     });
 
-    it("submits a redacted idea (description-only, support_id back)", async () => {
+    it("submits a redacted idea — modal closes, no support_id in DOM, body has no title/slug/token", async () => {
       const user = userEvent.setup();
       render(<TopBar />);
       await user.click(screen.getByRole("button", { name: /app suggestion/i }));
-      // Idea mode has no title — just a description.
-      await user.type(screen.getByLabelText(/description/i), "Add dark mode.");
+      // AS3: the textarea has no label — select by its placeholder.
+      await user.type(screen.getByPlaceholderText("Make the app better by\u2026"), "Add dark mode.");
       await user.click(screen.getByRole("button", { name: /^send$/i }));
 
-      const success = await screen.findByTestId("feedback-success");
-      expect(success).toHaveTextContent("SUP-ABC123");
-      // The body never carries a slug, token, or financial field (server also
-      // enforces this; we assert the client doesn't send them), and an idea
-      // carries no title at all.
+      // AS4: idea success → modal closes (no feedback-success panel); toast is shown
+      // by FeedbackModal's useToast() call (no-op here since no ToastProvider in
+      // this render; the FeedbackModal unit tests cover the toast assertion).
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      );
+      expect(screen.queryByTestId("feedback-success")).toBeNull();
+      // The body never carries a slug, token, financial field, or title (FEEDBACK rule).
       const body = JSON.parse(
         (vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string,
       );
       expect(body.type).toBe("idea");
       expect(body).not.toHaveProperty("title");
+      expect(body).not.toHaveProperty("email");
       expect(body).not.toHaveProperty("view_slug");
       expect(body).not.toHaveProperty("token");
       expect(JSON.stringify(body)).not.toContain("/p/");

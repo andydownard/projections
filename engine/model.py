@@ -6,7 +6,16 @@ the point of use; these module constants name the *default* assumption values.
 """
 from __future__ import annotations
 
-MODEL_VERSION = "2.5.0"          # math/shape change => bump (2.5.0: the Utilities/
+MODEL_VERSION = "2.6.0"          # math/shape change => bump (2.6.0: the ANNUAL P&L
+# extends from a 3-year to a 5-year horizon — Year 4 / Year 5 are driven by their own
+# explicit donor-share inputs (share_y4 / share_y5) through the SAME driver chain and
+# the existing compounding rent escalator; the revenue CAGR is now Y1->Y5 and the
+# §12.2 share/net-margin guardrails also check Y4/Y5. The monthly S-curve cash-flow
+# and the decision metrics (capital, break-even month, first-year cash gap) stay
+# Year-1-anchored and are byte-unchanged. The "Net profit" row/KPI/xlsx line is
+# renamed "Net income" everywhere. The donation drivers (donationValue, basket,
+# donationsPerHouseholdPerYear) are surfaced as editable settings;
+# 2.5.0: the Utilities/
 # trash service line stops being a flat fixed-$ and is DERIVED as UTILITIES_PER_SQFT ×
 # building_sqft (feature #245) — same existing pinnable line/slot, now sq-ft-scaled;
 # the default cost-schedule seed scales Equipment & Fixtures + Build-out per sq ft.
@@ -21,8 +30,15 @@ MODEL_VERSION = "2.5.0"          # math/shape change => bump (2.5.0: the Utiliti
 # view-model shape changes => bump (1.1.0: +sales/sqft, occupancy & labor ratio
 # KPIs; 1.2.0: +milestones{grandOpening,breakEven,payback} {raw,display}, payback-
 # period KPI replaces simple-payback-years, monthly[]+scheduledCosts; 1.3.0:
-# +settings.utilitiesPerSqft + settings.rentPerSqft (additive scalars, feature #245))
-COMPUTE_SCHEMA_VERSION = "1.3.0"
+# +settings.utilitiesPerSqft + settings.rentPerSqft (additive scalars, feature #245);
+# 1.4.0: every annual row carries y4/y5 cells; settings gain shareY4/shareY5 plus the
+# editable donation drivers donationValue/basket/donationsPerHouseholdPerYear; the KPI
+# strip + xlsx line read "Net income" (was "Net profit"); +incomeSeries (annual net
+# income Y1..Y5 {raw,display}) and +year5Income for the list/detail sparkline;
+# 1.5.0: +startupCosts (one-time startup line items as [{category, amount{raw,display}}])
+# and +startupTotal {raw,display} for the Board Packet .docx startup-costs table (EPIC
+# DOCX) — additive shape change, no math change (MODEL_VERSION stays 2.6.0))
+COMPUTE_SCHEMA_VERSION = "1.5.0"
 
 # --- export trust copy (#192). Single source for the "planning estimates, not
 # advice" disclaimer + AI-narrative disclosure that the terms gate exists to

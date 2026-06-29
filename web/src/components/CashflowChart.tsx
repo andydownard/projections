@@ -45,6 +45,11 @@ const MILESTONE_META: Array<{
   { key: "payback", testid: "payback-marker", label: "Payback", icon: "★" },
 ];
 
+// D3: label ONLY Grand Opening + Break-even ON the chart with short thin leader
+// lines. Payback is intentionally NOT drawn on the plot (it would crowd the line);
+// it lives in the header metric bar + the sr-only milestone summary below.
+const ON_CHART_KEYS: Array<keyof Milestones> = ["grandOpening", "breakEven"];
+
 const ROWS: Array<{ label: string; pick: (m: MonthlyPoint) => ServerValue }> = [
   { label: "Revenue", pick: (m) => m.revenue },
   { label: "Expenses", pick: (m) => m.expenses },
@@ -125,21 +130,19 @@ export function CashflowChart({
   const idxOf = (raw: number | null | undefined) =>
     raw == null ? -1 : monthly.findIndex((m) => m.month === raw);
 
-  // The three distinct milestone markers (issue #117). Break-even falls back to
-  // the legacy `breakevenMonth` prop when no milestones object is supplied, so
-  // existing callers keep their single break-even line.
+  // D3: only Grand Opening + Break-even are labeled ON the chart (Break-even falls
+  // back to the legacy `breakevenMonth` prop when no milestones object is supplied).
   const markers = milestones
-    ? MILESTONE_META.map((meta) => {
-        const ms: Milestone = milestones[meta.key];
-        return { ...meta, ms, idx: idxOf(ms.raw) };
-      }).filter((mk) => mk.idx >= 0)
+    ? MILESTONE_META.filter((meta) => ON_CHART_KEYS.includes(meta.key))
+        .map((meta) => {
+          const ms: Milestone = milestones[meta.key];
+          return { ...meta, ms, idx: idxOf(ms.raw) };
+        })
+        .filter((mk) => mk.idx >= 0)
     : [];
 
   // Break-even line shown even without a milestones object (back-compat).
   const beIdx = milestones ? idxOf(milestones.breakEven.raw) : idxOf(breakevenMonth);
-
-  // X ticks: EVERY month, so each tick sits under its table column (alignment).
-  const tickIdx = monthly.map((_, i) => i);
 
   const beLabel = milestones
     ? milestones.breakEven.raw != null
@@ -191,7 +194,7 @@ export function CashflowChart({
             width="100%"
             role="img"
             preserveAspectRatio="xMidYMid meet"
-            aria-label={`Monthly cumulative cash. Low point ${trough.cumulativeCash.display} in month ${trough.month}; break-even ${beLabel}.${milestoneDesc} Full figures in the table below.`}
+            aria-label={`Monthly cumulative cash. Lowest cash balance ${trough.cumulativeCash.display} in month ${trough.month}; break-even ${beLabel}.${milestoneDesc} Full figures in the table below.`}
           >
             {/* left y-axis ($), with 2–3 gridline ticks labeled by server display */}
             <text
@@ -258,16 +261,19 @@ export function CashflowChart({
               data-testid="trough-marker"
             />
 
-            {/* Distinct milestone markers (Grand Opening / Break-even / Payback),
-                each LABELED ON the chart (#40): a distinct stroke + icon glyph + the
-                server `display` text next to the line, staggered so labels of close
-                milestones do not collide. Never color alone (icon + text). */}
+            {/* D3: Grand Opening + Break-even labeled ABOVE the plot, each with a
+                SHORT thin leader line down to the curve — never a full vertical line
+                through the label text, and the two labels are staggered onto separate
+                rows so they never overlap. Never color alone (icon + text). */}
             {milestones
               ? markers.map((mk, i) => {
                   const lx = xAt(mk.idx);
                   // Anchor the label inside the plot near the edges so it never clips.
                   const anchor = lx > width - 64 ? "end" : lx < padL + 64 ? "start" : "middle";
-                  const labelY = padT - 18 + (i % 2) * 12; // stagger by index
+                  // Stagger by index so close labels sit on separate rows (no overlap).
+                  const labelY = 9 + (i % 2) * 11;
+                  // The leader is SHORT: from just under the label down to the top of
+                  // the plot region (a thin connector), not a line across the plot.
                   return (
                     <g
                       key={mk.key}
@@ -278,27 +284,18 @@ export function CashflowChart({
                       <line
                         x1={lx}
                         x2={lx}
-                        y1={padT}
-                        y2={height - padB}
-                        className="cashflow-chart__milestone-line"
+                        y1={labelY + 3}
+                        y2={padT}
+                        className="cashflow-chart__milestone-leader"
                       />
                       <text
                         x={lx}
                         y={labelY}
                         textAnchor={anchor}
-                        className="cashflow-chart__milestone-icon"
-                        aria-hidden="true"
-                      >
-                        {mk.icon}
-                      </text>
-                      <text
-                        x={lx}
-                        y={labelY + 11}
-                        textAnchor={anchor}
                         className="cashflow-chart__milestone-label"
                         aria-hidden="true"
                       >
-                        {mk.label} · {mk.ms.display}
+                        {mk.icon} {mk.label} · {mk.ms.display}
                       </text>
                     </g>
                   );
@@ -313,13 +310,6 @@ export function CashflowChart({
                     data-testid="breakeven-marker"
                   />
                 )}
-
-            {/* x-axis month ticks — one per month so each sits under its column */}
-            {tickIdx.map((i) => (
-              <text key={`tick-${i}`} x={xAt(i)} y={height - 6} className="cashflow-chart__tick">
-                M{monthly[i].month}
-              </text>
-            ))}
           </svg>
 
           {/* The dense monthly detail — aligned to the chart, and the chart's
@@ -334,7 +324,7 @@ export function CashflowChart({
                 </th>
                 {monthly.map((m) => (
                   <th scope="col" key={m.month} className="num">
-                    M{m.month}
+                    Mo. {m.month}
                   </th>
                 ))}
               </tr>
@@ -366,10 +356,9 @@ export function CashflowChart({
         </div>
       </div>
 
-      <figcaption className="cashflow-chart__caption">
-        Cash low point <strong className="num">{trough.cumulativeCash.display}</strong> in month{" "}
-        {trough.month} · Break-even <strong>{beLabel}</strong>
-      </figcaption>
+      {/* D5: the bottom "Cash low point … · Break-even …" figcaption is REMOVED —
+          break-even lives on the chart + in the header metric bar, and the lowest
+          cash balance reads from the chart's accessible label + the monthly table. */}
 
       {/* The keyboard/SR text alternative to the on-chart milestone labels (the
           visible legend LIST is gone; labels now sit on the chart). Visually hidden

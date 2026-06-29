@@ -1,17 +1,15 @@
-// web/src/components/SettingsTab.test.tsx — SLICE 4: Settings & assumptions tab.
-//
-// Sliders for the cost %s (labor/marketing/supplies/card/payroll-tax/salvage),
-// escalator, and the three demand shares — seeded from the server
-// `settings` view-model ({ raw, display }) and rendered with the server's display
-// string (PRD §13: no client math). Moving a slider debounces a PATCH that
-// carries If-Match (API_SPEC §1.3). The bar shows Saving… / Saved automatically,
-// and a 409 shows a conflict banner with reload / overwrite / save-as-copy
-// (API_SPEC §1.4, PRD §19.4). Mobile-375 is review-first (status before sliders).
+// web/src/components/SettingsTab.test.tsx — EPIC D / D11: the merged "Key metrics &
+// drivers" grid. Derived KPIs render read-only (server display verbatim); editable
+// drivers render a <NumberField> whose HUMAN value (e.g. "60" for 60%) divides by the
+// scale to the engine raw at the PATCH boundary. Editing debounces a PATCH carrying
+// If-Match (API_SPEC §1.3); a 409 shows a conflict banner (reload / overwrite / save
+// as copy). D12: the steady-state "Saved automatically" text is gone.
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SettingsTab } from "./SettingsTab";
 import { PatchConflictError } from "../api/patch";
+import type { Kpi } from "../api/viewModel";
 
 const sv = (raw: number, display: string) => ({ raw, display });
 
@@ -29,6 +27,12 @@ function settingsViewModel() {
     shareY3: sv(0.1, "10%"),
   };
 }
+
+const kpis: Kpi[] = [
+  { label: "Total revenue", value: { raw: 426911, display: "$426,911" }, sub: "Year 1" },
+  { label: "Net income", value: { raw: -44433, display: "($44,433)" }, sub: "Year 1" },
+  { label: "Labor ratio", value: { raw: 0.6, display: "60.0%" } },
+];
 
 function renderTab(overrides: Partial<Parameters<typeof SettingsTab>[0]> = {}) {
   const onPatch = overrides.onPatch ?? vi.fn().mockResolvedValue({ version: 8, viewModel: {} });
@@ -51,8 +55,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("SettingsTab — renders the server settings", () => {
-  it("shows a labeled slider for each assumption seeded from the view-model", () => {
+describe("SettingsTab — merged grid renders KPIs + driver fields (D11)", () => {
+  it("shows a labeled editable field for each driver seeded from the view-model", () => {
     renderTab();
     expect(screen.getByLabelText(/labor/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/marketing/i)).toBeInTheDocument();
@@ -64,24 +68,50 @@ describe("SettingsTab — renders the server settings", () => {
     expect(screen.getByLabelText(/year 3 share/i)).toBeInTheDocument();
   });
 
-  it("renders the server display string verbatim (no client math)", () => {
-    renderTab();
-    expect(screen.getByText("60%")).toBeInTheDocument();
-    expect(screen.getByText("6%")).toBeInTheDocument();
+  it("renders the donation drivers when present (E2): $/donation, basket, donations/yr", () => {
+    renderTab({
+      settings: {
+        ...settingsViewModel(),
+        shareY4: sv(0.11, "11%"),
+        shareY5: sv(0.12, "12%"),
+        donationValue: sv(50, "$50"),
+        basket: sv(17.08, "$17.08"),
+        donationsPerHouseholdPerYear: sv(3, "3"),
+      },
+    });
+    expect(screen.getByLabelText(/year 4 share/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/year 5 share/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/per donation/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/average basket/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/donations . donor/i)).toBeInTheDocument();
   });
 
-  it("starts in the saved state", () => {
+  it("renders the derived KPIs READ-ONLY with the server display string verbatim (no client math)", () => {
+    renderTab({ kpis });
+    expect(screen.getByTestId("kpi-revenue")).toHaveTextContent("$426,911");
+    expect(screen.getByTestId("kpi-Labor ratio")).toHaveTextContent("60.0%");
+    // The derived KPI cells are not editable fields.
+    expect(screen.getByTestId("kpi-revenue").querySelector("input")).toBeNull();
+  });
+
+  it("seeds a percent driver from raw × 100 (60% raw 0.6 → field value 60)", () => {
     renderTab();
-    expect(screen.getByText(/saved automatically/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/labor/i)).toHaveValue("60.00");
+  });
+
+  it("D12: does not show the 'Saved automatically' steady-state text", () => {
+    renderTab();
+    expect(screen.queryByText(/saved automatically/i)).not.toBeInTheDocument();
   });
 });
 
 describe("SettingsTab — debounced autosave (API_SPEC §1.3/§4.4)", () => {
-  it("PATCHes the changed assumption with the current version after the debounce", async () => {
+  it("PATCHes the changed % driver, dividing the human value by the scale to the engine raw", async () => {
     const onPatch = vi.fn().mockResolvedValue({ version: 8, viewModel: {} });
     renderTab({ onPatch });
 
-    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "0.45" } });
+    // The field is entered in HUMAN percent units: "45" → engine raw 0.45.
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     expect(screen.getByText(/saving/i)).toBeInTheDocument();
 
     await vi.advanceTimersByTimeAsync(20);
@@ -92,14 +122,10 @@ describe("SettingsTab — debounced autosave (API_SPEC §1.3/§4.4)", () => {
   });
 
   it("PATCHes a donor share as a flat inputs.share_yN (the shape the merge accepts)", async () => {
-    // Regression: shares used to PATCH as nested `inputs.demand.share_yN`, which the
-    // server merge rejected with 422 (Inputs(**{demand: ...}) -> unknown kwarg), so
-    // the autosave could never settle. `share_yN` is an engine Inputs field, so the
-    // body must be a FLAT `inputs.share_yN` — assert the exact shape, not just a key.
     const onPatch = vi.fn().mockResolvedValue({ version: 8, viewModel: {} });
     renderTab({ onPatch });
 
-    fireEvent.change(screen.getByLabelText(/year 1 share/i), { target: { value: "0.12" } });
+    fireEvent.change(screen.getByLabelText(/year 1 share/i), { target: { value: "12" } });
     await vi.advanceTimersByTimeAsync(20);
     await waitFor(() => expect(onPatch).toHaveBeenCalledTimes(1));
     const call = onPatch.mock.calls[0][0];
@@ -107,18 +133,29 @@ describe("SettingsTab — debounced autosave (API_SPEC §1.3/§4.4)", () => {
     expect(call.body).toEqual({ inputs: { share_y1: 0.12 } });
   });
 
-  it("collapses rapid edits into one PATCH and shows Saved automatically after", async () => {
+  it("PATCHes $/donation as a flat inputs.donation_value (no percent scaling)", async () => {
+    const onPatch = vi.fn().mockResolvedValue({ version: 8, viewModel: {} });
+    renderTab({
+      onPatch,
+      settings: { ...settingsViewModel(), donationValue: sv(50, "$50") },
+    });
+    fireEvent.change(screen.getByLabelText(/per donation/i), { target: { value: "60" } });
+    await vi.advanceTimersByTimeAsync(20);
+    await waitFor(() => expect(onPatch).toHaveBeenCalledTimes(1));
+    expect(onPatch.mock.calls[0][0].body).toEqual({ inputs: { donation_value: 60 } });
+  });
+
+  it("collapses rapid edits into one PATCH", async () => {
     const onPatch = vi.fn().mockResolvedValue({ version: 8, viewModel: {} });
     renderTab({ onPatch });
     const labor = screen.getByLabelText(/labor/i);
-    fireEvent.change(labor, { target: { value: "0.5" } });
-    fireEvent.change(labor, { target: { value: "0.55" } });
-    fireEvent.change(labor, { target: { value: "0.45" } });
+    fireEvent.change(labor, { target: { value: "50" } });
+    fireEvent.change(labor, { target: { value: "55" } });
+    fireEvent.change(labor, { target: { value: "45" } });
 
     await vi.advanceTimersByTimeAsync(20);
     await waitFor(() => expect(onPatch).toHaveBeenCalledTimes(1));
     expect(onPatch.mock.calls[0][0].body.assumptions.labor_pct).toBeCloseTo(0.45);
-    await waitFor(() => expect(screen.getByText(/saved automatically/i)).toBeInTheDocument());
   });
 });
 
@@ -139,7 +176,7 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
   it("shows the conflict banner with all three recovery actions on a 409", async () => {
     const onPatch = conflictingPatch();
     renderTab({ onPatch });
-    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "0.45" } });
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     await vi.advanceTimersByTimeAsync(20);
 
     const banner = await screen.findByRole("alert");
@@ -149,18 +186,15 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
     expect(within(banner).getByRole("button", { name: /save as copy|copy/i })).toBeInTheDocument();
   });
 
-  it("Reload discards local edits and adopts the server's current version (no PATCH)", async () => {
+  it("Reload discards local edits (no PATCH) and clears the banner", async () => {
     const onPatch = conflictingPatch();
     renderTab({ onPatch });
-    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "0.45" } });
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     await vi.advanceTimersByTimeAsync(20);
     await screen.findByRole("alert");
 
     fireEvent.click(screen.getByRole("button", { name: /reload/i }));
-    await waitFor(() =>
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
-    );
-    expect(screen.getByText(/saved automatically/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 
   it("Overwrite re-issues the PATCH with If-Match: <current_version>", async () => {
@@ -179,7 +213,7 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
       .mockResolvedValueOnce({ version: 10, viewModel: {} });
 
     renderTab({ onPatch });
-    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "0.45" } });
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     await vi.advanceTimersByTimeAsync(20);
     await screen.findByRole("alert");
 
@@ -193,7 +227,7 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
     const onPatch = conflictingPatch();
     const onSaveAsCopy = vi.fn();
     renderTab({ onPatch, onSaveAsCopy });
-    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "0.45" } });
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     await vi.advanceTimersByTimeAsync(20);
     await screen.findByRole("alert");
 
@@ -203,12 +237,11 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
 });
 
 describe("SettingsTab — mobile-375 review-first layout", () => {
-  it("orders the autosave status ahead of the slider controls in the DOM (review-first)", () => {
+  it("orders the autosave status ahead of the driver controls in the DOM (review-first)", () => {
     renderTab();
     const region = screen.getByRole("region", { name: /settings/i });
     const status = within(region).getByTestId("autosave-status");
-    const firstSlider = within(region).getByLabelText(/labor/i);
-    // status node appears before the first slider in document order
-    expect(status.compareDocumentPosition(firstSlider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const firstField = within(region).getByLabelText(/labor/i);
+    expect(status.compareDocumentPosition(firstField) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

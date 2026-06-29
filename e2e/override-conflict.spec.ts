@@ -25,9 +25,11 @@ test.describe("override + 409 optimistic-concurrency", () => {
     await expect(page).not.toHaveURL(/#edit-secret/);
     const capitalBefore = await page.getByTestId("metric-capital").textContent();
     // Epic G (#41): Settings is MERGED into the KPIs tab (no standalone Settings
-    // page); the KPI strip + the sliders both live there. The pct field is 0-1.
+    // page); the KPI strip + the driver fields both live there. D11: the driver is a
+    // <NumberField unit="%"> entered in HUMAN units (so "50" = 50%, divided to the
+    // engine raw at the PATCH boundary — no client math).
     await page.getByRole("tab", { name: /kpis/i }).click();
-    await page.getByLabel(/labor %/i).fill("0.5"); // change from the seed's 40%
+    await page.getByLabel(/labor %/i).fill("50"); // change from the seed's 40%
     // The SERVER recompute (no client math) shows in the KPIs tab — the Labor-ratio
     // KPI reads 50%, never computed on the client.
     await expect(page.getByTestId("kpi-Labor ratio")).toContainText("50.0%");
@@ -43,10 +45,14 @@ test.describe("override + 409 optimistic-concurrency", () => {
     const other = await context.newPage();
     await other.goto("/p/example/edit#edit-secret");
 
-    // Editor A saves first (version bumps); editor B's save is now stale.
+    // D1 / Decision 13: the always-on "Store name" input is replaced by an inline
+    // pencil-to-rename — reveal the input first, then edit. Editor A saves first
+    // (version bumps); editor B's save is now stale.
+    await page.getByTestId("rename-projection").click();
     await page.getByLabel(/store name/i).fill("Edited by A");
     await expect(page.getByTestId("save-label")).toHaveText(/all changes saved/i);
 
+    await other.getByTestId("rename-projection").click();
     await other.getByLabel(/store name/i).fill("Edited by B");
     await expect(other.getByTestId("save-conflict-modal")).toBeVisible();
     await expect(other.getByRole("button", { name: /reload latest/i })).toBeVisible();
@@ -56,22 +62,22 @@ test.describe("override + 409 optimistic-concurrency", () => {
 
   test("pinning a derived/total row is rejected (non-pinnable)", async ({ page }) => {
     await page.goto("/p/example/edit#edit-secret");
-    // Net profit is a derived total — the cell is not editable (non-pinnable, §14).
-    const netCell = page.getByTestId("row-net_profit-y1");
+    // Net income is a derived total — the cell is not editable (non-pinnable, §14).
+    const netCell = page.getByTestId("row-net_income-y1");
     await expect(netCell).toHaveAttribute("aria-disabled", "true");
   });
 
-  // Epic G2 (#42): the standalone right-edge Override Inspector is ELIMINATED — its
-  // function (the overrides audit + the justification capture) moved into Penny's
-  // drawer + the KPIs tab. The forensic FAB/panel must no longer exist; Penny remains
-  // the only side panel and the relocated audit lives in the KPIs tab.
-  test("the standalone Override Inspector is gone; the audit lives in the KPIs tab", async ({ page }) => {
+  // Epic G2 (#42) + D10: the standalone right-edge Override Inspector is ELIMINATED
+  // and the "Pinned overrides" audit block in the KPIs tab is REMOVED — the overrides
+  // audit + justification capture now live ONLY in Penny's drawer. The forensic
+  // FAB/panel must no longer exist; Penny remains the only side panel.
+  test("the standalone Override Inspector is gone; Penny is the only side panel", async ({ page }) => {
     await page.goto("/p/example/edit#edit-secret");
     await expect(page.getByTestId("penny-fab")).toBeVisible();
     await expect(page.getByTestId("inspector-fab")).toHaveCount(0);
     await expect(page.getByTestId("inspector-panel")).toHaveCount(0);
-    // The relocated "what's currently overridden" audit is in the KPIs tab.
-    await page.getByRole("tab", { name: /kpis/i }).click();
-    await expect(page.getByTestId("kpis-override-audit")).toBeVisible();
+    // D10: the relocated audit is no longer a standalone KPIs-tab block (it moved into
+    // Penny's drawer), so the old audit testid must be absent everywhere.
+    await expect(page.getByTestId("kpis-override-audit")).toHaveCount(0);
   });
 });

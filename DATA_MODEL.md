@@ -119,12 +119,12 @@ CREATE TABLE IF NOT EXISTS projections (
 | `compute_schema_version` | TEXT | Semver of the **view-model shape** (Appendix D field names / `{raw,display}` convention). Tracked separately from `model_version` so a renderer/shape change is not mistaken for a math change. See [`ENGINE_CONTRACT.md`](./ENGINE_CONTRACT.md). |
 | `location_json` | TEXT | §4.1. |
 | `trade_area_json` | TEXT | §4.2 — basis (city/county/manual), geography, households, ACS vintage. |
-| `inputs_json` | TEXT | §4.3 — opening, lease/rent type, **explicit `share_y1`/`share_y2`/`share_y3`**, source-of-funds, etc. |
+| `inputs_json` | TEXT | §4.3 — opening, lease/rent type, **explicit `share_y1`…`share_y5`** (5-year horizon; `share_y4`/`share_y5` default to the `0.11`/`0.12` plateau when absent), source-of-funds, etc. |
 | `demand_drivers_json` | TEXT | §4.4 — confidence inputs (PRD §9). |
 | `assumptions_json` | TEXT | §4.5 — cost-structure %s + defaults the user can edit on the Settings tab (PRD §7.3). |
 | `overrides_json` | TEXT | §4.6 — pins keyed `"{node}#{year}"` → `{value, note, ts}` (PRD §14, §24). |
 | `monthly_json` | TEXT | §4.7 — M0..M12 monthly cash-flow (PRD §10). |
-| `computed_json` | TEXT | §4.8 — resolved 3-year P&L + KPIs + decision metrics + `flags` map (PRD §12.4). |
+| `computed_json` | TEXT | §4.8 — resolved **5-year** P&L (rows carry `y1..y5`) + KPIs + decision metrics + `incomeSeries`/`year5Income` + `flags` map (PRD §12.4). |
 | `terms_accepted_at` | TEXT, nullable | Timestamp of terms acceptance; export/share gated until set (PRD §21). |
 | `ai_opt_out` | INTEGER | 1 → app computes/saves/exports `.xlsx` with zero AI calls (PRD §21). |
 | `created_at` / `updated_at` | TEXT | App-set ISO-8601 UTC. |
@@ -386,7 +386,7 @@ These are the contracts for the opaque `TEXT` JSON columns. The DB treats them a
   ]
 }
 ```
-**`share_y1`, `share_y2`, `share_y3` are three explicit inputs (PRD §7.1).** The legacy engine's Year-2 = midpoint rule (`generate_projection.py:65`, `methodology.md` lines 17–18) is **superseded** — there is no derived midpoint anywhere in v1. The wizard's "even ramp" helper may *pre-fill* `share_y2` but all three persist as explicit values. `mode` may also be `donations_per_week` (the app converts to share).
+**`share_y1`…`share_y5` are explicit per-year inputs (PRD §7.1; 5-year horizon).** The legacy engine's Year-2 = midpoint rule (`generate_projection.py:65`, `methodology.md` lines 17–18) is **superseded** — there is no derived midpoint anywhere in v1. The annual P&L spans five years; `share_y4`/`share_y5` default to the decelerating-plateau `0.11`/`0.12` (so a 3-year wizard POST still produces a full 5-year projection). The wizard's "even ramp" helper may *pre-fill* intermediate years but each persists as an explicit value. `mode` may also be `donations_per_week` (the app converts to share).
 
 **Timed cost schedule + opening anchor (Spec A §5; added in migration `0005`).** `opening_month_number` (`≥ 1`) is the project month grand opening lands on; `cost_schedule` is the list of timed startup rows `{category, month (≥ 1), amount (≥ 0)}`. The canonical copy lives here in `inputs_json`; first-class columns (`cost_schedule_json`, `opening_month_number`, `target_opening_date`) mirror it for queryability. A row MAY carry an optional **`provenance`** object attributing how it was created: Penny stamps `{ "source": "ai", "turn_id", "created_at" }` on each row she builds from a consultant proposal (Spec B §6.2/§9 `edit_cost_schedule`). `provenance` is **opaque audit/UI metadata** — it never feeds the engine (`cost_schedule` is filtered out of the engine args) and is validated as `{ source, … }` (an object) alongside the `{category, month, amount}` shape; manually-created rows simply omit it. Server validation (`month ≥ 1`, `amount ≥ 0`, `opening_month_number ≥ 1`) is enforced on every create/PATCH so the client never relies on client math. The array is also **COUNT-capped at `MAX_COST_SCHEDULE_ROWS = 200`** rows (generous vs. the ~10-30 rows a real launch carries) — because the schedule is serialized into `inputs_json`/`cost_schedule_json` **and** snapshotted into a fresh revision on every save, an unbounded array is a blob / revision-bloat DoS (issue #166). The cap is enforced server-side on the manual PATCH (`_validate_schedule_inputs`) **and** after Penny's `edit_cost_schedule` ops; an over-cap array is rejected with **422 `invalid_inputs`** ([`SECURITY.md`](./SECURITY.md) §9).
 
@@ -509,23 +509,37 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
   "rows": [
     { "label": "Donor market share", "group": "drivers",
       "y1": {"raw": 0.06, "display": "6.0%"}, "y2": {"raw": 0.08, "display": "8.0%"},
-      "y3": {"raw": 0.10, "display": "10.0%"}, "class": "input", "editable": true, "node": "share" },
+      "y3": {"raw": 0.10, "display": "10.0%"}, "y4": {"raw": 0.11, "display": "11.0%"},
+      "y5": {"raw": 0.12, "display": "12.0%"}, "class": "input", "editable": true, "node": "share" },
     { "label": "Payroll", "group": "expenses",
       "y1": {"raw": 170764, "display": "$170,764"}, "y2": {"raw": 250000, "display": "$250,000"},
-      "y3": {"raw": 284607, "display": "$284,607"}, "class": "overridden", "editable": true, "node": "Payroll" },
-    { "label": "Net profit", "group": "totals",
-      "y1": {"raw": 46900, "display": "$46,900"}, "...": "...", "class": "computed", "editable": false, "node": "net" }
+      "y3": {"raw": 284607, "display": "$284,607"}, "y4": {"raw": 313067, "display": "$313,067"},
+      "y5": {"raw": 341528, "display": "$341,528"}, "class": "overridden", "editable": true, "node": "Payroll" },
+    { "label": "Net income", "group": "expenses",
+      "y1": {"raw": 46900, "display": "$46,900"}, "...": "... y2..y5 ...", "class": "computed", "editable": false, "node": "net" }
   ],
+  "incomeSeries": [
+    {"raw": 46900, "display": "$46,900"}, {"raw": 60000, "display": "$60,000"},
+    {"raw": 80000, "display": "$80,000"}, {"raw": 95000, "display": "$95,000"},
+    {"raw": 110000, "display": "$110,000"}
+  ],
+  "year5Income": {"raw": 110000, "display": "$110,000"},
+  "startupCosts": [
+    {"category": "Thrift Store Consultant", "amount": {"raw": 100000, "display": "$100,000"}},
+    {"category": "Lease Deposit + First Month Rent", "amount": {"raw": 30000, "display": "$30,000"}}
+  ],
+  "startupTotal": {"raw": 238500, "display": "$238,500"},
   "overrides": [
     { "node": "Payroll", "year": 2, "calculated": {"raw": 227685, "display": "$227,685"},
       "value": {"raw": 250000, "display": "$250,000"}, "note": "signed 2 hires",
-      "pinnedDate": "2026-06-24T17:03:11Z", "affected": ["Payroll taxes", "Total Expenses", "Net profit", "Net margin"] }
+      "pinnedDate": "2026-06-24T17:03:11Z", "affected": ["Payroll taxes", "Total Expenses", "Net income", "Net margin"] }
   ],
   "settings": {
     "laborPct": 0.40, "marketingPct": 0.0375, "suppliesPct": 0.05, "cardPct": 0.02,
     "payrollTaxPct": 0.075, "salvagePct": 0.008, "escalator": 0.03,
     "utilitiesPerSqft": 2.23, "rentPerSqft": null, "basket": 17.08,
-    "donationsPerHh": 3, "shareY1": 0.06, "shareY2": 0.08, "shareY3": 0.10,
+    "donationsPerHh": 3, "donationValue": 74.0, "donationsPerHouseholdPerYear": 3,
+    "shareY1": 0.06, "shareY2": 0.08, "shareY3": 0.10, "shareY4": 0.11, "shareY5": 0.12,
     "occupancyAnnual": 90000, "leaseType": "nnn", "salesfloorSqft": 7000, "reserveBuffer": 25000
   },
   "sensitivity": { "rent": {"downside": "...", "base": "...", "upside": "..."},
@@ -541,6 +555,8 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
 ```
 
 **Contract notes:**
+- **Startup costs surfaced** (`compute_schema_version 1.5.0`, EPIC DOCX). Top-level `startupCosts` is the one-time startup line items `[{category, amount{raw,display}}]` (from the engine's `result.startup`, including the computed "Lease Deposit + First Month Rent" line) and `startupTotal` is their sum `{raw,display}`. Additive shape change feeding the Board Packet `.docx` startup-costs table; **no math change** (`model_version` stays `2.6.0`). A pre-1.5.0 snapshot simply lacks these keys and the `.docx` renderer degrades gracefully.
+- **5-year horizon** (`model_version 2.6.0` / `compute_schema_version 1.4.0`→`1.5.0`). Every annual `rows[]` entry carries `y1..y5` cells; `settings` gain `shareY4`/`shareY5` plus the editable donation drivers `donationValue` + `donationsPerHouseholdPerYear` (`donationsPerHh` is retained as an alias). Top-level `incomeSeries` is the annual **net income** Y1..Y5 as `{raw,display}` (the list/detail sparkline) and `year5Income` is the Year-5 figure. The net-total row/KPI is **"Net income"** (was "Net profit"). The decision metrics (`metrics.capital`/`cashGap`/`breakeven`, `milestones`, `monthly[]`) stay **Year-1-anchored and are byte-unchanged**; only the annual table, the Revenue-CAGR KPI (now Y1→Y5), and the §12.2 guardrails (now also Y4/Y5) extend. A legacy 3-year snapshot (`2.5.0`) is read **verbatim** (still three columns); recompute/upgrade auto-extends absent `share_y4`/`share_y5` to the plateau defaults `0.11`/`0.12`.
 - `settings.utilitiesPerSqft` + `settings.rentPerSqft` (`compute_schema_version ≥ 1.3.0`, #245) are additive raw scalars. `utilitiesPerSqft` is the rate the **Utilities/trash service** line is now derived from (`building_sqft × utilitiesPerSqft`, default `$2.23`); `rentPerSqft` echoes the input `rent_per_sqft` when occupancy was entered that way (else `null` — occupancy was entered as a flat annual `$`). Both are display-only context for the wizard/inspector; the engine remains the math authority.
 - `milestones` (`compute_schema_version ≥ 1.2.0`) carries the three detail-page milestones (`grandOpening`, `breakEven`, `payback`), each a `{raw, display}` project-month value with the **server as the formatting authority** ("Month 6"). An unreached milestone is `{raw: null, display: "N/A", reason}` (the N/A-with-reason flag pattern, **never a misleading 0**); `payback` adds a `duration` display ("25 months") when reached. The KPI strip's **Payback period** KPI is sourced from `milestones.payback`; the legacy `simple_payback_years` KPI is retired from the view-model surface (still computed internally). See [`ENGINE_CONTRACT.md`](./ENGINE_CONTRACT.md) §6.6.
 - `monthly[]` covers **all project months `1..N`** (`N = opening_month_number + 11`), x-axis from month 1. Each entry is `{ revenue, expenses, scheduledCosts, net, cumulativeCash }` — the same columns as the `.xlsx` Monthly tab, with `net = revenue − expenses − scheduledCosts`, so a pre-opening month (`1..G-1`) reads as a real monthly loss and `cumulativeCash` accumulates from month 1.

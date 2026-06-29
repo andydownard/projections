@@ -9,9 +9,9 @@ const LAST_STEP = STEPS.length - 1; // startup-costs
 
 // The shared wizard-state hook: holds the draft, the step cursor with per-step
 // validation gating Next, and the households-empty-until-resolved lifecycle
-// (§4). No client math — it only collects inputs (PRD §13). Phase 2 (owner
-// Decision 11): the order is Address → Square footage → Households → Donor market
-// share → Startup costs; there is NO Review step and terms is implicit.
+// (§4). No client math — it only collects inputs (PRD §13). W15 redesign:
+// the order is Address → Square footage → Configure donations → Startup costs;
+// there is NO Review step and terms is implicit.
 
 const RESOLVED: TradeAreaResolved = {
   location: { place_id: "PID", lat: 32.78, lng: -96.8, formatted_address: "Dallas, TX, USA" },
@@ -34,13 +34,12 @@ const RESOLVED: TradeAreaResolved = {
   },
 };
 
-describe("useWizardState — step set + order (owner Decision 11)", () => {
-  it("orders Address → Square footage → Households → Donor market share → Startup costs", () => {
+describe("useWizardState — step set + order (W15 redesign)", () => {
+  it("orders Address → Square footage → Configure donations → Startup costs", () => {
     expect(STEPS).toEqual([
       "address",
       "square-footage",
-      "households",
-      "donor-market",
+      "configure-donations",
       "startup-costs",
     ]);
   });
@@ -120,8 +119,8 @@ describe("useWizardState — households empty-until-resolved (§4)", () => {
     expect(result.current.householdsSource).toBe("manual");
     expect(result.current.canGenerate).toBe(false); // still no value
 
-    act(() => result.current.goTo(2)); // households step
-    expect(result.current.stepKey).toBe("households");
+    act(() => result.current.goTo(2)); // configure-donations step
+    expect(result.current.stepKey).toBe("configure-donations");
     expect(result.current.canProceed).toBe(false);
     act(() => result.current.setHouseholds(25000));
     expect(result.current.householdsSource).toBe("manual");
@@ -245,5 +244,63 @@ describe("useWizardState — terms acceptance is implicit on Generate (owner Dec
     act(() => result.current.goTo(LAST_STEP));
     expect(result.current.stepKey).toBe("startup-costs");
     expect(result.current.isLast).toBe(true);
+  });
+});
+
+describe("useWizardState — W1 furthestReached + W15 new steps", () => {
+  it("orders Address → Square footage → Configure donations → Startup costs (W15)", () => {
+    expect(STEPS).toEqual([
+      "address",
+      "square-footage",
+      "configure-donations",
+      "startup-costs",
+    ]);
+  });
+
+  it("furthestReached starts at the initial step", () => {
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.furthestReached).toBe(0);
+  });
+
+  it("furthestReached advances with goNext but not with goBack or goTo", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.onResolved(RESOLVED));
+    act(() => result.current.goNext()); // → step 1
+    expect(result.current.furthestReached).toBe(1);
+    act(() => result.current.goTo(0)); // jump back
+    expect(result.current.furthestReached).toBe(1); // stays at 1
+    act(() => result.current.goBack()); // already at 0
+    expect(result.current.furthestReached).toBe(1); // stays at 1
+  });
+
+  it("breadcrumb-navigation-preserves-draft: type a value, jump back, jump forward, value persists", () => {
+    const { result } = renderHook(() => useWizardState());
+    // Step 0 → 1
+    act(() => result.current.onResolved(RESOLVED));
+    act(() => result.current.goNext());
+    expect(result.current.step).toBe(1);
+    // Type a value on step 1
+    act(() => result.current.setBuildingSqft(8000));
+    expect(result.current.draft.buildingSqft).toBe(8000);
+    // Move to step 2 (to set furthestReached >= 1)
+    act(() => result.current.goNext()); // step 1 valid by defaults
+    expect(result.current.furthestReached).toBe(2);
+    // Jump back to step 1 via breadcrumb
+    act(() => result.current.goTo(1));
+    expect(result.current.draft.buildingSqft).toBe(8000); // value persists
+    // Jump forward to step 2
+    act(() => result.current.goTo(2));
+    expect(result.current.draft.buildingSqft).toBe(8000); // still persists
+  });
+
+  it("donationValue defaults to $50 (not $74) (W15 / Owner Decision 4)", () => {
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.draft.donationValue).toBe(50);
+  });
+
+  it("Y4/Y5 shares default to 11/12 (Owner Decision 5)", () => {
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.draft.shareY4).toBe(11);
+    expect(result.current.draft.shareY5).toBe(12);
   });
 });

@@ -1,12 +1,44 @@
 {
   "breakevenMonth": 5,
-  "compute_schema_version": "1.3.0",
+  "compute_schema_version": "1.5.0",
   "evidence": [],
   "flags": {
     "model_upgrade_available": false,
     "payback_month": "N/A \u2014 startup costs are not recovered within the projection horizon",
-    "ramp_low_confidence": true
+    "ramp_low_confidence": true,
+    "share_y4_out_of_band": {
+      "band": "\u2264 ~8%",
+      "requires_note": true,
+      "value": 0.11
+    },
+    "share_y5_out_of_band": {
+      "band": "\u2264 ~8%",
+      "requires_note": true,
+      "value": 0.12
+    }
   },
+  "incomeSeries": [
+    {
+      "display": "$47,359",
+      "raw": 47358.711632
+    },
+    {
+      "display": "$109,578",
+      "raw": 109578.282176
+    },
+    {
+      "display": "$171,690",
+      "raw": 171689.85272
+    },
+    {
+      "display": "$200,780",
+      "raw": 200780.397992
+    },
+    {
+      "display": "$229,756",
+      "raw": 229756.366064
+    }
+  ],
   "kpis": [
     {
       "color": "text",
@@ -19,7 +51,7 @@
     },
     {
       "color": "text",
-      "label": "Net profit",
+      "label": "Net income",
       "sub": "Year 1",
       "value": {
         "display": "$47,359",
@@ -93,10 +125,10 @@
     {
       "color": "text",
       "label": "Revenue CAGR",
-      "sub": "Y1->Y3",
+      "sub": "Y1->Y5",
       "value": {
-        "display": "29.1%",
-        "raw": 0.29099444873580566
+        "display": "18.9%",
+        "raw": 0.18920711500272105
       }
     }
   ],
@@ -132,7 +164,7 @@
       "reason": "N/A \u2014 startup costs are not recovered within the projection horizon"
     }
   },
-  "model_version": "2.5.0",
+  "model_version": "2.6.0",
   "monthly": [
     {
       "cumulativeCash": {
@@ -434,6 +466,14 @@
       "y3": {
         "display": "10.0%",
         "raw": 0.1
+      },
+      "y4": {
+        "display": "11.0%",
+        "raw": 0.11
+      },
+      "y5": {
+        "display": "12.0%",
+        "raw": 0.12
       }
     },
     {
@@ -452,6 +492,14 @@
       "y3": {
         "display": "3,180",
         "raw": 3179.8
+      },
+      "y4": {
+        "display": "3,498",
+        "raw": 3497.78
+      },
+      "y5": {
+        "display": "3,816",
+        "raw": 3815.76
       }
     },
     {
@@ -470,6 +518,14 @@
       "y3": {
         "display": "9,539",
         "raw": 9539.4
+      },
+      "y4": {
+        "display": "10,493",
+        "raw": 10493.34
+      },
+      "y5": {
+        "display": "11,447",
+        "raw": 11447.28
       }
     },
     {
@@ -488,6 +544,14 @@
       "y3": {
         "display": "41,330",
         "raw": 41329.95316159251
+      },
+      "y4": {
+        "display": "45,463",
+        "raw": 45462.94847775176
+      },
+      "y5": {
+        "display": "49,596",
+        "raw": 49595.94379391101
       }
     },
     {
@@ -506,6 +570,14 @@
       "y3": {
         "display": "$705,916",
         "raw": 705915.6
+      },
+      "y4": {
+        "display": "$776,507",
+        "raw": 776507.16
+      },
+      "y5": {
+        "display": "$847,099",
+        "raw": 847098.72
       }
     },
     {
@@ -524,6 +596,14 @@
       "y3": {
         "display": "$5,647",
         "raw": 5647.3248
+      },
+      "y4": {
+        "display": "$6,212",
+        "raw": 6212.05728
+      },
+      "y5": {
+        "display": "$6,777",
+        "raw": 6776.78976
       }
     },
     {
@@ -542,6 +622,14 @@
       "y3": {
         "display": "$711,563",
         "raw": 711562.9248
+      },
+      "y4": {
+        "display": "$782,719",
+        "raw": 782719.21728
+      },
+      "y5": {
+        "display": "$853,876",
+        "raw": 853875.50976
       }
     },
     {
@@ -560,6 +648,14 @@
       "y3": {
         "display": "$14,231",
         "raw": 14231.258496
+      },
+      "y4": {
+        "display": "$15,654",
+        "raw": 15654.3843456
+      },
+      "y5": {
+        "display": "$17,078",
+        "raw": 17077.5101952
       }
     },
     {
@@ -576,6 +672,14 @@
         "raw": 2000.0
       },
       "y3": {
+        "display": "$2,000",
+        "raw": 2000.0
+      },
+      "y4": {
+        "display": "$2,000",
+        "raw": 2000.0
+      },
+      "y5": {
         "display": "$2,000",
         "raw": 2000.0
       }
@@ -596,6 +700,14 @@
       "y3": {
         "display": "$3,000",
         "raw": 3000.0
+      },
+      "y4": {
+        "display": "$3,000",
+        "raw": 3000.0
+      },
+      "y5": {
+        "display": "$3,000",
+        "raw": 3000.0
       }
     },
     {
@@ -614,6 +726,14 @@
       "y3": {
         "display": "$26,684",
         "raw": 26683.60968
+      },
+      "y4": {
+        "display": "$29,352",
+        "raw": 29351.970648
+      },
+      "y5": {
+        "display": "$32,020",
+        "raw": 32020.331616
       }
     },
     {
@@ -632,6 +752,14 @@
       "y3": {
         "display": "$284,625",
         "raw": 284625.16992
+      },
+      "y4": {
+        "display": "$313,088",
+        "raw": 313087.686912
+      },
+      "y5": {
+        "display": "$341,550",
+        "raw": 341550.203904
       }
     },
     {
@@ -650,6 +778,14 @@
       "y3": {
         "display": "$21,347",
         "raw": 21346.887744
+      },
+      "y4": {
+        "display": "$23,482",
+        "raw": 23481.5765184
+      },
+      "y5": {
+        "display": "$25,616",
+        "raw": 25616.2652928
       }
     },
     {
@@ -666,6 +802,14 @@
         "raw": 300.0
       },
       "y3": {
+        "display": "$300",
+        "raw": 300.0
+      },
+      "y4": {
+        "display": "$300",
+        "raw": 300.0
+      },
+      "y5": {
         "display": "$300",
         "raw": 300.0
       }
@@ -686,6 +830,14 @@
       "y3": {
         "display": "$127,308",
         "raw": 127308.0
+      },
+      "y4": {
+        "display": "$131,127",
+        "raw": 131127.24
+      },
+      "y5": {
+        "display": "$135,061",
+        "raw": 135061.0572
       }
     },
     {
@@ -702,6 +854,14 @@
         "raw": 1600.0
       },
       "y3": {
+        "display": "$1,600",
+        "raw": 1600.0
+      },
+      "y4": {
+        "display": "$1,600",
+        "raw": 1600.0
+      },
+      "y5": {
         "display": "$1,600",
         "raw": 1600.0
       }
@@ -722,6 +882,14 @@
       "y3": {
         "display": "$900",
         "raw": 900.0
+      },
+      "y4": {
+        "display": "$900",
+        "raw": 900.0
+      },
+      "y5": {
+        "display": "$900",
+        "raw": 900.0
       }
     },
     {
@@ -740,6 +908,14 @@
       "y3": {
         "display": "$35,578",
         "raw": 35578.14624
+      },
+      "y4": {
+        "display": "$39,136",
+        "raw": 39135.960864
+      },
+      "y5": {
+        "display": "$42,694",
+        "raw": 42693.775488
       }
     },
     {
@@ -756,6 +932,14 @@
         "raw": 22300.0
       },
       "y3": {
+        "display": "$22,300",
+        "raw": 22300.0
+      },
+      "y4": {
+        "display": "$22,300",
+        "raw": 22300.0
+      },
+      "y5": {
         "display": "$22,300",
         "raw": 22300.0
       }
@@ -776,13 +960,21 @@
       "y3": {
         "display": "$539,873",
         "raw": 539873.07208
+      },
+      "y4": {
+        "display": "$581,939",
+        "raw": 581938.819288
+      },
+      "y5": {
+        "display": "$624,119",
+        "raw": 624119.143696
       }
     },
     {
       "class": "computed",
       "editable": false,
       "group": "expenses",
-      "label": "Net profit",
+      "label": "Net income",
       "y1": {
         "display": "$47,359",
         "raw": 47358.711632
@@ -794,6 +986,14 @@
       "y3": {
         "display": "$171,690",
         "raw": 171689.85272
+      },
+      "y4": {
+        "display": "$200,780",
+        "raw": 200780.397992
+      },
+      "y5": {
+        "display": "$229,756",
+        "raw": 229756.366064
       }
     },
     {
@@ -812,13 +1012,23 @@
       "y3": {
         "display": "24.1%",
         "raw": 0.24128555147565778
+      },
+      "y4": {
+        "display": "25.7%",
+        "raw": 0.2565165049731689
+      },
+      "y5": {
+        "display": "26.9%",
+        "raw": 0.2690747813209656
       }
     }
   ],
   "settings": {
     "basket": 17.08,
     "cardPct": 0.02,
+    "donationValue": 74.0,
     "donationsPerHh": 3,
+    "donationsPerHouseholdPerYear": 3,
     "escalator": 0.03,
     "laborPct": 0.4,
     "leaseType": "nnn",
@@ -831,9 +1041,56 @@
     "shareY1": 0.06,
     "shareY2": 0.08,
     "shareY3": 0.1,
+    "shareY4": 0.11,
+    "shareY5": 0.12,
     "suppliesPct": 0.05,
     "utilitiesPerSqft": 2.23
   },
   "staleNodes": [],
-  "version": "2.5.0"
+  "startupCosts": [
+    {
+      "amount": {
+        "display": "$100,000",
+        "raw": 100000.0
+      },
+      "category": "Thrift Store Consultant"
+    },
+    {
+      "amount": {
+        "display": "$45,000",
+        "raw": 45000.0
+      },
+      "category": "Equipment & Fixtures"
+    },
+    {
+      "amount": {
+        "display": "$50,000",
+        "raw": 50000.0
+      },
+      "category": "Build-out / Renovations / Tenant Improvements"
+    },
+    {
+      "amount": {
+        "display": "$13,500",
+        "raw": 13500.0
+      },
+      "category": "Legal, Permits, Insurance Setup, Signage"
+    },
+    {
+      "amount": {
+        "display": "$30,000",
+        "raw": 30000.0
+      },
+      "category": "Lease Deposit + First Month Rent"
+    }
+  ],
+  "startupTotal": {
+    "display": "$238,500",
+    "raw": 238500.0
+  },
+  "version": "2.6.0",
+  "year5Income": {
+    "display": "$229,756",
+    "raw": 229756.366064
+  }
 }

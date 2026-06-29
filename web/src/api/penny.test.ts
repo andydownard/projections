@@ -128,7 +128,7 @@ describe("sendPennyMessage — error classification (Spec B §8/§11)", () => {
   it("classifies 422 as rejected and relays the server message", async () => {
     mockFetch(() =>
       jsonResponse(
-        { error: "node_not_pinnable", message: "Net profit is a total I can't pin." },
+        { error: "node_not_pinnable", message: "Net income is a total I can't pin." },
         { status: 422 },
       ),
     );

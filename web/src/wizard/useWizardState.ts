@@ -63,12 +63,14 @@ export const DEFAULT_DRAFT: WizardDraft = {
   buildingSqft: DEFAULT_BUILDING_SQFT,
   salesfloorPct: DEFAULT_SALESFLOOR_PCT,
   leaseType: "nnn",
-  donationValue: 74,
+  donationValue: 50,
   basket: 17.08,
   donationsPerHh: 3,
   shareY1: 6,
   shareY2: 8,
   shareY3: 10,
+  shareY4: 11,
+  shareY5: 12,
   // Occupancy is sq ft × rent (#245): 12,500 sq ft × $12 = $150,000. The per-sq-ft
   // assumptions are anchored; the engine still derives occupancy server-side.
   occupancyAnnual: DEFAULT_BUILDING_SQFT * DEFAULT_RENT_PER_SQFT,
@@ -105,6 +107,7 @@ export interface WizardState {
   isFirst: boolean;
   isLast: boolean;
   canProceed: boolean;
+  furthestReached: number;
   goNext: () => void;
   goBack: () => void;
   goTo: (i: number) => void;
@@ -168,6 +171,9 @@ export function useWizardState(
 ): WizardState {
   const [draft, setDraft] = useState<WizardDraft>({ ...DEFAULT_DRAFT, ...initial });
   const [step, setStep] = useState(() =>
+    Math.min(Math.max(0, Math.trunc(initialStep)), STEPS.length - 1),
+  );
+  const [furthestReached, setFurthestReached] = useState(() =>
     Math.min(Math.max(0, Math.trunc(initialStep)), STEPS.length - 1),
   );
   const [resolved, setResolved] = useState<TradeAreaResolved | null>(null);
@@ -357,8 +363,11 @@ export function useWizardState(
         draft.buildingSqft > 0 &&
         draft.salesfloorPct > 0 &&
         draft.salesfloorPct <= 100,
-      households: () => hasValue(householdsValue),
-      "donor-market": () => draft.shareY1 > 0 && draft.shareY2 > 0 && draft.shareY3 > 0,
+      "configure-donations": () =>
+        hasValue(householdsValue) &&
+        draft.shareY1 > 0 && draft.shareY2 > 0 && draft.shareY3 > 0 &&
+        draft.shareY4 > 0 && draft.shareY5 > 0 &&
+        draft.donationValue > 0,
       "startup-costs": () =>
         (draft.openingMonthNumber ?? 1) >= 1 &&
         draft.rentPerSqft >= 0 &&
@@ -376,7 +385,11 @@ export function useWizardState(
 
   const goNext = useCallback(() => {
     setStep((s) => {
-      if (validators[STEPS[s]]() && s < STEPS.length - 1) return s + 1;
+      if (validators[STEPS[s]]() && s < STEPS.length - 1) {
+        const next = s + 1;
+        setFurthestReached((prev) => Math.max(prev, next));
+        return next;
+      }
       return s;
     });
   }, [validators]);
@@ -399,6 +412,7 @@ export function useWizardState(
     isFirst,
     isLast,
     canProceed,
+    furthestReached,
     goNext,
     goBack,
     goTo,

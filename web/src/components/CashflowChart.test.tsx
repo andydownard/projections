@@ -57,16 +57,18 @@ describe("CashflowChart", () => {
     expect(screen.queryByTestId("breakeven-marker")).not.toBeInTheDocument();
   });
 
-  it("marks Grand Opening, Breakeven and Payback distinctly", () => {
+  // D3: only Grand Opening + Break-even are labeled ON the chart; Payback is NOT
+  // drawn on the plot (it lives in the header metric bar + the sr-only summary).
+  it("marks ONLY Grand Opening + Break-even on the chart (Payback is not on-plot, D3)", () => {
     render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
     expect(screen.getByTestId("grandopening-marker")).toBeInTheDocument();
     expect(screen.getByTestId("breakeven-marker")).toBeInTheDocument();
-    expect(screen.getByTestId("payback-marker")).toBeInTheDocument();
+    expect(screen.queryByTestId("payback-marker")).not.toBeInTheDocument();
   });
 
-  // Epic G (#40): the milestone names are labeled ON the plotted timeline (server
-  // display strings), and the separate visible legend LIST is removed.
-  it("labels the milestones ON the chart with the server display strings (no client formatting)", () => {
+  // D3: the on-chart labels use SHORT leader lines, never a full vertical line that
+  // runs through the label text and across the plot.
+  it("labels Grand Opening + Break-even ON the chart with short leader lines (no full vertical line, D3)", () => {
     const { container } = render(
       <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
     );
@@ -75,7 +77,10 @@ describe("CashflowChart", () => {
     );
     expect(onChart.some((t) => t?.includes("Grand Opening") && t.includes("Month 3"))).toBe(true);
     expect(onChart.some((t) => t?.includes("Break-even") && t.includes("Month 5"))).toBe(true);
-    expect(onChart.some((t) => t?.includes("Payback") && t.includes("Month 7"))).toBe(true);
+    expect(onChart.some((t) => t?.includes("Payback"))).toBe(false);
+    // The old full-height vertical milestone line is gone; only short leaders remain.
+    expect(container.querySelector(".cashflow-chart__milestone-line")).toBeNull();
+    expect(container.querySelectorAll(".cashflow-chart__milestone-leader").length).toBe(2);
   });
 
   it("removes the separate visible milestone legend LIST (#40)", () => {
@@ -110,16 +115,30 @@ describe("CashflowChart", () => {
     expect(sr).toHaveTextContent("Payback");
   });
 
-  it("starts the x-axis at month 1 and renders a tick per month (table alignment)", () => {
+  // D4: the SVG no longer carries x-axis month ticks; months are labeled ONCE in
+  // the monthly table header as "Mo. N" (so they are never double-labeled).
+  it("removes the x-axis month ticks from the SVG and labels months once in the table header as 'Mo. N' (D4)", () => {
     const { container } = render(
       <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
     );
-    const ticks = Array.from(container.querySelectorAll(".cashflow-chart__tick")).map(
-      (t) => t.textContent,
+    expect(container.querySelectorAll(".cashflow-chart__tick").length).toBe(0);
+    const table = screen.getByTestId("cashflow-table");
+    expect(within(table).getByRole("columnheader", { name: "Mo. 1" })).toBeInTheDocument();
+  });
+
+  // D5: the bottom "Cash low point … · Break-even …" figcaption is removed.
+  it("removes the bottom cash-low-point / break-even figcaption (D5)", () => {
+    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
+    expect(screen.queryByText(/cash low point/i)).not.toBeInTheDocument();
+  });
+
+  // D2: the chart's accessible description no longer names a "cash low point".
+  it("does not name a 'cash low point' / 'low point' in the SVG accessible label (D2)", () => {
+    const { container } = render(
+      <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
     );
-    expect(ticks[0]).toBe("M1");
-    // one tick per month so each sits under its monthly-table column
-    expect(ticks).toHaveLength(monthlyV3.length);
+    const svg = container.querySelector("svg")!;
+    expect(svg.getAttribute("aria-label")).not.toMatch(/low point/i);
   });
 
   it("renders an unreached milestone as N/A with reason in the sr summary, never a 0 marker", () => {

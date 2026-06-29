@@ -87,7 +87,11 @@ _ASSUMPTION_BUCKET = {
     "supplies_pct": "assumptions", "card_pct": "assumptions",
     "payroll_tax_pct": "assumptions", "salvage_pct": "assumptions",
     "escalator": "assumptions", "basket": "assumptions",
+    # donations per household / year is an engine assumption (E2 editable driver).
+    "donations_per_hh": "assumptions",
     "share_y1": "inputs", "share_y2": "inputs", "share_y3": "inputs",
+    # 5-year horizon: the late-year donor shares route to inputs like share_y1..3.
+    "share_y4": "inputs", "share_y5": "inputs",
     "rent_per_sqft": "inputs", "occupancy_annual": "inputs",
     "donation_value": "inputs",
 }

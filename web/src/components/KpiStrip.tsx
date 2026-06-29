@@ -2,7 +2,7 @@
 //
 // The high-level decision tiles (capital / break-even / payback) live in
 // ProjectionTab; this is the SECOND tile set — the stored server `kpis[]` figures
-// (Total revenue, Net profit, Labor ratio, …). Epic G (#40/#41) relocates it into
+// (Total revenue, Net income, Labor ratio, …). Epic G (#40/#41) relocates it into
 // the detail page's "KPIs" tab (edit) / inline below the projection (read). It is
 // pure presentation: every figure is the server's { display } string (PRD §13, no
 // client math); the negative cue is read from the server `raw` SIGN and paired with

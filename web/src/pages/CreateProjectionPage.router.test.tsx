@@ -7,10 +7,10 @@ import { CreateProjectionPage } from "./CreateProjectionPage";
 // Epic B (#261) — page-per-step router. Each wizard step is its own route
 // (/wizard/<step-slug>) so browser Back/Forward navigate between steps and each
 // step is deep-linkable/refreshable. The cursor and the URL stay in sync and the
-// draft survives navigation (the page never unmounts on a /wizard route). Phase 2
-// (owner Decision 11): the order is Address → Square footage → Households → Donor
-// market share → Startup costs (the Square-footage step's defaults are valid, so it
-// is the simplest place to exercise Next/Back without resolving an address).
+// draft survives navigation (the page never unmounts on a /wizard route). W15
+// redesign: the order is Address → Square footage → Configure donations →
+// Startup costs (the Square-footage step's defaults are valid, so it is the
+// simplest place to exercise Next/Back without resolving an address).
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/wizard");
@@ -44,8 +44,8 @@ describe("CreateProjectionPage — route ↔ step sync (#261)", () => {
     await user.type(sqft, "9000");
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    await waitFor(() => expect(window.location.pathname).toBe("/wizard/households"));
-    expect(screen.getByRole("heading", { name: /confirm # of households/i })).toBeInTheDocument();
+    await waitFor(() => expect(window.location.pathname).toBe("/wizard/configure-donations"));
+    expect(screen.getByRole("heading", { name: /configure donations/i })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^back$/i }));
     await waitFor(() => expect(window.location.pathname).toBe("/wizard/square-footage"));
@@ -72,10 +72,10 @@ describe("CreateProjectionPage — route ↔ step sync (#261)", () => {
     await user.type(sqft, "9000");
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: /confirm # of households/i })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: /configure donations/i })).toBeInTheDocument(),
     );
-    rerender(<CreateProjectionPage step="households" />);
-    await waitFor(() => expect(window.location.pathname).toBe("/wizard/households"));
+    rerender(<CreateProjectionPage step="configure-donations" />);
+    await waitFor(() => expect(window.location.pathname).toBe("/wizard/configure-donations"));
 
     // Simulate a browser Back: the URL changes externally and the App re-parses the
     // route, handing the page the previous step. The cursor follows; draft intact.
@@ -96,7 +96,7 @@ describe("CreateProjectionPage — route ↔ step sync (#261)", () => {
 
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    const heading = await screen.findByRole("heading", { name: /confirm # of households/i });
+    const heading = await screen.findByRole("heading", { name: /configure donations/i });
     await waitFor(() => expect(heading).toHaveFocus());
   });
 
@@ -110,7 +110,7 @@ describe("CreateProjectionPage — route ↔ step sync (#261)", () => {
 
     const status = screen.getByTestId("wizard-step-status");
     expect(status).toHaveAttribute("aria-live", "polite");
-    await waitFor(() => expect(status).toHaveTextContent(/step 3 of 5/i));
-    expect(status).toHaveTextContent(/confirm # of households/i);
+    await waitFor(() => expect(status).toHaveTextContent(/step 3 of 4/i));
+    expect(status).toHaveTextContent(/configure donations/i);
   });
 });

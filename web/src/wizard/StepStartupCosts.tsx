@@ -21,12 +21,9 @@ import { useEffect, useRef, useState } from "react";
 import { previewCostSchedule, type CostSchedulePreview } from "../api/costSchedule";
 import { CostScheduleEditor } from "../components/CostScheduleEditor";
 import { assumptionSourceLabel } from "../components/displayLabels";
+import { NumberField } from "../components/NumberField";
 import { DEFAULT_OPENING_MONTH_NUMBER, type CostScheduleRow } from "./shareHelper";
 import type { AssumptionSource, WizardState } from "./useWizardState";
-
-/** A short "what would change this" hint shown under the rent estimate. */
-const WHAT_CHANGES_RENT =
-  "A signed lease or a local broker quote replaces this estimate — edit the field to use your real rate.";
 
 /** The verified-vs-estimated badge for a RESEARCH-sourced rent (icon + text, never
  *  color-only). `verified` is the server's flag (fetched source survived AND
@@ -150,7 +147,7 @@ export function StepStartupCosts({
 
   return (
     <section className="wizard-step" aria-labelledby="step-cost-heading">
-      <h2 id="step-cost-heading" className="wizard-step__heading">
+      <h2 id="step-cost-heading" className="wizard-step__heading sr-only">
         Set startup costs
       </h2>
       <p className="wizard-step__lede">
@@ -158,18 +155,19 @@ export function StepStartupCosts({
         project month it’s spent.
       </p>
 
-      {/* ---- Rent ($/sq ft/yr) — research pre-filled, editable (#245) ---- */}
+      {/* ---- Rent — research pre-filled, editable (#245) ---- */}
       <div className="assumption" data-testid="assumption-rent">
         <label className="wizard__field" htmlFor="wizard-rent-per-sqft">
-          Rent ($/sq ft/yr)
-          <input
+          Rent
+          <NumberField
             id="wizard-rent-per-sqft"
-            type="number"
-            inputMode="decimal"
+            value={draft.rentPerSqft || null}
+            onChange={(v) => state.setRentPerSqft(v ?? 0)}
+            unit="$/sq ft/yr"
+            unitPosition="suffix"
+            decimals={2}
             min={0}
-            step="any"
-            value={draft.rentPerSqft}
-            onChange={(e) => state.setRentPerSqft(Number(e.target.value))}
+            aria-label="Rent per square foot per year"
           />
         </label>
 
@@ -226,7 +224,6 @@ export function StepStartupCosts({
             </details>
           )}
 
-        <p className="assumption__hint">{WHAT_CHANGES_RENT}</p>
       </div>
 
       {/* #32 — contextual "Upload consultant proposal" → Penny (graceful when AI off). */}

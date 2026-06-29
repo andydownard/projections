@@ -135,6 +135,67 @@ def test_read_returns_older_snapshot_verbatim_and_surfaces_new_model(client_stor
     assert got["upgrade_available"] is True
 
 
+def test_legacy_three_year_snapshot_reads_verbatim_then_auto_extends_on_recompute():
+    # 5-year horizon (#redesign-v2). A projection saved under the 3-year engine (2.5.0)
+    # has no share_y4/share_y5 in its stored inputs. Two invariants:
+    #   (1) reading the stored snapshot is VERBATIM — still 2.5.0, still 3 columns, no
+    #       silent recompute onto the live 2.6.0 engine (Regression Registry #12).
+    #   (2) an explicit recompute (the upgrade-model path / a PATCH / an .xlsx export)
+    #       AUTO-EXTENDS the missing late-year shares to the decelerating-plateau
+    #       defaults (0.11 / 0.12) and yields a 5-year 2.6.0 view-model — non-destructive
+    #       (the prior 2.5.0 bytes are preserved; upgrade-model writes a NEW revision).
+    from app.routers.projections import _compute_view_model_from_dicts
+
+    legacy_inputs = {
+        "org_name": "House of Hope", "city": "Longview, Texas",
+        "opening_status": "pre_launch",
+        "share_y1": "0.06", "share_y2": "0.08", "share_y3": "0.10",  # NO y4/y5
+        "donation_value": "74", "building_sqft": "10000", "salesfloor_pct": "0.70",
+        "source_of_funds": "300000", "occupancy_annual": "120000", "lease_type": "nnn",
+    }
+    # (1) verbatim read: a planted 2.5.0 snapshot whose rows have only y1..y3 cells is
+    # returned unchanged (no y4/y5 grafted on, model_version not bumped).
+    store = SqliteStore(":memory:")
+    store.migrate()
+    app = create_app()
+    app.dependency_overrides[get_store] = lambda: store
+    client = TestClient(app)
+    legacy_vm = {
+        "model_version": "2.5.0", "compute_schema_version": "1.3.0",
+        "reco": {"tag": "revise"},
+        "rows": [{"label": "Net profit", "group": "expenses",
+                  "y1": {"raw": 1, "display": "$1"}, "y2": {"raw": 2, "display": "$2"},
+                  "y3": {"raw": 3, "display": "$3"}}],
+        "kpis": [], "monthly": [], "flags": {},
+    }
+    store.create_projection({
+        "id": "id-legacy3y", "view_slug": "slug-legacy3y",
+        "owner_token_hash": "ownerhash", "name": "Legacy 3-year",
+        "model_version": "2.5.0", "compute_schema_version": "1.3.0",
+        "computed_json": json.dumps(legacy_vm),
+        "created_at": "2020-01-01T00:00:00Z", "updated_at": "2020-01-01T00:00:00Z",
+    })
+    got = client.get("/api/projections/slug-legacy3y").json()
+    assert got["model_version"] == "2.5.0"          # not silently recomputed
+    assert got["upgrade_available"] is True          # staleness surfaced
+    assert "y4" not in got["rows"][0] and "y5" not in got["rows"][0]  # 3 columns verbatim
+    assert got["rows"][0]["label"] == "Net profit"   # the old label is preserved as stored
+
+    # (2) recompute auto-extends the legacy 3-year inputs to a 2.6.0 5-year view-model.
+    vm = _compute_view_model_from_dicts(
+        legacy_inputs, {"labor_pct": "0.60"}, {},
+        {"basis": "city", "households": "31798"}, {})
+    assert vm["model_version"] == MODEL_VERSION and MODEL_VERSION == "2.6.0"
+    assert vm["compute_schema_version"] == "1.5.0"
+    # plateau defaults filled the gap left by the pre-5-year save.
+    assert abs(vm["settings"]["shareY4"] - 0.11) < 1e-9
+    assert abs(vm["settings"]["shareY5"] - 0.12) < 1e-9
+    # every annual row now carries five columns + the renamed total.
+    assert all("y5" in r for r in vm["rows"])
+    assert any(r["label"] == "Net income" for r in vm["rows"])
+    assert len(vm["incomeSeries"]) == 5
+
+
 def test_read_does_not_flag_upgrade_when_snapshot_is_current(client_store):
     # The flag must be a TRUE comparison against the live engine, not always-on: a
     # snapshot already at the current model_version is not stale.

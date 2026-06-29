@@ -24,7 +24,7 @@ def test_year2_share_is_independent_input():
 
     inputs = Inputs(
         org_name="x", city="x", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.099", share_y3="0.10",
+        share_y1="0.06", share_y2="0.099", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
     )
@@ -108,7 +108,8 @@ def _hoh(cost_schedule=(), opening_month_number=1):
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
         building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
         lease_type="nnn", source_of_funds="300000",
         cost_schedule=cost_schedule, opening_month_number=opening_month_number,
@@ -202,7 +203,8 @@ def test_occupancy_requires_annual_or_per_sqft():
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="No Rent", city="x", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
         building_sqft="10000", salesfloor_pct="0.70", source_of_funds="300000",
         # occupancy_annual and rent_per_sqft both omitted (default None)
     )

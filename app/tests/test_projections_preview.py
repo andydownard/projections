@@ -138,7 +138,7 @@ def test_preview_rejects_non_pinnable_node_422(client, store):
     slug, owner = created["view_slug"], created["owner_token"]
     r = client.post(
         f"/api/projections/{slug}/preview",
-        json={"overrides": {"set": [{"node": "Net profit", "year": 2, "value": "1"}]}},
+        json={"overrides": {"set": [{"node": "Net income", "year": 2, "value": "1"}]}},
         headers={"Authorization": f"Bearer {owner}"},
     )
     assert r.status_code == 422, r.text

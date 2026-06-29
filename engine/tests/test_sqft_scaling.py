@@ -49,7 +49,7 @@ def _inputs(building_sqft="10000"):
     return Inputs(
         org_name="House of Hope", city="Longview, Texas",
         opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft=building_sqft, salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
     )
@@ -160,7 +160,8 @@ def test_viewmodel_rent_per_sqft_surfaced_when_input_provided():
     from engine.viewmodel import to_view_model
     inputs = Inputs(
         org_name="HoH", city="x", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
         building_sqft="10000", salesfloor_pct="0.70", rent_per_sqft="12",
         lease_type="nnn", source_of_funds="300000")
     vm = to_view_model(compute(inputs, Assumptions(), DemandDrivers(), _trade()))
