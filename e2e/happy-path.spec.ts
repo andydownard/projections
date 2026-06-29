@@ -45,10 +45,12 @@ test.describe("happy path: create -> decision -> milestones -> export -> reopen"
 
     // The monthly cash-flow chart renders on the default Projection tab.
     await expect(page.getByTestId("cashflow-chart")).toBeVisible();
-    // Server KPIs moved into the KPIs tab (Epic G / Decision G3) — switch to it,
-    // then the revenue KPI renders from `computed_json`.
+    // Server KPIs moved into the KPIs tab (Epic G / Decision G3). Switch to it,
+    // then assert a server KPI tile renders from `computed_json`. The Year-1
+    // revenue/net/margin tiles were de-duplicated (#324, they restate the 5-year
+    // table's Y1 column), so assert SOME kpi tile renders, not a specific one.
     await page.getByRole("tab", { name: "KPIs" }).click();
-    await expect(page.getByTestId("kpi-revenue")).toBeVisible();
+    await expect(page.locator('[data-testid^="kpi-"]').first()).toBeVisible();
 
     // #141 regression: exports 403'd for EVERY freshly-created projection because
     // the wizard's terms_accepted:true was dropped server-side. This drives a FRESH
@@ -69,13 +71,16 @@ test.describe("happy path: create -> decision -> milestones -> export -> reopen"
     await page.goto("/p/example");
     await expect(page).toHaveURL(/\/p\/example/);
 
-    const revenue = page.getByTestId("kpi-revenue");
-    await expect(revenue).toBeVisible();
-    const before = ((await revenue.innerText()).match(/\$[\d,]+/) ?? ["$0"])[0];
+    // Capital required is a server-resolved dollar figure in the always-visible
+    // MetricBar (the Year-1 revenue KPI tile was de-duplicated, #324). It proves
+    // "no client math": the same server number renders identically after reopen.
+    const capital = page.getByTestId("metric-capital");
+    await expect(capital).toBeVisible();
+    const before = ((await capital.innerText()).match(/\$[\d,]+/) ?? ["$0"])[0];
     expect(before).toMatch(/^\$[\d,]+$/);
 
     const url = page.url();
     await page.goto(url); // reopen by view_slug
-    await expect(page.getByTestId("kpi-revenue")).toContainText(before);
+    await expect(page.getByTestId("metric-capital")).toContainText(before);
   });
 });
