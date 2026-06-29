@@ -29,13 +29,17 @@ export function ProjectionsList({
   if (projections.length === 0) {
     return (
       <section className="list-empty" aria-labelledby="empty-heading">
-        <h1 id="empty-heading">No projections yet</h1>
-        <p>Build a board-ready 3-year projection from a few inputs.</p>
-        <div className="list-empty__actions">
+        {/* QA P1 (decision #4): the create button is CONSISTENT with the populated
+            state — same upper-right `.list__header` placement, same label + styling.
+            (Previously this was a "Create projection" button on the LEFT below the
+            copy; now it matches the populated "New projection" header control.) */}
+        <header className="list__header">
+          <h1 id="empty-heading">No projections yet</h1>
           <button type="button" className="btn btn--primary" onClick={onCreate}>
-            Create projection
+            New projection
           </button>
-        </div>
+        </header>
+        <p>Build a board-ready 3-year projection from a few inputs.</p>
       </section>
     );
   }

@@ -341,6 +341,34 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       });
   }
 
+  // Epic G2 (#42) / P1 regression (#284): commit an inline edit from a 3-year-table
+  // cell. The standalone Override Inspector that used to host value entry is gone, so
+  // the cell itself is the entry point again. A share-driver cell routes to its
+  // inputs.share_yN key (consistent with the Settings sliders, Penny, and the
+  // per-field undo); every other editable component cell PINS the typed value through
+  // the EXISTING override contract (overrides.set {node,year,value}). When the
+  // recompute trips a §12.2 guardrail, the auto-prompt effect above slides Penny OUT
+  // to capture the justification note — no data-model or server-contract change.
+  function onEditCell(node: string, year: number, value: string) {
+    if (!vm) return;
+    const v = value.trim();
+    if (!v) return;
+    const share = shareCells(vm).find((c) => c.key === fieldChangeKey(node, year));
+    const num = Number(v);
+    const body =
+      share && Number.isFinite(num)
+        ? { inputs: { [share.patchKey]: num } }
+        : { overrides: { set: [{ node, year, value: v }] } };
+    pendingActorRef.current = { by: "user", reverted: false };
+    setSaveLabel("Saving…");
+    doPatch(body, version)
+      .then(() => setSaveLabel("All changes saved"))
+      .catch((err) => {
+        if (err instanceof PatchConflictError) setConflict(err.conflict);
+        else setSaveLabel("Save failed — retry");
+      });
+  }
+
   // Epic G2 (#42): reset a pin — a host-owned FORWARD edit clearing the override
   // (PATCH overrides.clear → recompute → version++ → new revision). The data model
   // and server contract are untouched; only WHERE this is triggered moved (the
@@ -568,6 +596,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
             vm={vm}
             recomputeStatus={edit ? saveLabel : ""}
             fieldChanges={fieldChanges}
+            onEditCell={edit ? onEditCell : undefined}
             onUndoField={edit ? onUndoField : undefined}
           />
         );
