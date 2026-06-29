@@ -104,16 +104,17 @@ const PANEL_WIDTH = 380;
  *  (composer), per the PE12 mobile-375 / a11y pass (issue #131, spec §5). */
 const TOUCH_TARGET = 44;
 
-/** The collapsed FAB is a left-edge PULL-TAB, flush against the left edge and
- *  VERTICALLY CENTERED (`top: 50%`, base transform `translateY(-50%)`). Centering
- *  keeps it clear of the page HEADER band at the top of the content column, so it
- *  never overlaps the home "Your projections" H1, the "← Back to projections"
- *  breadcrumb, or the top bar's "App suggestion" button at ANY viewport — a top-
- *  anchored tab collided with that band once the centered frame gutter collapses on
- *  narrow screens (QA P2). It mirrors the right-edge Override Inspector; the drawer
- *  it opens still slides out from this same left edge (`translateX(-100%)→0`). On
- *  scroll-down the tab slides off the LEFT edge (out of the way), back on scroll-up. */
-const FAB_TOP = "50%";
+/** The collapsed FAB is a BOTTOM-LEFT pull-tab, flush against the left edge. Anchoring
+ *  it to the bottom keeps it clear of the page HEADER band at the top of the content
+ *  column, so it never overlaps the home "Your projections" H1, the "← Back to
+ *  projections" breadcrumb, or the top bar's "App suggestion" button at ANY viewport
+ *  (a top-anchored tab collided with that band once the centered frame gutter collapses
+ *  on narrow screens). The bottom corner is empty on the short wizard steps (the form +
+ *  its Back/Next actions sit well above it), and on the long detail page the tab auto-
+ *  hides the moment the reader scrolls — so it never sits over an interactive control
+ *  (QA P2). The drawer it opens still slides out from the left edge
+ *  (`translateX(-100%)→0`). On scroll-down the tab slides DOWN off the bottom edge. */
+const FAB_BOTTOM = "1.5rem";
 
 /** Safe matchMedia probe — jsdom and SSR have no matchMedia; default to `fallback`. */
 function mediaMatches(query: string, fallback: boolean): boolean {
@@ -724,11 +725,10 @@ export function PennyDrawer({
         }
         style={{
           position: "fixed",
-          // Left-edge pull-tab, VERTICALLY CENTERED (mirrors the enabled FAB) so it
-          // never overlaps the page header / breadcrumb band at any viewport.
+          // Bottom-left pull-tab (mirrors the enabled FAB) so it never overlaps the
+          // page header / breadcrumb band at any viewport.
           left: 0,
-          top: FAB_TOP,
-          transform: "translateY(-50%)",
+          bottom: FAB_BOTTOM,
           zIndex: 40,
           display: "inline-flex",
           alignItems: "center",
@@ -783,11 +783,12 @@ export function PennyDrawer({
         onClick={() => (open ? close() : setOpen(true))}
         style={{
           position: "fixed",
-          // FLUSH against the left edge (no inset) and VERTICALLY CENTERED, so the
-          // tab clears the page header / breadcrumb band at every viewport. The
-          // drawer it opens slides out from this same left edge (spec §5.1, #131).
+          // FLUSH against the left edge (no inset), anchored to the BOTTOM, so the tab
+          // clears the page header / breadcrumb band at every viewport and sits in the
+          // empty zone below the short wizard form. The drawer it opens slides out from
+          // this same left edge (spec §5.1, #131).
           left: 0,
-          top: FAB_TOP,
+          bottom: FAB_BOTTOM,
           zIndex: 40,
           display: "inline-flex",
           alignItems: "center",
@@ -801,10 +802,9 @@ export function PennyDrawer({
           color: "#fff",
           cursor: "pointer",
           boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-          // Centered via translateY(-50%); the hidden state (open OR scroll-down)
-          // ALSO slides the tab off the LEFT edge (it is left-anchored now, not top-
-          // anchored). Transition suppressed under reduced-motion.
-          transform: hidden ? "translate(-150%, -50%)" : "translate(0, -50%)",
+          // The hidden state (open OR scroll-down) slides the tab DOWN off the bottom
+          // edge (it is bottom-anchored). Transition suppressed under reduced-motion.
+          transform: hidden ? "translateY(150%)" : "translateY(0)",
           opacity: hidden ? 0 : 1,
           pointerEvents: hidden ? "none" : "auto",
           transition: reducedMotion

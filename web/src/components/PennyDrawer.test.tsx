@@ -285,18 +285,18 @@ describe("PennyDrawer — mobile-375 sheet & a11y (PE12, #131)", () => {
     expect(screen.getByRole("button", { name: /send/i })).toHaveStyle({ minHeight: "44px" });
   });
 
-  it("keeps the collapsed FAB a ≥44px touch target flush to the left edge, vertically centered", () => {
+  it("keeps the collapsed FAB a ≥44px touch target flush to the BOTTOM-left edge", () => {
     render(<PennyDrawer />);
     const fab = screen.getByTestId("penny-fab");
-    // 48px pill ≥ the 44px minimum, flush to the left edge (left: 0) and VERTICALLY
-    // CENTERED (top: 50% + translateY(-50%)) so the tab never overlaps the page
-    // header / breadcrumb / "App suggestion" band at any viewport (QA P2).
+    // 48px pill ≥ the 44px minimum, flush to the left edge (left: 0) and anchored to
+    // the BOTTOM so the tab never overlaps the page header / breadcrumb / "App
+    // suggestion" band — nor the wizard's Next/Back controls — at any viewport (QA P2).
     expect(fab).toHaveStyle({
       height: "48px",
       position: "fixed",
       left: "0px",
-      top: "50%",
-      transform: "translate(0, -50%)",
+      bottom: "1.5rem",
+      transform: "translateY(0)",
     });
   });
 });
