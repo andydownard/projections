@@ -10,9 +10,10 @@ def test_model_versions_stamped():
     # check Y4/Y5; "Net profit" is renamed "Net income". Decision metrics stay
     # Year-1-anchored (capital/break-even/cash-gap byte-unchanged).
     assert model.MODEL_VERSION == "2.6.0"
-    # 1.4.0: every row carries y4/y5; settings gained shareY4/Y5 + editable donation
-    # drivers (donationValue/donationsPerHouseholdPerYear); +incomeSeries/year5Income.
-    assert model.COMPUTE_SCHEMA_VERSION == "1.4.0"
+    # 1.5.0: +startupCosts/startupTotal for the Board Packet .docx startup-costs table
+    # (EPIC DOCX). 1.4.0 had added y4/y5 row cells, shareY4/Y5 + editable donation
+    # drivers, and incomeSeries/year5Income. Additive shape change, no math change.
+    assert model.COMPUTE_SCHEMA_VERSION == "1.5.0"
 
 
 def test_demand_constants():

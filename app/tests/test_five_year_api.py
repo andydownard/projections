@@ -50,7 +50,7 @@ def test_three_year_wizard_post_yields_five_year_projection_with_plateau(client)
     # 5-year projection seeded with the 0.11/0.12 plateau.
     vm = _create(client)
     assert vm["model_version"] == "2.6.0"
-    assert vm["compute_schema_version"] == "1.4.0"
+    assert vm["compute_schema_version"] == "1.5.0"
     assert abs(vm["settings"]["shareY4"] - 0.11) < 1e-9
     assert abs(vm["settings"]["shareY5"] - 0.12) < 1e-9
     assert all("y5" in r for r in vm["rows"])

@@ -1,6 +1,6 @@
 {
   "breakevenMonth": 5,
-  "compute_schema_version": "1.4.0",
+  "compute_schema_version": "1.5.0",
   "evidence": [],
   "flags": {
     "model_upgrade_available": false,
@@ -1047,6 +1047,47 @@
     "utilitiesPerSqft": 2.23
   },
   "staleNodes": [],
+  "startupCosts": [
+    {
+      "amount": {
+        "display": "$100,000",
+        "raw": 100000.0
+      },
+      "category": "Thrift Store Consultant"
+    },
+    {
+      "amount": {
+        "display": "$45,000",
+        "raw": 45000.0
+      },
+      "category": "Equipment & Fixtures"
+    },
+    {
+      "amount": {
+        "display": "$50,000",
+        "raw": 50000.0
+      },
+      "category": "Build-out / Renovations / Tenant Improvements"
+    },
+    {
+      "amount": {
+        "display": "$13,500",
+        "raw": 13500.0
+      },
+      "category": "Legal, Permits, Insurance Setup, Signage"
+    },
+    {
+      "amount": {
+        "display": "$30,000",
+        "raw": 30000.0
+      },
+      "category": "Lease Deposit + First Month Rent"
+    }
+  ],
+  "startupTotal": {
+    "display": "$238,500",
+    "raw": 238500.0
+  },
   "version": "2.6.0",
   "year5Income": {
     "display": "$229,756",
