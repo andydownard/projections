@@ -30,9 +30,9 @@ import pytest
 from openpyxl import load_workbook
 
 from engine.compute import (
+    EXPENSE_ORDER,
     Assumptions,
     DemandDrivers,
-    EXPENSE_ORDER,
     Inputs,
     TradeArea,
     cash_margin,
