@@ -66,6 +66,26 @@ describe("TopBar", () => {
     expect(screen.getByRole("button", { name: /extra/i })).toBeInTheDocument();
   });
 
+  describe("minimal header (sign-in page chrome, SIGNIN-2)", () => {
+    it("renders only the wordmark + 'Store Projections' — no idea-fab, spacer, or sign-in", () => {
+      render(<TopBar minimal />);
+      // Wordmark home link + brand divider remain.
+      expect(screen.getByRole("link", { name: /thriftly home/i })).toBeInTheDocument();
+      expect(screen.getByText(/Store Projections/i)).toBeInTheDocument();
+      // Nothing else: no App-suggestion (idea-fab), no header sign-in button.
+      expect(
+        screen.queryByRole("button", { name: /app suggestion/i }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /sign in/i })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("idea-fab")).not.toBeInTheDocument();
+    });
+
+    it("ignores the save-state chip in minimal mode", () => {
+      render(<TopBar minimal saveState="saving" />);
+      expect(screen.queryByTestId("save-label")).not.toBeInTheDocument();
+    });
+  });
+
   describe("Idea Fab lightbulb (feedback)", () => {
     beforeEach(() => {
       vi.stubGlobal(

@@ -185,6 +185,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* gap leaves room for the inline Rally wordmark beside the "Sign in" text. */
+  gap: 0.5rem;
   /* ≥44px tap target (WCAG 2.5.5 / project UI bar). */
   min-height: 44px;
   padding: 0 1.5rem;
@@ -225,7 +227,10 @@ body {
 .topbar__inner {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  /* #319 header-compact: tighter gap + vertical padding and a ~44px row (was
+     56px) so the chrome is denser while the row itself still gives every control
+     a comfortable >=44px-tall hit band. */
+  gap: 0.5rem;
   /* #195: wrap rather than clip on phones. Without this the row overflows 375px
      and slices the Idea Fab (the right-most item) off the right edge. Wrapping
      lets the chips + Idea Fab fall to a second row — always fully on-screen and
@@ -234,8 +239,8 @@ body {
   row-gap: 0.5rem;
   max-width: var(--frame);
   margin: 0 auto;
-  padding: 0.625rem 1.25rem;
-  min-height: 56px;
+  padding: 0.375rem 1.25rem;
+  min-height: 44px;
 }
 
 /* #195: below ~480px claw back horizontal space (tighter padding + gap) so the
@@ -258,7 +263,8 @@ body {
 
 .topbar__logo {
   display: block;
-  height: 22px;
+  /* #319 header-compact: shave the wordmark a touch with the denser row. */
+  height: 20px;
   width: auto;
 }
 
@@ -284,7 +290,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  height: 36px;
+  /* #319 header-compact: 32px control in the ~44px row (still AA target size). */
+  height: 32px;
   padding: 0 0.75rem;
   border: 1px solid var(--brand-primary);
   border-radius: 999px;
@@ -332,7 +339,10 @@ body {
 .owner-auth__sign-in {
   display: inline-flex;
   align-items: center;
-  height: 36px;
+  /* gap leaves room for the inline Rally wordmark beside the "Sign in" text. */
+  gap: 0.5rem;
+  /* #319 header-compact: 32px control in the ~44px row. */
+  height: 32px;
   padding: 0 0.875rem;
   border: 1px solid var(--brand-primary);
   border-radius: 999px;
@@ -3831,4 +3841,144 @@ td.cell-wrap {
   gap: 0.5rem;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+/* --- sign-in page chrome (Epic #318) ---------------------------------------- */
+
+/* The Rally partner wordmark inside the "Sign in with Rally" buttons. It keeps
+   its OWN brand fill (#35644F, set on the SVG paths — NOT recolored to the host
+   theme, UI rule); this rule only sizes it to sit on the text baseline. */
+.rally-mark {
+  display: block;
+  height: 1em;
+  width: auto;
+  flex-shrink: 0;
+}
+
+/* The 3-step explainer under the sign-in action (SIGNIN-5). A semantic <ol>;
+   numbering is suppressed because each row leads with its own glyph + prose. */
+.owner-gate__steps {
+  list-style: none;
+  margin: 2rem auto 0;
+  padding: 0;
+  max-width: 26rem;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.owner-gate__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+.owner-gate__step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  border: 1px solid var(--line);
+  color: var(--brand-primary);
+}
+.owner-gate__step-text {
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+  color: var(--text);
+  /* nudge the prose down to optically center against the round glyph. */
+  padding-top: 0.375rem;
+}
+
+/* --- owner account avatar + dropdown (Epic #319, user-avatar-dropdown) -------
+   Project-tokened replacement for Clerk's <UserButton/>. Round trigger, absolute
+   right-aligned menu, destructive Logout. Semantic tokens only (no brand theme
+   leakage), so meaning never depends on the brand layer. */
+.user-menu {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.user-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 0;
+}
+.user-menu__trigger:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+.user-menu__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.user-menu__avatar--initials {
+  background: var(--brand-primary);
+  color: #ffffff;
+  font-size: var(--text-sm);
+  font-weight: var(--w-bold);
+  text-transform: uppercase;
+  line-height: 1;
+}
+.user-menu__dropdown {
+  position: absolute;
+  top: calc(100% + 0.375rem);
+  right: 0;
+  z-index: 30;
+  min-width: 9rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+}
+.user-menu__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  /* >=36px-tall menu rows (comfortable touch). */
+  min-height: 36px;
+  padding: 0 0.625rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  text-align: left;
+  cursor: pointer;
+}
+.user-menu__item:hover {
+  background: var(--surface-alt);
+}
+.user-menu__item:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+.user-menu__item--danger {
+  color: var(--error);
+}
+.user-menu__item--danger:hover {
+  background: rgba(220, 38, 38, 0.08);
+}
+.user-menu__divider {
+  height: 1px;
+  margin: 0.25rem 0;
+  background: var(--line);
 }

@@ -10,10 +10,16 @@ import { TopBar } from "./TopBar";
 // Clerk import path (lazy OwnerAuthControls) is never executed.
 
 vi.mock("@clerk/clerk-react", () => ({
-  useClerk: () => ({ buildSignInUrl: () => "https://rallytasks.com/sign-in" }),
+  useClerk: () => ({
+    buildSignInUrl: () => "https://rallytasks.com/sign-in",
+    openUserProfile: vi.fn(),
+    signOut: vi.fn(),
+  }),
+  useUser: () => ({
+    user: { firstName: "Ada", lastName: "Lovelace", fullName: "Ada Lovelace", hasImage: false, imageUrl: "" },
+  }),
   SignedOut: ({ children }: { children: ReactNode }) => <>{children}</>,
   SignedIn: () => null,
-  UserButton: () => <div data-testid="user-button" />,
 }));
 
 afterEach(() => {

@@ -22,6 +22,19 @@ import { ClerkTokenBridge } from "./ClerkTokenBridge";
 const DEFAULT_DOMAIN = "thriftly.com";
 const DEFAULT_SIGN_IN_URL = "https://rallytasks.com/sign-in";
 
+// Where the primary returns the owner AFTER sign-in (SIGNIN-4). The magic-link /
+// OAuth completion must land back on THIS satellite, not the primary. Defaults to
+// this origin; prod can override via env. This is the provider-level fallback; the
+// sign-in buttons ALSO pass an explicit redirectUrl = the current page.
+function signInRedirectUrl(): string {
+  const override = import.meta.env.VITE_CLERK_AFTER_SIGN_IN_URL;
+  if (override) return override;
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return "https://projections.thriftly.com";
+}
+
 function allowedRedirectOrigins(): string[] {
   const csv = import.meta.env.VITE_ALLOWED_REDIRECT_ORIGINS;
   if (csv) {
@@ -51,6 +64,11 @@ export default function ClerkAuthProvider({
       domain={import.meta.env.VITE_CLERK_DOMAIN || DEFAULT_DOMAIN}
       signInUrl={import.meta.env.VITE_CLERK_SIGN_IN_URL || DEFAULT_SIGN_IN_URL}
       allowedRedirectOrigins={allowedRedirectOrigins()}
+      // SIGNIN-4: force the post-sign-in landing back onto this satellite so the
+      // magic-link round-trip returns here (not the primary). `forceRedirectUrl`
+      // is the v5 prop; `afterSignInUrl` is kept for back-compat.
+      signInForceRedirectUrl={signInRedirectUrl()}
+      afterSignInUrl={signInRedirectUrl()}
     >
       <ClerkTokenBridge />
       <ClaimLegacyOwnerToken />
