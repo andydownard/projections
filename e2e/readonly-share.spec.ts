@@ -18,7 +18,9 @@ test.describe("read-only share link", () => {
 
   test("a read-only user may still export (export is a business-model toggle)", async ({ page }) => {
     await page.goto("/p/example");
-    await expect(page.getByRole("button", { name: /download \.xlsx/i })).toBeVisible();
+    // D9: the .xlsx download lives in the header (reads "Excel", testid download-xlsx)
+    // and is present in the read-only view too (export is a business-model toggle).
+    await expect(page.getByTestId("download-xlsx")).toBeVisible();
   });
 
   test("role view renders the identical banner verdict", async ({ page }) => {
