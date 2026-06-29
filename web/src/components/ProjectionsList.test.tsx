@@ -25,21 +25,38 @@ const item: ProjectionListItem = {
 };
 
 describe("ProjectionsList — empty state", () => {
-  it("renders a utilitarian empty state with a single Create action", () => {
+  it("renders a utilitarian empty state with a single create action", () => {
     render(<ProjectionsList projections={[]} onCreate={() => {}} onOpen={() => {}} />);
     expect(screen.getByRole("heading", { name: /no projections yet/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /create/i })).toBeInTheDocument();
-    // The empty state offers ONE action — no mislabeled "Start from example"
-    // duplicate that just opened the same blank wizard (#deadcode cleanup).
+    // QA P1 (decision #4) — the create button is CONSISTENT with the populated
+    // state: same label "New projection" (no "Create projection" divergence).
+    expect(screen.getByRole("button", { name: /new projection/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create projection/i })).toBeNull();
+    // Still exactly one action — no mislabeled "Start from example" duplicate.
     expect(screen.queryByRole("button", { name: /start from example/i })).toBeNull();
   });
 
-  it("fires onCreate when Create is clicked in the empty state", () => {
+  // QA P1 (decision #4) — the button sits UPPER-RIGHT next to the heading, in the
+  // SAME `.list__header` (justify-content: space-between) the populated state uses,
+  // not on the LEFT below the copy. Asserting the shared container == same placement.
+  it("places the create button upper-right in the shared list header (same as populated)", () => {
+    const { container } = render(
+      <ProjectionsList projections={[]} onCreate={() => {}} onOpen={() => {}} />,
+    );
+    const header = container.querySelector(".list__header");
+    expect(header).not.toBeNull();
+    expect(within(header as HTMLElement).getByRole("heading", { name: /no projections yet/i }))
+      .toBeInTheDocument();
+    expect(within(header as HTMLElement).getByRole("button", { name: /new projection/i }))
+      .toBeInTheDocument();
+  });
+
+  it("fires onCreate when the create button is clicked in the empty state", () => {
     let created = false;
     render(
       <ProjectionsList projections={[]} onCreate={() => (created = true)} onOpen={() => {}} />,
     );
-    screen.getByRole("button", { name: /^create/i }).click();
+    screen.getByRole("button", { name: /new projection/i }).click();
     expect(created).toBe(true);
   });
 });
