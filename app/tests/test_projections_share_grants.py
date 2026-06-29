@@ -254,7 +254,8 @@ def test_grantee_can_patch_via_clerk_jwt(client, store, priv):
     """A Clerk user holding a grant edits via their JWT (no capability token)."""
     owner_jwt = mint(priv, sub="user_owner")
     created = client.post("/api/projections", json=VALID_BODY, headers=_auth(owner_jwt))
-    slug, edit, ver = created.json()["view_slug"], created.json()["edit_token"], created.json()["version"]
+    body = created.json()
+    slug, edit, ver = body["view_slug"], body["edit_token"], body["version"]
     grantee_jwt = mint(priv, sub="user_grantee")
     assert _claim_share(client, slug, edit_token=edit, token=grantee_jwt).status_code == 200
     # (a) auth/positive: the grantee's JWT now authorizes the PATCH.
@@ -279,7 +280,8 @@ def test_grant_patch_still_enforces_if_match_409(client, store, priv):
     """(c) If-Match/409 still enforced for the grant path — a stale version conflicts."""
     owner_jwt = mint(priv, sub="user_owner")
     created = client.post("/api/projections", json=VALID_BODY, headers=_auth(owner_jwt))
-    slug, edit, ver = created.json()["view_slug"], created.json()["edit_token"], created.json()["version"]
+    body = created.json()
+    slug, edit, ver = body["view_slug"], body["edit_token"], body["version"]
     grantee_jwt = mint(priv, sub="user_grantee")
     _claim_share(client, slug, edit_token=edit, token=grantee_jwt)
     # First edit succeeds (ver → ver+1); a SECOND at the stale ver → 409.
@@ -304,7 +306,8 @@ def test_patch_rate_limited_per_token(client, store, priv, monkeypatch):
     """(d) PATCH abuse path: the per-token cap returns 429."""
     owner_jwt = mint(priv, sub="user_owner")
     created = client.post("/api/projections", json=VALID_BODY, headers=_auth(owner_jwt))
-    slug, edit, ver = created.json()["view_slug"], created.json()["edit_token"], created.json()["version"]
+    body = created.json()
+    slug, edit, ver = body["view_slug"], body["edit_token"], body["version"]
     grantee_jwt = mint(priv, sub="user_grantee")
     _claim_share(client, slug, edit_token=edit, token=grantee_jwt)
     monkeypatch.setattr(projmod, "_PATCH_TOKEN_LIMIT", 1)
