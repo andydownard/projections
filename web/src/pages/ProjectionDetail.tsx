@@ -20,7 +20,7 @@
 // NO client math: every figure is the server's { display } string.
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
-import { fetchProjection, type ViewModel, xlsxHref } from "../api/viewModel";
+import { fetchProjection, type ViewModel, type OverrideEntry, xlsxHref } from "../api/viewModel";
 import { getOwnerToken } from "../api/projections";
 import { patchProjection, PatchConflictError } from "../api/patch";
 import { submitFeedback } from "../api/feedback";
@@ -34,8 +34,11 @@ import { SettingsTab } from "../components/SettingsTab";
 import { KpiStrip } from "../components/KpiStrip";
 import { DegradedState } from "../components/DegradedState";
 import { PennyAssistant } from "../components/PennyDrawer";
-import { OverrideInspector, type InspectorOverride } from "../components/OverrideInspector";
-import { SidePanelProvider } from "../components/sidePanels";
+import {
+  OverrideAudit,
+  type OverrideAuditItem,
+  type OverrideCommentTarget,
+} from "../components/OverrideAudit";
 import type { SaveState } from "../components/TopBar";
 import type { ConflictBody } from "../state/autosaveReducer";
 import { clearDetailHeader, setDetailHeader } from "../state/detailHeader";
@@ -119,24 +122,59 @@ function shareCells(vm: ViewModel): TrackedCell[] {
   return out;
 }
 
-/** Derive the Override Inspector's audit list from the view-model — the SERVER
- *  display string of every overridden cell, rendered VERBATIM (no client math, no
- *  re-classification: a cell is "overridden" only because the engine said so via
- *  `row.class`). The inspector is the forensic RIGHT partner to Penny (Spec B §10);
- *  resetting a pin is a future host-owned forward edit, so no reset seam is wired
- *  here yet (read-only audit). */
-function inspectorOverrides(vm: ViewModel): InspectorOverride[] {
-  const out: InspectorOverride[] = [];
+/** A §12.2 guardrail (net-margin / Y1 share out of band) demanding a justification
+ *  note that travels into the packet. Read VERBATIM from the server `flags` — the
+ *  client never decides the policy, only surfaces the prompt (PRD §12.2/§14). */
+function guardrailRequiresNote(vm: ViewModel): boolean {
+  const flags = (vm.flags ?? {}) as Record<string, { requires_note?: boolean } | undefined>;
+  return Boolean(
+    flags.net_margin_out_of_band?.requires_note || flags.share_y1_out_of_band?.requires_note,
+  );
+}
+
+/** Title-case a bare engine node id as a fallback human label ("payroll" → "Payroll"). */
+function prettyNode(node: string): string {
+  const s = node.replace(/_/g, " ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** A display string for the override's calculated value (it may arrive as a
+ *  {raw,display} or as a bare "N/A" string); rendered verbatim, never recomputed. */
+function calculatedDisplay(c: OverrideEntry["calculated"]): string | undefined {
+  if (c == null) return undefined;
+  if (typeof c === "string") return c;
+  return c.display;
+}
+
+/** Build the Override audit (relocated from the eliminated Override Inspector) from
+ *  the view-model's `overrides[]` — the SERVER display string of every pinned cell,
+ *  rendered VERBATIM (no client math). The label comes from the matching row; the
+ *  stale-upstream flag from `staleNodes`; `needsNote` lights up when a §12.2 guardrail
+ *  requires a justification the pin doesn't yet carry. */
+function auditItems(vm: ViewModel): OverrideAuditItem[] {
+  const overrides = vm.overrides ?? [];
+  if (overrides.length === 0) return [];
+  // node id → human row label (component rows carry `node`; fall back to a pretty id).
+  const labelByNode = new Map<string, string>();
   for (const row of vm.rows) {
-    if (row.class !== "overridden") continue;
-    const node = row.node ?? row.label;
-    for (const year of [1, 2, 3] as const) {
-      const cell = row[`y${year}` as "y1" | "y2" | "y3"];
-      if (!cell) continue;
-      out.push({ node, year, label: `${row.label}, Year ${year}`, value: cell.display });
-    }
+    if (row.node) labelByNode.set(row.node, row.label);
   }
-  return out;
+  const stale = new Set(vm.staleNodes ?? []);
+  const needNote = guardrailRequiresNote(vm);
+  return overrides.map((o) => {
+    const base = labelByNode.get(o.node) ?? prettyNode(o.node);
+    const note = o.note ?? "";
+    return {
+      node: o.node,
+      year: o.year,
+      label: `${base}, Year ${o.year}`,
+      value: o.value.display,
+      calculated: calculatedDisplay(o.calculated),
+      note: note || undefined,
+      stale: stale.has(o.node),
+      needsNote: needNote && note.length === 0,
+    };
+  });
 }
 
 /** Build the SettingsTab view-model from the server settings map. */
@@ -174,6 +212,14 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const prevCellsRef = useRef<Map<string, TrackedCell>>(new Map());
   const revertRef = useRef<Map<string, { patchKey: string; raw: number }>>(new Map());
   const pendingActorRef = useRef<{ by: FieldChangeActor; reverted: boolean } | null>(null);
+
+  // Epic G2 (#42): the Override Inspector is eliminated — Penny slides OUT to capture
+  // an override justification, so the detail page controls Penny's open state and the
+  // override currently being justified. `autoPromptedRef` debounces the guardrail
+  // auto-open so Penny only nags once per pin, not on every recompute.
+  const [pennyOpen, setPennyOpen] = useState(false);
+  const [commentTarget, setCommentTarget] = useState<OverrideCommentTarget | null>(null);
+  const autoPromptedRef = useRef<Set<string>>(new Set());
 
   // Roving tab navigation (WAI-ARIA tabs): Left/Right move + focus the next tab.
   function onTabKey(e: KeyboardEvent<HTMLButtonElement>) {
@@ -262,6 +308,22 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     pendingActorRef.current = null;
   }, [vm]);
 
+  // Epic G2 (#42): when a §12.2 guardrail demands a justification an override doesn't
+  // yet carry, SLIDE Penny OUT with the focused prompt — the note that travels into
+  // the board packet is captured in the drawer, not a standalone inspector. Debounced
+  // per pin (autoPromptedRef) so a later recompute never re-nags a pin the owner is
+  // already — or has finished — justifying.
+  useEffect(() => {
+    if (!edit || !vm) return;
+    const needing = auditItems(vm).find((o) => o.needsNote);
+    if (!needing) return;
+    const key = `${needing.node}#${needing.year}`;
+    if (autoPromptedRef.current.has(key)) return;
+    autoPromptedRef.current.add(key);
+    setCommentTarget({ node: needing.node, year: needing.year, label: needing.label });
+    setPennyOpen(true);
+  }, [vm, edit]);
+
   // PE7: per-field inline undo — a FORWARD PATCH restoring the share input to its
   // prior value (carries Bearer + If-Match), producing a NEW revision. Never erases
   // the revision that introduced the change; re-undoable (the revert is itself a
@@ -272,6 +334,54 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     pendingActorRef.current = { by: "user", reverted: true };
     setSaveLabel("Saving…");
     doPatch({ inputs: { [revert.patchKey]: revert.raw } }, version)
+      .then(() => setSaveLabel("All changes saved"))
+      .catch((err) => {
+        if (err instanceof PatchConflictError) setConflict(err.conflict);
+        else setSaveLabel("Save failed — retry");
+      });
+  }
+
+  // Epic G2 (#42): reset a pin — a host-owned FORWARD edit clearing the override
+  // (PATCH overrides.clear → recompute → version++ → new revision). The data model
+  // and server contract are untouched; only WHERE this is triggered moved (the
+  // eliminated Inspector → the relocated audit in Penny / the KPIs tab).
+  function onResetPin(node: string, year: number) {
+    pendingActorRef.current = { by: "user", reverted: false };
+    setSaveLabel("Saving…");
+    if (commentTarget && commentTarget.node === node && commentTarget.year === year) {
+      setCommentTarget(null);
+    }
+    doPatch({ overrides: { clear: [{ node, year }] } }, version)
+      .then(() => setSaveLabel("All changes saved"))
+      .catch((err) => {
+        if (err instanceof PatchConflictError) setConflict(err.conflict);
+        else setSaveLabel("Save failed — retry");
+      });
+  }
+
+  // Slide Penny OUT with the focused "why did you override {node} {year}?" prompt for
+  // a specific pin. Opening the drawer is the whole point (decision #42): the comment
+  // is captured in Penny, not a standalone inspector.
+  function openComment(node: string, year: number) {
+    const base = vm?.rows.find((r) => r.node === node)?.label ?? prettyNode(node);
+    setCommentTarget({ node, year, label: `${base}, Year ${year}` });
+    setPennyOpen(true);
+  }
+
+  // Persist the justification ONTO the override exactly as today: re-pin the SAME
+  // value with the note via the EXISTING overrides.set contract ({node,year,value,
+  // note}). No data-model change — only the capture surface moved into Penny. The
+  // stored note travels into the board packet on the next export (server-side).
+  function onCommentOverride(node: string, year: number, note: string) {
+    const ov = (vm?.overrides ?? []).find((o) => o.node === node && o.year === year);
+    if (!ov) return;
+    setCommentTarget(null);
+    pendingActorRef.current = { by: "user", reverted: false };
+    setSaveLabel("Saving…");
+    doPatch(
+      { overrides: { set: [{ node, year, value: String(ov.value.raw), note }] } },
+      version,
+    )
       .then(() => setSaveLabel("All changes saved"))
       .catch((err) => {
         if (err instanceof PatchConflictError) setConflict(err.conflict);
@@ -516,6 +626,17 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
                   onSaveAsCopy={resolveSaveAsCopy}
                 />
               </div>
+              {/* Epic G2 (#42): the relocated "what's currently overridden" audit at a
+                  glance — reset a pin or jump to Penny to add/edit its justification.
+                  The focused comment prompt itself lives in Penny's drawer. */}
+              <div data-testid="kpis-override-audit">
+                <OverrideAudit
+                  overrides={auditItems(vm)}
+                  onResetPin={onResetPin}
+                  onComment={openComment}
+                  title="Pinned overrides"
+                />
+              </div>
             </div>
           </div>
         );
@@ -584,23 +705,35 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           dead-end). Her applied edits flow back through onApplied → refreshViewModel,
           which the PE7 diff (above) surfaces as the per-field "recent change / was X
           / undo" affordance on the share cells. */}
-      {/* Coexistence (Spec B §10, issue #129): Penny LEFT + the Override Inspector
-          RIGHT share ONE coordinator so they obey the spatial grammar — ≥1180px
-          both non-modal (center stays interactive, no double-dim, opening Penny
-          never steals the Inspector's focus); <1180px modal full-screen sheets that
-          are mutually exclusive (opening one closes + politely announces the other).
-          Both are edit-only (Penny's mutate path + pin resets need the token). */}
+      {/* Epic G2 (#42): the standalone right-edge Override Inspector is ELIMINATED.
+          Penny is now the only side panel; she slides OUT (controlled open) to capture
+          an override justification through the focused "why did you override …?" prompt
+          and hosts the relocated audit (reset + add/edit justification). The note
+          persists on the pin through the EXISTING overrides contract — no data-model or
+          server-contract change — and travels into the packet exactly as today. */}
       {edit && (
-        <SidePanelProvider>
-          <PennyAssistant
-            viewSlug={slug}
-            token={token.current ?? ""}
-            aiEnabled={!aiOff}
-            settingsHref={`/p/${encodeURIComponent(slug)}/edit`}
-            onApplied={() => refreshViewModel()}
-          />
-          <OverrideInspector overrides={inspectorOverrides(vm)} />
-        </SidePanelProvider>
+        <PennyAssistant
+          viewSlug={slug}
+          token={token.current ?? ""}
+          aiEnabled={!aiOff}
+          settingsHref={`/p/${encodeURIComponent(slug)}/edit`}
+          onApplied={() => refreshViewModel()}
+          overrides={auditItems(vm)}
+          onResetPin={onResetPin}
+          onComment={openComment}
+          commentTarget={commentTarget}
+          commentInitial={
+            commentTarget
+              ? vm.overrides?.find(
+                  (o) => o.node === commentTarget.node && o.year === commentTarget.year,
+                )?.note ?? ""
+              : ""
+          }
+          onSubmitComment={onCommentOverride}
+          onCancelComment={() => setCommentTarget(null)}
+          open={pennyOpen}
+          onOpenChange={setPennyOpen}
+        />
       )}
     </div>
   );

@@ -70,6 +70,24 @@ export interface Row {
   node?: string;
 }
 
+/** One pinned override as the engine emits it (viewmodel.py): the pinned value +
+ *  the calculated value it replaced (both server display strings), the justification
+ *  note stored on the pin, and the derived rows the pin foots through. The frontend
+ *  renders these VERBATIM and re-pins via the EXISTING contract (no client math). */
+export interface OverrideEntry {
+  node: string;
+  year: number;
+  /** The value the engine would derive with the pin absent ({raw,display} or "N/A"). */
+  calculated?: ServerValue | string | null;
+  /** The pinned value as a server display string + its raw for re-pinning. */
+  value: ServerValue;
+  /** The justification note stored on the override (DATA_MODEL §4.6). */
+  note?: string;
+  pinnedDate?: string;
+  /** Derived rows this pin rewrites (foot-through to totals/net/margin). */
+  affected?: string[];
+}
+
 export interface LocationInfo {
   place_id?: string;
   lat: number;
@@ -113,6 +131,10 @@ export interface ViewModel {
   monthly: MonthlyPoint[];
   breakevenMonth: number | null;
   rows: Row[];
+  /** The pinned overrides (Override audit + Penny justification capture). */
+  overrides?: OverrideEntry[];
+  /** Node ids whose upstream inputs changed since the pin (stale-upstream flag). */
+  staleNodes?: string[];
   settings: Record<string, ServerValue | number | string>;
   flags?: Record<string, unknown>;
   evidence?: EvidenceItem[];
