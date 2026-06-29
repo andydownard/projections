@@ -51,6 +51,11 @@ class PostgresStore:
     ) -> list[dict]:
         self._stub("list_card_summaries_by_clerk_owner")
 
+    def claim_projections_to_clerk_owner(
+        self, owner_token_hash: str, clerk_user_id: str, org_id: str | None = None
+    ) -> int:
+        self._stub("claim_projections_to_clerk_owner")
+
     def create_projection(self, p: dict) -> dict:
         self._stub("create_projection")
 

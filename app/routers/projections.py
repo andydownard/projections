@@ -90,6 +90,10 @@ _PREVIEW_WINDOW_SECONDS = 300
 # cached per location, so the Google-bill blast radius is first-fetch-per-location).
 _CREATE_IP_LIMIT = 20
 _CREATE_WINDOW_SECONDS = 3600
+# claim is authenticated (a verified Clerk JWT) but still runs a durable write, and
+# JWT verification is crypto work — cap per IP so a flood is rejected before either.
+_CLAIM_IP_LIMIT = 60
+_CLAIM_WINDOW_SECONDS = 3600
 _EXPORT_IP_LIMIT = 30  # xlsx + packet, per IP
 _EXPORT_TOKEN_LIMIT = 60  # xlsx + packet, per token when a bearer is presented
 _EXPORT_WINDOW_SECONDS = 3600
@@ -744,6 +748,68 @@ def create_projection(
     if minted_owner is not None:
         out["owner_token"] = minted_owner  # one-time; client stores in localStorage
     return out
+
+
+class ClaimIn(BaseModel):
+    """The capability owner token to link onto the signed-in Clerk identity."""
+    owner_token: str = Field(min_length=1)
+
+    class Config:
+        extra = "forbid"
+
+
+@router.post("/claim")
+def claim_projections(
+    body: ClaimIn,
+    request: Request,
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
+):
+    """Link a signed-in Clerk owner's EXISTING token-owned projections onto their
+    verified Clerk identity (the claim/bridge path — SECURITY §2.8, API_SPEC §4.9).
+
+    Once the owner signs in, the owner list keys on the Clerk ``sub`` (not the
+    hashed token), so without this bridge the projections they created before
+    signing in would silently vanish from their list. This backfills
+    ``owner_clerk_user_id`` (and ``owner_org_id`` when org-scoped) onto every
+    UNCLAIMED row owned by the presented capability token, in ONE atomic conditional
+    UPDATE (no check-then-act).
+
+    Guarantees:
+      - **Auth (Mutation Quad a):** the Bearer MUST resolve to a verified
+        ``ClerkOwner``; ``Anonymous`` or a capability-token-only caller → **401**. A
+        capability token alone can NEVER claim — possession of a token grants access
+        to that workspace, not the right to bind it to an arbitrary Clerk identity.
+      - **Tenant (b):** only rows whose ``owner_token_hash`` matches the presented
+        token are touched, and the ``owner_clerk_user_id IS NULL`` guard means an
+        already-claimed row can never be re-linked/stolen (TENANT, PRD §20).
+      - **Idempotency (c):** a re-claim links 0 more (``IS NULL`` excludes the
+        already-stamped rows) and returns ``{"linked": 0}``.
+      - **Rate limit (d):** per-IP cap (§10.1) BEFORE the JWT verify + the write.
+      - **Ship dark:** with ``CLERK_ENABLED`` off the path does not exist → **404**.
+    """
+    # Ship-dark: with Clerk off there is no Clerk identity to claim onto. The feature
+    # simply does not exist (404), never a crash.
+    if not config.clerk_enabled():
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+
+    # §10.1: cap per IP BEFORE the JWT verify (crypto) and the durable write.
+    limited = _rate_limited(
+        "claim_projections", request,
+        ip_limit=_CLAIM_IP_LIMIT, window_seconds=_CLAIM_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
+    # Cookie-blind: identity resolves from the Authorization header only. A capability
+    # token (or no bearer) cannot claim — only a verified Clerk owner.
+    identity = resolve_bearer_identity(authorization)
+    if not isinstance(identity, ClerkOwner):
+        raise HTTPException(status_code=401, detail={"error": "clerk_identity_required"})
+
+    linked = store.claim_projections_to_clerk_owner(
+        hash_token(body.owner_token), identity.clerk_user_id, identity.org_id)
+    return {"linked": linked}
 
 
 @router.get("")

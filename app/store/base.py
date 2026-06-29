@@ -37,6 +37,13 @@ class Store(Protocol):
     def list_card_summaries_by_clerk_owner(
         self, clerk_user_id: str, *, include_trashed: bool = False
     ) -> list[dict]: ...
+    # claim/bridge: backfill a verified Clerk owner onto every UNCLAIMED row owned by
+    # this capability token hash. One atomic conditional UPDATE; the
+    # owner_clerk_user_id IS NULL guard makes it idempotent and anti-takeover. Returns
+    # the rows linked (#claim, SECURITY §2.8).
+    def claim_projections_to_clerk_owner(
+        self, owner_token_hash: str, clerk_user_id: str, org_id: str | None = None
+    ) -> int: ...
     def create_projection(self, p: dict) -> dict: ...
     def update_with_version_check(
         self, id: str, expected_version: int, patch: dict[str, Any]
