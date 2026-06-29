@@ -61,10 +61,11 @@ def test_payback_present_when_y1_net_positive(design_parity_result):
 
 
 def test_revenue_cagr(canonical_result):
+    # 5-year horizon: CAGR spans Y1->Y5 (4 compounding periods, exponent 1/4).
     dec = canonical_result.decision
     r1 = D(str(canonical_result.annual[1].total_rev))
-    r3 = D(str(canonical_result.annual[3].total_rev))
-    expected = (r3 / r1) ** (Decimal("1") / Decimal("2")) - Decimal("1")
+    r5 = D(str(canonical_result.annual[5].total_rev))
+    expected = (r5 / r1) ** (Decimal("1") / Decimal("4")) - Decimal("1")
     assert abs(D(str(dec.revenue_cagr)) - expected) < Decimal("0.0001")
 
 
@@ -166,7 +167,8 @@ def test_efficiency_kpis_are_na_when_revenue_is_zero():
     # never $0 / 0% masquerading as a value (ENGINE_CONTRACT §12.4; trap #2).
     inputs = Inputs(
         org_name="Zero", city="x", opening_status="pre_launch",
-        share_y1="0", share_y2="0", share_y3="0", donation_value="74",
+        share_y1="0", share_y2="0", share_y3="0",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
         building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
         lease_type="nnn", source_of_funds="300000",
     )
@@ -189,7 +191,7 @@ def test_aggressive_fixture_triggers_margin_guardrail():
     # the share>8% guardrail fires regardless of labor.
     inputs = Inputs(
         org_name="Aggressive", city="x", opening_status="pre_launch",
-        share_y1="0.15", share_y2="0.20", share_y3="0.25",
+        share_y1="0.15", share_y2="0.20", share_y3="0.25", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="800000",
     )
@@ -212,7 +214,7 @@ def test_find_cheaper_rent_when_occupancy_is_the_binding_constraint():
     # neither do_not_proceed nor raise_cash, and occupancy is the binding constraint.
     inputs = Inputs(
         org_name="High Rent", city="x", opening_status="pre_launch",
-        share_y1="0.07", share_y2="0.07", share_y3="0.07",
+        share_y1="0.07", share_y2="0.07", share_y3="0.07", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="110000", lease_type="gross", source_of_funds="900000",
     )
@@ -241,7 +243,8 @@ def test_find_cheaper_rent_when_occupancy_is_the_binding_constraint():
 def _opening_at(opening_month_number, cost_schedule=(), labor="0.60", **kw):
     base = dict(
         org_name="HoH", city="x", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
         building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
         lease_type="nnn", source_of_funds="900000",
         opening_month_number=opening_month_number, cost_schedule=cost_schedule,
@@ -308,7 +311,7 @@ def test_payback_na_with_reason_when_unreached():
 def test_break_even_na_with_reason_when_unreached():
     # A deep loss case never turns net positive -> break-even N/A with reason.
     res = _opening_at(1, labor="0.60", share_y1="0.005",
-                      share_y2="0.005", share_y3="0.005")
+                      share_y2="0.005", share_y3="0.005", share_y4="0.11", share_y5="0.12")
     assert res.decision.break_even_month is None
     assert res.flags.get("break_even_month", "").startswith("N/A")
 
@@ -361,7 +364,7 @@ def test_aggressive_share_guardrail_fires_at_canonical_labor():
     # Independent of labor, the 15% Y1 share is out of the <=8% advisory band.
     inputs = Inputs(
         org_name="Aggressive", city="x", opening_status="pre_launch",
-        share_y1="0.15", share_y2="0.20", share_y3="0.25",
+        share_y1="0.15", share_y2="0.20", share_y3="0.25", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="800000",
     )
@@ -438,7 +441,7 @@ def test_reco_text_consistent_for_deep_loss_base_unreached():
     # message is allowed (metrics.breakeven is N/A, so there is no contradiction).
     from engine.viewmodel import to_view_model
     res = _opening_at(1, labor="0.60", share_y1="0.005",
-                      share_y2="0.005", share_y3="0.005")
+                      share_y2="0.005", share_y3="0.005", share_y4="0.11", share_y5="0.12")
     vm = to_view_model(res)
     assert vm["metrics"]["breakeven"]["raw"] is None  # base never reaches break-even
     assert vm["reco"]["tag"] == "do_not_proceed"
@@ -465,7 +468,7 @@ def test_base_unreached_reason_is_honest_not_viable():
     # viable (and the downside fails too) — it does NOT name a base break-even month
     # (there is none), and the break-even metric is the N/A sentinel.
     res = _opening_at(1, labor="0.60", share_y1="0.005",
-                      share_y2="0.005", share_y3="0.005")
+                      share_y2="0.005", share_y3="0.005", share_y4="0.11", share_y5="0.12")
     dec = res.decision
     assert dec.reco_tag == "do_not_proceed"
     assert dec.break_even_month is None
@@ -481,7 +484,7 @@ def test_do_not_proceed_message_differs_between_base_fail_and_downside_fail():
     downside_driven = _opening_at(1, labor="0.60").decision.reco_reasons["breakeven"]
     base_failed = _opening_at(
         1, labor="0.60", share_y1="0.005", share_y2="0.005",
-        share_y3="0.005").decision.reco_reasons["breakeven"]
+        share_y3="0.005", share_y4="0.11", share_y5="0.12").decision.reco_reasons["breakeven"]
     assert downside_driven != base_failed
     assert "reaches break-even" in downside_driven
     assert "reaches break-even" not in base_failed
@@ -498,7 +501,8 @@ def _econ_120k_encodings():
     """
     common = dict(
         org_name="HoH", city="x", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10", donation_value="74",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
         building_sqft="10000", salesfloor_pct="0.70",
         # Funds high enough that capital is never the binding constraint, so the
         # verdict is driven purely by the (rent-stressed) downside break-even.

@@ -56,8 +56,8 @@ test.describe("override + 409 optimistic-concurrency", () => {
 
   test("pinning a derived/total row is rejected (non-pinnable)", async ({ page }) => {
     await page.goto("/p/example/edit#edit-secret");
-    // Net profit is a derived total — the cell is not editable (non-pinnable, §14).
-    const netCell = page.getByTestId("row-net_profit-y1");
+    // Net income is a derived total — the cell is not editable (non-pinnable, §14).
+    const netCell = page.getByTestId("row-net_income-y1");
     await expect(netCell).toHaveAttribute("aria-disabled", "true");
   });
 

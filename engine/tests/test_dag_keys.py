@@ -30,13 +30,13 @@ def test_parse_key_non_integer_year_rejected():
     assert "not an int" in str(ei.value)
 
 
-@pytest.mark.parametrize("year", ["0", "4", "-1", "10"])
+@pytest.mark.parametrize("year", ["0", "6", "-1", "10"])
 def test_parse_key_year_out_of_range_rejected(year):
     with pytest.raises(dag.PinRejected):
         dag.parse_key(f"Payroll#{year}")
 
 
-@pytest.mark.parametrize("year", [1, 2, 3])
+@pytest.mark.parametrize("year", [1, 2, 3, 4, 5])
 def test_parse_key_accepts_legal_years(year):
     node, parsed_year = dag.parse_key(f"Rent#{year}")
     assert (node, parsed_year) == ("Rent", year)
@@ -82,13 +82,13 @@ def test_validate_all_passes_for_all_legal_pins():
 def test_affected_rows_default_is_totals_only():
     # A generic expense component foots only through to the totals block.
     assert dag.affected_rows("Insurance liability") == [
-        "Total Expenses", "Net profit", "Net margin"]
+        "Total Expenses", "Net income", "Net margin"]
 
 
 def test_affected_rows_payroll_includes_payroll_taxes():
     rows = dag.affected_rows("Payroll")
     assert rows[0] == "Payroll taxes"
-    assert rows[-3:] == ["Total Expenses", "Net profit", "Net margin"]
+    assert rows[-3:] == ["Total Expenses", "Net income", "Net margin"]
 
 
 def test_affected_rows_share_fans_out_through_revenue_chain():

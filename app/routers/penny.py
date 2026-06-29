@@ -501,7 +501,8 @@ def _draft_figure_guard(*values: object) -> Optional[dict]:
 _DRAFT_INPUT_FIELDS = {"city", "org_name", "target_opening_date", "opening_month_number"}
 _DRAFT_ASSUMPTION_KEYS = {
     "labor_pct", "marketing_pct", "supplies_pct", "card_pct", "payroll_tax_pct",
-    "salvage_pct", "escalator", "basket", "share_y1", "share_y2", "share_y3",
+    "salvage_pct", "escalator", "basket", "donations_per_hh",
+    "share_y1", "share_y2", "share_y3", "share_y4", "share_y5",
     "rent_per_sqft", "occupancy_annual", "donation_value",
 }
 

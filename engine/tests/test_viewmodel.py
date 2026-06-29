@@ -48,7 +48,7 @@ def test_overridden_row_class_when_pinned():
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="x", city="x", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
     )
@@ -69,7 +69,7 @@ def test_override_inspector_fields_calc_value_affected():
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="x", city="x", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
     )
@@ -89,7 +89,7 @@ def test_override_inspector_fields_calc_value_affected():
     assert abs(ov["calculated"]["raw"] - 250000) > 1
     # affected = derived rows the pin rewrites (foot-through to totals/net/margin).
     assert "Total Expenses" in ov["affected"]
-    assert "Net profit" in ov["affected"]
+    assert "Net income" in ov["affected"]
     assert "Payroll taxes" in ov["affected"]  # payroll drives its own tax line
 
 
@@ -108,7 +108,8 @@ def test_settings_block(canonical_result):
     for k in ("laborPct", "marketingPct", "suppliesPct", "cardPct",
               "payrollTaxPct", "salvagePct", "escalator", "basket",
               "donationsPerHh", "shareY1", "shareY2", "shareY3",
-              "reserveBuffer"):
+              "shareY4", "shareY5", "donationValue",
+              "donationsPerHouseholdPerYear", "reserveBuffer"):
         assert k in s
     assert abs(s["laborPct"] - 0.60) < 1e-9
 
@@ -120,9 +121,10 @@ def test_view_model_is_json_serializable(canonical_result):
 
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
-    assert vm["model_version"] == "2.5.0"
-    # 1.3.0: settings gained utilitiesPerSqft + rentPerSqft (additive shape change).
-    assert vm["compute_schema_version"] == "1.3.0"
+    assert vm["model_version"] == "2.6.0"
+    # 1.4.0: rows carry y4/y5; settings gained shareY4/Y5 + editable donation drivers;
+    # +incomeSeries/year5Income (additive shape change).
+    assert vm["compute_schema_version"] == "1.4.0"
     assert "utilitiesPerSqft" in vm["settings"]
     assert "rentPerSqft" in vm["settings"]
 
@@ -134,7 +136,7 @@ def _preopening_result(opening_month_number=3):
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
         opening_month_number=opening_month_number,
@@ -154,7 +156,7 @@ def _recovered_payback_result():
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="Strong", city="x", opening_status="pre_launch",
-        share_y1="0.15", share_y2="0.20", share_y3="0.25",
+        share_y1="0.15", share_y2="0.20", share_y3="0.25", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="800000",
         opening_month_number=1,
@@ -199,7 +201,7 @@ def test_breakeven_milestone_is_na_with_reason_when_unreached():
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="Deep loss", city="x", opening_status="pre_launch",
-        share_y1="0.005", share_y2="0.005", share_y3="0.005",
+        share_y1="0.005", share_y2="0.005", share_y3="0.005", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
     )
@@ -268,7 +270,7 @@ def _do_not_proceed_base_reaches_downside_fails(opening_month_number=1):
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
         opening_month_number=opening_month_number,
@@ -367,7 +369,7 @@ def test_row_class_computed_fallthrough_for_derived_label():
 
     # A derived row (not pinnable, not pinned) classes as 'computed' — the
     # fallthrough arm the editable/overridden rows never reach.
-    assert _row_class("Net profit", set()) == "computed"
+    assert _row_class("Net income", set()) == "computed"
     # Contrast: an editable component is 'input'; a pinned one is 'overridden'.
     assert _row_class("Payroll", set()) == "input"
     assert _row_class("Payroll", {"Payroll"}) == "overridden"

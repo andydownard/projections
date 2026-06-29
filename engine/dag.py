@@ -68,8 +68,8 @@ def parse_key(key: str):
         year = int(year_s)
     except ValueError as err:
         raise PinRejected(f"override key year not an int: {key!r}") from err
-    if year not in (1, 2, 3):
-        raise PinRejected(f"override year out of range (1..3): {key!r}")
+    if year not in (1, 2, 3, 4, 5):
+        raise PinRejected(f"override year out of range (1..5): {key!r}")
     return node, year
 
 
@@ -106,12 +106,12 @@ _UPSTREAM_OF = {
 # Downstream derived rows a pinned component rewrites (foots through to totals).
 # Used only to populate overrides[].affected for the Override Inspector; the engine
 # always re-foots totals over components, so this is descriptive, not computational.
-_TOTALS = ["Total Expenses", "Net profit", "Net margin"]
+_TOTALS = ["Total Expenses", "Net income", "Net margin"]
 _AFFECTED_OF = {
     "Payroll": ["Payroll taxes", *_TOTALS],
     "share": ["Donating households", "Annual donations", "Retail Sales",
               "Salvage Sales", "Total Revenue", "Total Expenses",
-              "Net profit", "Net margin"],
+              "Net income", "Net margin"],
 }
 
 

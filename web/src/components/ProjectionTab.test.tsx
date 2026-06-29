@@ -31,7 +31,7 @@ function vm(overrides: Partial<ViewModel> = {}): ViewModel {
     },
     kpis: [
       { label: "Total revenue", value: { raw: 426911, display: "$426,911" }, sub: "Year 1" },
-      { label: "Net profit", value: { raw: 46000, display: "$46,000" }, sub: "Year 1" },
+      { label: "Net income", value: { raw: 46000, display: "$46,000" }, sub: "Year 1" },
     ],
     monthly: [
       { month: 0, revenue: { raw: 0, display: "$0" }, expenses: { raw: 31870, display: "($31,870)" }, net: { raw: -14793, display: "($14,793)" }, cumulativeCash: { raw: -199793, display: "($199,793)" } },
@@ -44,7 +44,7 @@ function vm(overrides: Partial<ViewModel> = {}): ViewModel {
       { label: "Total Revenue", group: "revenue", y1: { raw: 426911, display: "$426,911" }, y2: { raw: 560000, display: "$560,000" }, y3: { raw: 700000, display: "$700,000" }, class: "computed", editable: false },
       { label: "Rent", group: "expenses", y1: { raw: 90000, display: "$90,000" }, y2: { raw: 92700, display: "$92,700" }, y3: { raw: 95481, display: "$95,481" }, class: "estimated", editable: true },
       { label: "Payroll", group: "expenses", y1: { raw: 256146, display: "$256,146" }, y2: { raw: 280000, display: "$280,000" }, y3: { raw: 300000, display: "$300,000" }, class: "overridden", editable: false },
-      { label: "Net profit", group: "expenses", y1: { raw: 46000, display: "$46,000" }, y2: { raw: 60000, display: "$60,000" }, y3: { raw: 80000, display: "$80,000" }, class: "computed", editable: false },
+      { label: "Net income", group: "expenses", y1: { raw: 46000, display: "$46,000" }, y2: { raw: 60000, display: "$60,000" }, y3: { raw: 80000, display: "$80,000" }, class: "computed", editable: false },
     ],
     settings: {},
     version: 3,
@@ -165,7 +165,7 @@ describe("ProjectionTab — negative (loss) treatment [#148]", () => {
     const m = vm({
       rows: [
         {
-          label: "Net profit",
+          label: "Net income",
           group: "expenses",
           y1: { raw: -44433, display: "($44,433)" },
           y2: { raw: 10000, display: "$10,000" },
@@ -176,10 +176,10 @@ describe("ProjectionTab — negative (loss) treatment [#148]", () => {
       ],
     });
     render(<ProjectionTab vm={m} />);
-    const neg = screen.getByTestId("cell-Net profit-y1");
+    const neg = screen.getByTestId("cell-Net income-y1");
     expect(neg).toHaveAttribute("data-negative", "true");
     expect(neg).toHaveTextContent("($44,433)");
-    expect(screen.getByTestId("cell-Net profit-y2")).not.toHaveAttribute("data-negative");
+    expect(screen.getByTestId("cell-Net income-y2")).not.toHaveAttribute("data-negative");
   });
 
   it("flags a negative capital tile value but not a positive one", () => {

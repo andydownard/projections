@@ -63,7 +63,7 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
         pinned[(node, year)] = overrides[key]
 
     # ---------- INPUTS block (blue) ----------------------------------------
-    ws["A1"] = f"{inputs.org_name} — 3-Year Thrift Store Projection"
+    ws["A1"] = f"{inputs.org_name} — 5-Year Thrift Store Projection"
     ws["A1"].font = Font(name="Arial", bold=True, size=14)
 
     cell_ref = {}
@@ -77,6 +77,8 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
         ("share_y1", _f(inputs.share_y1), PCT),
         ("share_y2", _f(inputs.share_y2), PCT),
         ("share_y3", _f(inputs.share_y3), PCT),
+        ("share_y4", _f(inputs.share_y4), PCT),
+        ("share_y5", _f(inputs.share_y5), PCT),
         ("donation_value", _f(inputs.donation_value), USD),
         ("basket", _f(a.basket), USD),
         ("salvage_pct", _f(a.salvage_pct), PCT),
@@ -116,11 +118,11 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
 
     # ---------- 3-YEAR PROJECTION ------------------------------------------
     row += 1
-    ws[f"A{row}"] = "3-YEAR PROJECTION"
+    ws[f"A{row}"] = "5-YEAR PROJECTION"
     ws[f"A{row}"].font = BOLD
     row += 1
-    cols = ["B", "C", "D"]
-    for i, y in enumerate(("Year 1", "Year 2", "Year 3")):
+    cols = ["B", "C", "D", "E", "F"]
+    for i, y in enumerate(("Year 1", "Year 2", "Year 3", "Year 4", "Year 5")):
         ws.cell(row=row, column=2 + i, value=y).font = BOLD
     row += 1
 
@@ -141,9 +143,10 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
         row += 1
 
     sh = cell_ref
-    # share row — three independent input cells (NO average).
+    # share row — five independent input cells (NO average / midpoint).
     line("Donor market share",
-         [f"={sh['share_y1']}", f"={sh['share_y2']}", f"={sh['share_y3']}"], PCT)
+         [f"={sh['share_y1']}", f"={sh['share_y2']}", f"={sh['share_y3']}",
+          f"={sh['share_y4']}", f"={sh['share_y5']}"], PCT)
     sr = rowmap["Donor market share"]
     line("Donating households",
          [f"={c}{sr}*{sh['households']}" for c in cols], NUM)
@@ -196,8 +199,8 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
     first, last = min(exp_rows), max(exp_rows)
     line("Total Expenses", [f"=SUM({c}{first}:{c}{last})" for c in cols], USD, bold=True)
     te = rowmap["Total Expenses"]
-    line("Net profit", [f"={c}{tr}-{c}{te}" for c in cols], USD, bold=True, fill=TOT_FILL)
-    npr = rowmap["Net profit"]
+    line("Net income", [f"={c}{tr}-{c}{te}" for c in cols], USD, bold=True, fill=TOT_FILL)
+    npr = rowmap["Net income"]
     # net margin = net/totrev (guarded)
     line("Net margin",
          [f'=IF({c}{tr}=0,"",{c}{npr}/{c}{tr})' for c in cols], PCT)
@@ -296,8 +299,9 @@ def _expense_formula(label, col, tr, sh, rowmap):
     if label == "Supplies & processing":
         return f"{col}{tr}*{sh['supplies_pct']}"
     if label == "Rent":
-        # occupancy_y1 * (1+escalator)^(year-1); year derived from column.
-        yexp = {"B": 0, "C": 1, "D": 2}[col]
+        # occupancy_y1 * (1+escalator)^(year-1); year derived from column. The 3%
+        # escalator compounds through Year 5 with the SAME formula (no special-case).
+        yexp = {"B": 0, "C": 1, "D": 2, "E": 3, "F": 4}[col]
         return f"{sh['occupancy_y1']}*(1+{sh['escalator']})^{yexp}"
     if label == "Utilities/trash service":
         # Sq-ft-derived (feature #245): building_sqft × utilities_per_sqft. Flat across

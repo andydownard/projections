@@ -1,7 +1,7 @@
 // web/src/components/ProjectionsList.tsx — owner-scoped list page (PRD §19.1).
 //
 // Owner-scoped; no global index. Each row: name, location + basis, updated,
-// Year-1 revenue, net profit, capital required, and a recommendation chip. Money
+// Year-1 revenue, net income, capital required, and a recommendation chip. Money
 // is the server { display } rendered VERBATIM (no client math). Empty state is
 // utilitarian (heading + a single Create action; no marketing illustration).
 import type { ProjectionListItem } from "../api/projections";
