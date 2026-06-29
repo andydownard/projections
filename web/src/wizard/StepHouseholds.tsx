@@ -77,7 +77,7 @@ export function StepHouseholds({ state }: { state: WizardState }) {
 
             <input
               id="wizard-households"
-              type="number"
+              type="text"
               inputMode="numeric"
               disabled={householdsDisabled}
               aria-disabled={householdsDisabled}

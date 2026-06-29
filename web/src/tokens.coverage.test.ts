@@ -88,3 +88,27 @@ describe("tokens.css covers every static className the app renders", () => {
     ).toBe(0);
   });
 });
+
+// Regression: an unbalanced "{" silently nests every following rule under the
+// orphaned selector (esbuild treats it as CSS nesting and only WARNS — the build
+// still succeeds). One missing "}" on .cost-matrix__month--right swallowed the
+// entire EPIC D + X2 stylesheet (48 rules, incl. the metric bar) into dead
+// `.cost-matrix__month--right .<sel>` descendant selectors, so the detail metric
+// bar rendered unstyled ("Capital required$361,773money to raise"). This gate
+// fails on any brace imbalance so the bug can never ship unnoticed again.
+describe("tokens.css braces are balanced (no rule-swallowing unbalanced brace)", () => {
+  it("has equal { and } counts (comments stripped)", () => {
+    const css = readFileSync(join(srcDir, "tokens.css"), "utf8").replace(
+      /\/\*[\s\S]*?\*\//g,
+      "",
+    );
+    const opens = (css.match(/\{/g) ?? []).length;
+    const closes = (css.match(/\}/g) ?? []).length;
+    expect(
+      opens,
+      `Unbalanced braces in tokens.css: ${opens} "{" vs ${closes} "}". ` +
+        `A missing "}" makes esbuild nest every following rule under the prior ` +
+        `selector (dead descendant selectors) — the build only warns, it does not fail.`,
+    ).toBe(closes);
+  });
+});

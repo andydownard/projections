@@ -36,7 +36,7 @@ export function StepDonorMarket({ state }: { state: WizardState }) {
             {editing ? (
               <span className="donor-share__field">
                 <input
-                  type="number"
+                  type="text"
                   inputMode="numeric"
                   min={0}
                   className="donor-share__input"
