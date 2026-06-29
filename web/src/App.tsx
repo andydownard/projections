@@ -117,6 +117,12 @@ export function App() {
     </>
   );
 
+  // The persistent chrome. When the gate is active these are handed INTO
+  // ClerkOwnerGate so the signed-IN branch renders today's chrome verbatim and the
+  // signed-OUT branch renders the minimal sign-in page WITHOUT Penny (SIGNIN-1).
+  const topBar = <TopBar saveState={isDetail ? detailHeader.saveState : "idle"} />;
+  const penny = generalPenny ? <PennyGeneralAssistant aiEnabled={!aiOff} /> : null;
+
   // Forced owner sign-in gate (Phase 0 B2). Only on OWNER surfaces, and only when
   // the Clerk satellite is active — otherwise (ship dark / local / CI / tests) the
   // content renders directly, byte-for-byte as today, and the Clerk import path is
@@ -124,22 +130,29 @@ export function App() {
   // so a signed-in owner is never trapped (fail-safe).
   const gated = clerkActive() && isOwnerSurface(route);
 
+  // When gated, App renders ONLY the gate (it owns the chrome for both branches).
+  // The skip-link + .app shell stay constant so #main is always a valid target.
+  // With Clerk off, the else branch is byte-for-byte today's shell.
   return (
     <div className="app">
       <a className="skip-link" href="#main">
         Skip to content
       </a>
-      <TopBar saveState={isDetail ? detailHeader.saveState : "idle"} />
-      <main id="main" className="app__main" tabIndex={-1}>
-        {gated ? (
-          <Suspense fallback={null}>
-            <ClerkOwnerGate>{content}</ClerkOwnerGate>
-          </Suspense>
-        ) : (
-          content
-        )}
-      </main>
-      {generalPenny && <PennyGeneralAssistant aiEnabled={!aiOff} />}
+      {gated ? (
+        <Suspense fallback={null}>
+          <ClerkOwnerGate topBar={topBar} penny={penny}>
+            {content}
+          </ClerkOwnerGate>
+        </Suspense>
+      ) : (
+        <>
+          {topBar}
+          <main id="main" className="app__main" tabIndex={-1}>
+            {content}
+          </main>
+          {penny}
+        </>
+      )}
     </div>
   );
 }

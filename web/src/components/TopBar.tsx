@@ -40,6 +40,13 @@ const SAVE_LABEL: Record<SaveState, string> = {
 export interface TopBarProps {
   saveState?: SaveState;
   children?: ReactNode;
+  /**
+   * Minimal chrome for the signed-out sign-in page (SIGNIN-2): only the wordmark
+   * + "Store Projections" divider. No save chip, no spacer, no App-suggestion
+   * button, and no owner sign-in control. The full chrome returns on the
+   * signed-in branch (the gate renders the full TopBar there).
+   */
+  minimal?: boolean;
 }
 
 // Inlined lightbulb glyph; inherits color via currentColor (brand layer).
@@ -57,14 +64,16 @@ function LightbulbIcon() {
       aria-hidden="true"
       focusable="false"
     >
+      {/* Canonical Lucide "lightbulb" geometry — a distinct glass dome over the
+          screw-base lines, not the prior balloon-on-a-stick shape (#319). */}
+      <path d="M15 14c.2-1 .7-1.7 1.5-2.5C17.7 10.2 18 9 18 7.5a6 6 0 1 0-12 0c0 1.5.4 2.7 1.5 4 .8.8 1.3 1.5 1.5 2.5" />
       <path d="M9 18h6" />
-      <path d="M10 21h4" />
-      <path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2V17h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z" />
+      <path d="M10 22h4" />
     </svg>
   );
 }
 
-export function TopBar({ saveState = "idle", children }: TopBarProps) {
+export function TopBar({ saveState = "idle", children, minimal = false }: TopBarProps) {
   const [showFeedback, setShowFeedback] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -88,6 +97,22 @@ export function TopBar({ saveState = "idle", children }: TopBarProps) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [showFeedback, closeFeedback]);
 
+  // Minimal sign-in-page chrome (SIGNIN-2): wordmark + brand only. Hooks above run
+  // unconditionally; this just trims the right cluster. The full chrome returns on
+  // the signed-in branch where the gate renders <TopBar /> without `minimal`.
+  if (minimal) {
+    return (
+      <header className="topbar" role="banner">
+        <div className="topbar__inner">
+          <a className="topbar__home" href="/" aria-label="Thriftly home">
+            <ThriftlyLogo className="topbar__logo" />
+          </a>
+          <span className="topbar__brand">Store Projections</span>
+        </div>
+      </header>
+    );
+  }
+
   return (
     <header className="topbar" role="banner">
       <div className="topbar__inner">
@@ -107,11 +132,6 @@ export function TopBar({ saveState = "idle", children }: TopBarProps) {
           </span>
         )}
         {children}
-        {clerkActive() && (
-          <Suspense fallback={null}>
-            <OwnerAuthControls />
-          </Suspense>
-        )}
         <button
           ref={triggerRef}
           type="button"
@@ -128,6 +148,13 @@ export function TopBar({ saveState = "idle", children }: TopBarProps) {
           <LightbulbIcon />
           <span aria-hidden="true">App suggestion</span>
         </button>
+        {/* The Clerk block renders LAST so the account avatar / UserMenu is the
+            RIGHTMOST element (#319). Mounted only when the satellite is active. */}
+        {clerkActive() && (
+          <Suspense fallback={null}>
+            <OwnerAuthControls />
+          </Suspense>
+        )}
       </div>
 
       {showFeedback && (

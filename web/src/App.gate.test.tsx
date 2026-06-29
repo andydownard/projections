@@ -18,10 +18,16 @@ import { readFragmentSecret } from "./router/route";
 let signedIn = false;
 
 vi.mock("@clerk/clerk-react", () => ({
-  useClerk: () => ({ buildSignInUrl: () => "https://rallytasks.com/sign-in" }),
+  useClerk: () => ({
+    buildSignInUrl: () => "https://rallytasks.com/sign-in",
+    openUserProfile: vi.fn(),
+    signOut: vi.fn(),
+  }),
+  useUser: () => ({
+    user: { firstName: "Ada", lastName: "Lovelace", fullName: "Ada Lovelace", hasImage: false, imageUrl: "" },
+  }),
   SignedIn: ({ children }: { children: ReactNode }) => (signedIn ? <>{children}</> : null),
   SignedOut: ({ children }: { children: ReactNode }) => (signedIn ? null : <>{children}</>),
-  UserButton: () => <div data-testid="user-button" />,
 }));
 
 vi.mock("./pages/ListPage", () => ({
