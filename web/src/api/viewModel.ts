@@ -65,9 +65,32 @@ export interface Row {
   y1: ServerValue | null;
   y2: ServerValue | null;
   y3: ServerValue | null;
+  /** Years 4 + 5 (engine ≥ 2.6.0). Optional so stored 3-year snapshots — which
+   *  carry only y1..y3 — still satisfy the type. The detail table is rendered
+   *  YEAR-COUNT-AGNOSTICALLY: it derives the present `yN` columns from the row,
+   *  so a legacy 3-year row renders 3 columns and a 2.6.0 row renders 5. */
+  y4?: ServerValue | null;
+  y5?: ServerValue | null;
   class: string;
   editable: boolean;
   node?: string;
+}
+
+/** The year keys a row may carry, in order (for the year-count-agnostic table). */
+export type YearKey = "y1" | "y2" | "y3" | "y4" | "y5";
+
+/** The present year columns of a 5-year (or legacy 3-year) projection: a year is
+ *  "present" when at least one row carries that `yN` key (engine ≥ 2.6.0 always
+ *  emits y1..y5; a stored 3-year snapshot omits y4/y5). Display only — no math. */
+export function presentYears(rows: Row[]): number[] {
+  const all: Array<{ n: number; key: YearKey }> = [
+    { n: 1, key: "y1" },
+    { n: 2, key: "y2" },
+    { n: 3, key: "y3" },
+    { n: 4, key: "y4" },
+    { n: 5, key: "y5" },
+  ];
+  return all.filter(({ key }) => rows.some((r) => r[key] !== undefined)).map(({ n }) => n);
 }
 
 /** One pinned override as the engine emits it (viewmodel.py): the pinned value +
@@ -130,6 +153,11 @@ export interface ViewModel {
   kpis: Kpi[];
   monthly: MonthlyPoint[];
   breakevenMonth: number | null;
+  /** Annual NET INCOME Y1..Y5 ({raw,display}) — the Income sparkline source
+   *  (engine ≥ 2.6.0). Optional so legacy snapshots without it still render. */
+  incomeSeries?: ServerValue[];
+  /** Year-5 net income ({raw,display}) — the small "Y5 income" sparkline label. */
+  year5Income?: ServerValue;
   rows: Row[];
   /** The pinned overrides (Override audit + Penny justification capture). */
   overrides?: OverrideEntry[];
@@ -143,6 +171,10 @@ export interface ViewModel {
   version: number;
   view_slug: string;
   name: string;
+  /** Server-stamped last-updated time (ISO). Optional — the read endpoint only
+   *  includes it when available; the header renders it ONLY when present (never a
+   *  fabricated date, UI rule). */
+  updated_at?: string;
   model_version?: string;
   role?: string;
   readOnly?: boolean;
@@ -169,4 +201,11 @@ export function fetchRoleView(roleSlug: string): Promise<ViewModel> {
 /** Absolute URL to the formula-driven .xlsx export (a plain anchor href). */
 export function xlsxHref(viewSlug: string): string {
   return `${BASE}/projections/${encodeURIComponent(viewSlug)}/xlsx`;
+}
+
+/** Absolute URL to the board-packet .docx export (a plain anchor href). The GET
+ *  packet endpoint is reachable with the slug alone (terms already stamped at
+ *  create), so this is a plain download link — no auth header in the URL. */
+export function docxHref(viewSlug: string): string {
+  return `${BASE}/projections/${encodeURIComponent(viewSlug)}/packet?format=docx`;
 }

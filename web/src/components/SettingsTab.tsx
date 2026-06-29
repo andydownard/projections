@@ -1,24 +1,30 @@
-// web/src/components/SettingsTab.tsx — SLICE 4: Settings & assumptions tab.
+// web/src/components/SettingsTab.tsx — EPIC D / D11: the merged "Key metrics &
+// drivers" grid (the old KPI strip + the settings sliders fused into ONE compact
+// grid with inline units).
 //
-// Sliders for the cost %s + escalator + the three demand shares,
-// seeded from the server `settings` view-model ({ raw, display }). The DISPLAY
-// string is the server's (PRD §13 — no client math); the slider's numeric `raw`
-// is just the control position the user PATCHes back. Every change debounces a
-// PATCH carrying If-Match: <version> (API_SPEC §1.3/§4.4). The bar shows
-// "Saving…" / "Saved automatically", and a 409 raises a conflict banner offering
-// reload / overwrite / save-as-copy (API_SPEC §1.4, PRD §19.4).
+//   - DERIVED KPIs (revenue, net income, ratios) render READ-ONLY, the server's
+//     { display } string verbatim (PRD §13 — no client math).
+//   - EDITABLE DRIVERS (labor / marketing / supplies / card / payroll-tax / salvage
+//     %, rent escalator, the 5 donor shares, $/donation, average basket, and
+//     donations/donor/yr) render a <NumberField> with the unit glued to the field.
 //
-// Mobile-375 is review-first: the autosave status sits above the controls so a
-// narrow-screen user sees save state before scrolling the sliders.
+// A driver edit debounces a PATCH carrying If-Match: <version> (API_SPEC §1.3/§4.4);
+// a 409 raises a conflict banner offering reload / overwrite / save-as-copy. The
+// percent drivers are entered in their HUMAN unit (e.g. "60" for 60%); the PATCH
+// boundary divides by the scale to the engine's raw fraction (the same convention as
+// the wizard's shareHelper — display formatting only, never client math). D12: the
+// "Saved automatically" idle text is gone (the TopBar carries the save chip).
 import { useEffect, useReducer, useRef } from "react";
 
+import { NumberField } from "./NumberField";
+import { isNegative } from "./displayLabels";
 import { PatchConflictError, type PatchBody, type PatchResult } from "../api/patch";
 import {
   autosaveReducer,
   initialAutosaveState,
-  saveLabel,
 } from "../state/autosaveReducer";
 import type { ServerValue } from "../api/client";
+import type { Kpi } from "../api/viewModel";
 
 export interface SettingsViewModel {
   laborPct: ServerValue;
@@ -31,6 +37,13 @@ export interface SettingsViewModel {
   shareY1: ServerValue;
   shareY2: ServerValue;
   shareY3: ServerValue;
+  // 2.6.0 + E2 drivers — optional so a legacy snapshot (which omits them) renders
+  // only the drivers it actually carries (year-count-agnostic, applied to drivers).
+  shareY4?: ServerValue;
+  shareY5?: ServerValue;
+  donationValue?: ServerValue;
+  basket?: ServerValue;
+  donationsPerHouseholdPerYear?: ServerValue;
 }
 
 export interface PatchHandlerArgs {
@@ -40,6 +53,8 @@ export interface PatchHandlerArgs {
 
 export interface SettingsTabProps {
   settings: SettingsViewModel;
+  /** Derived server KPIs (read-only) merged into the same grid (D11). */
+  kpis?: Kpi[];
   version: number;
   /** Performs the PATCH (carries If-Match); throws PatchConflictError on 409. */
   onPatch: (args: PatchHandlerArgs) => Promise<PatchResult>;
@@ -48,49 +63,78 @@ export interface SettingsTabProps {
   debounceMs?: number;
 }
 
-// Each control maps a settings field → the assumptions key the PATCH body uses
-// (API_SPEC §4.4). Percent sliders move in `raw` (0..1) space.
+// Each editable driver maps a settings field → the PATCH key + its owning group.
+// `scale` converts the HUMAN unit shown in the field to the engine raw (100 for a
+// percent entered as "60", 1 for a dollar/count); `decimals` is the NumberField
+// precision (2 for money, 1 for percents, 0 for whole counts).
 interface ControlDef {
   field: keyof SettingsViewModel;
   patchKey: string;
   label: string;
-  kind: "pct" | "money";
-  min: number;
-  max: number;
-  step: number;
+  group: "inputs" | "assumptions";
+  unit: string;
+  unitPosition: "prefix" | "suffix";
+  scale: number;
+  decimals: number;
 }
 
-const PCT_CONTROLS: ControlDef[] = [
-  { field: "laborPct", patchKey: "labor_pct", label: "Labor % (payroll, of revenue)", kind: "pct", min: 0, max: 1, step: 0.005 },
-  { field: "marketingPct", patchKey: "marketing_pct", label: "Marketing & outreach % of revenue", kind: "pct", min: 0, max: 0.2, step: 0.0025 },
-  { field: "suppliesPct", patchKey: "supplies_pct", label: "Supplies & processing % of revenue", kind: "pct", min: 0, max: 0.2, step: 0.0025 },
-  { field: "cardPct", patchKey: "card_pct", label: "Credit card fees % of revenue", kind: "pct", min: 0, max: 0.1, step: 0.0025 },
-  { field: "payrollTaxPct", patchKey: "payroll_tax_pct", label: "Payroll taxes % of payroll", kind: "pct", min: 0, max: 0.2, step: 0.0025 },
-  { field: "salvagePct", patchKey: "salvage_pct", label: "Salvage % of retail", kind: "pct", min: 0, max: 0.05, step: 0.001 },
-  { field: "escalator", patchKey: "escalator", label: "Annual rent escalator", kind: "pct", min: 0, max: 0.1, step: 0.0025 },
+const pct = (
+  field: keyof SettingsViewModel,
+  patchKey: string,
+  label: string,
+  group: "inputs" | "assumptions",
+  decimals = 1,
+): ControlDef => ({
+  field,
+  patchKey,
+  label,
+  group,
+  unit: "%",
+  unitPosition: "suffix",
+  scale: 100,
+  decimals,
+});
+
+// The driver controls, in grid order. Cost %s + escalator are Assumptions; donor
+// shares + $/donation are engine Inputs; basket + donations/yr are Assumptions.
+// `label` is the CLEAN name (no unit); the unit is shown only by the field's
+// suffix/prefix and is appended to the accessible name (see `ariaLabel`).
+const CONTROLS: ControlDef[] = [
+  pct("laborPct", "labor_pct", "Labor", "assumptions", 2),
+  pct("marketingPct", "marketing_pct", "Marketing", "assumptions", 2),
+  pct("suppliesPct", "supplies_pct", "Supplies", "assumptions", 2),
+  pct("cardPct", "card_pct", "Card fees", "assumptions", 2),
+  pct("payrollTaxPct", "payroll_tax_pct", "Payroll tax", "assumptions", 2),
+  pct("salvagePct", "salvage_pct", "Salvage", "assumptions", 2),
+  pct("escalator", "escalator", "Rent escalator", "assumptions", 2),
+  pct("shareY1", "share_y1", "Year 1 share", "inputs"),
+  pct("shareY2", "share_y2", "Year 2 share", "inputs"),
+  pct("shareY3", "share_y3", "Year 3 share", "inputs"),
+  pct("shareY4", "share_y4", "Year 4 share", "inputs"),
+  pct("shareY5", "share_y5", "Year 5 share", "inputs"),
+  { field: "donationValue", patchKey: "donation_value", label: "Per donation", group: "inputs", unit: "$", unitPosition: "prefix", scale: 1, decimals: 2 },
+  { field: "basket", patchKey: "basket", label: "Average basket", group: "assumptions", unit: "$", unitPosition: "prefix", scale: 1, decimals: 2 },
+  { field: "donationsPerHouseholdPerYear", patchKey: "donations_per_hh", label: "Donations / donor", group: "assumptions", unit: "/yr", unitPosition: "suffix", scale: 1, decimals: 0 },
 ];
 
-const SHARE_CONTROLS: ControlDef[] = [
-  { field: "shareY1", patchKey: "share_y1", label: "Year 1 share (donor market)", kind: "pct", min: 0, max: 0.3, step: 0.005 },
-  { field: "shareY2", patchKey: "share_y2", label: "Year 2 share (donor market)", kind: "pct", min: 0, max: 0.3, step: 0.005 },
-  { field: "shareY3", patchKey: "share_y3", label: "Year 3 share (donor market)", kind: "pct", min: 0, max: 0.3, step: 0.005 },
-  // NOTE: aria-labels carry "Year N … share" so each is independently addressable
-  //       (three explicit shares, PRD §7.1 — no auto-midpoint).
-];
+/** The accessible name for a driver field: the clean label + its unit symbol, so a
+ *  screen reader hears the unit the (aria-hidden) field suffix conveys visually. */
+function ariaLabel(c: ControlDef): string {
+  return `${c.label} ${c.unit}`;
+}
 
-// Donor shares (`share_yN`) are engine `Inputs` fields; the cost %s + escalator are
-// `Assumptions`. The merge path builds Inputs(**inputs) / Assumptions(**assumptions),
-// so each key MUST sit under its owning group — a misplaced key is an unknown kwarg
-// that 422s (invalid_inputs) and the autosave can never settle (API_SPEC §4.4).
-function buildBody(control: ControlDef, raw: number): PatchBody {
-  if (control.field.startsWith("share")) {
-    return { inputs: { [control.patchKey]: raw } };
-  }
-  return { assumptions: { [control.patchKey]: raw } };
+// Build the partial PATCH body for one driver: the field's HUMAN value ÷ scale =
+// the engine raw. Donor shares + $/donation are Inputs; the rest are Assumptions.
+function buildBody(control: ControlDef, humanValue: number): PatchBody {
+  const raw = humanValue / control.scale;
+  const value = control.decimals === 0 ? Math.round(raw) : raw;
+  if (control.group === "inputs") return { inputs: { [control.patchKey]: value } };
+  return { assumptions: { [control.patchKey]: value } };
 }
 
 export function SettingsTab({
   settings,
+  kpis = [],
   version,
   onPatch,
   onSaveAsCopy,
@@ -98,12 +142,10 @@ export function SettingsTab({
 }: SettingsTabProps) {
   const [state, dispatch] = useReducer(autosaveReducer, version, initialAutosaveState);
 
-  // The pending change (control + raw value) the debounce will flush. A ref so a
+  // The pending change (control + human value) the debounce will flush. A ref so a
   // re-render mid-debounce doesn't reset the timer.
-  const pending = useRef<{ control: ControlDef; raw: number } | null>(null);
+  const pending = useRef<{ control: ControlDef; value: number } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // The version is held in a ref so the debounced flush always sends the latest
-  // (e.g. after an OVERWRITE bumped it to current_version) without re-arming.
   const versionRef = useRef(state.version);
   versionRef.current = state.version;
 
@@ -111,7 +153,7 @@ export function SettingsTab({
     const change = pending.current;
     if (!change) return;
     dispatch({ type: "SAVE_START" });
-    onPatch({ version: versionRef.current, body: buildBody(change.control, change.raw) })
+    onPatch({ version: versionRef.current, body: buildBody(change.control, change.value) })
       .then((res) => {
         pending.current = null;
         dispatch({ type: "SAVE_SUCCESS", version: res.version });
@@ -130,8 +172,9 @@ export function SettingsTab({
     timer.current = setTimeout(flush, debounceMs);
   }
 
-  function onSlide(control: ControlDef, value: string) {
-    pending.current = { control, raw: Number(value) };
+  function onEdit(control: ControlDef, value: number | null) {
+    if (value === null) return;
+    pending.current = { control, value };
     dispatch({ type: "EDIT" });
     scheduleFlush();
   }
@@ -148,23 +191,32 @@ export function SettingsTab({
   }
 
   function overwrite() {
-    // Re-arm a save at the server's current_version, then flush immediately so
-    // the PATCH carries If-Match: <current_version> (API_SPEC §1.4 overwrite path).
     dispatch({ type: "OVERWRITE" });
-    // versionRef updates on the next render; flush after that commit.
     queueMicrotask(() => {
       versionRef.current = state.conflict?.current_version ?? versionRef.current;
       flush();
     });
   }
 
-  const allControls = [...PCT_CONTROLS, ...SHARE_CONTROLS];
+  // D12: only "Saving…" (a pending/in-flight save) and "Save failed" surface here;
+  // the steady-state "Saved automatically" text is dropped (the TopBar carries the
+  // save chip). "dirty" + "saving" both read as "Saving…" (a save is coming).
+  const statusText =
+    state.status === "dirty" || state.status === "saving"
+      ? "Saving…"
+      : state.status === "error"
+        ? "Save failed — retry"
+        : "";
+
+  // Render only the driver controls whose setting is actually present (legacy
+  // snapshots omit the 2.6.0 / E2 drivers) — year-count-agnostic, for drivers.
+  const controls = CONTROLS.filter((c) => settings[c.field] !== undefined);
 
   return (
-    <section className="settings-tab" aria-label="Settings & assumptions" role="region">
+    <section className="settings-tab kpis-grid" aria-label="Key metrics & settings" role="region">
       {/* Review-first: status sits above the controls (mobile-375). */}
       <div className="settings-tab__status" data-testid="autosave-status" aria-live="polite">
-        {saveLabel(state)}
+        {statusText}
       </div>
 
       {state.status === "conflict" && state.conflict && (
@@ -184,31 +236,53 @@ export function SettingsTab({
         </div>
       )}
 
-      <div className="settings-tab__controls">
-        {allControls.map((c) => {
+      <div className="kpis-grid__cells">
+        {/* Derived KPIs — READ-ONLY (revenue, net income, ratios). Display verbatim. */}
+        {kpis.map((k) => (
+          <div
+            key={`kpi-${k.label}`}
+            className="kpis-grid__cell kpis-grid__cell--derived"
+            data-testid={/^total revenue$/i.test(k.label) ? "kpi-revenue" : `kpi-${k.label}`}
+          >
+            <span className="kpis-grid__label">{k.label}</span>
+            <span
+              className="kpis-grid__value num"
+              data-negative={isNegative(k.value) ? "true" : undefined}
+            >
+              {k.value.display}
+            </span>
+            {k.sub && <span className="kpis-grid__sub">{k.sub}</span>}
+          </div>
+        ))}
+
+        {/* Editable drivers — a <NumberField> with the unit glued to the field. */}
+        {controls.map((c) => {
           const sv = settings[c.field];
+          const human = sv ? sv.raw * c.scale : null;
           return (
-            <label key={c.field} className="settings-tab__control">
-              <span className="settings-tab__control-label">{c.label}</span>
-              {/* A number spinner (not a range slider): a dense, finance-grade
-                  control (DESIGN_PROMPT) that is directly fillable in E2E. The
-                  value is the server `raw` (0..1 for percents); the adjacent
-                  <output> shows the server `display` verbatim (no client math). */}
-              <input
-                type="number"
-                aria-label={c.label}
-                min={c.min}
-                max={c.max}
-                step={c.step}
-                defaultValue={sv.raw}
-                onChange={(e) => onSlide(c, e.target.value)}
+            <div key={c.field} className="kpis-grid__cell kpis-grid__cell--driver">
+              <span className="kpis-grid__label" id={`driver-${c.field}-label`}>
+                {/* The pencil marks this cell as editable (non-color cue). */}
+                <span className="kpis-grid__edit-icon" aria-hidden="true">
+                  ✎
+                </span>{" "}
+                {c.label}
+              </span>
+              <NumberField
+                value={human}
+                onChange={(v) => onEdit(c, v)}
+                unit={c.unit}
+                unitPosition={c.unitPosition}
+                decimals={c.decimals}
+                min={0}
+                aria-label={ariaLabel(c)}
               />
-              {/* Server display string — rendered verbatim (no client math). */}
-              <output className="settings-tab__control-value">{sv.display}</output>
-            </label>
+            </div>
           );
         })}
       </div>
     </section>
   );
 }
+
+export default SettingsTab;

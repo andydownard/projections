@@ -28,10 +28,25 @@ function fullVm(overrides: Partial<ViewModel> = {}): ViewModel {
       { month: 12, revenue: { raw: 53364, display: "$53,364" }, expenses: { raw: 32077, display: "($32,077)" }, net: { raw: 20718, display: "$20,718" }, cumulativeCash: { raw: -173000, display: "($173,000)" } },
     ],
     breakevenMonth: 5,
+    milestones: {
+      grandOpening: { raw: 1, display: "Month 1" },
+      breakEven: { raw: 5, display: "Month 5" },
+      payback: { raw: 25, display: "Month 25", duration: "25 months" },
+    },
+    incomeSeries: [
+      { raw: 46000, display: "$46,000" },
+      { raw: 60000, display: "$60,000" },
+      { raw: 80000, display: "$80,000" },
+      { raw: 90000, display: "$90,000" },
+      { raw: 100000, display: "$100,000" },
+    ],
+    year5Income: { raw: 100000, display: "$100,000" },
     rows: [
       { label: "Total Revenue", group: "revenue", y1: { raw: 426911, display: "$426,911" }, y2: { raw: 560000, display: "$560,000" }, y3: { raw: 700000, display: "$700,000" }, class: "computed", editable: false },
     ],
     settings: {},
+    location: { lat: 32.5, lng: -94.7, formatted_address: "123 Main St, Longview, TX" },
+    updated_at: "2026-06-20T12:00:00Z",
     version: 3,
     view_slug: "p_8x",
     name: "House of Hope",
@@ -376,14 +391,15 @@ describe("ProjectionDetail — Epic G reorg", () => {
     expect(screen.queryByText(/the trough is covered/i)).not.toBeInTheDocument();
   });
 
-  it("HIDES the first-year cash-gap tile (metric.cashGap stays in the vm)", async () => {
+  it("HIDES the first-year cash-gap metric (metric.cashGap stays in the vm)", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     render(<ProjectionDetail slug="p_8x" edit={false} />);
     await screen.findByTestId("decision-banner");
     expect(screen.queryByTestId("metric-cashgap")).not.toBeInTheDocument();
-    // Capital tile drops "required".
-    expect(screen.getByTestId("tile-capital")).toHaveTextContent(/startup capital/i);
-    expect(screen.getByTestId("tile-capital")).not.toHaveTextContent(/required/i);
+    // D1: the header metric bar carries Capital required (RED), Payback, Break-even.
+    expect(screen.getByTestId("metric-capital")).toHaveTextContent("$277,990");
+    expect(screen.getByTestId("metric-breakeven")).toBeInTheDocument();
+    expect(screen.getByTestId("metric-payback")).toBeInTheDocument();
   });
 
   it("renders the 2nd tile set (KPIs) inline on the read page so kpi-revenue is visible", async () => {
@@ -401,7 +417,7 @@ describe("ProjectionDetail — Epic G reorg", () => {
     expect(screen.getByTestId("detail-map")).toBeInTheDocument();
   });
 
-  it("edit mode shows a Projection | KPIs tablist and merges Settings into the KPIs tab", async () => {
+  it("edit mode shows a Projection | KPIs tablist and merges KPIs + Settings into the KPIs tab (D11)", async () => {
     localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     const user = userEvent.setup();
@@ -413,12 +429,77 @@ describe("ProjectionDetail — Epic G reorg", () => {
     expect(screen.getByRole("tab", { name: /kpis/i })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /^settings$/i })).not.toBeInTheDocument();
 
-    // Settings is hidden under the (inactive) KPIs tab, then revealed on activation.
+    // The merged KPIs+drivers grid is hidden under the (inactive) KPIs tab, then
+    // revealed on activation. The derived KPI + an editable driver live in ONE grid.
     expect(screen.getByTestId("settings-tab")).not.toBeVisible();
     await user.click(screen.getByRole("tab", { name: /kpis/i }));
     expect(screen.getByTestId("settings-tab")).toBeVisible();
-    // The KPIs tab also carries the 2nd tile set.
     expect(screen.getByTestId("kpi-revenue")).toBeVisible();
+    // D10: the standalone "Pinned overrides" audit block is gone from the KPIs tab.
+    expect(screen.queryByTestId("kpis-override-audit")).not.toBeInTheDocument();
+    localStorage.clear();
+  });
+});
+
+// EPIC D — D1 header (name + inline pencil rename, address, updated date, the 4-cell
+// metric bar with the income sparkline + capital-RED), D9 (.xlsx/.docx at the top),
+// D8 (no bottom feedback button).
+describe("ProjectionDetail — D1 header + D9 downloads", () => {
+  it("renders the income sparkline (annual net income) with the Y5 income label in the metric bar", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    const income = await screen.findByTestId("metric-income");
+    // The Sparkline is a role=img naming the Y1→Y5 net-income series + the Y5 value.
+    const spark = within(income).getByRole("img");
+    expect(spark).toHaveAccessibleName(/net income year 1 to year 5/i);
+    expect(spark).toHaveAccessibleName(/\$100,000/); // the Y5 income label
+  });
+
+  it("renders the address (muted) and the updated date when the server provides them", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    expect(await screen.findByTestId("detail-address")).toHaveTextContent("Longview, TX");
+    expect(screen.getByTestId("detail-updated")).toHaveTextContent(/updated/i);
+  });
+
+  it("omits the updated date when the server does not provide one (never a fabricated date)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm({ updated_at: undefined }));
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("detail-updated")).not.toBeInTheDocument();
+  });
+
+  it("places the .xlsx and .docx downloads at the top with the correct hrefs (D9)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    const xlsx = await screen.findByTestId("download-xlsx");
+    const docx = screen.getByTestId("download-docx");
+    expect(xlsx).toHaveAttribute("href", "/api/projections/p_8x/xlsx");
+    expect(docx).toHaveAttribute("href", "/api/projections/p_8x/packet?format=docx");
+    // Both live in the header download cluster (top), not a bottom actions row.
+    expect(screen.getByTestId("detail-downloads")).toContainElement(xlsx);
+  });
+
+  it("D8: renders no bottom Feedback button", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByRole("button", { name: /^feedback$/i })).not.toBeInTheDocument();
+    localStorage.clear();
+  });
+
+  it("D1/Decision 13: the always-on 'Store name' input is gone; a pencil reveals the rename input", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+    // No always-on Store-name input.
+    expect(screen.queryByLabelText("Store name")).not.toBeInTheDocument();
+    // The pencil reveals it.
+    await user.click(screen.getByTestId("rename-projection"));
+    expect(screen.getByLabelText("Store name")).toBeInTheDocument();
     localStorage.clear();
   });
 });
@@ -481,6 +562,8 @@ describe("ProjectionDetail — 409 Overwrite resolves (does not loop) #188", () 
     const user = userEvent.setup();
     render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
 
+    // D1/Decision 13: the rename input is behind the inline pencil now.
+    await user.click(await screen.findByTestId("rename-projection"));
     const nameInput = await screen.findByLabelText("Store name");
     await user.type(nameInput, "Z"); // debounced PATCH with the stale If-Match: 3
 
@@ -576,46 +659,27 @@ describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
     expect(screen.queryByTestId("inspector-panel")).not.toBeInTheDocument();
   });
 
-  it("relocates the overrides audit into the KPIs tab (label + value verbatim, with reset)", async () => {
+  it("D10: removes the standalone 'Pinned overrides' audit block from the KPIs tab", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(overrideVm());
     const user = userEvent.setup();
     render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
     await screen.findByTestId("decision-banner");
 
     await user.click(screen.getByRole("tab", { name: /kpis/i }));
-    const audit = screen.getByTestId("kpis-override-audit");
-    expect(within(audit).getByText("Payroll, Year 1")).toBeInTheDocument();
-    expect(within(audit).getByText("$120,000")).toBeInTheDocument();
-    expect(within(audit).getByTestId("override-reset-payroll-y1")).toBeInTheDocument();
+    // The at-a-glance "Pinned overrides" audit is gone (override justification now
+    // lives only in Penny's drawer). The merged KPIs grid is still there.
+    expect(screen.queryByTestId("kpis-override-audit")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-tab")).toBeVisible();
   });
 
-  it("resets a pin via the EXISTING overrides.clear contract (forward edit, If-Match)", async () => {
-    vi.mocked(fetchProjection).mockResolvedValue(overrideVm());
-    const { bodies, ifMatches } = patchCapture();
-    const user = userEvent.setup();
-    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
-    await screen.findByTestId("decision-banner");
-
-    await user.click(screen.getByRole("tab", { name: /kpis/i }));
-    await user.click(within(screen.getByTestId("kpis-override-audit")).getByTestId("override-reset-payroll-y1"));
-
-    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
-    expect(bodies[0]).toEqual({ overrides: { clear: [{ node: "payroll", year: 1 }] } });
-    expect(ifMatches[0]).toBe("3");
-  });
-
-  it("captures a justification in Penny and re-pins the SAME value with the note (overrides.set)", async () => {
-    vi.mocked(fetchProjection).mockResolvedValue(overrideVm());
+  it("slides Penny OUT with the prompt + saves the justification (overrides.set) when a §12.2 guardrail needs an unrecorded note", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(
+      overrideVm({ flags: { net_margin_out_of_band: { value: 0.39, band: "≤ ~30%", requires_note: true } } }),
+    );
     const { bodies } = patchCapture();
     const user = userEvent.setup();
     render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
-    await screen.findByTestId("decision-banner");
-
-    // From the at-a-glance KPIs audit, "Add justification" slides Penny OUT.
-    await user.click(screen.getByRole("tab", { name: /kpis/i }));
-    await user.click(within(screen.getByTestId("kpis-override-audit")).getByTestId("override-comment-payroll-y1"));
-
-    // Penny is now open with the focused prompt (the comment form is Penny-only).
+    // No FAB click: the guardrail auto-opens Penny straight onto the justification.
     const form = await screen.findByTestId("override-comment-form");
     const input = within(form).getByLabelText(/why did you override payroll, year 1\?/i);
     await user.type(input, "signed two hires");
@@ -626,16 +690,6 @@ describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
     expect(bodies[0]).toEqual({
       overrides: { set: [{ node: "payroll", year: 1, value: "120000", note: "signed two hires" }] },
     });
-  });
-
-  it("slides Penny OUT with the prompt when a §12.2 guardrail needs an unrecorded note", async () => {
-    vi.mocked(fetchProjection).mockResolvedValue(
-      overrideVm({ flags: { net_margin_out_of_band: { value: 0.39, band: "≤ ~30%", requires_note: true } } }),
-    );
-    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
-    // No FAB click: the guardrail auto-opens Penny straight onto the justification.
-    const form = await screen.findByTestId("override-comment-form");
-    expect(within(form).getByLabelText(/why did you override payroll, year 1\?/i)).toBeInTheDocument();
   });
 
   // P1 REGRESSION (#284): activating an editable cell in the 3-year table was a
