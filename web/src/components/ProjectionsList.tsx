@@ -19,10 +19,19 @@ export interface ProjectionsListProps {
    *  The list is owner-scoped, so every listed row is owner-editable. */
   onRowClick: (viewSlug: string) => void;
   /** Owner chose "Move to Trash" on a row's actions menu. When omitted, the per-row
-   *  menu is not rendered (e.g. a read-only context). */
+   *  menu is not rendered (e.g. the "Shared with me" section — owner-only affordances
+   *  never appear on a shared row). */
   onTrash?: (item: ProjectionListItem) => void;
   /** Navigate to the Trash view. When omitted, the header Trash link is hidden. */
   onOpenTrash?: () => void;
+  /** Section heading. Defaults to "Projections" (the owner list). The "Shared with
+   *  me" section (#323) passes its own heading. */
+  heading?: string;
+  /** Unique id for the heading element (aria-labelledby target). Defaulted so a
+   *  second instance on the page never duplicates the id. */
+  headingId?: string;
+  /** Whether to render the "New projection" action. Hidden on the shared section. */
+  showCreate?: boolean;
 }
 
 export function ProjectionsList({
@@ -31,28 +40,37 @@ export function ProjectionsList({
   onRowClick,
   onTrash,
   onOpenTrash,
+  heading = "Projections",
+  headingId = "list-heading",
+  showCreate = true,
 }: ProjectionsListProps) {
+  const headerActions = (
+    <div className="list__header-actions">
+      {onOpenTrash && (
+        <button
+          type="button"
+          className="btn btn--ghost"
+          data-testid="open-trash"
+          onClick={onOpenTrash}
+        >
+          Trash
+        </button>
+      )}
+      {showCreate && (
+        <button type="button" className="btn btn--primary" onClick={onCreate}>
+          New projection
+        </button>
+      )}
+    </div>
+  );
+
   if (projections.length === 0) {
     return (
-      <section className="list-empty" aria-labelledby="list-heading">
+      <section className="list-empty" aria-labelledby={headingId}>
         {/* L1: h1 is "Projections" on both empty and populated states (v2). */}
         <header className="list__header">
-          <h1 id="list-heading">Projections</h1>
-          <div className="list__header-actions">
-            {onOpenTrash && (
-              <button
-                type="button"
-                className="btn btn--ghost"
-                data-testid="open-trash"
-                onClick={onOpenTrash}
-              >
-                Trash
-              </button>
-            )}
-            <button type="button" className="btn btn--primary" onClick={onCreate}>
-              New projection
-            </button>
-          </div>
+          <h1 id={headingId}>{heading}</h1>
+          {headerActions}
         </header>
         <p>No projections yet. Build a board-ready projection from a few inputs.</p>
       </section>
@@ -60,25 +78,11 @@ export function ProjectionsList({
   }
 
   return (
-    <section className="list" aria-labelledby="list-heading">
+    <section className="list" aria-labelledby={headingId}>
       {/* L1: h1 is "Projections" (drop "Your"). */}
       <header className="list__header">
-        <h1 id="list-heading">Projections</h1>
-        <div className="list__header-actions">
-          {onOpenTrash && (
-            <button
-              type="button"
-              className="btn btn--ghost"
-              data-testid="open-trash"
-              onClick={onOpenTrash}
-            >
-              Trash
-            </button>
-          )}
-          <button type="button" className="btn btn--primary" onClick={onCreate}>
-            New projection
-          </button>
-        </div>
+        <h1 id={headingId}>{heading}</h1>
+        {headerActions}
       </header>
       <table className="list__table">
         <thead>

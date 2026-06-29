@@ -15,6 +15,7 @@ import { ProjectionDetail } from "./pages/ProjectionDetail";
 import { RoleView } from "./pages/RoleView";
 import { TrashPage } from "./pages/TrashPage";
 import { clerkActive } from "./auth/clerkToken";
+import { capturePostSignInRedirect } from "./auth/postSignInRedirect";
 import { setEditToken } from "./api/projections";
 import { useDetailHeader } from "./state/detailHeader";
 import "./tokens.css";
@@ -92,6 +93,14 @@ export function App() {
     const secret = readFragmentSecret(window.location.hash);
     if (!secret) return;
     setEditToken(editSlug, secret);
+    // Shared deep link (#323): a recipient arriving with an edit-token fragment is the
+    // ONLY case we auto-redirect after sign-in. Capture the destination path (NOT the
+    // fragment secret — already saved to localStorage above) so the forced owner gate
+    // can return the recipient here once they sign in. A signed-in recipient never
+    // round-trips, so the captured path is harmlessly consumed as a no-op.
+    if (clerkActive()) {
+      capturePostSignInRedirect(window.location.pathname + window.location.search);
+    }
     history.replaceState(null, "", window.location.pathname + window.location.search);
   }, [editSlug]);
 
