@@ -8,6 +8,8 @@
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { lazy, StrictMode, Suspense, type ReactNode } from "react";
 
+import { ToastProvider } from "./components/Toast";
+
 // lazy(() => import(...)) does NOT execute the import until the component renders,
 // so the dark path (no key) never touches Clerk.
 const ClerkAuthProvider = lazy(() => import("./auth/ClerkAuthProvider"));
@@ -27,15 +29,21 @@ export function RootProviders({
   const publishableKey = clerkPublishableKey();
   const tree = <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 
+  // ToastProvider wraps the outermost tree so any page — wizard, detail, list —
+  // can call useToast() to surface success messages (app-suggestion, terms accept).
+  // It sits outside QueryClientProvider so it doesn't depend on the query client
+  // and is never unmounted by a query boundary reset.
   return (
     <StrictMode>
-      {publishableKey ? (
-        <Suspense fallback={null}>
-          <ClerkAuthProvider publishableKey={publishableKey}>{tree}</ClerkAuthProvider>
-        </Suspense>
-      ) : (
-        tree
-      )}
+      <ToastProvider>
+        {publishableKey ? (
+          <Suspense fallback={null}>
+            <ClerkAuthProvider publishableKey={publishableKey}>{tree}</ClerkAuthProvider>
+          </Suspense>
+        ) : (
+          tree
+        )}
+      </ToastProvider>
     </StrictMode>
   );
 }
