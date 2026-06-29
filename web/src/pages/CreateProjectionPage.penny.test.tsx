@@ -181,12 +181,10 @@ describe("CreateProjectionPage — Generate persists a Penny-built schedule with
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole("button", { name: /^next$/i })).toBeEnabled());
 
-    // 2. → Square footage, 3. → Households (resolved static), 4. → Donor market,
-    // 5. → Startup costs (last)
+    // 2. → Square footage, 3. → Configure donations (resolved static), 4. → Startup costs (last)
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     await waitFor(() => expect(screen.getByTestId("households-confirm")).toHaveTextContent(/512,000 households/i));
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     expect(screen.getByRole("heading", { name: /set startup costs/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /generate projections/i }));

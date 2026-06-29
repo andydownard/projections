@@ -23,10 +23,10 @@ describe("parseRoute", () => {
       aiOff: false,
       step: "address",
     });
-    expect(parseRoute("/wizard/households")).toEqual({
+    expect(parseRoute("/wizard/configure-donations")).toEqual({
       kind: "wizard",
       aiOff: false,
-      step: "households",
+      step: "configure-donations",
     });
     expect(parseRoute("/wizard/startup-costs", "?ai=off")).toEqual({
       kind: "wizard",

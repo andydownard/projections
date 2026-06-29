@@ -19,6 +19,7 @@
 import type { KeyboardEvent } from "react";
 
 import type { CostSchedulePreview } from "../api/costSchedule";
+import { NumberField } from "./NumberField";
 import {
   addCategoryRow,
   DEFAULT_MONTH_COUNT,
@@ -85,10 +86,8 @@ export function CostScheduleEditor({
     return "";
   }
 
-  function onCellChange(category: string, month: number, raw: string) {
-    const trimmed = raw.trim();
-    const amount = trimmed === "" ? null : Number(trimmed);
-    onChangeRows(setCellAmount(rows, category, month, Number.isNaN(amount as number) ? null : amount));
+  function onCellAmountChange(category: string, month: number, value: number | null) {
+    onChangeRows(setCellAmount(rows, category, month, value));
   }
 
   function onRename(from: string, to: string) {
@@ -161,7 +160,7 @@ export function CostScheduleEditor({
     <section className="cost-matrix" aria-labelledby="cost-matrix-heading">
       <div className="cost-matrix__head">
         <h3 id="cost-matrix-heading" className="cost-matrix__title">
-          Timed startup costs
+          Itemized startup costs
         </h3>
         <p className="cost-matrix__hint" id="cost-matrix-hint">
           Each line-item lands on the project month it’s spent. Drag the{" "}
@@ -173,6 +172,21 @@ export function CostScheduleEditor({
       <div className="cost-matrix__scroll" role="region" aria-label="Startup costs grid" tabIndex={0}>
         <table className="cost-matrix__table" data-testid="cost-schedule-editor">
           <thead>
+            {/* Row 1: grand-opening label above its column */}
+            <tr className="cost-matrix__go-row" aria-hidden="true">
+              <td /> {/* corner */}
+              {months.map((m) => (
+                <td
+                  key={m}
+                  className={`cost-matrix__go-cell ${columnClass(m)}`.trim()}
+                >
+                  {m === opening && handle}
+                </td>
+              ))}
+              <td /> {/* total */}
+              <td /> {/* remove */}
+            </tr>
+            {/* Row 2: month labels */}
             <tr>
               <th scope="col" className="cost-matrix__corner">
                 Line item
@@ -182,7 +196,7 @@ export function CostScheduleEditor({
                   key={m}
                   scope="col"
                   data-testid={`cost-col-${m}`}
-                  className={`cost-matrix__month ${columnClass(m)}`.trim()}
+                  className={`cost-matrix__month cost-matrix__month--right ${columnClass(m)}`.trim()}
                   aria-label={
                     m === opening
                       ? `Month ${m} — grand opening`
@@ -196,8 +210,7 @@ export function CostScheduleEditor({
                     onChangeOpeningMonth(m);
                   }}
                 >
-                  <span className="cost-matrix__month-label">Mo {m}</span>
-                  {m === opening && handle}
+                  <span className="cost-matrix__month-label">Mo. {m}</span>
                 </th>
               ))}
               <th scope="col" className="cost-matrix__total-head">
@@ -233,15 +246,15 @@ export function CostScheduleEditor({
                       key={cell.month}
                       className={`cost-matrix__cell ${columnClass(cell.month)}`.trim()}
                     >
-                      <input
-                        type="number"
-                        inputMode="decimal"
+                      <NumberField
+                        value={cell.amount || null}
+                        onChange={(v) => onCellAmountChange(row.category, cell.month, v)}
+                        unit="$"
+                        unitPosition="prefix"
+                        thousands
                         min={0}
-                        step="any"
-                        className="cost-matrix__amount"
+                        decimals={2}
                         aria-label={`Line item ${i + 1} month ${cell.month} cost`}
-                        value={cell.amount == null || cell.amount === 0 ? "" : cell.amount}
-                        onChange={(e) => onCellChange(row.category, cell.month, e.target.value)}
                       />
                     </td>
                   ))}
@@ -269,7 +282,7 @@ export function CostScheduleEditor({
           <tfoot>
             <tr className="cost-matrix__totals">
               <th scope="row" className="cost-matrix__totals-label">
-                Monthly total
+                Total
               </th>
               {months.map((m) => (
                 <td

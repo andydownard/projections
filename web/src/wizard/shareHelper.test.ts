@@ -23,6 +23,8 @@ const DRAFT: WizardDraft = {
   shareY1: 6,
   shareY2: 8,
   shareY3: 10,
+  shareY4: 11,
+  shareY5: 12,
   occupancyAnnual: 120000,
   rentPerSqft: 12,
   utilitiesPerSqft: 2.23,
@@ -44,6 +46,8 @@ describe("buildCreatePayload (maps wizard draft → POST /api/projections body)"
       share_y1: 0.06,
       share_y2: 0.08,
       share_y3: 0.1,
+      share_y4: 0.11,
+      share_y5: 0.12,
     });
     expect(payload.inputs.building_sqft).toBe(10000);
     expect(payload.inputs.salesfloor_pct).toBe(0.7);
@@ -119,6 +123,8 @@ describe("toServerCreateBody (nested wizard payload → flat backend body)", () 
     expect(body.inputs.share_y1).toBe("0.06");
     expect(body.inputs.share_y2).toBe("0.08");
     expect(body.inputs.share_y3).toBe("0.1");
+    expect(body.inputs.share_y4).toBe("0.11");
+    expect(body.inputs.share_y5).toBe("0.12");
     expect(body.inputs.salesfloor_pct).toBe("0.7");
     expect(body.inputs.lease_type).toBe("nnn");
     // source_of_funds collapses to a single total string (backend InputsIn shape).

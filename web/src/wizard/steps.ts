@@ -8,19 +8,17 @@
 // Epic B (#261): each wizard step is its OWN route — /wizard/<step-slug> — so
 // browser Back/Forward navigate between steps and each step is deep-linkable.
 //
-// Phase 2 (Epics B/C, #261/#262, owner Decision 11 — REVISED order): the steps are
-// Address → Square footage → Households → Donor market share → Startup costs.
-// Square footage now PRECEDES households; there is NO Review step — the last step's
-// primary button is "Generate projections".
+// W15 (redesign v2): the former "households" and "donor-market" steps are merged
+// into a single "configure-donations" step. Order is now:
+// Address → Square footage → Configure donations → Startup costs.
+// Square footage precedes configure-donations; there is NO Review step — the last
+// step's primary button is "Generate projections".
 
-/** The ordered wizard steps (owner Decision 11, REVISED). The household lookup fires
- *  on address resolution (step 1), so inserting "square-footage" before the household
- *  confirm changes only WHERE the number is confirmed, not when it is fetched. */
+/** The ordered wizard steps (W15 redesign). */
 export const STEPS = [
   "address",
   "square-footage",
-  "households",
-  "donor-market",
+  "configure-donations",
   "startup-costs",
 ] as const;
 export type StepKey = (typeof STEPS)[number];
@@ -31,8 +29,7 @@ export type StepKey = (typeof STEPS)[number];
 export const STEP_LABELS: Record<StepKey, string> = {
   address: "Select address",
   "square-footage": "Set square footage",
-  households: "Confirm # of households",
-  "donor-market": "Set donor market share",
+  "configure-donations": "Configure donations",
   "startup-costs": "Set startup costs",
 };
 

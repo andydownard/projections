@@ -3111,3 +3111,117 @@ body {
     animation: none;
   }
 }
+
+/* === W1 Wizard breadcrumb (replaces .wizard-steps numbered pills) === */
+.wizard-breadcrumb {
+  display: flex;
+  width: 100%;
+  margin-bottom: 1.75rem;
+  border-bottom: 2px solid var(--line);
+}
+.wizard-breadcrumb__item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.625rem 0.5rem;
+  font-size: var(--text-sm);
+  font-weight: var(--w-regular);
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  text-align: center;
+}
+.wizard-breadcrumb__item--current {
+  color: var(--text);
+  font-weight: var(--w-semibold);
+  border-bottom: 2px solid var(--brand-primary);
+}
+.wizard-breadcrumb__item--done {
+  color: var(--text-muted);
+}
+.wizard-breadcrumb__btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+}
+.wizard-breadcrumb__btn:hover {
+  color: var(--brand-primary);
+  text-decoration-color: currentColor;
+}
+.wizard-breadcrumb__label {
+  display: block;
+  cursor: default;
+}
+
+/* === NumberField component (X1 / W2–W5/W12) === */
+.number-field {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  height: 40px;
+  overflow: hidden;
+  width: 100%;
+}
+.number-field:focus-within {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+.number-field--with-unit {
+  /* unit + input share the same pill */
+}
+.number-field__input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 0 0.625rem;
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  min-width: 0;
+}
+.number-field__input:focus {
+  outline: none;
+}
+.number-field__input.num {
+  text-align: right;
+}
+.number-field__unit {
+  padding: 0 0.5rem;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  user-select: none;
+  white-space: nowrap;
+}
+
+/* === W10 section labels within a step === */
+.wizard-step__section-label {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.25rem;
+}
+
+/* === W11 cost-matrix go-row (grand-opening label above month headers) === */
+.cost-matrix__go-row td {
+  padding: 0;
+  height: 1.5rem;
+  vertical-align: bottom;
+  text-align: center;
+}
+.cost-matrix__go-cell {
+  text-align: center;
+}
+.cost-matrix__month--right {
+  text-align: right;
+}
