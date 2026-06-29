@@ -20,6 +20,7 @@ from app.store.migrations import (
     m0009_role_links,
     m0010_clerk_owner,
     m0011_feedback_creator,
+    m0012_recover_longview,
 )
 
 # Ordered list of (name, ddl) migrations. Append-only.
@@ -35,4 +36,5 @@ MIGRATIONS = [
     ("0009_role_links", m0009_role_links.SQL),
     ("0010_clerk_owner", m0010_clerk_owner.SQL),
     ("0011_feedback_creator", m0011_feedback_creator.SQL),
+    ("0012_recover_longview", m0012_recover_longview.SQL),
 ]
