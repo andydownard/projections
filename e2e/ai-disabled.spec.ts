@@ -18,10 +18,11 @@ test.describe("AI opt-out works end-to-end", () => {
     // "Rent" input in the ai-off narrative-disabled section.
     await expect(page.getByRole("textbox", { name: "Rent" })).toBeVisible();
 
-    // Export still works without any AI call.
+    // Export still works without any AI call (D9: header "Excel" download, testid
+    // download-xlsx).
     const [download] = await Promise.all([
       page.waitForEvent("download"),
-      page.getByRole("button", { name: /download \.xlsx/i }).click(),
+      page.getByTestId("download-xlsx").click(),
     ]);
     expect(download.suggestedFilename()).toMatch(/\.xlsx$/);
   });

@@ -75,11 +75,12 @@ export async function mockPlaces(page: Page): Promise<void> {
 }
 
 /**
- * Drive the shipped 5-step wizard to Generate a FRESH projection (not the seeded
- * `example`). The revised order (owner Decision 11) is Address → Square footage →
- * Households → Donor market share → Startup costs, with "Generate projections" on the
- * last step landing DIRECTLY on /p/<slug>/edit. Returns once that click is issued.
- * Requires `mockPlaces(page)` to have been called first.
+ * Drive the shipped 4-step wizard to Generate a FRESH projection (not the seeded
+ * `example`). The v2 redesign (W15) MERGED the former Households + Donor-market steps
+ * into one "Configure donations" step, so the order is now
+ * Address → Square footage → Configure donations → Startup costs, with "Generate
+ * projections" on the last step landing DIRECTLY on /p/<slug>/edit. Returns once that
+ * click is issued. Requires `mockPlaces(page)` to have been called first.
  */
 export async function createProjectionViaWizard(
   page: Page,
@@ -89,25 +90,27 @@ export async function createProjectionViaWizard(
 
   // Step 1 — Address: resolve an address (the resolve fills households). The store
   // name is OPTIONAL and sits beneath the address; we set it for a recognisable label.
+  // Next stays disabled until the resolve lands, so Playwright's actionability wait
+  // is the resolve synchronisation point.
   await page.getByRole("combobox", { name: "Address" }).fill("123 Main St");
   await page.getByRole("option").first().click();
   await page.getByLabel("Store name (optional)").fill(storeName);
   await page.getByRole("button", { name: "Next" }).click();
 
   // Step 2 — Square footage: defaults 12,500 sq ft / 80% sales floor pass straight
-  // through (the building-size assertion is the resolve synchronisation point). The
-  // field renders comma-grouped for display consistency (QA P2).
+  // through. The building-size <NumberField> is type="text" (fill/assert by label,
+  // not a spinner) and renders comma-grouped for display consistency (QA P2).
   await expect(page.getByLabel(/building size/i)).toHaveValue("12,500");
   await page.getByRole("button", { name: "Next" }).click();
 
-  // Step 3 — Confirm # of households: the resolved count renders as static text.
+  // Step 3 — Configure donations (the merged step): the Census-resolved household
+  // count renders as static text, and the 5 donor-share <NumberField unit="%"> +
+  // the $/donation field are pre-filled (6/8/10/11/12 and $50), so the step passes
+  // straight through to Next.
   await expect(page.getByTestId("households-confirm")).toContainText("31,798 households");
   await page.getByRole("button", { name: "Next" }).click();
 
-  // Step 4 — Donor market share: three explicit shares are pre-filled (6/8/10).
-  await page.getByRole("button", { name: "Next" }).click();
-
-  // Step 5 — Startup costs: rent pre-fills from the (stubbed) research benchmark and
+  // Step 4 — Startup costs: rent pre-fills from the (stubbed) research benchmark and
   // the seeded cost rows render in the ROWS × MONTHS grid (Epic D #263). The server
   // preview (POST /api/cost-schedule/preview) totals the grid — the grand total comes
   // back as a server display string (no client math) — and a draggable "grand opening"

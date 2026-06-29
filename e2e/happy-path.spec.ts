@@ -55,9 +55,11 @@ test.describe("happy path: create -> decision -> milestones -> export -> reopen"
     // projection (not the seeded `example`, which already has terms_accepted_at) all
     // the way to a real .xlsx download — a 403 surfaces as a JSON blob and never a
     // download event, so waitForEvent("download") firing is the proof of the fix.
+    // D9: the .xlsx download moved to the header next to the name and reads "Excel"
+    // (testid download-xlsx) — a role=button anchor with href + download.
     const [download] = await Promise.all([
       page.waitForEvent("download"),
-      page.getByRole("button", { name: /download \.xlsx/i }).click(),
+      page.getByTestId("download-xlsx").click(),
     ]);
     expect(download.suggestedFilename()).toMatch(/\.xlsx$/);
   });
