@@ -145,6 +145,42 @@ describe("ListPage", () => {
     expect(screen.getByText("House of Hope — Longview, TX")).toBeInTheDocument();
   });
 
+  it("renders a 'Shared with me' section for shared rows with no owner-only affordances (#323)", async () => {
+    localStorage.setItem("projections.owner_token", "owner-abc");
+    const sharedRow = {
+      ...populated.projections[0],
+      view_slug: "p_shared",
+      name: "Partner Co — Dallas, TX",
+      owner: false,
+      shared: true,
+      editable: true,
+    };
+    const ownerRow = { ...populated.projections[0], owner: true, shared: false };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ projections: [ownerRow, sharedRow] }), { status: 200 }),
+    );
+    render(<ListPage />);
+
+    // The shared row appears under its own "Shared with me" heading.
+    expect(
+      await screen.findByRole("heading", { name: /shared with me/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Partner Co — Dallas, TX")).toBeInTheDocument();
+    // Owner-only affordances render ONLY on the owner row: exactly one actions "⋯"
+    // trigger (the owner row), none on the shared row.
+    expect(screen.getAllByTestId("row-actions-trigger")).toHaveLength(1);
+  });
+
+  it("omits the 'Shared with me' section when there are no shared rows", async () => {
+    localStorage.setItem("projections.owner_token", "owner-abc");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(populated), { status: 200 }),
+    );
+    render(<ListPage />);
+    await screen.findByText("House of Hope — Longview, TX");
+    expect(screen.queryByRole("heading", { name: /shared with me/i })).toBeNull();
+  });
+
   it("cancelling the confirm keeps the row in the list and makes no request", async () => {
     localStorage.setItem("projections.owner_token", "owner-abc");
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(

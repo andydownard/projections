@@ -5,6 +5,7 @@ import {
   editTokenKey,
   getEditToken,
   getOwnerToken,
+  listEditTokenEntries,
   listProjections,
   setEditToken,
   setOwnerToken,
@@ -44,6 +45,26 @@ describe("edit token storage (EPIC SHARE)", () => {
     expect(getEditToken("p_8x")).toBe("edit_8x");
     expect(getEditToken("p_9y")).toBe("edit_9y");
     expect(getEditToken("p_unknown")).toBeNull();
+  });
+
+  // EPIC #323 — listEditTokenEntries powers the ClaimSharedToken bridge.
+  it("listEditTokenEntries returns every stored (slug, token), ignoring other keys", () => {
+    setEditToken("p_8x", "edit_8x");
+    setEditToken("p_9y", "edit_9y");
+    setOwnerToken("owner_should_be_ignored");
+    localStorage.setItem("unrelated.key", "nope");
+    const entries = listEditTokenEntries().sort((a, b) =>
+      a.viewSlug.localeCompare(b.viewSlug),
+    );
+    expect(entries).toEqual([
+      { viewSlug: "p_8x", token: "edit_8x" },
+      { viewSlug: "p_9y", token: "edit_9y" },
+    ]);
+  });
+
+  it("listEditTokenEntries is empty when no edit tokens are stored", () => {
+    setOwnerToken("owner_only");
+    expect(listEditTokenEntries()).toEqual([]);
   });
 });
 

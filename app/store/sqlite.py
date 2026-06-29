@@ -72,6 +72,11 @@ def _new_transcript_id() -> str:
     return "pt_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + secrets.token_hex(6)
 
 
+def _new_share_grant_id() -> str:
+    # App-generated, time-ordered string PK (no DB autoincrement; Postgres-portable).
+    return "sg_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + secrets.token_hex(6)
+
+
 # Migrations whose apply step needs runtime logic the static-SQL path cannot express,
 # keyed by migration name -> callable(conn). The runner dispatches to the hook inside
 # the SAME explicit transaction it uses for the DDL + ledger INSERT (so the hook stays
@@ -420,6 +425,89 @@ class SqliteStore:
             self._conn.commit()
             return cur.rowcount
 
+    # --- share grants (editable shares that follow a Clerk account, #323) -------
+    def create_share_grant(
+        self,
+        projection_id: str,
+        grantee_clerk_user_id: str,
+        *,
+        role: str = "editor",
+        grantee_owner_token_hash: str | None = None,
+    ) -> bool:
+        """Grant ``grantee_clerk_user_id`` editable access to ``projection_id`` (#323).
+
+        Created ONLY from a verified edit-token presentation at the router boundary
+        (``POST …/claim-share``); this method just persists the grant. Idempotent:
+        a portable SELECT-then-INSERT under the single-writer lock (no SQLite-only
+        upsert above the Store interface), with UNIQUE(projection_id, grantee) as the
+        backstop — a re-grant returns ``False`` and inserts nothing. Empty
+        projection/grantee is a no-op (``False``) so a blank can never create a
+        NULL-grantee grant (TENANT). Returns ``True`` only when a NEW grant is written.
+        """
+        if not projection_id or not grantee_clerk_user_id:
+            return False
+        with self._write_lock:
+            existing = self._conn.execute(
+                "SELECT 1 FROM share_grants "
+                "WHERE projection_id = ? AND grantee_clerk_user_id = ?",
+                (projection_id, grantee_clerk_user_id),
+            ).fetchone()
+            if existing is not None:
+                return False
+            self._conn.execute(
+                "INSERT INTO share_grants "
+                "(id, projection_id, role, grantee_clerk_user_id, "
+                "grantee_owner_token_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (_new_share_grant_id(), projection_id, role, grantee_clerk_user_id,
+                 grantee_owner_token_hash, _utcnow()),
+            )
+            self._conn.commit()
+            return True
+
+    def has_share_grant(self, projection_id: str, grantee_clerk_user_id: str) -> bool:
+        """Constant-cost membership check for the PATCH-grant auth path (#323).
+
+        ``True`` iff an editable grant exists for exactly this (projection, grantee).
+        Empty grantee never matches (so a NULL/blank identity can never authorize a
+        write — TENANT, PRD §20)."""
+        if not projection_id or not grantee_clerk_user_id:
+            return False
+        row = self._read_conn().execute(
+            "SELECT 1 FROM share_grants "
+            "WHERE projection_id = ? AND grantee_clerk_user_id = ?",
+            (projection_id, grantee_clerk_user_id),
+        ).fetchone()
+        return row is not None
+
+    def list_shared_card_summaries_by_clerk_owner(
+        self, clerk_user_id: str, *, include_trashed: bool = False
+    ) -> list[dict]:
+        """Grant-scoped "Shared with me" card list (#323), NEVER global (Override
+        TENANT / PRD §20).
+
+        Joins ``share_grants`` (scoped to THIS grantee's grants) to the live
+        projection, returning the same small card columns as the owner list (#178) plus
+        the grant ``role``. An empty ``clerk_user_id`` matches nothing. Excludes
+        purged (``deleted_at``) and, by default, trashed projections, and excludes a
+        row the grantee already OWNS (that belongs to their owner list, not the shared
+        section — no double-listing)."""
+        if not clerk_user_id:
+            return []
+        sql = (
+            "SELECT p.view_slug, p.name, p.status, p.version, p.updated_at, "
+            "p.summary_json, g.role AS grant_role "
+            "FROM share_grants g JOIN projections p ON p.id = g.projection_id "
+            "WHERE g.grantee_clerk_user_id = ? AND p.deleted_at IS NULL "
+            "AND (p.owner_clerk_user_id IS NULL OR p.owner_clerk_user_id != ?)"
+        )
+        if not include_trashed:
+            sql += " AND p.status = 'active'"
+        sql += " ORDER BY p.updated_at DESC"
+        return [
+            dict(r)
+            for r in self._read_conn().execute(sql, (clerk_user_id, clerk_user_id))
+        ]
+
     def list_card_summaries(
         self, owner_token_hash: str, *, include_trashed: bool = False
     ) -> list[dict]:
@@ -615,7 +703,7 @@ class SqliteStore:
     # the FK references (no ON DELETE CASCADE; PRAGMA foreign_keys=ON) resolve.
     _PURGE_CHILD_TABLES = (
         "revisions", "narratives", "evidence", "penny_transcripts",
-        "actuals", "role_links",
+        "actuals", "role_links", "share_grants",
     )
 
     def purge_projection(self, id: str, expected_version: int) -> int:

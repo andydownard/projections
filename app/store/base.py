@@ -44,6 +44,24 @@ class Store(Protocol):
     def claim_projections_to_clerk_owner(
         self, owner_token_hash: str, clerk_user_id: str, org_id: str | None = None
     ) -> int: ...
+    # share grants: editable shares that follow a Clerk account (#323). A grant is
+    # created ONLY from a verified edit-token presentation at the router boundary;
+    # it scopes a "Shared with me" list + the JWT-grant PATCH path on the grantee's
+    # Clerk sub. NEVER global (Override TENANT / PRD §20).
+    def create_share_grant(
+        self,
+        projection_id: str,
+        grantee_clerk_user_id: str,
+        *,
+        role: str = "editor",
+        grantee_owner_token_hash: str | None = None,
+    ) -> bool: ...  # True iff a NEW grant was written (idempotent; empty -> False)
+    def has_share_grant(
+        self, projection_id: str, grantee_clerk_user_id: str
+    ) -> bool: ...  # membership check for the PATCH-grant auth path
+    def list_shared_card_summaries_by_clerk_owner(
+        self, clerk_user_id: str, *, include_trashed: bool = False
+    ) -> list[dict]: ...  # grant-scoped "Shared with me" cards; never global
     def create_projection(self, p: dict) -> dict: ...
     def update_with_version_check(
         self, id: str, expected_version: int, patch: dict[str, Any]

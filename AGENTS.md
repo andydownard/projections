@@ -146,6 +146,7 @@ Three named projections pinned to `model_version` drive design, edge-case math, 
 | 15 | Annual P&L drifts from monthly | **Each year's** annual = roll-up of its 12 operating months (60-month horizon); Year-1 **cash** net == Σ monthly cash nets over project months `1..G+11` (incl. startup); golden asserts equality | §10.2 |
 | 16 | Confusing operating loss with cash recovery (payback never resolves) | Payback = first project-month `cumulativeCash ≥ 0` after going negative, over the **60-month** series ("Month N"); a positive-operating-net (Aurora-class) projection MUST resolve to a real month, not N/A | §12.1 |
 | 17 | A second / incongruent margin | Displayed Net income **and** Net margin are BOTH cash-based (Year-1 subtracts `startup_total`); `margin == net / revenue` exactly — no operating-margin twin, no footnote; internal operating net still drives the verdict | §12 |
+| 18 | A share-grant that is NOT from a verified edit-token presentation (cross-owner edit leak) | `share_grants` (#323) are minted ONLY by `POST …/claim-share` after a **constant-time** edit-token match for **that** slug; a wrong/foreign token → 403, no grant. Grant-based PATCH/list are **grantee-Clerk-sub-scoped, never global**; a Clerk user with no grant → 403 (negative cross-owner test). Edit token rides the **body**, never path/query/log. Full Mutation Quad | §20 |
 
 ---
 

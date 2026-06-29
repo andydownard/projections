@@ -35,8 +35,15 @@ beforeEach(() => {
   assignMock = vi.fn();
   Object.defineProperty(window, "location", {
     configurable: true,
-    value: { ...originalLocation, assign: assignMock, href: "https://projections.thriftly.com/wizard" },
+    value: {
+      ...originalLocation,
+      assign: assignMock,
+      href: "https://projections.thriftly.com/wizard",
+      pathname: "/wizard",
+      search: "",
+    },
   });
+  sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -44,6 +51,7 @@ afterEach(() => {
     configurable: true,
     value: originalLocation,
   });
+  sessionStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -135,5 +143,46 @@ describe("ClerkOwnerGate — forced owner sign-in", () => {
       screen.getByText(/You tweak startup costs\. Have a proposal\?/i),
     ).toBeInTheDocument();
     expect(screen.getByText(/Get 5-year projections\./i)).toBeInTheDocument();
+  });
+
+  // EPIC #323 — auto-redirect to a captured shared deep link after sign-in.
+  it("redirects to a captured shared deep link once after sign-in, then clears it", () => {
+    signedIn = true;
+    sessionStorage.setItem("projections.post_signin_redirect", "/p/abc/edit");
+    const pushSpy = vi.spyOn(window.history, "pushState");
+    render(
+      <ClerkOwnerGate topBar={TOP_BAR} penny={PENNY}>
+        <div data-testid="owner-content">owner page</div>
+      </ClerkOwnerGate>,
+    );
+    // The recipient is navigated to the shared projection (current path is /wizard).
+    expect(pushSpy).toHaveBeenCalledWith(null, "", "/p/abc/edit");
+    // Fires once: the captured destination is cleared.
+    expect(sessionStorage.getItem("projections.post_signin_redirect")).toBeNull();
+  });
+
+  it("does not redirect when already at the captured destination (no loop)", () => {
+    signedIn = true;
+    sessionStorage.setItem("projections.post_signin_redirect", "/wizard");
+    const pushSpy = vi.spyOn(window.history, "pushState");
+    render(
+      <ClerkOwnerGate topBar={TOP_BAR} penny={PENNY}>
+        <div data-testid="owner-content">owner page</div>
+      </ClerkOwnerGate>,
+    );
+    expect(pushSpy).not.toHaveBeenCalled();
+    // Still consumed (cleared) so it never fires on a later navigation.
+    expect(sessionStorage.getItem("projections.post_signin_redirect")).toBeNull();
+  });
+
+  it("does not redirect when nothing was captured", () => {
+    signedIn = true;
+    const pushSpy = vi.spyOn(window.history, "pushState");
+    render(
+      <ClerkOwnerGate topBar={TOP_BAR} penny={PENNY}>
+        <div data-testid="owner-content">owner page</div>
+      </ClerkOwnerGate>,
+    );
+    expect(pushSpy).not.toHaveBeenCalled();
   });
 });
