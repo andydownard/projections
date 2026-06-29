@@ -112,7 +112,7 @@ describe("TrashPage", () => {
 
   it("keeps the row when a permanent delete 409s (nothing erased)", async () => {
     localStorage.setItem("projections.owner_token", "owner-abc");
-    mockFetch((url, init) => {
+    mockFetch((_url, init) => {
       if (init?.method === "DELETE") {
         return new Response(
           JSON.stringify({ detail: { error: "version_conflict", current_version: 9 } }),
