@@ -333,3 +333,77 @@ describe("PennyAssistant — AI-disabled up front", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
+
+// ============================================================================
+// Epic G2 (decision #42, #266) — the eliminated Override Inspector's function now
+// lives in Penny's drawer: the overrides audit + the focused "why did you override
+// {node} {year}?" justification capture. Penny SLIDES OUT (controlled open) to host
+// the prompt; saving raises onSubmitComment so the host persists the note onto the
+// pin through the EXISTING override contract (no data-model change here).
+// ============================================================================
+describe("PennyAssistant — override audit + comment capture (#42)", () => {
+  const OV = [
+    { node: "payroll", year: 1, label: "Payroll, Year 1", value: "$120,000", calculated: "$140,000" },
+  ];
+
+  it("renders the overrides audit inside the open drawer", async () => {
+    const user = userEvent.setup();
+    render(<PennyAssistant viewSlug="p_abc" token="t" overrides={OV} onResetPin={vi.fn()} onComment={vi.fn()} />);
+    await user.click(screen.getByTestId("penny-fab"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("override-audit")).toBeInTheDocument();
+    expect(within(dialog).getByText("Payroll, Year 1")).toBeInTheDocument();
+    expect(within(dialog).getByText("$120,000")).toBeInTheDocument();
+  });
+
+  it("does NOT grow an overrides section when there is nothing pinned", async () => {
+    const user = userEvent.setup();
+    render(<PennyAssistant viewSlug="p_abc" token="t" />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    expect(screen.queryByTestId("override-audit")).not.toBeInTheDocument();
+  });
+
+  it("reset + add-justification buttons raise the host seams", async () => {
+    const onResetPin = vi.fn();
+    const onComment = vi.fn();
+    const user = userEvent.setup();
+    render(<PennyAssistant viewSlug="p_abc" token="t" overrides={OV} onResetPin={onResetPin} onComment={onComment} />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    await user.click(screen.getByTestId("override-comment-payroll-y1"));
+    expect(onComment).toHaveBeenCalledWith("payroll", 1);
+    await user.click(screen.getByTestId("override-reset-payroll-y1"));
+    expect(onResetPin).toHaveBeenCalledWith("payroll", 1);
+  });
+
+  it("a controlled commentTarget slides Penny out to the focused prompt; Save persists the note", async () => {
+    const onSubmitComment = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <PennyAssistant
+        viewSlug="p_abc"
+        token="t"
+        overrides={OV}
+        open
+        commentTarget={{ node: "payroll", year: 1, label: "Payroll, Year 1" }}
+        onSubmitComment={onSubmitComment}
+      />,
+    );
+    // open=true → the drawer is already slid out, no FAB click needed.
+    const dialog = await screen.findByRole("dialog");
+    const input = within(dialog).getByLabelText(/why did you override payroll, year 1\?/i);
+    await waitFor(() => expect(input).toHaveFocus());
+    await user.type(input, "signed two hires");
+    await user.click(within(dialog).getByTestId("override-comment-save"));
+    expect(onSubmitComment).toHaveBeenCalledWith("payroll", 1, "signed two hires");
+  });
+
+  it("forwards onOpenChange so the FAB toggle is host-controlled", async () => {
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    render(<PennyAssistant viewSlug="p_abc" token="t" open={false} onOpenChange={onOpenChange} />);
+    await user.click(screen.getByTestId("penny-fab"));
+    expect(onOpenChange).toHaveBeenCalledWith(true);
+  });
+});

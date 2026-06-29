@@ -107,8 +107,14 @@ export async function createProjectionViaWizard(
   await page.getByRole("button", { name: "Next" }).click();
 
   // Step 5 — Startup costs: rent pre-fills from the (stubbed) research benchmark and
-  // the default month-1 lump rows are valid. Terms acceptance is IMPLICIT on Generate
-  // (owner Decision 5) — there is no checkbox; the disclaimer is shown and the server
-  // still stamps EXPORT_DISCLAIMER so the .xlsx export stays a 200 (not 403).
+  // the seeded cost rows render in the ROWS × MONTHS grid (Epic D #263). The server
+  // preview (POST /api/cost-schedule/preview) totals the grid — the grand total comes
+  // back as a server display string (no client math) — and a draggable "grand opening"
+  // marker sets the opening month. Terms acceptance is IMPLICIT on Generate (owner
+  // Decision 5) — no checkbox; the disclaimer shows and the server stamps
+  // EXPORT_DISCLAIMER so the .xlsx export stays a 200 (not 403).
+  await expect(page.getByTestId("cost-schedule-editor")).toBeVisible();
+  await expect(page.getByTestId("grand-opening-handle")).toBeVisible();
+  await expect(page.getByTestId("cost-grand-total")).toContainText("$");
   await page.getByRole("button", { name: "Generate projections" }).click();
 }

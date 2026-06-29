@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PennyTranscript, type PennyTurn } from "./PennyTranscript";
@@ -43,6 +43,38 @@ describe("PennyTranscript", () => {
     // the settled string.
     expect(await screen.findByText(/donor-market share to 8%/i)).toBeInTheDocument();
     expect(screen.queryByTestId("penny-transcript-empty")).not.toBeInTheDocument();
+  });
+
+  it("is texting-style: NO visible per-message role caption, but an sr-only role label is kept (#10)", () => {
+    const turns: PennyTurn[] = [
+      { id: "u", role: "user", content: "Hi there" },
+      { id: "a", role: "assistant", content: "Hello back" },
+    ];
+    render(<PennyTranscript turns={turns} />);
+    const [userTurn, pennyTurn] = screen.getAllByTestId("penny-turn");
+
+    // The role is announced to screen readers ("You said…" / "Penny said…") but the
+    // caption is sr-only — distinguished by alignment/color, NOT a visible label.
+    const userLabel = within(userTurn).getByText(/you said/i);
+    expect(userLabel).toHaveClass("sr-only");
+    const pennyLabel = within(pennyTurn).getByText(/penny said/i);
+    expect(pennyLabel).toHaveClass("sr-only");
+
+    // No per-message avatar/icon on the bubbles (the drawer-HEADER avatar is the
+    // brand cue — decision #17 — but the bubbles carry none).
+    expect(within(userTurn).queryByRole("img")).not.toBeInTheDocument();
+    expect(within(pennyTurn).queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes user (right) vs Penny (left) by alignment, not a label (#10)", () => {
+    const turns: PennyTurn[] = [
+      { id: "u", role: "user", content: "Hi" },
+      { id: "a", role: "assistant", content: "Hello" },
+    ];
+    render(<PennyTranscript turns={turns} />);
+    const [userTurn, pennyTurn] = screen.getAllByTestId("penny-turn");
+    expect(userTurn).toHaveStyle({ alignSelf: "flex-end" });
+    expect(pennyTurn).toHaveStyle({ alignSelf: "flex-start" });
   });
 
   it("renders an assistant turn's Markdown as formatted, sanitized output", () => {

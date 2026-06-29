@@ -60,4 +60,18 @@ test.describe("override + 409 optimistic-concurrency", () => {
     const netCell = page.getByTestId("row-net_profit-y1");
     await expect(netCell).toHaveAttribute("aria-disabled", "true");
   });
+
+  // Epic G2 (#42): the standalone right-edge Override Inspector is ELIMINATED — its
+  // function (the overrides audit + the justification capture) moved into Penny's
+  // drawer + the KPIs tab. The forensic FAB/panel must no longer exist; Penny remains
+  // the only side panel and the relocated audit lives in the KPIs tab.
+  test("the standalone Override Inspector is gone; the audit lives in the KPIs tab", async ({ page }) => {
+    await page.goto("/p/example/edit#edit-secret");
+    await expect(page.getByTestId("penny-fab")).toBeVisible();
+    await expect(page.getByTestId("inspector-fab")).toHaveCount(0);
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(0);
+    // The relocated "what's currently overridden" audit is in the KPIs tab.
+    await page.getByRole("tab", { name: /kpis/i }).click();
+    await expect(page.getByTestId("kpis-override-audit")).toBeVisible();
+  });
 });

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PennyDrawer, PennyGeneralAssistant } from "./PennyDrawer";
+import { PENNY_MESSAGE_FONT_SIZE } from "./PennyTranscript";
 
 /**
  * jsdom does not implement window.matchMedia. Install a stub so the component's
@@ -331,6 +332,64 @@ describe("PennyDrawer — composer (paper-airplane send)", () => {
     // The send affordance is an icon button with an accessible name (not text).
     const send = screen.getByRole("button", { name: /^send$/i });
     expect(within(send).queryByRole("img")).not.toBeInTheDocument(); // svg is aria-hidden
+  });
+
+  it("nests the paper-airplane send button INSIDE the input field (#23)", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+
+    // A single field wraps the textarea + the in-field send button (bottom-right),
+    // not a sibling button beside the input.
+    const field = screen.getByTestId("penny-field");
+    expect(field).toHaveStyle({ position: "relative" });
+    const input = within(field).getByRole("textbox", { name: /ask penny/i });
+    const send = within(field).getByRole("button", { name: /^send$/i });
+    expect(send).toHaveStyle({ position: "absolute" });
+    // Consistent font size: the input reads at the same size as the transcript bubbles.
+    expect(input).toHaveStyle({ fontSize: PENNY_MESSAGE_FONT_SIZE });
+  });
+
+  it("sends on Enter and inserts a newline on Shift+Enter (keyboard-first, preserved)", async () => {
+    const user = userEvent.setup();
+    render(<PennyGeneralAssistant />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    const input = screen.getByRole("textbox", { name: /ask penny/i }) as HTMLTextAreaElement;
+
+    // Shift+Enter inserts a newline and does NOT send (no real turn yet).
+    await user.type(input, "line one");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    await user.type(input, "line two");
+    expect(input.value).toMatch(/line one\nline two/);
+    expect(screen.queryByTestId("penny-turn")).not.toBeInTheDocument();
+
+    // Enter sends → the turns render.
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getAllByTestId("penny-turn").length).toBeGreaterThan(0));
+  });
+});
+
+describe("PennyDrawer — contextual quick-replies (#11/#264)", () => {
+  it("shows NO quick-reply chips by default (not always-on)", async () => {
+    const user = userEvent.setup();
+    render(<PennyDrawer />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    expect(screen.queryByTestId("penny-quick-replies")).not.toBeInTheDocument();
+  });
+
+  it("renders contextual chips ONLY when provided, and fires onSelect on click", async () => {
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    render(<PennyDrawer quickReplies={[{ id: "qr1", label: "Looks right", onSelect }]} />);
+    await user.click(screen.getByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+
+    const chips = screen.getByTestId("penny-quick-replies");
+    await user.click(within(chips).getByRole("button", { name: /looks right/i }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 });
 
