@@ -53,6 +53,8 @@ export interface WizardDraft {
   shareY1: number;
   shareY2: number;
   shareY3: number;
+  shareY4: number;
+  shareY5: number;
   // Occupancy is now driven by sq ft × rent (feature #245): the wizard sends
   // `rent_per_sqft` and the engine resolves occupancy = building_sqft × rent_per_sqft.
   // `occupancyAnnual` is kept for the Penny draft bridge / server back-compat only.
@@ -95,6 +97,8 @@ export interface CreatePayload {
       share_y1: number;
       share_y2: number;
       share_y3: number;
+      share_y4: number;
+      share_y5: number;
     };
     source_of_funds: { cash: number; grant: number; loan: number };
     // Opening anchor + timed cost schedule (Spec §5/§7). Optional on the payload
@@ -129,6 +133,8 @@ export interface ServerCreateBody {
     share_y1: string;
     share_y2: string;
     share_y3: string;
+    share_y4: string;
+    share_y5: string;
     donation_value: string;
     building_sqft: string;
     salesfloor_pct: string;
@@ -182,6 +188,8 @@ export function toServerCreateBody(p: CreatePayload): ServerCreateBody {
       share_y1: String(p.inputs.demand.share_y1),
       share_y2: String(p.inputs.demand.share_y2),
       share_y3: String(p.inputs.demand.share_y3),
+      share_y4: String(p.inputs.demand.share_y4),
+      share_y5: String(p.inputs.demand.share_y5),
       donation_value: String(p.inputs.donation_value),
       building_sqft: String(p.inputs.building_sqft),
       salesfloor_pct: String(p.inputs.salesfloor_pct),
@@ -227,6 +235,8 @@ export function buildCreatePayload(d: WizardDraft): CreatePayload {
         share_y1: d.shareY1 / 100,
         share_y2: d.shareY2 / 100,
         share_y3: d.shareY3 / 100,
+        share_y4: d.shareY4 / 100,
+        share_y5: d.shareY5 / 100,
       },
       source_of_funds: { cash: d.cash, grant: d.grant, loan: d.loan },
       // Target opening date is dropped (owner Decision 13); always null server-side.

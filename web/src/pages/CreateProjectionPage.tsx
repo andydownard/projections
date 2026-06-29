@@ -11,6 +11,7 @@
 // acceptance is IMPLICIT (owner Decision 5 — the disclaimer still shows + stamps
 // artifacts). NO client math — the server computes (PRD §13 / CLAUDE.md hard rule).
 import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useToast } from "../components/Toast";
 
 import {
   PennyError,
@@ -36,8 +37,7 @@ import {
 import { StepIndicator } from "../wizard/StepIndicator";
 import { StepSelectAddress } from "../wizard/StepSelectAddress";
 import { StepSquareFootage } from "../wizard/StepSquareFootage";
-import { StepHouseholds } from "../wizard/StepHouseholds";
-import { StepDonorMarket } from "../wizard/StepDonorMarket";
+import { StepConfigureDonations } from "../wizard/StepConfigureDonations";
 import { StepStartupCosts } from "../wizard/StepStartupCosts";
 import { useWizardState, type WizardState } from "../wizard/useWizardState";
 import {
@@ -60,6 +60,8 @@ const DRAFT_FIELD_LABELS: Record<string, string> = {
   share_y1: "Year-1 donor share",
   share_y2: "Year-2 donor share",
   share_y3: "Year-3 donor share",
+  share_y4: "Year-4 donor share",
+  share_y5: "Year-5 donor share",
   basket: "Average basket",
   donation_value: "Donation value",
   occupancy_annual: "Annual occupancy",
@@ -113,6 +115,8 @@ function wizardToDraftState(wiz: WizardState): PennyDraftState {
       share_y1: String(wiz.draft.shareY1),
       share_y2: String(wiz.draft.shareY2),
       share_y3: String(wiz.draft.shareY3),
+      share_y4: String(wiz.draft.shareY4),
+      share_y5: String(wiz.draft.shareY5),
       basket: String(wiz.draft.basket),
       donation_value: String(wiz.draft.donationValue),
       occupancy_annual: String(wiz.draft.occupancyAnnual),
@@ -142,6 +146,7 @@ function initialStepFromUrl(): number {
 
 export function CreateProjectionPage({ aiOff = false, step = null }: CreateProjectionPageProps) {
   const wiz = useWizardState(undefined, initialStepFromUrl());
+  const { showToast } = useToast();
 
   // --- route ↔ step-cursor sync (Epic B #261) --------------------------------
   // The wizard cursor and the URL are kept in lock-step: a Next/Back/jump pushes a
@@ -319,6 +324,12 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
       case "share_y3":
         wiz.set("shareY3", Number(value));
         break;
+      case "share_y4":
+        wiz.set("shareY4", Number(value));
+        break;
+      case "share_y5":
+        wiz.set("shareY5", Number(value));
+        break;
       case "basket":
         wiz.set("basket", Number(value));
         break;
@@ -430,6 +441,7 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
       if (created.owner_token && !hadOwnerIdentity) {
         setOwnerToken(created.owner_token);
       }
+      showToast("Projection created.");
       // Land directly on the editable projection (owner Decision 12).
       window.history.pushState(null, "", `/p/${created.view_slug}/edit`);
       window.dispatchEvent(new PopStateEvent("popstate"));
@@ -490,7 +502,7 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
           <h1 className="wizard__eyebrow">Create projection</h1>
         </header>
 
-        <StepIndicator current={wiz.step} onJump={wiz.goTo} />
+        <StepIndicator current={wiz.step} furthestReached={wiz.furthestReached} onJump={wiz.goTo} />
 
         <form
           className="wizard__form"
@@ -511,8 +523,7 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
           <div ref={stepContainerRef} style={{ display: "contents" }}>
             {wiz.stepKey === "address" && <StepSelectAddress state={wiz} />}
             {wiz.stepKey === "square-footage" && <StepSquareFootage state={wiz} />}
-            {wiz.stepKey === "households" && <StepHouseholds state={wiz} />}
-            {wiz.stepKey === "donor-market" && <StepDonorMarket state={wiz} />}
+            {wiz.stepKey === "configure-donations" && <StepConfigureDonations state={wiz} />}
             {wiz.stepKey === "startup-costs" && (
               <StepStartupCosts
                 state={wiz}
@@ -544,15 +555,6 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
           >
             {stepAnnounce}
           </div>
-
-          {/* The planning-estimates disclaimer stays visible — acceptance is now
-              IMPLICIT on Generate (owner Decision 5 / PRD §21); EXPORT_DISCLAIMER still
-              stamps the exported artifacts server-side. */}
-          {wiz.isLast && (
-            <p className="wizard__disclaimer" data-testid="terms-disclaimer">
-              These are planning estimates, not financial advice. Generating accepts that.
-            </p>
-          )}
 
           <div className="wizard__actions">
             {/* Back is bottom-left on every step EXCEPT the first (owner Decision 7). */}

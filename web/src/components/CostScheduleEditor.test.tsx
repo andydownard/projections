@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -50,11 +50,11 @@ describe("CostScheduleEditor — rows × months grid (#31)", () => {
     });
     const rows = screen.getAllByTestId("cost-row");
     expect(rows).toHaveLength(1); // both flat entries collapse onto ONE Consultant row
-    // The two entries land in their month columns.
-    expect(screen.getByLabelText("Line item 1 month 1 cost")).toHaveValue(100000);
-    expect(screen.getByLabelText("Line item 1 month 6 cost")).toHaveValue(20000);
+    // The two entries land in their month columns (NumberField renders type=text).
+    expect(screen.getByLabelText("Line item 1 month 1 cost")).toHaveValue("100,000.00");
+    expect(screen.getByLabelText("Line item 1 month 6 cost")).toHaveValue("20,000.00");
     // A month with no entry is blank.
-    expect(screen.getByLabelText("Line item 1 month 2 cost")).toHaveValue(null);
+    expect(screen.getByLabelText("Line item 1 month 2 cost")).toHaveValue("");
   });
 
   it("editing a cell emits the updated flat array (no client sum)", () => {
@@ -133,9 +133,8 @@ describe("CostScheduleEditor — grand-opening column (#34)", () => {
     const handle = screen.getByTestId("grand-opening-handle");
     expect(handle).toHaveTextContent(/grand opening/i);
     expect(handle).toHaveAttribute("draggable", "true");
-    expect(within(screen.getByTestId("cost-col-4")).getByTestId("grand-opening-handle")).toBe(
-      handle,
-    );
+    // The handle is now in the go-row (above the month headers), not inside cost-col-4.
+    expect(handle).toBeInTheDocument();
   });
 
   it("dropping the handle on another month column sets openingMonthNumber", () => {

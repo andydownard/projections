@@ -1,53 +1,52 @@
-// web/src/wizard/StepIndicator.tsx — the wizard's step progress indicator.
+// web/src/wizard/StepIndicator.tsx — wizard breadcrumb navigation (W1 redesign).
 //
-// An accessible ordered list of the steps with the current one marked
-// aria-current. Completed steps are clickable (jump back); future steps are
-// not yet reachable (gating lives in useWizardState). Purely presentational.
+// Full-width underlined breadcrumbs (replaces the numbered-pill `.wizard-steps`
+// design). Equal-flex segments; current step = brand-primary 2px underline + bold;
+// any step <= furthestReached is clickable (lets users navigate without losing work).
+// The draft survives because CreateProjectionPage never unmounts the wizard hook.
 import { STEP_LABELS, STEPS, type StepKey } from "./useWizardState";
 
 export interface StepIndicatorProps {
   current: number;
+  furthestReached: number;
   onJump?: (i: number) => void;
 }
 
-export function StepIndicator({ current, onJump }: StepIndicatorProps) {
+export function StepIndicator({ current, furthestReached, onJump }: StepIndicatorProps) {
   return (
-    <nav className="wizard-steps" aria-label="Create projection steps">
-      <ol className="wizard-steps__list">
-        {STEPS.map((key: StepKey, i) => {
-          const state = i < current ? "done" : i === current ? "current" : "todo";
-          const label = STEP_LABELS[key];
-          const clickable = i < current && !!onJump;
-          return (
-            <li
-              key={key}
-              className={`wizard-steps__item wizard-steps__item--${state}`}
-              aria-current={i === current ? "step" : undefined}
-              data-testid={`step-indicator-${key}`}
-            >
-              {clickable ? (
-                <button
-                  type="button"
-                  className="wizard-steps__btn"
-                  onClick={() => onJump(i)}
-                >
-                  <span className="wizard-steps__num" aria-hidden="true">
-                    {i + 1}
-                  </span>
-                  {label}
-                </button>
-              ) : (
-                <span className="wizard-steps__label">
-                  <span className="wizard-steps__num" aria-hidden="true">
-                    {i + 1}
-                  </span>
-                  {label}
-                </span>
-              )}
-            </li>
-          );
-        })}
-      </ol>
+    <nav className="wizard-breadcrumb" aria-label="Create projection steps">
+      {STEPS.map((key: StepKey, i) => {
+        const isCurrent = i === current;
+        const clickable = i <= furthestReached && i !== current && !!onJump;
+        const label = STEP_LABELS[key];
+        return (
+          <div
+            key={key}
+            className={[
+              "wizard-breadcrumb__item",
+              isCurrent ? "wizard-breadcrumb__item--current" : "",
+              i < current ? "wizard-breadcrumb__item--done" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            aria-current={isCurrent ? "step" : undefined}
+            data-testid={`step-indicator-${key}`}
+          >
+            {clickable ? (
+              <button
+                type="button"
+                className="wizard-breadcrumb__btn"
+                onClick={() => onJump(i)}
+                aria-label={label}
+              >
+                {label}
+              </button>
+            ) : (
+              <span className="wizard-breadcrumb__label">{label}</span>
+            )}
+          </div>
+        );
+      })}
     </nav>
   );
 }
