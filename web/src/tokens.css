@@ -329,15 +329,13 @@ body {
   padding: 0;
 }
 
-.list__header,
-.list-empty__actions {
+/* The list header carries the heading + the upper-right "New projection" control.
+ * Both the populated AND empty states use it now (QA #4: one consistent button). */
+.list__header {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
-}
-
-.list__header {
   justify-content: space-between;
 }
 

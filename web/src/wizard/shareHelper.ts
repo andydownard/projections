@@ -205,9 +205,16 @@ export function toServerCreateBody(p: CreatePayload): ServerCreateBody {
 
 /** Map a wizard draft to the POST /api/projections body (API_SPEC §4.2). */
 export function buildCreatePayload(d: WizardDraft): CreatePayload {
+  const query = [d.city, d.state].filter(Boolean).join(", ");
+  // QA P2 #24 — the store name is OPTIONAL and the field placeholder promises it
+  // "Defaults to the address." A BLANK (or whitespace-only) name resolves to the
+  // address here so the server never falls back to its "Untitled projection"
+  // placeholder. d.city holds the resolved formatted_address (onResolved), so the
+  // address-derived name flows into BOTH name + inputs.org_name (toServerCreateBody).
+  const name = d.name.trim() || query;
   return {
-    name: d.name,
-    location: { query: [d.city, d.state].filter(Boolean).join(", ") },
+    name,
+    location: { query },
     trade_area: { basis: d.basis, households: d.households },
     inputs: {
       building_sqft: d.buildingSqft,

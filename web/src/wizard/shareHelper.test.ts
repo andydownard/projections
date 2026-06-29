@@ -89,6 +89,26 @@ describe("buildCreatePayload (maps wizard draft → POST /api/projections body)"
       { category: "Build-out", month: 3, amount: 60000 },
     ]);
   });
+
+  // QA P2 #24 — the store name is OPTIONAL and "Defaults to the address" (the field
+  // placeholder promises it). A BLANK name must default to the RESOLVED ADDRESS, not
+  // the server's "Untitled projection" placeholder. The resolved address lives in
+  // d.city (onResolved persists result.location.formatted_address there).
+  it("defaults a blank store name to the resolved address (not Untitled)", () => {
+    const payload = buildCreatePayload({ ...DRAFT, name: "" });
+    expect(payload.name).toBe("Longview, TX");
+    expect(payload.name).not.toMatch(/untitled/i);
+  });
+
+  it("defaults a whitespace-only store name to the resolved address", () => {
+    const payload = buildCreatePayload({ ...DRAFT, name: "   " });
+    expect(payload.name).toBe("Longview, TX");
+  });
+
+  it("preserves a non-blank store name verbatim (trimmed)", () => {
+    const payload = buildCreatePayload({ ...DRAFT, name: "  House of Hope  " });
+    expect(payload.name).toBe("House of Hope");
+  });
 });
 
 describe("toServerCreateBody (nested wizard payload → flat backend body)", () => {
@@ -120,5 +140,15 @@ describe("toServerCreateBody (nested wizard payload → flat backend body)", () 
     expect(body.inputs.target_opening_date).toBeNull();
     expect(Array.isArray(body.inputs.cost_schedule)).toBe(true);
     expect(body.inputs.cost_schedule[0]).toMatchObject({ month: 1 });
+  });
+
+  // QA P2 #24 — a blank store name reaches the backend as the ADDRESS-derived name in
+  // BOTH `name` and `inputs.org_name`, so the server never falls back to its
+  // "Untitled projection" placeholder (name = body.name or org_name or "Untitled…").
+  it("sends the address-derived name (name + org_name) when the store name is blank", () => {
+    const body = toServerCreateBody(buildCreatePayload({ ...DRAFT, name: "" }));
+    expect(body.name).toBe("Longview, TX");
+    expect(body.inputs.org_name).toBe("Longview, TX");
+    expect(body.name).not.toMatch(/untitled/i);
   });
 });
