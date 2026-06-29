@@ -5,13 +5,13 @@ A server-authoritative tool that helps a first-time nonprofit thrift-store opera
 
 > **Global engineering contract:** https://github.com/rallytasks/agents/blob/main/AGENTS.md
 > Every rule there applies to this repo. Cite rules by ID — `SECRETS`, `TENANT`, `DB`, `MUTATION`, `SERVER`, `OUTBOUND`, `MONEY`, `DESTRUCTIVE`, `INJECTION`, `PLAN`, `TDD`, `VERIFY`, `GIT`, `DOCS`, `HYGIENE`, `PATTERNS`, `REGRESSIONS`, `TRACKING`, `STYLE`, `STANDARD`, `API`, `SESSION`, `PII`, `AI`, `UI`, plus the portfolio conventions (Feedback FAB, Maximum parallelization). This file adds **only** project specifics and any `Override <ID>:` line. Shared rules live in the global file **once** — they are never copied here. A `grep "Override "` of this file lists exactly where projections diverges.
-@../../agents/AGENTS.md   <!-- local-checkout convenience; projections is nested one level deeper, so two `..`. No-op in a standalone clone — the URL above is canonical. -->
+@../agents/AGENTS.md   <!-- local-checkout convenience: agents/ is a sibling of projections/ under projects/, so one `..`. No-op in a standalone clone; the URL above is canonical. -->
 
-**`CLAUDE.md` is a symlink to this file. Edit `AGENTS.md`; never edit `CLAUDE.md`.**
+**`CLAUDE.md` is a thin pointer that imports this file (`@AGENTS.md`); this file in turn loads the global contract (`@../agents/AGENTS.md`). Put all project rules in `AGENTS.md`; never in `CLAUDE.md`.**
 
 **Read first:** [reference/PRD.md](./reference/PRD.md) (authoritative requirements) → this file → [ARCHITECTURE.md](./ARCHITECTURE.md) → [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) → [BUILD_PLAN.md](./BUILD_PLAN.md) → [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) (the bar).
 
-**Status:** scaffolded, **not yet built**. The Python script in `reference/` is a *calibration seed*, not the v1 engine — see [The engine is a rewrite](#the-engine-is-a-rewrite-not-a-reuse-read-before-touching-m1).
+**Status:** **built and deployed** (prod `projections.thriftly.com`; engine `MODEL_VERSION 2.6.0` / `COMPUTE_SCHEMA 1.5.0`); now in an **iterative owner-feedback phase**. The live engine is `engine/`; `reference/.../generate_projection.py` remains only the calibration golden. See [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) for the live math authority.
 
 ---
 
@@ -26,7 +26,7 @@ A server-authoritative tool that helps a first-time nonprofit thrift-store opera
 | Access | **Capability tokens** for viewers (no login) ⊕ an **optional Clerk satellite login** for the owner/editor, ship-dark behind `CLERK_ENABLED` (see `Override SESSION` below). |
 | AI | Anthropic primary, OpenAI fallback; **extract-only** research with citation validation; **numeric-grounded** narrative. Compute works fully with AI disabled (PRD §16/§17/§21). |
 | Health | `GET /api/health`. |
-| Key files (once built) | `engine/compute.py` (pure math), `engine/monthly.py`, `dag.py`, `decision.py`, `xlsx.py`, `packet.py`, `model.py` (constants + versions), `engine/tests/golden/`; `app/main.py`, `app/deps.py`, `app/routers/`, `app/store/` (`base.py` Protocol, `sqlite.py`, `postgres.py` stub). |
+| Key files | `engine/compute.py` (pure math), `engine/monthly.py`, `dag.py`, `decision.py`, `xlsx.py`, `packet.py`, `model.py` (constants + versions), `engine/tests/golden/`; `app/main.py`, `app/deps.py`, `app/routers/`, `app/store/` (`base.py` Protocol, `sqlite.py`, `postgres.py` stub). |
 | Reference | `reference/PRD.md`, `reference/DESIGN_PROMPT.md`, `reference/thrift-store-projections-skill/` (SKILL.md, `methodology.md`, `scripts/generate_projection.py`, `scripts/recalc.py`, `examples/house_of_hope.json`). |
 
 ## Commands
@@ -52,7 +52,7 @@ One small nonprofit/church-backed operator planning their **first** store in 3�
 
 ## Top damage risks (the single home — DoD references this)
 
-1. **Treating M1 as "wire up the existing engine."** It is a rewrite (~70% net-new: monthly cash-flow, decision metrics, % cost lines, escalator, three shares, override DAG). Scope it from the gap table below.
+1. **Forking or re-deriving the math authority.** The engine (`engine/`, `MODEL_VERSION 2.6.0`) is the *one* math authority -- never silently recompute stored snapshots, never add a second compute surface; bump `model_version` + regenerate goldens in the same change for any math change. (The original M1 rewrite is complete; the gap table below is historical context.)
 2. **Shipping a second math authority** by porting the prototype's client `calc*` functions — violates `SERVER`/PRD §13 and breaks the golden gate.
 3. **Leaking a resolvable projection link / financial field into GitHub feedback** (PRD §22). Only `support_id`.
 4. **Cross-owner data access / global list** — every query is owner-scoped (`TENANT`, PRD §20).
@@ -65,7 +65,7 @@ One small nonprofit/church-backed operator planning their **first** store in 3�
 
 Every bullet is project-specific or overrides a global default. Generic rules (plan-first, red-green TDD, evidence-before-done, secrets-in-env, branch/CI/deploy, additive migrations, parameterized SQL, untrusted-input-is-data, WCAG-AA, YAGNI) are **not** restated — they live in the global file under the cited ID.
 
-- **ENGINE — the one version-locked math authority** (extends `SERVER` + `MONEY`). `model_version` + `compute_schema_version` are stamped on every `computed_json`. Projections **never silently recompute** on a newer engine — read returns the stored snapshot verbatim and surfaces "New model available"; `upgrade-model` writes a **new revision** preserving the prior (PRD §13). The engine is the *one* math authority; the server emits display strings as the *one* formatting authority (`{raw, display}`) — DRY. It is a **rewrite, not a reuse** ([below](#the-engine-is-a-rewrite-not-a-reuse-read-before-touching-m1)).
+- **ENGINE — the one version-locked math authority** (extends `SERVER` + `MONEY`). `model_version` + `compute_schema_version` are stamped on every `computed_json`. Projections **never silently recompute** on a newer engine — read returns the stored snapshot verbatim and surfaces "New model available"; `upgrade-model` writes a **new revision** preserving the prior (PRD §13). The engine is the *one* math authority; the server emits display strings as the *one* formatting authority (`{raw, display}`) — DRY. (Engine built; see [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) for the live contract.)
 - **NO-CLIENT-MATH** (`SERVER`, load-bearing here). The interactive prototype's `support.js` (`calcYears`/`calcMonthly`/`scenario`/`startupTotal`/`paybackYears`) is **forbidden in production** — the prototype is a *layout + view-model field-name reference only*. The client sends inputs/overrides via `PATCH` and renders `computed_json` (PRD §13).
 - **GOLDEN — the three-way reconcile is CI-blocking** (extends `VERIFY` + `TDD`). server compute == stored `computed_json` == LibreOffice recalc of the exported `.xlsx`, **with AND without overrides**, within **< $0.50** on dollar cells / **< 0.1pp** on percent cells, with **zero** formula errors (`#VALUE! #DIV/0! #REF! #NAME? #NULL! #NUM! #N/A`). Pin the `soffice` version in the build image. **Built in M1 before feature breadth;** if it is red, nothing lands (PRD §13/§18). Full gate in [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md).
 - **Override SESSION + Override TENANT — capability tokens for viewers ⊕ optional Clerk owner login, cookie-blind API.** Owner ≥256-bit bearer in `localStorage`; `view_slug` ≥128-bit plaintext **lookup key**; edit/role secrets in the **URL fragment only** (scrubbed after read with `searchParams.delete()` + `replaceState()`; **never** in path/query/logs). Generated with a CSPRNG (`secrets.token_urlsafe`), stored **hashed** (SHA-256), compared **constant-time** (`hmac.compare_digest`). The global `SESSION` HttpOnly-cookie model does not apply. **Clerk satellite amendment (ship dark behind `CLERK_ENABLED`; supersedes the "no login / no cookies" clause for the OWNER/editor only — approved override, `docs/plans/2026-06-27-clerk-satellite-auth.md` §0 + [SECURITY.md](./SECURITY.md) §2.8):** projections.thriftly.com is a cross-apex Clerk **satellite** of the rallytasks.com primary. When enabled, the owner/editor may sign in via Clerk and owner-scope keys on the Clerk `userId`/`orgId` (`owner_clerk_user_id`/`owner_org_id`, additive, nullable — a row is token-owned OR clerk-owned; *claim* is a follow-up); **viewers (board/funder/advisor) NEVER log in — capability share-links are preserved verbatim.** Our FastAPI verifies a short-lived Clerk session JWT in `Authorization: Bearer` **networklessly against the primary's JWKS** (`app/clerk/verify.py`; RS256-only, `iss`/`exp`/`nbf`/`azp` enforced, fail-closed) and holds **NO Clerk secret** (finding C1 — boot refuses if `CLERK_SECRET_KEY`/`CLERK_WEBHOOK_SIGNING_SECRET` is set). The API is **cookie-blind by invariant** — it never reads `request.cookies`, not even the Clerk `__session` cookie — so there is **still no CSRF** (Regression #11 preserved). With `CLERK_ENABLED` off (the default), the app is byte-for-byte the capability-token app it is today. **Do NOT introduce a cookie our API trusts.** `TENANT` still applies in full across BOTH key types: lists are owner-scoped, never global; no cross-owner read/write (PRD §20).
@@ -77,30 +77,28 @@ Every bullet is project-specific or overrides a global default. Generic rules (p
 - **Terms acceptance before export/share** (planning estimates, not advice) (PRD §21).
 - **Override DB** (project deltas only; the rest — additive-only migrations, no DROP/recreate, parameterized SQL, app-generated string PKs — per global `DB`). No SQLite-only SQL above the `Store` interface so the Postgres path stays drop-in; take a **pre-migration Litestream snapshot**; DB at `DB_PATH=/data/projections.db` (never `/app`).
 - **DOCS-CODE** (instantiates `DOCS`). Any PR touching the engine, the API contract (`computed_json`/view-model), or the schema **updates the matching doc — `ENGINE_CONTRACT.md` / `API_SPEC.md` / `DATA_MODEL.md` — in the same PR**. Keep plans in `docs/plans/` (no new tracking files, per `TRACKING`).
-- **M-1 is a hard gate** (do not skip). Before heavy build of M3+ (research/narrative/overrides): **20 ICP interviews · 10 manual projections · 5 board/funder shares · 3 paid-or-SQL conversions**, plus a human go/no-go (PRD §28). An eager agent must not barrel past this. The free-vs-paid gate (PRD §3) is a config decision, not a rebuild.
+- **Demand validation & business-model gate remain open** for the *paid* path (the build has shipped). The free create→compute→decision→export loop is not hard-gated. Free-vs-paid (PRD §3) is a config decision, not a rebuild.
 - **MODEL-SELECTION** (instantiates portfolio "Maximum parallelization"). **Name the model in every subagent dispatch** — never inherit the session default. *cheapest* = transcription where the plan contains complete code (most M2/M6 CRUD, `.xlsx` cell wiring); *standard* = integration/glue (override-DAG, monthly cash-flow, research retrieval, 409 handling); *most-capable* = the **M1 engine rewrite + decision-metric solver + every milestone-end whole-branch review**. Keep a `.superpowers` progress ledger so a compaction never re-dispatches finished work.
 
 ---
 
-## The engine is a rewrite, not a reuse (read before touching M1)
+## Engine history & resolved defaults (the rewrite is DONE -- reference only)
 
-The PRD calls the Python engine "the single math authority." **As-built it is not.** `reference/.../generate_projection.py` implements the OLD model and satisfies ~30% of v1: it is **annual-only**, hard-codes **Year-2 = midpoint** of Y1/Y3 (`compute()` L65; Excel `=AVERAGE(...)` L209), has **no monthly cash-flow**, **no decision metrics**, **no override/DAG**, treats supplies as a **fixed $3,700 line** (L44), has **no Marketing line and no rent escalator**, and emits **unguarded divisions** (`=net/totrev` L257, `=startup/Y1net` L284) that produce `#DIV/0!` — an automatic recalc-gate failure.
+The M1 engine rewrite is complete. `engine/` (`MODEL_VERSION 2.6.0` / `COMPUTE_SCHEMA 1.5.0`) is the live math authority. The gap table below is historical context showing what was built; all rows are now DONE. `reference/.../generate_projection.py` is retained only as the calibration golden (the original annual-only seed used to verify the driver chain). The full live formula spec and defaults are in [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md).
 
-**M1 is a versioned rewrite into a pure compute core**, keeping the bottom-up driver chain and blue-input/live-formula Excel styling as the *calibration seed* and extending everything else. The legacy script is retained **only as a calibration golden**. Each row below is an M1 TDD task: write the failing golden test first. **The full gap table, formula spec, and resolved defaults are authoritative in [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md);** this is the single working summary.
-
-| Concern | As-built (`generate_projection.py`) | v1 requirement | Status |
+| Concern | Original seed (`generate_projection.py`) | v1 requirement | Status |
 |---|---|---|---|
-| Driver chain (hh × share → donations → retail → customers → salvage → total) | `compute()` L63–94 | keep verbatim | **KEEP** |
-| Blue input / live-formula Excel styling | exists | keep + extend | **KEEP** |
-| Year-2 share | midpoint of Y1/Y3 (L65) | **three explicit shares** (PRD §7.1) — kill `AVERAGE`; Y2 has its own blue input | **REWRITE** |
-| Supplies & processing | fixed $3,700 (L44) | **% of revenue, default 5.0%** (PRD §7.3) | **REWRITE** |
-| Marketing & outreach | none | **% of revenue, default 3.75%** (new line) | **NEW** |
-| Rent escalator | none | **`rent_y1 × (1+escalator)^(y-1)`, 3.0%, Y2–Y3** | **NEW** |
-| Monthly M0–M12 cash-flow | none | S-curve donation ramp, hire-date payroll, timed startup outflows; **Year-1 annual = roll-up of the 12 months** (PRD §10) | **NEW** |
-| Decision metrics | none | break-even month; **capital required = \|peak cash shortfall\| + reserve buffer** (the monthly trough already embeds startup; never add it twice); first-year cash gap; runway; sensitivity (PRD §12) | **NEW** |
-| Override DAG | none | topological resolve; **no upstream back-solve**; derived rows/KPIs **non-pinnable** (server-enforced); key `"{node}#{year}"` (PRD §14) | **NEW** |
-| Edge-case N/A | unguarded → `#DIV/0!` | explicit `null` + `flags` map; Excel `IF(denom=0,"",num/denom)` (PRD §12.4) | **NEW** |
-| Output shape | positional tuples | the **Appendix-D view-model** as native output (below) | **NEW** |
+| Driver chain (hh x share → donations → retail → customers → salvage → total) | `compute()` L63-94 | keep verbatim | **DONE** |
+| Blue input / live-formula Excel styling | exists | keep + extend | **DONE** |
+| Year-2 share | midpoint of Y1/Y3 (L65) | **three explicit shares** (PRD §7.1) -- kill `AVERAGE`; Y2 has its own blue input | **DONE** |
+| Supplies & processing | fixed $3,700 (L44) | **% of revenue, default 5.0%** (PRD §7.3) | **DONE** |
+| Marketing & outreach | none | **% of revenue, default 3.75%** (new line) | **DONE** |
+| Rent escalator | none | **`rent_y1 x (1+escalator)^(y-1)`, 3.0%, Y2-Y3** | **DONE** |
+| Monthly M0-M12 cash-flow | none | S-curve donation ramp, hire-date payroll, timed startup outflows; **Year-1 annual = roll-up of the 12 months** (PRD §10) | **DONE** |
+| Decision metrics | none | break-even month; **capital required = \|peak cash shortfall\| + reserve buffer** (the monthly trough already embeds startup; never add it twice); first-year cash gap; runway; sensitivity (PRD §12) | **DONE** |
+| Override DAG | none | topological resolve; **no upstream back-solve**; derived rows/KPIs **non-pinnable** (server-enforced); key `"{node}#{year}"` (PRD §14) | **DONE** |
+| Edge-case N/A | unguarded → `#DIV/0!` | explicit `null` + `flags` map; Excel `IF(denom=0,"",num/denom)` (PRD §12.4) | **DONE** |
+| Output shape | positional tuples | the **Appendix-D view-model** as native output (below) | **DONE** |
 
 **Resolved defaults** (close PRD §7.3 open items; the golden fixtures use these — full table in [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) §1):
 
@@ -242,3 +240,4 @@ A confidently-wrong break-even month is worse than none: label confidence, show 
 | Redacted feedback → GitHub + intent → CRM (idea fab) | [IDEA_FAB.md](./IDEA_FAB.md) |
 | Final product/engineering calls (labor %, stack, fixtures, ratio meter) | [DECISIONS.md](./DECISIONS.md) |
 | Calibration seed engine + LibreOffice recalc gate | `reference/thrift-store-projections-skill/scripts/{generate_projection.py,recalc.py}` |
+| Historical / archived docs (shipped or superseded) | [docs/archive/README.md](./docs/archive/README.md) |
