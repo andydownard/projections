@@ -192,18 +192,24 @@ body {
   padding: 0 1.5rem;
   border: 1px solid var(--brand-primary);
   border-radius: 999px;
-  background: var(--brand-primary);
-  color: #ffffff;
+  /* White/outlined "Sign in with X" treatment so the Rally wordmark (its own
+     brand green #35644F) stays visible. A filled brand-primary background would
+     hide a same-color mark. Mirrors .owner-auth__sign-in. */
+  background: var(--surface);
+  color: var(--brand-primary);
   font: inherit;
   font-size: var(--text-base);
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 .owner-gate__sign-in:hover {
-  background: var(--brand-deep);
+  /* Keep the light background on hover so the green Rally mark stays visible;
+     deepen the border + text for the affordance. */
+  background: var(--surface);
   border-color: var(--brand-deep);
+  color: var(--brand-deep);
 }
 .owner-gate__sign-in:focus-visible {
   outline: var(--focus-ring);
