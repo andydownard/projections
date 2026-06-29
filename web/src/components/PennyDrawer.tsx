@@ -39,6 +39,11 @@ import {
 } from "react";
 
 import { FieldChange } from "./FieldChange";
+import {
+  OverrideAudit,
+  type OverrideAuditItem,
+  type OverrideCommentTarget,
+} from "./OverrideAudit";
 import { PENNY_MESSAGE_FONT_SIZE, PennyTranscript, type PennyTurn } from "./PennyTranscript";
 import { ProposalUpload } from "./ProposalUpload";
 import { useCoexistenceModal, useSidePanel, Z } from "./sidePanels";
@@ -852,6 +857,27 @@ export interface PennyAssistantProps {
    */
   onApplied?: (revisionIds: string[]) => void;
   avatarSrc?: string;
+  // ---- Override audit + comment capture (Epic G2, decision #42, #266). The
+  // standalone right-edge Override Inspector is eliminated; its function lives in
+  // Penny's drawer: the at-a-glance audit + a focused justification prompt that
+  // persists on the override through the EXISTING contract (no data-model change).
+  /** The pinned overrides to audit inside the drawer (server display strings). */
+  overrides?: OverrideAuditItem[];
+  /** Reset a pin — a host-owned forward edit clearing the override. */
+  onResetPin?: (node: string, year: number) => void;
+  /** Request the focused override-comment prompt for an override. */
+  onComment?: (node: string, year: number) => void;
+  /** The override being justified now — renders Penny's focused comment prompt. */
+  commentTarget?: OverrideCommentTarget | null;
+  /** Existing note to seed the comment prompt. */
+  commentInitial?: string;
+  /** Persist the justification onto the override (existing override contract). */
+  onSubmitComment?: (node: string, year: number, note: string) => void;
+  /** Dismiss the comment prompt without saving. */
+  onCancelComment?: () => void;
+  /** Controlled drawer open — lets the host SLIDE Penny OUT to capture a comment. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 interface PennyErrorView {
@@ -891,6 +917,15 @@ export function PennyAssistant({
   initialTurns = [],
   onApplied,
   avatarSrc,
+  overrides = [],
+  onResetPin,
+  onComment,
+  commentTarget = null,
+  commentInitial = "",
+  onSubmitComment,
+  onCancelComment,
+  open,
+  onOpenChange,
 }: PennyAssistantProps) {
   const [turns, setTurns] = useState<PennyTurn[]>(initialTurns);
   const [pending, setPending] = useState(false);
@@ -972,8 +1007,25 @@ export function PennyAssistant({
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
 
+  // The relocated overrides audit + the focused justification prompt (decision #42).
+  // Shown when there is something to audit OR an override is being justified — so an
+  // empty projection never grows a stray section. It sits ABOVE the transcript so the
+  // "why did you override …?" prompt is the first thing a slid-out Penny presents.
+  const showAudit = overrides.length > 0 || !!commentTarget;
+
   const body = (
     <>
+      {showAudit && (
+        <OverrideAudit
+          overrides={overrides}
+          onResetPin={onResetPin}
+          onComment={onComment}
+          commentFor={commentTarget}
+          commentInitial={commentInitial}
+          onSubmitComment={onSubmitComment}
+          onCancelComment={onCancelComment}
+        />
+      )}
       <PennyTranscript turns={turns} pending={pending} />
       {error && (
         <div
@@ -1003,6 +1055,8 @@ export function PennyAssistant({
       settingsHref={settingsHref}
       onOpenSettings={onOpenSettings}
       avatarSrc={avatarSrc}
+      open={open}
+      onOpenChange={onOpenChange}
       composer={
         <LiveComposer
           pending={pending}

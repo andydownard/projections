@@ -1,13 +1,16 @@
-// web/src/components/coexistence.test.tsx — Penny LEFT ↔ Override Inspector RIGHT
-// spatial-grammar acceptance (Spec B §10, issue #129 / PE10). Renders the two real
-// panels inside the shared SidePanelProvider and asserts the documented coexistence:
-// z-order, ≥1180px non-modal coexistence (no focus steal, no double-dim), and
-// <1180px mutually-exclusive modal sheets with an aria-live announcement.
-import { render, screen, waitFor } from "@testing-library/react";
+// web/src/components/coexistence.test.tsx — Penny is now the ONLY side panel.
+//
+// Epic G2 (decision #42, #266) ELIMINATED the standalone right-edge Override
+// Inspector: its function (the overrides audit + the justification capture) moved into
+// Penny's drawer + the KPIs tab. So there is no longer a second edge panel to coexist
+// with. What remains worth asserting is that Penny keeps its single-panel spatial
+// grammar — non-modal side panel at/above 1180px, modal full-screen sheet below it —
+// whether rendered standalone (the wizard) or inside the shared SidePanelProvider (the
+// detail page), with no Inspector to fight for focus or z-order.
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { OverrideInspector, type InspectorOverride } from "./OverrideInspector";
 import { PennyDrawer } from "./PennyDrawer";
 import { COEXIST_MIN_WIDTH, SidePanelProvider } from "./sidePanels";
 
@@ -28,108 +31,42 @@ function stubMatchMedia(matchesByQuery: Record<string, boolean>) {
 const DESKTOP = { [`(min-width: ${COEXIST_MIN_WIDTH}px)`]: true };
 const MOBILE = { [`(min-width: ${COEXIST_MIN_WIDTH}px)`]: false };
 
-const OVERRIDES: InspectorOverride[] = [
-  { node: "payroll", year: 1, label: "Payroll, Year 1", value: "$120,000" },
-];
-
-function Surface() {
-  return (
-    <SidePanelProvider>
-      <PennyDrawer />
-      <OverrideInspector overrides={OVERRIDES} />
-    </SidePanelProvider>
-  );
-}
-
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("coexistence ≥1180px — non-modal, both open", () => {
-  it("lets Penny and the Inspector be open at once, both non-modal, no scrims", async () => {
+describe("Penny is the only side panel — no Override Inspector remains", () => {
+  it("renders no inspector FAB or panel alongside Penny (the Inspector is eliminated)", async () => {
     stubMatchMedia(DESKTOP);
     const user = userEvent.setup();
-    render(<Surface />);
-
-    await user.click(screen.getByTestId("inspector-fab"));
-    await user.click(screen.getByTestId("penny-fab"));
-
-    const pennyPanel = await screen.findByTestId("penny-panel");
-    const inspectorPanel = await screen.findByTestId("inspector-panel");
-    expect(pennyPanel).toBeInTheDocument();
-    expect(inspectorPanel).toBeInTheDocument();
-    // Loose focus traps: both report aria-modal=false on the desktop.
-    expect(pennyPanel).toHaveAttribute("aria-modal", "false");
-    expect(inspectorPanel).toHaveAttribute("aria-modal", "false");
-    // Desktop scrims suppressed (no double-dim).
-    expect(screen.queryByTestId("penny-scrim")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("inspector-scrim")).not.toBeInTheDocument();
-  });
-
-  it("stacks Penny exactly one above the Inspector", async () => {
-    stubMatchMedia(DESKTOP);
-    const user = userEvent.setup();
-    render(<Surface />);
-    await user.click(screen.getByTestId("inspector-fab"));
-    await user.click(screen.getByTestId("penny-fab"));
-    const pennyPanel = await screen.findByTestId("penny-panel");
-    const inspectorPanel = await screen.findByTestId("inspector-panel");
-    expect(Number(pennyPanel.style.zIndex)).toBe(Number(inspectorPanel.style.zIndex) + 1);
-    expect(pennyPanel.style.zIndex).toBe("52");
-    expect(inspectorPanel.style.zIndex).toBe("51");
-  });
-
-  it("opening Penny does not steal focus from an already-open Inspector", async () => {
-    stubMatchMedia(DESKTOP);
-    const user = userEvent.setup();
-    render(<Surface />);
-
-    await user.click(screen.getByTestId("inspector-fab"));
-    const inspectorClose = await screen.findByRole("button", {
-      name: /close override inspector/i,
-    });
-    await waitFor(() => expect(inspectorClose).toHaveFocus());
-
-    await user.click(screen.getByTestId("penny-fab"));
-    const pennyPanel = await screen.findByTestId("penny-panel");
-    // Penny must NOT pull focus into its own panel (exactly one focus ring). With the
-    // de-crufted header the dialog itself is the focus anchor, so assert it is unfocused.
-    expect(pennyPanel).not.toHaveFocus();
-    // The Inspector stays open (coexistence, not exclusion).
-    expect(screen.getByTestId("inspector-panel")).toBeInTheDocument();
-  });
-});
-
-describe("coexistence <1180px — modal sheets, mutually exclusive", () => {
-  it("opening Penny closes the Inspector, announces it, and takes focus cleanly", async () => {
-    stubMatchMedia(MOBILE);
-    const user = userEvent.setup();
-    render(<Surface />);
-
-    await user.click(screen.getByTestId("inspector-fab"));
-    expect(await screen.findByTestId("inspector-panel")).toBeInTheDocument();
-
-    await user.click(screen.getByTestId("penny-fab"));
-    const pennyPanel = await screen.findByTestId("penny-panel");
-    // Mutually exclusive: the Inspector is gone…
-    expect(screen.queryByTestId("inspector-panel")).not.toBeInTheDocument();
-    // …both are modal sheets with scrims when open…
-    expect(pennyPanel).toHaveAttribute("aria-modal", "true");
-    expect(screen.getByTestId("penny-scrim")).toBeInTheDocument();
-    // …the close was announced politely…
-    await waitFor(() =>
-      expect(screen.getByTestId("side-panel-live")).toHaveTextContent(
-        /override inspector closed/i,
-      ),
+    render(
+      <SidePanelProvider>
+        <PennyDrawer />
+      </SidePanelProvider>,
     );
-    // …and focus landed cleanly on the new sheet (not lost to the body). The
-    // de-crufted header has no close button, so the dialog itself is the focus anchor.
-    await waitFor(() => expect(pennyPanel).toHaveFocus());
+    // No standalone Override Inspector trigger anywhere.
+    expect(screen.queryByTestId("inspector-fab")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("penny-fab"));
+    expect(await screen.findByTestId("penny-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("inspector-panel")).not.toBeInTheDocument();
   });
 });
 
-describe("wizard parity — Penny is the only side panel, same breakpoint", () => {
-  it("non-modal at/above 1180px when rendered standalone (no Inspector)", async () => {
+describe("Penny spatial grammar — same breakpoint, with or without a provider", () => {
+  it("non-modal at/above 1180px inside the SidePanelProvider (no double-dim scrim)", async () => {
+    stubMatchMedia(DESKTOP);
+    const user = userEvent.setup();
+    render(
+      <SidePanelProvider>
+        <PennyDrawer />
+      </SidePanelProvider>,
+    );
+    await user.click(screen.getByTestId("penny-fab"));
+    expect(await screen.findByTestId("penny-panel")).toHaveAttribute("aria-modal", "false");
+    expect(screen.queryByTestId("penny-scrim")).not.toBeInTheDocument();
+  });
+
+  it("non-modal at/above 1180px when rendered standalone (the wizard)", async () => {
     stubMatchMedia(DESKTOP);
     const user = userEvent.setup();
     render(<PennyDrawer />);

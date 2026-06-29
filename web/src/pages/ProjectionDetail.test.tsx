@@ -498,3 +498,143 @@ describe("ProjectionDetail — 409 Overwrite resolves (does not loop) #188", () 
     vi.unstubAllGlobals();
   });
 });
+
+// ============================================================================
+// Epic G2 (decision #42, #266) — the standalone Override Inspector is ELIMINATED.
+// Its function moved into Penny (the focused justification capture) + the KPIs tab
+// (the at-a-glance audit). The override DATA model + server contract are unchanged:
+// reset PATCHes overrides.clear; a saved justification re-pins the SAME value with the
+// note via overrides.set. A §12.2 guardrail that needs a note slides Penny OUT.
+// ============================================================================
+describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
+  beforeEach(() => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+  });
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  /** A view-model carrying one pinned override (Payroll, Year 1). */
+  function overrideVm(over: Partial<ViewModel> = {}): ViewModel {
+    return fullVm({
+      version: 3,
+      rows: [
+        {
+          label: "Payroll",
+          group: "expenses",
+          node: "payroll",
+          y1: { raw: 120000, display: "$120,000" },
+          y2: null,
+          y3: null,
+          class: "overridden",
+          editable: true,
+        },
+      ],
+      overrides: [
+        {
+          node: "payroll",
+          year: 1,
+          calculated: { raw: 140000, display: "$140,000" },
+          value: { raw: 120000, display: "$120,000" },
+          note: "",
+        },
+      ],
+      staleNodes: [],
+      ...over,
+    });
+  }
+
+  /** Stub fetch to capture PATCH bodies and echo a bumped view-model. */
+  function patchCapture() {
+    const bodies: Array<Record<string, unknown>> = [];
+    const ifMatches: string[] = [];
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+        ifMatches.push(new Headers(init?.headers).get("If-Match") ?? "");
+        bodies.push(JSON.parse(String(init?.body)));
+        return Promise.resolve(
+          new Response(JSON.stringify(overrideVm({ version: 4 })), {
+            status: 200,
+            headers: { "Content-Type": "application/json", ETag: '"4"' },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { bodies, ifMatches };
+  }
+
+  it("mounts NO standalone Override Inspector FAB on the editable page (it is eliminated)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(overrideVm());
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("penny-fab");
+    expect(screen.queryByTestId("inspector-fab")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("inspector-panel")).not.toBeInTheDocument();
+  });
+
+  it("relocates the overrides audit into the KPIs tab (label + value verbatim, with reset)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(overrideVm());
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+
+    await user.click(screen.getByRole("tab", { name: /kpis/i }));
+    const audit = screen.getByTestId("kpis-override-audit");
+    expect(within(audit).getByText("Payroll, Year 1")).toBeInTheDocument();
+    expect(within(audit).getByText("$120,000")).toBeInTheDocument();
+    expect(within(audit).getByTestId("override-reset-payroll-y1")).toBeInTheDocument();
+  });
+
+  it("resets a pin via the EXISTING overrides.clear contract (forward edit, If-Match)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(overrideVm());
+    const { bodies, ifMatches } = patchCapture();
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+
+    await user.click(screen.getByRole("tab", { name: /kpis/i }));
+    await user.click(within(screen.getByTestId("kpis-override-audit")).getByTestId("override-reset-payroll-y1"));
+
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    expect(bodies[0]).toEqual({ overrides: { clear: [{ node: "payroll", year: 1 }] } });
+    expect(ifMatches[0]).toBe("3");
+  });
+
+  it("captures a justification in Penny and re-pins the SAME value with the note (overrides.set)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(overrideVm());
+    const { bodies } = patchCapture();
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+
+    // From the at-a-glance KPIs audit, "Add justification" slides Penny OUT.
+    await user.click(screen.getByRole("tab", { name: /kpis/i }));
+    await user.click(within(screen.getByTestId("kpis-override-audit")).getByTestId("override-comment-payroll-y1"));
+
+    // Penny is now open with the focused prompt (the comment form is Penny-only).
+    const form = await screen.findByTestId("override-comment-form");
+    const input = within(form).getByLabelText(/why did you override payroll, year 1\?/i);
+    await user.type(input, "signed two hires");
+    await user.click(within(form).getByTestId("override-comment-save"));
+
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    // The note persists on the pin by re-setting the SAME value (no data-model change).
+    expect(bodies[0]).toEqual({
+      overrides: { set: [{ node: "payroll", year: 1, value: "120000", note: "signed two hires" }] },
+    });
+  });
+
+  it("slides Penny OUT with the prompt when a §12.2 guardrail needs an unrecorded note", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(
+      overrideVm({ flags: { net_margin_out_of_band: { value: 0.39, band: "≤ ~30%", requires_note: true } } }),
+    );
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    // No FAB click: the guardrail auto-opens Penny straight onto the justification.
+    const form = await screen.findByTestId("override-comment-form");
+    expect(within(form).getByLabelText(/why did you override payroll, year 1\?/i)).toBeInTheDocument();
+  });
+});
