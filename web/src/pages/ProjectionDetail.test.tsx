@@ -727,3 +727,50 @@ describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
     expect(ifMatches[0]).toBe("3");
   });
 });
+
+// EPIC SHARE (Decision 12) — the unified Share affordance on the detail header. The
+// read-only link is always offered; the editable link appears only when this device
+// holds the projection's edit token (localStorage), and carries it in the fragment.
+describe("ProjectionDetail — Share affordance (EPIC SHARE)", () => {
+  afterEach(() => {
+    localStorage.clear();
+    window.history.pushState({}, "", "/");
+  });
+
+  it("opens the Share panel with the read-only view_slug link", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+
+    await user.click(screen.getByTestId("share-projection"));
+    const readonly = (await screen.findByTestId("share-readonly-link")) as HTMLInputElement;
+    expect(readonly.value).toBe(`${window.location.origin}/p/p_8x`);
+  });
+
+  it("offers the editable link (token in the fragment) when the edit token is held", async () => {
+    localStorage.setItem("projections.edit_token.p_8x", "edit_secret_xyz");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+
+    await user.click(screen.getByTestId("share-projection"));
+    const editLink = (await screen.findByTestId("share-edit-link")) as HTMLInputElement;
+    expect(editLink.value).toBe(`${window.location.origin}/p/p_8x/edit#edit_secret_xyz`);
+    // Regression #10: the secret is in the fragment, never the path/query.
+    expect(new URL(editLink.value).pathname).not.toContain("edit_secret_xyz");
+  });
+
+  it("omits the editable link when no edit token is held on this device", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+
+    await user.click(screen.getByTestId("share-projection"));
+    await screen.findByTestId("share-readonly-link");
+    expect(screen.queryByTestId("share-edit-link")).not.toBeInTheDocument();
+    expect(screen.getByTestId("share-edit-unavailable")).toBeInTheDocument();
+  });
+});

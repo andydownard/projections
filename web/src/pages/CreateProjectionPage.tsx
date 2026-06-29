@@ -23,7 +23,7 @@ import {
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
 import { researchRent } from "../api/research";
 import type { ViewModel } from "../api/viewModel";
-import { setOwnerToken } from "../api/projections";
+import { setEditToken, setOwnerToken } from "../api/projections";
 import { authHeader } from "../api/authHeader";
 import { PennyDraftAssistant } from "../components/PennyDrawer";
 import { SidePanelProvider } from "../components/sidePanels";
@@ -432,7 +432,10 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
         headers: { "Content-Type": "application/json", ...owner },
         body: JSON.stringify(body),
       });
-      const created = (await resp.json()) as ViewModel & { owner_token?: string };
+      const created = (await resp.json()) as ViewModel & {
+        owner_token?: string;
+        edit_token?: string;
+      };
       // Persist a minted owner token ONLY when the request went out anonymous (no
       // pre-existing owner). Never overwrite an existing owner token — that single
       // localStorage slot is the only handle on the prior projection, and clobbering
@@ -440,6 +443,13 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
       // returns a token, but the row is Clerk-scoped, so we likewise do not store it.
       if (created.owner_token && !hadOwnerIdentity) {
         setOwnerToken(created.owner_token);
+      }
+      // EPIC SHARE (Decision 12): retain the one-time edit token so the Share panel can
+      // later build the editable deep link. The server returns it once and keeps only a
+      // hash, so this localStorage slot (owner's device) is the only handle on it. Same
+      // secrecy posture as the owner token — never a URL path/query, never logged.
+      if (created.edit_token && created.view_slug) {
+        setEditToken(created.view_slug, created.edit_token);
       }
       showToast("Projection created.");
       // Land directly on the editable projection (owner Decision 12).
