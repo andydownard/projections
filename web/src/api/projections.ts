@@ -22,6 +22,31 @@ export function setOwnerToken(token: string): void {
   localStorage.setItem(OWNER_TOKEN_KEY, token);
 }
 
+// ─── Per-projection edit token (EPIC SHARE) ─────────────────────────────────────
+// The edit token is the one-time edit capability POST /projections returns (hashed
+// at rest on the server, re-derivable nowhere). It carries the SAME secrecy posture
+// as the owner token, so it lives in the SAME store — localStorage on the owner's
+// device — never in a URL path/query and never logged. The Share affordance reads it
+// back to build the editable deep link, where the token rides the URL FRAGMENT only
+// (/p/<slug>/edit#<edit-token>). Keyed per view_slug so each projection keeps its own
+// capability. Absent (a different device / cleared storage) ⇒ the Share panel offers
+// the read-only link only and never fabricates a token.
+
+const EDIT_TOKEN_PREFIX = "projections.edit_token.";
+
+/** The localStorage key holding the edit token for one projection. */
+export function editTokenKey(viewSlug: string): string {
+  return `${EDIT_TOKEN_PREFIX}${viewSlug}`;
+}
+
+export function getEditToken(viewSlug: string): string | null {
+  return localStorage.getItem(editTokenKey(viewSlug));
+}
+
+export function setEditToken(viewSlug: string, token: string): void {
+  localStorage.setItem(editTokenKey(viewSlug), token);
+}
+
 export type RecoTag =
   | "proceed"
   | "revise"

@@ -80,7 +80,7 @@ function wireFetch(bodies: Record<string, unknown>) {
       return jsonResponse(RESEARCH);
     }
     bodies[url] = JSON.parse(String(init?.body));
-    return jsonResponse({ ...VM, owner_token: "tok" });
+    return jsonResponse({ ...VM, owner_token: "tok", edit_token: "edit_new" });
   });
 }
 
@@ -255,6 +255,9 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     expect(body.trade_area.households_source).toBe("census_acs");
     // Terms acceptance is implicit-true so the .xlsx / packet exports stay reachable.
     expect(body.terms_accepted).toBe(true);
+    // EPIC SHARE: the one-time edit token is retained (keyed by view_slug) so the Share
+    // panel can later build the editable deep link. It NEVER lands in the URL/path.
+    expect(localStorage.getItem("projections.edit_token.p_new")).toBe("edit_new");
   });
 });
 
