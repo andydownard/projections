@@ -99,6 +99,12 @@ _EXPORT_TOKEN_LIMIT = 60  # xlsx + packet, per token when a bearer is presented
 _EXPORT_WINDOW_SECONDS = 3600
 _STATICMAP_IP_LIMIT = 120  # cached per (lat,lng,kind); per IP only (view-capability)
 _STATICMAP_WINDOW_SECONDS = 3600
+# Owner lifecycle ops (trash / restore / purge): owner-authenticated and infrequent,
+# but each is a destructive state change, so they carry the Mutation Safety Quad's
+# (d) per-IP + per-token cap (each route has its OWN bucket). SECURITY.md §10.
+_LIFECYCLE_IP_LIMIT = 60
+_LIFECYCLE_TOKEN_LIMIT = 120
+_LIFECYCLE_WINDOW_SECONDS = 3600
 
 router = APIRouter(prefix="/api/projections", tags=["projections"])
 
@@ -837,22 +843,32 @@ def claim_projections(
 def list_projections(
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
+    trashed: bool = False,
 ):
     """Owner-scoped list (never global). No/invalid token -> empty list.
 
     Owner identity is resolved COOKIE-BLIND from the Authorization header — a
     verified Clerk owner (when CLERK_ENABLED) lists by ``owner_clerk_user_id``;
     an opaque owner token lists by its hash (today's path); anything else is empty.
+
+    ``?trashed=true`` returns ONLY this owner's trashed projections (the Trash view,
+    API_SPEC §4.1/§4.8); the default (active) list excludes them. Owner-scoped in
+    both modes — the store query is always keyed on the owner, never global.
     """
     identity = resolve_bearer_identity(authorization)
     # #178: read the small denormalized card columns (summary_json) only — the store
     # never SELECTs or parses the full ~10KB computed_json per row for the owner list.
     if isinstance(identity, ClerkOwner):
-        rows = store.list_card_summaries_by_clerk_owner(identity.clerk_user_id)
+        rows = store.list_card_summaries_by_clerk_owner(
+            identity.clerk_user_id, include_trashed=trashed)
     elif isinstance(identity, CapabilityBearer):
-        rows = store.list_card_summaries(hash_token(identity.token))
+        rows = store.list_card_summaries(
+            hash_token(identity.token), include_trashed=trashed)
     else:  # Anonymous
         return {"projections": []}
+    # include_trashed=True returns active + trashed; the Trash view wants trashed-only.
+    if trashed:
+        rows = [r for r in rows if (r.get("status") or "active") == "trashed"]
     items = []
     for r in rows:
         summary = loads_obj(r.get("summary_json"))
@@ -1684,9 +1700,26 @@ def _set_status_and_respond(store, row, view_slug, response, if_match, status):
             "name": row["name"], "status": status}
 
 
+def _lifecycle_rate_limit(
+    endpoint: str, request: Request, authorization: Optional[str]
+) -> Optional[JSONResponse]:
+    """Mutation Safety Quad (d) for the owner lifecycle routes: a per-IP + per-token
+    429 (its own bucket per endpoint), emitted AFTER the owner check so it never
+    leaks existence to a non-owner but BEFORE the state change."""
+    token = _bearer(authorization)
+    return _rate_limited(
+        endpoint, request,
+        ip_limit=_LIFECYCLE_IP_LIMIT,
+        token=hash_token(token) if token else None,
+        token_limit=_LIFECYCLE_TOKEN_LIMIT,
+        window_seconds=_LIFECYCLE_WINDOW_SECONDS,
+    )
+
+
 @router.post("/{view_slug}/trash")
 def trash_projection(
     view_slug: str,
+    request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
@@ -1694,12 +1727,16 @@ def trash_projection(
 ):
     """Soft delete (API_SPEC §4.8): status -> trashed. Owner-only, If-Match required."""
     row = _require_owner(store, view_slug, authorization)
+    limited = _lifecycle_rate_limit("trash", request, authorization)
+    if limited is not None:
+        return limited
     return _set_status_and_respond(store, row, view_slug, response, if_match, "trashed")
 
 
 @router.post("/{view_slug}/restore")
 def restore_projection(
     view_slug: str,
+    request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
@@ -1707,12 +1744,16 @@ def restore_projection(
 ):
     """Restore from trash (API_SPEC §4.8): status -> active. Owner-only."""
     row = _require_owner(store, view_slug, authorization)
+    limited = _lifecycle_rate_limit("restore", request, authorization)
+    if limited is not None:
+        return limited
     return _set_status_and_respond(store, row, view_slug, response, if_match, "active")
 
 
 @router.delete("/{view_slug}", status_code=204)
 def delete_projection(
     view_slug: str,
+    request: Request,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
@@ -1724,6 +1765,9 @@ def delete_projection(
     and Penny conversation are actually ERASED, not merely hidden (#202, DATA_MODEL
     §5.4)."""
     row = _require_owner(store, view_slug, authorization)
+    limited = _lifecycle_rate_limit("purge", request, authorization)
+    if limited is not None:
+        return limited
     if row.get("status") != "trashed":
         raise HTTPException(status_code=409, detail={"error": "not_trashed"})
     affected = store.purge_projection(row["id"], if_match)

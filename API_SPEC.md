@@ -378,13 +378,15 @@ Projections are soft-deleted (`status:"trashed"`, `deleted_at` set) and restorab
 
 | Route | Method | Auth | If-Match | Effect |
 |---|---|---|---|---|
-| `…/{view_slug}/trash` | `POST` | owner | required | `status → trashed`, set `deleted_at`. Hidden from the default list; excluded from non-owner `GET` (returns `404`). |
-| `…/{view_slug}/restore` | `POST` | owner | required | `status → active`, clear `deleted_at`. |
-| `…/{view_slug}` | `DELETE` | owner | required | **Hard delete** — purge the projection and its revisions/evidence/narratives. Irreversible. Only permitted when already `trashed` (else `409 not_trashed`). |
+| `…/{view_slug}/trash` | `POST` | owner | required | `status → trashed`. Hidden from the default owner list; excluded from non-owner `GET` (returns `404`). |
+| `…/{view_slug}/restore` | `POST` | owner | required | `status → active`. |
+| `…/{view_slug}` | `DELETE` | owner | required | **Hard delete / purge** — irreversibly erases the projection AND cascades to every child row it owns (`revisions`, `narratives`, `evidence`, `penny_transcripts`, `actuals`, `role_links`), all in one transaction, so no orphaned financial data or Penny conversation survives (#202). Only permitted when already `trashed` (else `409 not_trashed`). |
 
 - **Capability:** owner only for all three (`owner_required` for edit/view).
-- **Response:** `trash`/`restore` → `200` with the updated view-model (`status` reflected). `DELETE` → `204 No Content`.
-- **Errors:** `428`/`409`; `403`; `DELETE` on an active projection → `409 { "error":"not_trashed" }`.
+- **Listing trashed:** `GET /api/projections?trashed=true` returns this owner's trashed projections only (owner-scoped, never global — the Trash view). The default `GET /api/projections` excludes them.
+- **Rate limit (Mutation Safety Quad d):** each route is per-IP + per-token capped (its own bucket); over the cap → `429 { "error":"rate_limited", … }` with `Retry-After`, evaluated AFTER the owner check (so it never leaks existence) but BEFORE the state change.
+- **Response:** `trash`/`restore` → `200` with the updated view-model (`status` reflected) + the new `ETag`. `DELETE` → `204 No Content`.
+- **Errors:** `428`/`409`; `403`; `429` over the cap; `DELETE` on an active projection → `409 { "error":"not_trashed" }`; a stale `If-Match` on `DELETE` → `409 { "error":"version_conflict", … }` (nothing erased).
 
 ### 4.9 `POST /api/projections/claim` — link token-owned projections to a Clerk owner
 

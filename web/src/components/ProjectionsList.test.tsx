@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import { ProjectionsList } from "./ProjectionsList";
 import type { ProjectionListItem } from "../api/projections";
@@ -270,5 +271,75 @@ describe("ProjectionsList — populated: general", () => {
         <ProjectionsList projections={[noSeries]} onCreate={() => {}} onRowClick={() => {}} />,
       ),
     ).not.toThrow();
+  });
+});
+
+// Soft-delete affordance (per-row "⋯" → Move to Trash) + the header Trash link.
+describe("ProjectionsList — trash affordance", () => {
+  it("renders a per-row actions menu only when onTrash is provided", () => {
+    const { rerender } = render(
+      <ProjectionsList projections={[item]} onCreate={() => {}} onRowClick={() => {}} />,
+    );
+    // No onTrash → no menu (backward compatible with read-only contexts).
+    expect(screen.queryByTestId("row-actions-trigger")).toBeNull();
+
+    rerender(
+      <ProjectionsList
+        projections={[item]}
+        onCreate={() => {}}
+        onRowClick={() => {}}
+        onTrash={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("row-actions-trigger")).toBeInTheDocument();
+  });
+
+  it("calls onTrash with the row item and does NOT navigate the row", async () => {
+    const onTrash = vi.fn();
+    const onRowClick = vi.fn();
+    render(
+      <ProjectionsList
+        projections={[item]}
+        onCreate={() => {}}
+        onRowClick={onRowClick}
+        onTrash={onTrash}
+      />,
+    );
+    await userEvent.click(screen.getByTestId("row-actions-trigger"));
+    await userEvent.click(screen.getByTestId("row-action-trash"));
+    expect(onTrash).toHaveBeenCalledWith(item);
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  it("shows a Trash link in the header only when onOpenTrash is provided", () => {
+    const onOpenTrash = vi.fn();
+    const { rerender } = render(
+      <ProjectionsList projections={[item]} onCreate={() => {}} onRowClick={() => {}} />,
+    );
+    expect(screen.queryByTestId("open-trash")).toBeNull();
+
+    rerender(
+      <ProjectionsList
+        projections={[item]}
+        onCreate={() => {}}
+        onRowClick={() => {}}
+        onOpenTrash={onOpenTrash}
+      />,
+    );
+    screen.getByTestId("open-trash").click();
+    expect(onOpenTrash).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the Trash link in the empty state too", () => {
+    const onOpenTrash = vi.fn();
+    render(
+      <ProjectionsList
+        projections={[]}
+        onCreate={() => {}}
+        onRowClick={() => {}}
+        onOpenTrash={onOpenTrash}
+      />,
+    );
+    expect(screen.getByTestId("open-trash")).toBeInTheDocument();
   });
 });

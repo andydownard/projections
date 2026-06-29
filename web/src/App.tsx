@@ -13,6 +13,7 @@ import { ListPage } from "./pages/ListPage";
 import { CreateProjectionPage } from "./pages/CreateProjectionPage";
 import { ProjectionDetail } from "./pages/ProjectionDetail";
 import { RoleView } from "./pages/RoleView";
+import { TrashPage } from "./pages/TrashPage";
 import { clerkActive } from "./auth/clerkToken";
 import { setEditToken } from "./api/projections";
 import { useDetailHeader } from "./state/detailHeader";
@@ -61,6 +62,7 @@ export function appProvidesGeneralPenny(route: Route): boolean {
 export function isOwnerSurface(route: Route): boolean {
   if (route.kind === "home") return true;
   if (route.kind === "wizard") return true;
+  if (route.kind === "trash") return true;
   if (route.kind === "detail" && route.edit) return true;
   return false;
 }
@@ -103,6 +105,7 @@ export function App() {
   const content = (
     <>
       {route.kind === "home" && <ListPage />}
+      {route.kind === "trash" && <TrashPage />}
       {route.kind === "wizard" && (
         <CreateProjectionPage aiOff={route.aiOff} step={route.step} />
       )}
