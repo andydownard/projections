@@ -115,16 +115,16 @@ describe("CashflowChart", () => {
     expect(sr).toHaveTextContent("Payback");
   });
 
-  // D4: the SVG no longer carries x-axis month ticks; months are labeled ONCE in
-  // the monthly table header (so they are never double-labeled). #320 abbreviates the
-  // header to "M N" so the dense table stays compact.
-  it("removes the x-axis month ticks from the SVG and labels months once in the table header as 'M N' (D4 / #320)", () => {
+  // D4: the SVG no longer carries x-axis month ticks; months are labeled ONCE in the
+  // monthly table (so they are never double-labeled). #320 transposes the table so the
+  // months are abbreviated "M N" ROW headers and the dense table stays compact.
+  it("removes the x-axis month ticks from the SVG and labels months once as 'M N' table rows (D4 / #320)", () => {
     const { container } = render(
       <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
     );
     expect(container.querySelectorAll(".cashflow-chart__tick").length).toBe(0);
     const table = screen.getByTestId("cashflow-table");
-    expect(within(table).getByRole("columnheader", { name: "M1" })).toBeInTheDocument();
+    expect(within(table).getByRole("rowheader", { name: /^M1\b/ })).toBeInTheDocument();
   });
 
   // D5: the bottom "Cash low point … · Break-even …" figcaption is removed.
@@ -158,6 +158,98 @@ describe("CashflowChart", () => {
     const sr = screen.getByTestId("chart-milestones-sr");
     expect(sr).toHaveTextContent("N/A");
     expect(sr).toHaveTextContent("startup costs are not recovered");
+  });
+
+  // #320: engine 2.7.0 emits the full 60-month horizon. The TABLE must show ONLY the
+  // first project year (months up to grand opening + 11) so 61 columns don't crush to
+  // ~12px and force heavy horizontal scroll; the CHART keeps the full series.
+  function series60(): MonthlyPoint[] {
+    const sv = (raw: number) => ({ raw, display: `$${raw.toLocaleString()}` });
+    const pts: MonthlyPoint[] = [];
+    for (let m = 1; m <= 60; m++) {
+      // A V-shaped cash curve whose GLOBAL trough sits at month 30, well past the
+      // year-1 table cut, so the chart provably reads the FULL series, not the slice.
+      const cum = m <= 30 ? -1000 * m : -30000 + (m - 30) * 2000;
+      pts.push({
+        month: m,
+        revenue: sv(100 * m),
+        expenses: sv(-50 * m),
+        net: sv(50 * m),
+        cumulativeCash: sv(cum),
+      });
+    }
+    return pts;
+  }
+
+  const milestones60: Milestones = {
+    grandOpening: { raw: 2, display: "Month 2" }, // year-1 cut = 2 + 11 = month 13
+    breakEven: { raw: 6, display: "Month 6" },
+    payback: { raw: 45, display: "Month 45", duration: "44 months" },
+  };
+
+  // #320: the table is transposed to months-as-ROWS (line items are the columns), so
+  // "only the first year" means only the first-year MONTH ROWS render (not all 60),
+  // while the chart keeps the full series. Month rows are <th scope="row"> "M N".
+  const monthRows = (table: HTMLElement) =>
+    within(table)
+      .getAllByRole("rowheader")
+      .map((h) => (h.textContent ?? "").replace(/\s*\(grand opening\)\s*/, "").trim())
+      .filter((t) => /^M\d+/.test(t));
+
+  it("shows ONLY the first project year (months 1..opening+11) as table rows, not all 60 [#320]", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={6} milestones={milestones60} />);
+    const table = screen.getByTestId("cashflow-table");
+    const rows = monthRows(table);
+    // grand opening month 2 → first year = months 1..13 → 13 month rows, not 60.
+    expect(rows).toHaveLength(13);
+    expect(rows[0]).toMatch(/^M1\b/);
+    expect(rows[rows.length - 1]).toMatch(/^M13\b/);
+    expect(table.querySelector('[data-testid="cashflow-month-14"]')).toBeNull();
+    expect(table.querySelector('[data-testid="cashflow-month-60"]')).toBeNull();
+    // The four line items are the COLUMNS now.
+    const cols = within(table)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    expect(cols).toEqual(["Month", "Revenue", "Expenses", "Net", "Cumulative cash"]);
+  });
+
+  it("keeps the FULL 60-month series in the chart even though the table is sliced to year 1 [#320]", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={6} milestones={milestones60} />,
+    );
+    // One net bar per month across the whole horizon = 60 (the table shows only 13).
+    expect(container.querySelectorAll(".cashflow-chart__bar")).toHaveLength(60);
+    // The chart's lowest cash balance is the month-30 trough, only reachable if the
+    // chart reads the full series, not the year-1 slice.
+    const svg = container.querySelector("svg")!;
+    expect(svg.getAttribute("aria-label")).toMatch(/month 30/);
+  });
+
+  it("flags the grand-opening month row when it falls in the shown range [#320]", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={6} milestones={milestones60} />);
+    const row = screen.getByTestId("cashflow-month-2"); // grand opening = month 2
+    expect(row).toHaveAttribute("data-grand-opening", "true");
+    expect(screen.getByTestId("cashflow-month-1")).not.toHaveAttribute("data-grand-opening");
+  });
+
+  it("falls back to the first 13 months when no milestones carry the opening month [#320]", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={6} />);
+    const rows = monthRows(screen.getByTestId("cashflow-table"));
+    expect(rows).toHaveLength(13);
+    expect(rows[rows.length - 1]).toMatch(/^M13\b/);
+  });
+
+  it("notes that only year 1 is shown and points to the chart for the full horizon [#320]", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={6} milestones={milestones60} />);
+    const note = screen.getByTestId("cashflow-year1-note");
+    expect(note).toHaveTextContent("Showing year 1 (months 1 to 13)");
+    expect(note).toHaveTextContent("Month 45"); // payback, server display string
+  });
+
+  it("does NOT show the year-1 note when the whole series already fits in year 1 [#320]", () => {
+    // monthlyV3 is 7 months, all within the year-1 cut → nothing is hidden.
+    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
+    expect(screen.queryByTestId("cashflow-year1-note")).not.toBeInTheDocument();
   });
 
   it("colors negative cells in the monthly data table — loss color paired with the server parentheses [#148]", () => {
