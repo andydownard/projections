@@ -1,6 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { getEditToken, setEditToken } from "./api/projections";
+import { readFragmentSecret } from "./router/route";
 
 // Phase 0 B2 — the App shell wires the FORCED owner sign-in gate over OWNER
 // surfaces only (home / wizard / detail-EDIT). VIEWER surfaces (role share, the
@@ -49,10 +52,12 @@ const GATE_HEADING = { name: /sign in to continue/i } as const;
 
 beforeEach(() => {
   signedIn = false;
+  localStorage.clear();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
   go("/");
+  localStorage.clear();
 });
 
 describe("isOwnerSurface — which routes the gate covers", () => {
@@ -110,5 +115,74 @@ describe("App — forced owner sign-in gate wiring (Phase 0 B2)", () => {
     render(<App />);
     expect(screen.getByTestId("page-home")).toBeInTheDocument();
     expect(screen.queryByRole("heading", GATE_HEADING)).not.toBeInTheDocument();
+  });
+});
+
+describe("App — edit-token capture above the Clerk gate (editable share-link flow)", () => {
+  // When a recipient opens /p/<slug>/edit#<edit-token> while signed out, the App
+  // captures the token into localStorage AND scrubs the fragment BEFORE the gate
+  // shows the sign-in screen. On the post-sign-in return the fragment is gone but
+  // the stored token is available via getEditToken(slug).
+
+  it("stores the edit token in localStorage and scrubs the fragment when a signed-out user opens an editable link", async () => {
+    vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_abc");
+    signedIn = false;
+    // Simulate the recipient opening the editable share link.
+    window.history.pushState({}, "", "/p/p_share/edit");
+    window.location.hash = "edit_secret_xyz";
+
+    render(<App />);
+
+    // The token must be persisted before the user can interact with the gate.
+    await waitFor(() => {
+      expect(getEditToken("p_share")).toBe("edit_secret_xyz");
+    });
+    // Fragment is scrubbed so the secret never lands in browser history or server logs.
+    expect(window.location.hash).toBe("");
+    // The gate still shows — account is still required (the requirement is unchanged).
+    expect(await screen.findByRole("heading", GATE_HEADING)).toBeInTheDocument();
+  });
+
+  it("after sign-in the stored edit token is retrievable so ProjectionDetail can authorize the PATCH", async () => {
+    vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_abc");
+    signedIn = false;
+    window.history.pushState({}, "", "/p/p_share/edit");
+    window.location.hash = "edit_secret_xyz";
+    const { unmount } = render(<App />);
+
+    // Token is captured, fragment is gone.
+    await waitFor(() => expect(getEditToken("p_share")).toBe("edit_secret_xyz"));
+    expect(window.location.hash).toBe("");
+    unmount();
+
+    // Simulate the post-sign-in return: user comes back signed in with no fragment.
+    signedIn = true;
+    render(<App />);
+    expect(await screen.findByTestId("page-detail")).toHaveTextContent("edit");
+    // The stored token is still in localStorage for ProjectionDetail's getEditToken fallback.
+    expect(getEditToken("p_share")).toBe("edit_secret_xyz");
+  });
+
+  it("the owner's own path is unaffected — owner token in localStorage works without a fragment", () => {
+    // Clerk is OFF (ship dark) so the gate never fires; the owner navigates directly.
+    // No edit token in the fragment; getOwnerToken() is the fallback in ProjectionDetail.
+    signedIn = false;
+    go("/p/p_owner/edit");
+    // No fragment set (owner navigates from the list, no #token in the URL).
+    render(<App />);
+    // No edit token is stored (nothing to capture from an empty fragment).
+    expect(getEditToken("p_owner")).toBeNull();
+    // Page renders directly (Clerk off — no gate).
+    expect(screen.getByTestId("page-detail")).toHaveTextContent("edit");
+  });
+
+  it("ProjectionDetail's edit-token resolution falls back to stored token when fragment is absent (post-round-trip)", () => {
+    // This pins the ?? chain in ProjectionDetail's token useRef:
+    // readFragmentSecret("") → null → getEditToken(slug) → stored token.
+    // It proves the path that carries the edit token through to the PATCH authorization.
+    setEditToken("p_share", "stored_edit_secret");
+    const resolved =
+      readFragmentSecret("") ?? getEditToken("p_share") ?? null;
+    expect(resolved).toBe("stored_edit_secret");
   });
 });

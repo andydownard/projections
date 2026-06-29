@@ -4,16 +4,17 @@
 // active route. The shell renders the server view-model; it computes NO
 // projection math (PRD §13). Routes: / (home), /wizard, /p/<slug>[/edit],
 // /r/<slug>.
-import { lazy, Suspense, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useSyncExternalStore } from "react";
 
 import { TopBar } from "./components/TopBar";
 import { PennyGeneralAssistant } from "./components/PennyDrawer";
-import { parseRoute, type Route } from "./router/route";
+import { parseRoute, readFragmentSecret, type Route } from "./router/route";
 import { ListPage } from "./pages/ListPage";
 import { CreateProjectionPage } from "./pages/CreateProjectionPage";
 import { ProjectionDetail } from "./pages/ProjectionDetail";
 import { RoleView } from "./pages/RoleView";
 import { clerkActive } from "./auth/clerkToken";
+import { setEditToken } from "./api/projections";
 import { useDetailHeader } from "./state/detailHeader";
 import "./tokens.css";
 
@@ -75,6 +76,22 @@ export function App() {
   // anywhere (#38) — it stays on computed_json; only the display is gone.
   const detailHeader = useDetailHeader();
   const isDetail = route.kind === "detail";
+
+  // Capture the edit-token from the URL fragment BEFORE the Clerk gate can show the
+  // sign-in screen. On the first visit to /p/<slug>/edit#<token> the Clerk lazy-load
+  // means the "Sign in" button is not yet in the DOM when this effect fires, so there
+  // is no race. The token is saved to localStorage (keyed by slug) and the fragment
+  // is scrubbed with replaceState so the secret never lands in browser history or
+  // server logs (SECURITY.md §2.5 / Regression #10). On the post-sign-in return the
+  // fragment is absent; ProjectionDetail's getEditToken(slug) fallback retrieves it.
+  const editSlug = route.kind === "detail" && route.edit ? route.slug : "";
+  useEffect(() => {
+    if (!editSlug) return;
+    const secret = readFragmentSecret(window.location.hash);
+    if (!secret) return;
+    setEditToken(editSlug, secret);
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  }, [editSlug]);
 
   // General-help Penny is openable on home + the read-only detail view; the wizard
   // and detail-edit pages mount their own (#264). With ?ai=off she degrades to the
