@@ -119,7 +119,7 @@ describe("FieldChange — per-field undo (forward PATCH via onUndo)", () => {
   });
 
   it("omits the undo control when no onUndo is provided (display-only)", () => {
-    render(<FieldChange label="Net profit, Year 1" current="$46,000" previous="$40,000" />);
+    render(<FieldChange label="Net income, Year 1" current="$46,000" previous="$40,000" />);
     expect(screen.queryByTestId("field-change-undo")).not.toBeInTheDocument();
   });
 

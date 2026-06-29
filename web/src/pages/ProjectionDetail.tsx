@@ -9,7 +9,7 @@
 // autosave PATCH (If-Match: version) — for the OWNER the fallback owner token in
 // localStorage authorizes it, so the editable surface is reachable from the list
 // with no secret in the URL (issue #143). A stale save → the 409 SaveConflictModal
-// (reload / overwrite / save-as-copy). Net profit is a derived total — its cell
+// (reload / overwrite / save-as-copy). Net income is a derived total — its cell
 // is non-pinnable (aria-disabled), enforced server-side too (PRD §14).
 //
 // A 404 (bad/expired/removed slug) rejects the load; we render a load-failed

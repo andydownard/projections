@@ -124,7 +124,7 @@ const LEGEND: Array<{ cls: string; label: string }> = [
   { cls: "estimated", label: "Estimated" },
 ];
 
-/** Stable, slugified node id for a row (e.g. "Net profit" -> "net_profit").
+/** Stable, slugified node id for a row (e.g. "Net income" -> "net_income").
  *  Used for the back-compat `row-<slug>-y<year>` testid the detail/e2e read. */
 function rowSlug(label: string): string {
   return label
@@ -315,7 +315,7 @@ function Cell({
   // the server's parentheses so meaning is never carried by color alone.
   const negative = isNegative(value) ? "true" : undefined;
   const testid = `cell-${row.label}-y${year}`;
-  // Back-compat alias the detail page / e2e read (e.g. row-net_profit-y1).
+  // Back-compat alias the detail page / e2e read (e.g. row-net_income-y1).
   const rowTestid = `row-${rowSlug(row.label)}-y${year}`;
 
   // PE7: a recent change on this editable cell (Penny or manual). The cell's own
