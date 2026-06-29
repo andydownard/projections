@@ -69,7 +69,7 @@ def _reconcile(result, tmp_path) -> int:
             continue
         r = label_row[label]
         tol = _PCT_TOL if label in _PCT_LABELS else _USD_TOL
-        for i, key in enumerate(("y1", "y2", "y3")):
+        for i, key in enumerate(("y1", "y2", "y3", "y4", "y5")):
             expect = vmrow[key]
             if not expect or expect.get("raw") is None:
                 continue
@@ -102,7 +102,7 @@ def test_golden_gate_preopening_custom_schedule(tmp_path):
 
     inputs = Inputs(
         org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="400000",
         opening_month_number=3,
@@ -128,7 +128,7 @@ def test_golden_gate_month1_lump_default(tmp_path):
 
     inputs = Inputs(
         org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
         opening_month_number=model.DEFAULT_OPENING_MONTH_NUMBER,
@@ -160,7 +160,8 @@ def test_golden_gate_loss_case_recalcs_clean(tmp_path):
 
     inputs = Inputs(
         org_name="Grace Mission", city="x", opening_status="pre_launch",
-        share_y1="0.02", share_y2="0.02", share_y3="0.02", donation_value="74",
+        share_y1="0.02", share_y2="0.02", share_y3="0.02", share_y4="0.02", share_y5="0.02",
+        donation_value="74",
         building_sqft="8000", salesfloor_pct="0.70", occupancy_annual="400000",
         lease_type="nnn", source_of_funds="300000",
     )

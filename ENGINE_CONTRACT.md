@@ -1,7 +1,7 @@
 # ENGINE_CONTRACT.md — The Math Authority
 
 > **Status:** Build spec (ready-to-build, not yet built) · **Repo:** `rallytasks/projections` · **Owner:** Andy Downard
-> **Model version this contract defines:** `model_version = "2.5.0"` · `compute_schema_version = "1.3.0"` (2.5.0: **Utilities/trash service** stops being a flat fixed-$ line and is **derived** as `UTILITIES_PER_SQFT × building_sqft` — the SAME pinnable line + slot, now sq-ft-scaled; the default cost-schedule seed scales **Equipment & Fixtures** + **Build-out** as `FIXTURES_PER_SQFT`/`BUILDOUT_PER_SQFT × building_sqft`; all three **anchored** so the example's 10,000 sq ft reproduces today's literals byte-for-byte (#245); schema 1.3.0: view-model `settings.utilitiesPerSqft` + `settings.rentPerSqft` additive scalars; 2.4.0: `first_year_cash_gap` is scoped **strictly** to the operating Year-1 window `G..G+11`, so a scheduled cost beyond `G+11` no longer leaks its deeper trough into the first-year headline (#182); `cash_runway_months` ignores leading zero-cost pre-opening months instead of trivially reporting `1` (#184); 2.3.0: downside sensitivity rent stress applied to the **resolved** occupancy — `rent_per_sqft` and `nnn` opex are stressed too, not just `occupancy_annual` (#181); 2.2.0: multi-month pre-opening timeline + scheduled costs + 3 milestones; schema 1.2.0: view-model `milestones` block + Payback-period KPI, monthly `scheduledCosts`)
+> **Model version this contract defines:** `model_version = "2.6.0"` · `compute_schema_version = "1.4.0"` (2.6.0: the annual P&L extends from a **3-year to a 5-year horizon** — **Year 4 / Year 5** are driven by their own explicit donor-share inputs `share_y4` / `share_y5` through the SAME driver chain and the existing **compounding rent escalator** (which now compounds through Year 5 with the same `(1+e)^(y−1)` formula, no special-case); the revenue **CAGR is Y1→Y5** (exponent `1/4`); the **§12.2 share + net-margin guardrails also check Y4/Y5**; the **"Net profit" row/KPI/.xlsx line is renamed "Net income"** everywhere. The monthly S-curve cash-flow and the decision metrics (**capital required, break-even month, first-year cash gap**) stay **Year-1-anchored and are byte-unchanged**. Donation drivers (`donationValue`, `basket`, `donationsPerHouseholdPerYear`) are surfaced as **editable settings**. schema 1.4.0: every annual `rows[]` entry carries `y4`/`y5` cells; `settings` gain `shareY4`/`shareY5` + the editable donation drivers; top-level `incomeSeries` (annual net income Y1..Y5 `{raw,display}`) + `year5Income` for the list/detail sparkline. Legacy 3-year snapshots (2.5.0) read **verbatim**; `upgrade-model` recompute **auto-extends** absent `share_y4`/`share_y5` to the decelerating-plateau defaults `0.11`/`0.12` and writes a NEW 2.6.0 revision (the prior bytes are preserved); 2.5.0: **Utilities/trash service** stops being a flat fixed-$ line and is **derived** as `UTILITIES_PER_SQFT × building_sqft` — the SAME pinnable line + slot, now sq-ft-scaled; the default cost-schedule seed scales **Equipment & Fixtures** + **Build-out** as `FIXTURES_PER_SQFT`/`BUILDOUT_PER_SQFT × building_sqft`; all three **anchored** so the example's 10,000 sq ft reproduces today's literals byte-for-byte (#245); schema 1.3.0: view-model `settings.utilitiesPerSqft` + `settings.rentPerSqft` additive scalars; 2.4.0: `first_year_cash_gap` is scoped **strictly** to the operating Year-1 window `G..G+11`, so a scheduled cost beyond `G+11` no longer leaks its deeper trough into the first-year headline (#182); `cash_runway_months` ignores leading zero-cost pre-opening months instead of trivially reporting `1` (#184); 2.3.0: downside sensitivity rent stress applied to the **resolved** occupancy — `rent_per_sqft` and `nnn` opex are stressed too, not just `occupancy_annual` (#181); 2.2.0: multi-month pre-opening timeline + scheduled costs + 3 milestones; schema 1.2.0: view-model `milestones` block + Payback-period KPI, monthly `scheduledCosts`)
 > **Source of truth for requirements:** [`PRD.md`](reference/PRD.md) (cited inline as §) and [`methodology.md`](reference/thrift-store-projections-skill/reference/methodology.md).
 > **Sibling docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [BUILD_PLAN.md](BUILD_PLAN.md) · [DATA_MODEL.md](DATA_MODEL.md) · [API_SPEC.md](API_SPEC.md) · [SECURITY.md](SECURITY.md) · [OPS_RUNBOOK.md](OPS_RUNBOOK.md) · [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CLAUDE.md](CLAUDE.md) · [AGENTS.md](AGENTS.md) · [IDEA_FAB.md](IDEA_FAB.md)
 
@@ -35,7 +35,7 @@ The PRD's phrase "reused engine, single math authority" (§13, §23, Appendix A)
 | Year-2 share | midpoint `(y1+y3)/2` line 65 / `=AVERAGE` line 209 | three explicit inputs `share_y1/y2/y3` (§7.1) | **REWRITE** |
 | Supplies | fixed `$3,700` (line 44) | `supplies_pct` × revenue, default 5.0% (§7.3) | **REWRITE** |
 | Marketing & outreach | none | `marketing_pct` × revenue, default 3.75% (§7.3) | **NEW** |
-| Rent | `sqft × rate`, flat all 3 yrs (line 80/247) | escalator 3.0% on Y2–Y3 (§7.3); or annual occupancy $ | **REWRITE** |
+| Rent | `sqft × rate`, flat all 3 yrs (line 80/247) | escalator 3.0% compounding Y2–Y5 (§7.3); or annual occupancy $ | **REWRITE** |
 | Reserve buffer | none | `$25,000`, feeds capital-required (§12.1) | **NEW** |
 | Monthly cash-flow M0–M12 | none | full ramp/timed-outflow model (§10) | **NEW** |
 | Decision metrics (break-even mo, capital req, cash gap, runway, sensitivity, recommendation) | none | §12 | **NEW** |
@@ -83,7 +83,7 @@ CARD_FEES_PCT_OF_REVENUE  = 0.02     # §7.3
 PAYROLL_TAX_PCT_OF_PAYROLL= 0.075    # §7.3
 
 # --- occupancy
-RENT_ESCALATOR            = 0.03     # §7.3 — compound, Y2–Y3 (resolved §1)
+RENT_ESCALATOR            = 0.03     # §7.3 — compound, Y2–Y5 (resolved §1; 5-year horizon)
 
 # --- sq-ft scaling basis (#245). Example store = 10,000 sq ft; each per-sq-ft
 # constant is the example literal / 10,000, ANCHORED so that × 10,000 reproduces
@@ -160,16 +160,16 @@ For each year `y ∈ {1, 2, 3}`:
 | `salvage[y]` | `retail[y] × SALVAGE_PCT_OF_RETAIL` | methodology 14 |
 | `total_rev[y]` | `retail[y] + salvage[y]` | methodology 15 |
 
-### 4.1 Year-2 is an explicit input — the midpoint is dead
+### 4.1 Year-2 is an explicit input — the midpoint is dead (and the horizon is 5 years)
 
-The methodology's "Year 2 = midpoint" (methodology lines 17–18) and the engine's `share={1:y1, 2:(y1+y3)/2, 3:y3}` (line 65) and Excel `=AVERAGE(...)` (line 209) are **superseded by PRD §7.1**. v1 has **three independent blue input cells** for share. The Excel Year-2 row references **its own input cell**, never `AVERAGE`. The wizard's "even ramp" helper may *pre-fill* Year 2 between Year 1 and Year 3, but the value is a real, editable input.
+The methodology's "Year 2 = midpoint" (methodology lines 17–18) and the engine's `share={1:y1, 2:(y1+y3)/2, 3:y3}` (line 65) and Excel `=AVERAGE(...)` (line 209) are **superseded by PRD §7.1**. v1 has an **independent blue input cell per year** for share. The annual P&L spans **five years** (`share_y1..share_y5`); Year 4 / Year 5 default to the decelerating-plateau `0.11`/`0.12`. The Excel year rows reference **their own input cells**, never `AVERAGE`. The wizard's "even ramp" helper may *pre-fill* intermediate years, but each value is a real, editable input.
 
 ### 4.2 Expense lines (annual)
 
 `rent_y[y] = occupancy_y[y]` where occupancy is **either** `building_sqft × rent_per_sqft` **or** a directly entered annual occupancy dollar (§7.3), then escalated:
 
 ```
-occupancy_y[y] = occupancy_y1 × (1 + RENT_ESCALATOR)^(y − 1)     # compound, y∈{1,2,3}; §1
+occupancy_y[y] = occupancy_y1 × (1 + RENT_ESCALATOR)^(y − 1)     # compound, y∈{1,2,3,4,5}; §1 (escalator compounds through Y5, same formula)
 ```
 
 If `lease_type == "nnn"`, add researched/entered NNN opex to occupancy (§7.3, §16.4). The Gross/NNN toggle and the escalator both apply.
@@ -272,11 +272,11 @@ Each driver has an advisory benchmark band. Exceeding it sets a `flags` entry **
 
 | Metric | Advisory band |
 |---|---|
-| Donor market share (Y1) | ≤ ~8% for a new store |
+| Donor market share (Y1, **Y4, Y5**) | ≤ ~8% (`SHARE_Y1_BAND_MAX`). The band-violation check is set on Year 1 **and** the late years Year 4 / Year 5, each with its own flag key (`share_y1_out_of_band` / `share_y4_out_of_band` / `share_y5_out_of_band`). The decelerating-plateau default `0.11`/`0.12` for Y4/Y5 sits above the conservative band, so a default 5-year projection carries advisory `share_y4`/`share_y5` flags + a justification note — an **advisory badge, not a math error**. The recommendation gate (§6.3) still keys on `share_y1_out_of_band` only, so the verdict is unchanged. |
 | Sales per sq ft | ~$50–$300 |
 | Labor ratio | ~25–60% of revenue |
 | Occupancy ratio | ≤ ~15–20% of revenue |
-| Net margin | flag > ~30% as unusual for a new store |
+| Net margin (Y1, **Y4, Y5**) | flag > ~30% as unusual (`net_margin_out_of_band` for Y1; `net_margin_y4`/`net_margin_y5_out_of_band` for the late years) |
 
 **Sensitivity:** base / downside / upside at `±SENSITIVITY_DELTA` (25%) on **rent** and **donations**, showing the effect on net profit, break-even month, and capital required. Each scenario is a full re-run of the core. Downside scenarios are **fixtured** (§13.6) so a sign/compounding error cannot ship behind a passing happy path.
 
@@ -315,7 +315,7 @@ the view-model uses that same string as **both** `reco.sub` and
 > threshold/guardrail logic is unchanged — this is messaging/transparency only.
 
 ### 6.4 KPIs (§11)
-Per period, recomputed live (subject to §12.4 guards): Total revenue · Net profit · Net margin · **Sales per sales-floor sq ft** · Sales per total sq ft · Revenue per donation · Revenue per customer · Annual donations · Customers · Occupancy cost ratio · Labor ratio · Donations per sq ft · **Break-even month** · **Startup capital required** · **First-year cash gap** · **Payback period** (the precise `payback_month`, §6.6) · Revenue CAGR (Y1→Y3).
+Per period, recomputed live (subject to §12.4 guards): Total revenue · **Net income** · Net margin · **Sales per sales-floor sq ft** · Sales per total sq ft · Revenue per donation · Revenue per customer · Annual donations · Customers · Occupancy cost ratio · Labor ratio · Donations per sq ft · **Break-even month** · **Startup capital required** · **First-year cash gap** · **Payback period** (the precise `payback_month`, §6.6) · Revenue CAGR (**Y1→Y5**).
 
 > `simple_payback_years` (`startup_total / net[1]`) is **retained internally** (still computed and listed as a non-pinnable derived node) but is **no longer surfaced on the view-model**: the KPI strip shows the precise **Payback period** milestone (`payback_month`) instead (§6.6).
 
@@ -324,7 +324,7 @@ sales_per_salesfloor_sqft = total_rev[1] / (building_sqft × salesfloor_pct)   #
 occupancy_ratio[y]        = occupancy_y[y] / total_rev[y]                      # N/A if rev 0
 labor_ratio[y]            = Payroll[y] / total_rev[y]                          # N/A if rev 0
 simple_payback_years      = startup_total / net[1]                            # N/A if net[1] ≤ 0
-revenue_cagr              = (total_rev[3] / total_rev[1])^(1/2) − 1           # N/A if rev[1] == 0
+revenue_cagr              = (total_rev[5] / total_rev[1])^(1/4) − 1           # Y1→Y5, 4 periods; N/A if rev[1] == 0
 ```
 
 ### 6.6 Milestones (project-month timeline, §8 / #117)
@@ -438,10 +438,11 @@ It returns the **App-D view-model** as its native output — the **same** struct
 | `milestones` | `{ grandOpening, breakEven, payback }` — each `{ raw, display }`; unreached ⇒ `{ raw: null, display: "N/A", reason }`; `payback` adds `duration` ("25 months") when reached (§6.6) |
 | `kpis[]` | `{ label, value, sub, color }` — includes the **Payback period** KPI (sourced from `milestones.payback`); the `simple_payback_years` KPI is retired (§6.4) |
 | `monthly[]` | per **project month 1..N** `{ revenue, expenses, scheduledCosts, net, cumulativeCash }` (the same columns as the `.xlsx` Monthly tab; `net = revenue − expenses − scheduledCosts`, so a pre-opening month reads as a real loss) + top-level `breakevenMonth` |
-| `rows[]` | per 3-year line `{ label, group, y1, y2, y3, class: input\|computed\|overridden\|estimated, editable }` |
+| `rows[]` | per 5-year line `{ label, group, y1, y2, y3, y4, y5, class: input\|computed\|overridden\|estimated, editable }` (every annual row carries all five year cells; "Net income" is the net total row) |
+| `incomeSeries[]` · `year5Income` | annual **net income** Y1..Y5 as `{raw,display}` (the list/detail sparkline) + the Year-5 figure; server is the one format authority |
 | `overrides[]` | per pin `{ node, year, calculated, value, note, pinnedDate, affected[] }` |
 | `evidence[]` | `{ label, value, method, badge, change, meta }` |
-| `settings` | `{ laborPct, marketingPct, suppliesPct, cardPct, payrollTaxPct, salvagePct, escalator, basket, donationsPerHh, shareY1, shareY2, shareY3, occupancyAnnual, leaseType, salesfloorSqft, reserveBuffer }` |
+| `settings` | `{ laborPct, marketingPct, suppliesPct, cardPct, payrollTaxPct, salvagePct, escalator, basket, donationsPerHh, donationValue, donationsPerHouseholdPerYear, shareY1, shareY2, shareY3, shareY4, shareY5, occupancyAnnual, leaseType, salesfloorSqft, reserveBuffer }` (E2: `donationValue` + `donationsPerHouseholdPerYear` join `basket` as editable donation drivers; `donationsPerHh` retained as an alias) |
 | `version`, `model_version`, `compute_schema_version`, `flags` | version stamps (§3) + the N/A flags map (§8) |
 
 ### 9.2 Dual-value convention
@@ -460,8 +461,8 @@ Three named projections drive design, the §8 edge-case math, and the golden/Lib
 
 | Fixture | Inputs (deltas from defaults) | Expected headline | Tests |
 |---|---|---|---|
-| **House of Hope (canonical, 60% labor)** | shares 6/8/10%, basket $17.08, **labor 60% (owner default)**, marketing 3.75%, supplies 5%, escalator 3%, reserve $25k, `H`=31,798, donation_value $74, 10,000 sqft, 70% salesfloor, NNN | Y1 rev ≈ **$426,911** (labor-independent); margin / capital / `reco.tag` computed at 60% (a slight-loss / `revise`-class case) and **pinned at fixture-generation time** | happy path; annual==Σmonthly; no overrides |
-| **House of Hope (design-parity, 40% labor)** | as above but **labor 40%** | Y1 net margin ≈ **11%**; capital required ≈ **$277,990**; break-even ≈ **month 5**; `reco.tag = proceed` (reproduces the prototype screenshots) | **design-QA only** — pixel/number parity with the Appendix-D prototype |
+| **House of Hope (canonical, 60% labor)** | shares **6/8/10/11/12%** (Y4/Y5 = the `0.11`/`0.12` decelerating plateau), basket $17.08, **labor 60% (owner default)**, marketing 3.75%, supplies 5%, escalator 3% (compounds through Y5), reserve $25k, `H`=31,798, donation_value $74, 10,000 sqft, 70% salesfloor, NNN | Y1 rev ≈ **$426,911** (labor-independent); capital ≈ **$321,940**, cash-gap ≈ **($296,940)**, break-even **month 9** — all Year-1-anchored and **byte-unchanged** from the 3-year model; `reco.tag = do_not_proceed` (downside never breaks even); advisory `share_y4`/`share_y5` flags fire; frozen at `model_version 2.6.0` | happy path; annual==Σmonthly; 5-column three-way golden reconcile; no overrides |
+| **House of Hope (design-parity, 40% labor)** | as above but **labor 40%** | Y1 net margin ≈ **11%**; capital required ≈ **$279,446**; break-even ≈ **month 5**; `reco.tag = proceed` (reproduces the prototype screenshots) | **design-QA only** — pixel/number parity with the Appendix-D prototype |
 | **Aggressive (flagged)** | shares **15/20/25%**, else defaults | net margin ≈ **39%** → **must trigger** the §12.2 net-margin (>30%) and share (>8%) guardrails; `requires_note = true`; `reco.tag = revise` | guardrail flags fire; not a math error |
 | **Grace Mission (loss case)** | high rent / low share → **Y1 net ≈ ($12,400)**; rent **$14/sqft low-confidence**; **one overridden Payroll cell** (`Payroll#1`) | `simple_payback_years = null` ("N/A — no Year 1 profit"); negatives in parentheses; low-confidence rent badge | N/A sentinels; override + N/A path both recalc clean |
 
@@ -504,7 +505,7 @@ Every divided cell uses the guard pattern so LibreOffice recalc never yields `#D
 Applied to: net margin (`=net/totrev`, was line 257), simple payback (`=startup/Y1net`, was line 284), customers (`=retail/basket`), and every per-unit KPI. A `null` from the core renders as a **blank cell + comment** describing the N/A (§8).
 
 ### 11.6 Tabs
-- **`Projection`** — inputs (blue), 3-year P&L (formulas), startup costs, KPIs, decision metrics, and a **Notes & Disclaimer** block (§11.7).
+- **`Projection`** — inputs (blue), 5-year P&L (formulas, columns B–F = Year 1–5), startup costs, KPIs, decision metrics, and a **Notes & Disclaimer** block (§11.7).
 - **`Monthly Cash Flow`** — M0–M12 rows; the Year-1 P&L column on the `Projection` tab references these cells (§18, §10.3).
 
 ### 11.7 Notes & Disclaimer block (#192)

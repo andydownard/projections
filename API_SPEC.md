@@ -170,17 +170,19 @@ Every read or mutation of a projection returns the **same** view-model — the e
       "cumulativeCash":{"raw":-20000,"display":"($20,000)"} }
   ],
   "breakevenMonth": 5,
+  "incomeSeries": [ {"raw":46900,"display":"$46,900"}, {"...":"... y2..y5 ..."} ],
+  "year5Income": {"raw":110000,"display":"$110,000"},
 
   "rows": [
     { "label":"Donor market share", "group":"drivers",
-      "y1":{"raw":0.06,"display":"6.0%"}, "y2":{...}, "y3":{...},
+      "y1":{"raw":0.06,"display":"6.0%"}, "y2":{...}, "y3":{...}, "y4":{"raw":0.11,"display":"11.0%"}, "y5":{"raw":0.12,"display":"12.0%"},
       "class":"input", "editable":true, "node":"market_share" }
   ],
 
   "overrides": [
     { "node":"Payroll", "year":2, "calculated":{"raw":233000,"display":"$233,000"},
       "value":{"raw":250000,"display":"$250,000"}, "note":"signed 2 hires",
-      "pinnedDate":"2026-06-20T14:00:00Z", "affected":["Payroll taxes","Total Expenses","Net profit"] }
+      "pinnedDate":"2026-06-20T14:00:00Z", "affected":["Payroll taxes","Total Expenses","Net income"] }
   ],
 
   "evidence": [
@@ -192,7 +194,8 @@ Every read or mutation of a projection returns the **same** view-model — the e
   "settings": {
     "laborPct":0.40, "marketingPct":0.0375, "suppliesPct":0.05, "cardPct":0.02,
     "payrollTaxPct":0.075, "salvagePct":0.008, "escalator":0.03, "basket":17.08,
-    "donationsPerHh":3, "shareY1":0.06, "shareY2":0.08, "shareY3":0.10,
+    "donationsPerHh":3, "donationValue":74.0, "donationsPerHouseholdPerYear":3,
+    "shareY1":0.06, "shareY2":0.08, "shareY3":0.10, "shareY4":0.11, "shareY5":0.12,
     "occupancyAnnual":90000, "leaseType":"nnn", "salesfloorSqft":7000, "reserveBuffer":25000
   },
 
@@ -250,17 +253,17 @@ Notes:
     "opening":"2027-03", "opening_status":"pre_launch",
     "building_sqft":10000, "salesfloor_pct":0.70, "lease_type":"nnn",
     "donation_value":74, "rent_per_sqft":12,
-    "demand": { "mode":"market_share", "share_y1":0.06, "share_y2":0.08, "share_y3":0.10 },
+    "demand": { "mode":"market_share", "share_y1":0.06, "share_y2":0.08, "share_y3":0.10, "share_y4":0.11, "share_y5":0.12 },
     "source_of_funds": { "cash":150000, "grant":50000 }
   },
   "demand_drivers": { "competition":"low", "pickup_service":true },
-  "assumptions": { "labor_pct":0.40, "utilities_per_sqft":"2.23" },
+  "assumptions": { "labor_pct":0.40, "utilities_per_sqft":"2.23", "donations_per_hh":3 },
   "terms_accepted": true
 }
 ```
 
 - **Occupancy driver (#245):** the wizard ships **`inputs.rent_per_sqft`** (and leaves `occupancy_annual` null) so the engine resolves occupancy = `building_sqft × rent_per_sqft`; a flat `inputs.occupancy_annual` is still accepted for back-compat and **takes precedence when present**. `assumptions.utilities_per_sqft` (default `"2.23"`) scales the Utilities/trash line (`building_sqft × utilities_per_sqft`); the Equipment & Fixtures / Build-out cost-schedule rows are seeded from `FIXTURES_PER_SQFT`/`BUILDOUT_PER_SQFT × building_sqft` (anchored so 10,000 sq ft reproduces today's literals).
-- **Validation:** `share_y1/y2/y3` are **three explicit values** — no auto-midpoint (PRD §7.1; supersedes `methodology.md` line 17). `salesfloor_pct ∈ (0,1]`; `building_sqft > 0` (0 sq ft blocked, §12.4); `terms_accepted` must be `true` before any export/share is later allowed (§21) — create may proceed without it, but exports are gated (see §6/§7).
+- **Validation:** `share_y1`…`share_y5` are **explicit per-year values** — no auto-midpoint (PRD §7.1; supersedes `methodology.md` line 17). The 5-year horizon (`model_version 2.6.0`) makes `share_y4`/`share_y5` **optional** with the decelerating-plateau defaults `0.11`/`0.12`, so the current 3-year wizard POST keeps working. The editable donation drivers are `inputs.donation_value`, `assumptions.basket`, and `assumptions.donations_per_hh` (E2). `salesfloor_pct ∈ (0,1]`; `building_sqft > 0` (0 sq ft blocked, §12.4); `terms_accepted` must be `true` before any export/share is later allowed (§21) — create may proceed without it, but exports are gated (see §6/§7).
 - **Behavior:** computes server-side (the only math authority), persists `inputs/assumptions/trade_area/computed_json/monthly_json/flags`, stamps `model_version`, sets `version=1`, mints owner + edit + view tokens. When `terms_accepted: true` is sent, the server **stamps `terms_accepted_at` = now** so the later `.xlsx`/packet exports (§6/§7) are reachable; when it is absent/`false`, `terms_accepted_at` stays unset and exports `403 terms_required`. `terms_accepted` defaults to `false` — an unchecked box must never silently accept.
 - **Response `201`:** the full view-model (§3) **plus** the one-time secrets, returned **only here** (never stored in retrievable plaintext on the server beyond `view_slug`):
 
@@ -304,7 +307,7 @@ The core editing endpoint. Drives autosave (debounced) and every Settings/driver
 ```
 
 - **Override rules (server-enforced, not just UI — PRD §14):**
-  - Pinnable nodes are **inputs and expense component lines only**. A pin on a derived/total/margin/KPI node → **422** `{ "error":"node_not_pinnable", "node":"Net profit" }`.
+  - Pinnable nodes are **inputs and expense component lines only**. A pin on a derived/total/margin/KPI node → **422** `{ "error":"node_not_pinnable", "node":"Net income" }`.
   - Recompute is a **topological DAG evaluation**: `resolve(node) = pin.value if pinned else f(resolve(parents))`. **No back-solve** — pinning a downstream node never mutates upstream inputs; upstream rows that no longer drive any pinned downstream node get a **stale flag** surfaced in `flags`/`overrides[].affected`.
   - Setting an override whose value equals the calculated value within tolerance ($0.50) **deletes** the pin (auto-clear-on-equal, matching the design's commit semantics).
 - **Behavior:** recompute server-side (<50 ms p95 target, §27), persist new `computed_json/monthly_json/overrides_json/flags`, increment `version`, write one revision snapshot (`actor_token_hash`, `change_summary`).
@@ -346,6 +349,7 @@ A **read-only what-if**: merge the same editable-surface partial as `PATCH` (§4
 
 - **Auth:** owner or edit (Bearer). **Capability:** owner/edit. **Requires `If-Match: <version>`.**
 - **Behavior:** recompute the projection under the **current** engine `model_version`, writing a **new revision** (the prior `computed_json`+`model_version` are preserved in `revisions`, never destroyed — §13). Only call when `upgrade_available` is true; calling when already current is a no-op `200` with unchanged version.
+  - **3-year → 5-year auto-extend (`2.5.0` → `2.6.0`):** a legacy snapshot's stored inputs have no `share_y4`/`share_y5`. The recompute **auto-extends** the missing late-year shares to the decelerating-plateau defaults `0.11`/`0.12` (the new revision persists them, editable thereafter). The upgrade is non-destructive — the prior 3-year `2.5.0` bytes stay readable verbatim on the old revision.
 - **Response `200`:** the upgraded view-model with the new `model_version` and incremented `version`.
 - **Errors:** `428`/`409` (concurrency); `403`.
 
@@ -463,7 +467,7 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 
 - **Auth:** owner/edit/view. **Capability:** owner/edit/view (role flag tailors emphasis/CTAs — board/funder/advisor, §6.2/§17). **Terms acceptance required** (`403 terms_required` otherwise).
 - **Query:** `?format=pdf|docx` (default `pdf`); `?role=board|funder|advisor` (defaults to the share-link role, else `board`).
-- **Behavior:** the packet **leads with evidence** (§15), then decision recommendation, assumptions (verified vs estimated), citations w/ dates+confidence, sensitivity table, risks, cash need + break-even, monthly cash-flow summary, 3-year P&L, KPIs. Prose is the grounded narrative (§6.1); if AI is disabled, the packet omits generated prose but still includes the structured/evidence sections.
+- **Behavior:** the packet **leads with evidence** (§15), then decision recommendation, assumptions (verified vs estimated), citations w/ dates+confidence, sensitivity table, risks, cash need + break-even, monthly cash-flow summary, 5-year P&L, KPIs. Prose is the grounded narrative (§6.1); if AI is disabled, the packet omits generated prose but still includes the structured/evidence sections.
 - **Response `200`:** `application/pdf` or the `.docx` content type; `Content-Disposition: attachment`.
 - **Errors:** `403 terms_required`; `404`; `429`.
 
@@ -560,8 +564,8 @@ Decision #15: keep the **summing and formatting authority server-side** for the 
     { "month": 2, "total": { "raw": 50000.0, "display": "$50,000" } }
   ],
   "grandTotal": { "raw": 95000.0, "display": "$95,000" },
-  "modelVersion": "2.5.0",
-  "computeSchemaVersion": "1.3.0"
+  "modelVersion": "2.6.0",
+  "computeSchemaVersion": "1.4.0"
 }
 ```
 - **Errors:** `429 rate_limited` (`{ "error":"rate_limited", "retry_after_seconds": N, "scope":"ip" }` + `Retry-After`); `422` validation (a malformed row).

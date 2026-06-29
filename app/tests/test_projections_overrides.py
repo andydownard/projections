@@ -75,7 +75,7 @@ def test_pin_via_set_surfaces_override_with_calc_and_affected(client):
     assert ov["value"]["raw"] == 250000
     assert ov["note"] == "signed 2 hires"
     assert ov["calculated"]["raw"] is not None
-    assert "Net profit" in ov["affected"]
+    assert "Net income" in ov["affected"]
     # the Payroll Y2 row reflects the pin (overridden class)
     payroll = [row for row in vm["rows"] if row["label"] == "Payroll"][0]
     assert payroll["class"] == "overridden"
@@ -88,14 +88,14 @@ def test_pin_derived_node_rejected_422(client):
     r = client.patch(
         f"/api/projections/{slug}",
         json={"overrides": {"set": [
-            {"node": "Net profit", "year": 1, "value": "999999"}
+            {"node": "Net income", "year": 1, "value": "999999"}
         ]}},
         headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
     )
     assert r.status_code == 422, r.text
     body = r.json().get("detail", r.json())
     assert body["error"] == "node_not_pinnable"
-    assert body["node"] == "Net profit"
+    assert body["node"] == "Net income"
     # version must NOT have advanced on a rejected pin
     assert client.get(f"/api/projections/{slug}").json()["version"] == 1
 

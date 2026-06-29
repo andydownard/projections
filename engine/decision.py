@@ -65,6 +65,8 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
            "share_y1": str(D(inputs.share_y1) * D(str(donation_mult))),
            "share_y2": str(D(inputs.share_y2) * D(str(donation_mult))),
            "share_y3": str(D(inputs.share_y3) * D(str(donation_mult))),
+           "share_y4": str(D(inputs.share_y4) * D(str(donation_mult))),
+           "share_y5": str(D(inputs.share_y5) * D(str(donation_mult))),
            "occupancy_annual": str(stressed_occ),
            "rent_per_sqft": None,
            "lease_type": "gross",
@@ -165,11 +167,12 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
         payback = None
         flags["payback"] = "N/A — no Year 1 profit"
 
-    # revenue CAGR Y1->Y3 — N/A when Y1 rev == 0.
+    # revenue CAGR Y1->Y5 — N/A when Y1 rev == 0. Five-year horizon: 4 compounding
+    # periods between Year 1 and Year 5, so the exponent is 1/4.
     r1 = D(str(y1.total_rev))
-    r3 = D(str(annual[3].total_rev))
+    r5 = D(str(annual[5].total_rev))
     if r1 != 0:
-        cagr = (r3 / r1) ** (Decimal("1") / Decimal("2")) - Decimal("1")
+        cagr = (r5 / r1) ** (Decimal("1") / Decimal("4")) - Decimal("1")
     else:
         cagr = None
         flags["cagr"] = "N/A"
@@ -257,18 +260,30 @@ def build_flags(result, assumptions, demand):
         "model_upgrade_available": False,
         "ramp_low_confidence": True,
     }
-    y1 = result.annual[1]
+    annual = result.annual
+    y1 = annual[1]
 
-    # share guardrail (Y1 donor market share <= ~8%)
-    share_y1 = D(str(y1.share))
-    if share_y1 > D(model.SHARE_Y1_BAND_MAX):
-        flags["share_y1_out_of_band"] = {
-            "value": float(share_y1), "band": "≤ ~8%", "requires_note": True}
+    # share guardrail (§12.2). The advisory band (≤ ~8% donor market share) is anchored
+    # on the early-store view; with the 5-year horizon the band-violation check extends
+    # to Year 4 and Year 5 so an over-aggressive late-year donor-share assumption also
+    # raises an advisory flag + justification note (a flag, NOT a math error). Year 1
+    # keeps its own legacy flag key (read by the recommendation gate); Y4/Y5 get their
+    # own additive keys so the existing share_y1 reco logic is unchanged.
+    for y, key in ((1, "share_y1_out_of_band"), (4, "share_y4_out_of_band"),
+                   (5, "share_y5_out_of_band")):
+        share_y = D(str(annual[y].share))
+        if share_y > D(model.SHARE_Y1_BAND_MAX):
+            flags[key] = {"value": float(share_y), "band": "≤ ~8%", "requires_note": True}
 
-    # net-margin guardrail (> ~30% unusual for a new store)
+    # net-margin guardrail (> ~30% unusual for a new store) — also checked on Y4/Y5.
     if y1.margin is not None and D(str(y1.margin)) > D(model.NET_MARGIN_FLAG_MAX):
         flags["net_margin_out_of_band"] = {
             "value": float(D(str(y1.margin))), "band": "≤ ~30%", "requires_note": True}
+    for y, key in ((4, "net_margin_y4_out_of_band"), (5, "net_margin_y5_out_of_band")):
+        margin_y = annual[y].margin
+        if margin_y is not None and D(str(margin_y)) > D(model.NET_MARGIN_FLAG_MAX):
+            flags[key] = {
+                "value": float(D(str(margin_y))), "band": "≤ ~30%", "requires_note": True}
 
     # revenue == 0 -> margin/per-unit KPIs null
     if y1.total_rev == 0:

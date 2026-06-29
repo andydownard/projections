@@ -39,11 +39,18 @@ def build_card_summary(vm: dict[str, Any]) -> dict[str, Any]:
     """
     ta = vm.get("trade_area") or {}
     loc = vm.get("location") or {}
+    # 5-year list contract (#redesign-v2): the annual net-income series Y1..Y5 + the
+    # Year-5 figure power the list/detail sparkline. The engine/server is the one
+    # format authority, so these are the same {raw,display} values the detail uses.
+    income_series = vm.get("incomeSeries") or []
+    y5_income = vm.get("year5Income") or dict(_MISSING_MONEY)
     return {
         "location": ta.get("geography_name") or loc.get("formatted_address") or "",
         "basis": ta.get("basis") or "",
         "y1_revenue": _kpi_value(vm, "Total revenue"),
-        "y1_net": _kpi_value(vm, "Net profit"),
+        "y1_net": _kpi_value(vm, "Net income"),
+        "income_series": income_series,
+        "y5_income": y5_income,
         "capital_required": (vm.get("metrics") or {}).get("capital")
                             or dict(_MISSING_MONEY),
         "reco_tag": (vm.get("reco") or {}).get("tag") or "revise",

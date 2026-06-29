@@ -80,11 +80,11 @@ def test_edit_token_caller_can_mutate(store, projection):
 # --------------------------------------------------------------- DAG / domain guards
 def test_non_pinnable_target_relayed_as_422_through_the_loop(store, projection):
     ctx = make_ctx(projection)
-    res = _loop_tool(store, ctx, "set_override", {"node": "Net profit", "year": 1, "value": "100"})
+    res = _loop_tool(store, ctx, "set_override", {"node": "Net income", "year": 1, "value": "100"})
     relayed = res.tool_invocations[0].result
     assert relayed["error"] == "node_not_pinnable"
     assert relayed["status"] == 422
-    assert relayed["node"] == "Net profit"
+    assert relayed["node"] == "Net income"
     # plain-language relay reached the model and the loop finished (no 500)
     assert res.final_text == "ok"
     assert store.get_projection_by_slug(projection["view_slug"])["version"] == 1
@@ -92,7 +92,7 @@ def test_non_pinnable_target_relayed_as_422_through_the_loop(store, projection):
 
 def test_penny_and_manual_share_one_rejection_authority_for_non_pinnable(client, store, projection):
     slug, owner = projection["view_slug"], projection["owner_token"]
-    bad = {"node": "Net profit", "year": 1, "value": "100"}
+    bad = {"node": "Net income", "year": 1, "value": "100"}
 
     # Penny path (loop + tools)
     penny = _loop_tool(store, make_ctx(projection), "set_override", bad).tool_invocations[0].result
@@ -108,7 +108,7 @@ def test_penny_and_manual_share_one_rejection_authority_for_non_pinnable(client,
     # SAME rejection authority — identical error + node, both 422, neither mutates.
     assert r.status_code == 422
     assert penny["error"] == manual["error"] == "node_not_pinnable"
-    assert penny["node"] == manual["node"] == "Net profit"
+    assert penny["node"] == manual["node"] == "Net income"
     assert client.get(f"/api/projections/{slug}").json()["version"] == 1
 
 

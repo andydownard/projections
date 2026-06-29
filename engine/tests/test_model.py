@@ -5,12 +5,14 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    # 2.5.0: Utilities/trash service is derived from UTILITIES_PER_SQFT × building_sqft
-    # (was a flat fixed-$); the default cost-schedule seed scales fixtures/build-out by
-    # sq ft. Both anchored so 10k reproduces today's literals (feature #245).
-    assert model.MODEL_VERSION == "2.5.0"
-    # 1.3.0: view-model settings gained utilitiesPerSqft + rentPerSqft (additive).
-    assert model.COMPUTE_SCHEMA_VERSION == "1.3.0"
+    # 2.6.0: the annual P&L extends to a 5-year horizon (share_y4/share_y5 drivers +
+    # the compounding escalator through Y5); CAGR is Y1->Y5; the §12.2 guardrails also
+    # check Y4/Y5; "Net profit" is renamed "Net income". Decision metrics stay
+    # Year-1-anchored (capital/break-even/cash-gap byte-unchanged).
+    assert model.MODEL_VERSION == "2.6.0"
+    # 1.4.0: every row carries y4/y5; settings gained shareY4/Y5 + editable donation
+    # drivers (donationValue/donationsPerHouseholdPerYear); +incomeSeries/year5Income.
+    assert model.COMPUTE_SCHEMA_VERSION == "1.4.0"
 
 
 def test_demand_constants():

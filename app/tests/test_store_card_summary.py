@@ -31,7 +31,7 @@ _VM = {
     "metrics": {"capital": {"raw": 277990, "display": "$277,990"}},
     "kpis": [
         {"label": "Total revenue", "value": {"raw": 426911, "display": "$426,911"}},
-        {"label": "Net profit", "value": {"raw": 46900, "display": "$46,900"}},
+        {"label": "Net income", "value": {"raw": 46900, "display": "$46,900"}},
     ],
     "trade_area": {"basis": "city", "geography_name": "Longview city"},
     "location": {"lat": 32.5, "lng": -94.7, "formatted_address": "Longview, TX"},
