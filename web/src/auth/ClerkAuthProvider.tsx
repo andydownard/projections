@@ -15,6 +15,7 @@
 import { ClerkProvider } from "@clerk/clerk-react";
 import type { ReactNode } from "react";
 
+import { ClaimLegacyOwnerToken } from "./ClaimLegacyOwnerToken";
 import { ClerkTokenBridge } from "./ClerkTokenBridge";
 
 // Defaults track the satellite host / primary sign-in; prod overrides via env.
@@ -52,6 +53,7 @@ export default function ClerkAuthProvider({
       allowedRedirectOrigins={allowedRedirectOrigins()}
     >
       <ClerkTokenBridge />
+      <ClaimLegacyOwnerToken />
       {children}
     </ClerkProvider>
   );
