@@ -4,6 +4,10 @@
 // <owner_token> from localStorage and the server filters by owner_token_hash.
 // Without a token there is nothing to list — the utilitarian empty state shows.
 // Money arrives as server { display } and is rendered VERBATIM (no client math).
+//
+// v2 (EPIC L): the entire row is the click target → /p/<slug>/edit. No separate
+// "Open" / "Edit" buttons. onRowClick receives the slug and navigates to the
+// editable detail; no secret appears in the URL (owner token is in localStorage).
 import { useEffect, useState } from "react";
 
 import { listProjections, type ProjectionListItem } from "../api/projections";
@@ -48,11 +52,10 @@ export function ListPage() {
     <ProjectionsList
       projections={projections}
       onCreate={() => navigate("/wizard")}
-      onOpen={(slug) => navigate(`/p/${slug}`)}
-      // Edit routes to the EDITABLE detail (#143). No secret in the URL: the owner
-      // token in localStorage authorizes the PATCH (ProjectionDetail's token
-      // fallback). The list is owner-scoped, so every listed row is owner-editable.
-      onEdit={(slug) => navigate(`/p/${slug}/edit`)}
+      // v2 (L2): the entire row is the click target; always routes to the editable
+      // detail (/p/<slug>/edit). No secret in the URL — the owner token in
+      // localStorage authorizes the PATCH (ProjectionDetail's token fallback).
+      onRowClick={(slug) => navigate(`/p/${slug}/edit`)}
     />
   );
 }

@@ -1,53 +1,49 @@
-// web/src/components/ProjectionsList.tsx — owner-scoped list page (PRD §19.1).
+// web/src/components/ProjectionsList.tsx — v2 owner-scoped list (EPIC L redesign).
 //
-// Owner-scoped; no global index. Each row: name, location + basis, updated,
-// Year-1 revenue, net income, capital required, and a recommendation chip. Money
-// is the server { display } rendered VERBATIM (no client math). Empty state is
-// utilitarian (heading + a single Create action; no marketing illustration).
+// Owner-scoped; no global index. Columns: Location (name + updated date), Income
+// (sparkline Y1..Y5 net income + Y5 label), Capital required (red), Payback,
+// Breakeven, Caret. The entire row is the click target → /p/<slug>/edit.
+//
+// Money arrives as server {raw, display} and is rendered VERBATIM — no client math
+// (PRD §13 / SERVER). The sparkline receives the raw numeric points extracted from
+// the server's income_series; the Y5 label is the server's display string.
 import type { ProjectionListItem } from "../api/projections";
-import { RecoChip } from "./RecoChip";
-import { TradeAreaMap } from "./TradeAreaMap";
-import { basisLabel, formatListDate, isNegative } from "./displayLabels";
+import { Sparkline } from "./Sparkline";
+import { formatListDate, isNegative } from "./displayLabels";
 
 export interface ProjectionsListProps {
   projections: ProjectionListItem[];
   onCreate: () => void;
-  onOpen: (viewSlug: string) => void;
-  /** Open the EDITABLE detail (Settings/sliders/overrides/autosave) for an owned
-   *  projection (#143). The list is owner-scoped, so every row is editable by its
-   *  owner; the owner token in localStorage authorizes the PATCH (no secret in the
-   *  URL). Omitted ⇒ no Edit affordance renders. */
-  onEdit?: (viewSlug: string) => void;
+  /** Called with the view_slug when a row is activated → routes to /p/<slug>/edit.
+   *  The list is owner-scoped, so every listed row is owner-editable. */
+  onRowClick: (viewSlug: string) => void;
 }
 
 export function ProjectionsList({
   projections,
   onCreate,
-  onOpen,
-  onEdit,
+  onRowClick,
 }: ProjectionsListProps) {
   if (projections.length === 0) {
     return (
-      <section className="list-empty" aria-labelledby="empty-heading">
-        {/* QA P1 (decision #4): the create button is CONSISTENT with the populated
-            state — same upper-right `.list__header` placement, same label + styling.
-            (Previously this was a "Create projection" button on the LEFT below the
-            copy; now it matches the populated "New projection" header control.) */}
+      <section className="list-empty" aria-labelledby="list-heading">
+        {/* L1: h1 is "Projections" on both empty and populated states (v2). */}
         <header className="list__header">
-          <h1 id="empty-heading">No projections yet</h1>
+          <h1 id="list-heading">Projections</h1>
           <button type="button" className="btn btn--primary" onClick={onCreate}>
             New projection
           </button>
         </header>
-        <p>Build a board-ready 3-year projection from a few inputs.</p>
+        <p>No projections yet. Build a board-ready projection from a few inputs.</p>
       </section>
     );
   }
 
   return (
     <section className="list" aria-labelledby="list-heading">
+      {/* L1: h1 is "Projections" (drop "Your"). */}
       <header className="list__header">
-        <h1 id="list-heading">Your projections</h1>
+        <h1 id="list-heading">Projections</h1>
         <button type="button" className="btn btn--primary" onClick={onCreate}>
           New projection
         </button>
@@ -55,93 +51,89 @@ export function ProjectionsList({
       <table className="list__table">
         <thead>
           <tr>
-            <th scope="col">Projection</th>
-            <th scope="col">Updated</th>
-            <th scope="col" className="num">
-              Y1 revenue
-            </th>
-            <th scope="col" className="num">
-              Y1 net
-            </th>
+            {/* L3 column headers (v2 redesign). */}
+            <th scope="col">Location</th>
+            <th scope="col">Income</th>
             <th scope="col" className="num">
               Capital required
             </th>
-            <th scope="col">Recommendation</th>
+            <th scope="col">Payback</th>
+            <th scope="col">Breakeven</th>
+            {/* Caret column: no visible label; aria-label tells screen readers this
+                column holds the row-open affordance. */}
+            <th scope="col" className="list__caret-col" aria-label="Open"></th>
           </tr>
         </thead>
         <tbody>
-          {projections.map((p) => (
-            <tr key={p.view_slug} data-testid={`projection-row-${p.view_slug}`}>
-              <td>
-                <div className="list__cell">
-                  <TradeAreaMap
-                    slug={p.view_slug}
-                    location={
-                      p.coords
-                        ? { lat: p.coords.lat, lng: p.coords.lng, formatted_address: p.location }
-                        : null
-                    }
-                    size="thumb"
-                  />
-                  <div>
-                    <button
-                      type="button"
-                      className="list__open"
-                      aria-label={`Open ${p.name}`}
-                      onClick={() => onOpen(p.view_slug)}
-                    >
-                      {p.name}
-                    </button>
-                    <span className="list__sub">
-                      {/* #151: render a human basis label, never the raw enum
-                          code (e.g. "city" → "City"). */}
-                      {p.location} · {basisLabel(p.basis)}
-                    </span>
-                    {onEdit && (
-                      <button
-                        type="button"
-                        data-testid={`projection-edit-${p.view_slug}`}
-                        aria-label={`Edit ${p.name}`}
-                        onClick={() => onEdit(p.view_slug)}
-                        // PE1 inline style: a compact secondary action that doesn't
-                        // depend on shared tokens.css (avoids cross-agent CSS churn).
-                        style={{
-                          display: "inline-block",
-                          marginTop: "0.25rem",
-                          padding: "0.125rem 0.5rem",
-                          fontSize: "var(--text-sm)",
-                          fontWeight: 600,
-                          color: "var(--brand-primary)",
-                          background: "transparent",
-                          border: "1px solid var(--line)",
-                          borderRadius: "6px",
-                          cursor: "pointer",
-                        }}
-                      >
-                        Edit
-                      </button>
-                    )}
+          {projections.map((p) => {
+            // Extract the raw numeric points for the sparkline from the server's
+            // income_series (array of {raw, display}). No math — just plucking the
+            // raw value the server already computed.
+            const sparkPoints = (p.income_series || []).map((v) => v.raw);
+            const sparkAriaLabel = `Annual net income Year 1 to Year 5 for ${p.name}, ending at ${p.y5_income?.display ?? "N/A"}`;
+
+            return (
+              // L2: the entire row is the click target → /p/<slug>/edit.
+              // role="button" + tabIndex={0} + keyboard handler make it accessible
+              // (Enter/Space fire the same action as a click, per WCAG 2.1 AA).
+              <tr
+                key={p.view_slug}
+                data-testid={`projection-row-${p.view_slug}`}
+                className="list__row"
+                role="button"
+                tabIndex={0}
+                aria-label={`Open ${p.name}`}
+                onClick={() => onRowClick(p.view_slug)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onRowClick(p.view_slug);
+                  }
+                }}
+              >
+                {/* L3 col 1: Location — name on top; updated date directly below in
+                    the same font but --text-muted (2-line cell). */}
+                <td>
+                  <div className="list__location">
+                    <span className="list__name">{p.name}</span>
+                    <span className="list__date">{formatListDate(p.updated_at)}</span>
                   </div>
-                </div>
-              </td>
-              {/* #151: friendly, locale-stable date — not a raw ISO slice. */}
-              <td>{formatListDate(p.updated_at)}</td>
-              {/* #148: losses get the error color PAIRED with the server's
-                  parentheses (the non-color cue); positives are unflagged. */}
-              <td className="num" data-negative={isNegative(p.y1_revenue) ? "true" : undefined}>
-                {p.y1_revenue.display}
-              </td>
-              <td className="num" data-negative={isNegative(p.y1_net) ? "true" : undefined}>
-                {p.y1_net.display}
-              </td>
-              <td className="num" data-negative={isNegative(p.capital_required) ? "true" : undefined}>
-                {p.capital_required.display}
-              </td>
-              <td>
-                <RecoChip tag={p.reco_tag} />
-              </td>
-            </tr>
-          ))}
+                </td>
+
+                {/* L3 col 2: Income sparkline (annual net income Y1..Y5) + Y5 label.
+                    The Sparkline component is GEOMETRY ONLY — it receives server raw
+                    points and the server's display label; no client math (PRD §13). */}
+                <td className="list__income-cell">
+                  <Sparkline
+                    points={sparkPoints}
+                    y5Label={p.y5_income?.display}
+                    aria-label={sparkAriaLabel}
+                  />
+                </td>
+
+                {/* L3 col 3: Capital required — red (--error), tabular right-aligned.
+                    The server's display string is rendered verbatim; isNegative reads
+                    the sign of the server raw value for the color cue (#148 pattern). */}
+                <td
+                  className="num list__capital"
+                  data-negative={isNegative(p.capital_required) ? "true" : undefined}
+                >
+                  {p.capital_required.display}
+                </td>
+
+                {/* L3 col 4: Payback — server display string verbatim. */}
+                <td>{p.payback.display}</td>
+
+                {/* L3 col 5: Breakeven — server display string verbatim. */}
+                <td>{p.breakeven.display}</td>
+
+                {/* L3 col 6: Caret — visual affordance for the row click target.
+                    aria-hidden because the row's own aria-label already names the
+                    action ("Open <name>"). */}
+                <td className="list__caret" aria-hidden="true">›</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </section>

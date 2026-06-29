@@ -28,17 +28,24 @@ describe("listProjections (owner-scoped)", () => {
   beforeEach(() => localStorage.clear());
 
   it("GETs /api/projections with the owner bearer token", async () => {
+    // v2 list-item contract: income_series, y5_income, payback, breakeven.
     const body = {
       projections: [
         {
           view_slug: "p_8x",
           name: "House of Hope — Longview, TX",
-          location: "Longview, TX",
-          basis: "city",
-          y1_revenue: { raw: 426911, display: "$426,911" },
-          y1_net: { raw: 47100, display: "$47,100" },
+          location: "Longview city",
+          income_series: [
+            { raw: -20000, display: "($20,000)" },
+            { raw: 10000, display: "$10,000" },
+            { raw: 30000, display: "$30,000" },
+            { raw: 45000, display: "$45,000" },
+            { raw: 60000, display: "$60,000" },
+          ],
+          y5_income: { raw: 60000, display: "$60,000" },
           capital_required: { raw: 277990, display: "$277,990" },
-          reco_tag: "proceed",
+          payback: { raw: 25, display: "Month 25" },
+          breakeven: { raw: 5, display: "Month 5" },
           status: "active",
           version: 7,
           updated_at: "2026-06-24T17:03:21Z",
@@ -57,7 +64,9 @@ describe("listProjections (owner-scoped)", () => {
       }),
     );
     expect(result.projections).toHaveLength(1);
-    expect(result.projections[0].reco_tag).toBe("proceed");
+    expect(result.projections[0].capital_required.display).toBe("$277,990");
+    expect(result.projections[0].payback.display).toBe("Month 25");
+    expect(result.projections[0].income_series).toHaveLength(5);
   });
 
   it("returns an empty list (no owner token yet) without calling the server", async () => {
