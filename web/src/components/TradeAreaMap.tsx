@@ -19,7 +19,8 @@ import type { LocationInfo } from "../api/viewModel";
 export interface TradeAreaMapProps {
   slug: string;
   location?: LocationInfo | null;
-  basis?: string | null;
+  /** Trade-area geography name — used for the descriptive alt text only (#320 drops
+   *  the visible caption; the geography still rides the image's alt). */
   geography?: string | null;
   size?: "thumb" | "detail";
 }
@@ -36,7 +37,6 @@ type DetailState = "loading" | "ok" | "no-location" | "unavailable";
 export function TradeAreaMap({
   slug,
   location,
-  basis,
   geography,
   size = "detail",
 }: TradeAreaMapProps) {
@@ -140,12 +140,9 @@ export function TradeAreaMap({
         height={dims.h}
         onError={() => setDetailState("unavailable")}
       />
-      {geography && (
-        <figcaption className="map__caption">
-          {geography}
-          {basis ? ` · ${basis} trade area` : ""}
-        </figcaption>
-      )}
+      {/* #320: the visible trade-area caption is removed — the geography stays in the
+          image's descriptive alt text; the map sits LEFT with the content on the
+          right (CSS order), so the caption no longer earns its vertical space. */}
     </figure>
   );
 }

@@ -12,6 +12,10 @@ export interface SparklineProps {
   points: number[];
   /** Server-formatted display string for the Y5 net income value. */
   y5Label?: string;
+  /** Server display string per point (#320): when supplied, each point gets a
+   *  hover target whose native <title> reads "Year {i+1}: {labels[i]}". Display
+   *  strings only — no math (PRD §13). */
+  labels?: string[];
   width?: number;
   height?: number;
   "aria-label"?: string;
@@ -26,6 +30,7 @@ const PAD_R = 44; // room for y5 label on the right
 export function Sparkline({
   points,
   y5Label,
+  labels,
   width = 120,
   height = 36,
   "aria-label": ariaLabel,
@@ -120,6 +125,24 @@ export function Sparkline({
           />
         </>
       )}
+
+      {/* Per-point hover targets (#320): a small invisible circle over each point
+          whose native <title> shows "Year N: <server display>". A <title> is the
+          accessible/native SVG tooltip — NOT a <text> element — so it never adds a
+          visible label or trips the y5-label gate. Display strings only (no math). */}
+      {labels &&
+        points.map((v, i) => (
+          <circle
+            key={`pt-${i}`}
+            data-testid={`sparkline-point-${i}`}
+            className="sparkline__point"
+            cx={toX(i)}
+            cy={toY(v)}
+            r={6}
+          >
+            <title>{`Year ${i + 1}: ${labels[i] ?? ""}`}</title>
+          </circle>
+        ))}
 
       {/* Y5 net-income label (server display string, e.g. "($12,340)" / "$1,200").
           Positioned to the right of the last point; aria-hidden because the label

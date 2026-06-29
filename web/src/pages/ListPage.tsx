@@ -19,8 +19,9 @@ import {
   type ProjectionListItem,
 } from "../api/projections";
 import { ProjectionsList } from "../components/ProjectionsList";
-import { ConfirmDialog } from "../components/ConfirmDialog";
+import { TrashConfirmDialog } from "../components/TrashConfirmDialog";
 import { useToast } from "../components/Toast";
+import { TRASH_CONFLICT, TRASH_MOVED, trashCouldNot } from "../api/trashMessages";
 
 function navigate(path: string) {
   window.history.pushState(null, "", path);
@@ -61,12 +62,12 @@ export function ListPage() {
       await trashProjection({ viewSlug: target.view_slug, version: target.version });
       // Optimistically drop the row from the active list.
       setProjections((rows) => rows.filter((r) => r.view_slug !== target.view_slug));
-      showToast("Moved to Trash");
+      showToast(TRASH_MOVED);
     } catch (err) {
       if (err instanceof LifecycleConflictError) {
-        showToast("This projection changed in another tab. Refresh and try again.");
+        showToast(TRASH_CONFLICT);
       } else {
-        showToast("Could not move to Trash. Try again.");
+        showToast(trashCouldNot("move to Trash"));
       }
     } finally {
       setBusy(false);
@@ -95,17 +96,12 @@ export function ListPage() {
         onOpenTrash={() => navigate("/trash")}
       />
       {pendingTrash && (
-        <ConfirmDialog
-          title="Move to Trash?"
-          confirmLabel="Move to Trash"
-          tone="danger"
+        <TrashConfirmDialog
+          name={pendingTrash.name}
           busy={busy}
           onConfirm={confirmTrash}
           onClose={() => setPendingTrash(null)}
-        >
-          Move <strong>{pendingTrash.name}</strong> to Trash. You can restore it later
-          from the Trash view.
-        </ConfirmDialog>
+        />
       )}
     </>
   );

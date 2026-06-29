@@ -58,6 +58,10 @@ def test_overridden_row_class_when_pinned():
     vm = to_view_model(res)
     payroll_rows = [r for r in vm["rows"] if r["label"] == "Payroll"]
     assert payroll_rows and payroll_rows[0]["class"] == "overridden"
+    # I3 (#322): a pinned component row STAYS editable so the owner can re-edit the
+    # pin in place (the cell is the override entry point). The "overridden" class is
+    # the orange highlight; editability is independent of the pin.
+    assert payroll_rows[0]["editable"] is True
     assert vm["overrides"], "overrides[] must list the pin"
     assert vm["overrides"][0]["node"] == "Payroll"
 

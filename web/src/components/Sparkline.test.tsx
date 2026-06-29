@@ -131,4 +131,28 @@ describe("Sparkline", () => {
     const pts = parsePolylinePoints(document.querySelector("polyline")!);
     expect(pts.every((p) => p.y === pts[0].y)).toBe(true);
   });
+
+  // --- per-point hover tooltips (#320 layout) ---
+
+  it("renders a per-point hover target with a Year N: <label> <title> when labels are given", () => {
+    render(
+      <Sparkline
+        points={[1000, 2000, 3000, 4000, 5000]}
+        labels={["$1,000", "$2,000", "$3,000", "$4,000", "$5,000"]}
+      />,
+    );
+    const points = document.querySelectorAll("[data-testid^='sparkline-point-']");
+    expect(points).toHaveLength(5);
+    const titles = Array.from(document.querySelectorAll("title")).map((t) => t.textContent);
+    expect(titles).toContain("Year 1: $1,000");
+    expect(titles).toContain("Year 5: $5,000");
+  });
+
+  it("adds no <text> elements when labels are given but no y5Label (titles are not text)", () => {
+    const { container } = render(
+      <Sparkline points={[1000, 2000]} labels={["$1,000", "$2,000"]} />,
+    );
+    // <title> is not a <text> element, so the existing y5-label gate still holds.
+    expect(container.querySelectorAll("text")).toHaveLength(0);
+  });
 });

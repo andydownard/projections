@@ -116,14 +116,15 @@ describe("CashflowChart", () => {
   });
 
   // D4: the SVG no longer carries x-axis month ticks; months are labeled ONCE in
-  // the monthly table header as "Mo. N" (so they are never double-labeled).
-  it("removes the x-axis month ticks from the SVG and labels months once in the table header as 'Mo. N' (D4)", () => {
+  // the monthly table header (so they are never double-labeled). #320 abbreviates the
+  // header to "M N" so the dense table stays compact.
+  it("removes the x-axis month ticks from the SVG and labels months once in the table header as 'M N' (D4 / #320)", () => {
     const { container } = render(
       <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
     );
     expect(container.querySelectorAll(".cashflow-chart__tick").length).toBe(0);
     const table = screen.getByTestId("cashflow-table");
-    expect(within(table).getByRole("columnheader", { name: "Mo. 1" })).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "M1" })).toBeInTheDocument();
   });
 
   // D5: the bottom "Cash low point … · Break-even …" figcaption is removed.

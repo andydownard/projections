@@ -1441,6 +1441,10 @@ body {
 .three-year-table th,
 .three-year-table td {
   padding: 0.4rem 0.75rem;
+  /* #320: ONE right edge for headers + read-only + editable + input cells. The
+     editable cell's inner button + the inline editor already use --field-pad-x, so
+     matching the read-only/header right padding lines every numeric column up. */
+  padding-right: var(--field-pad-x);
   border-bottom: 1px solid var(--line);
   text-align: right;
 }
@@ -1798,7 +1802,8 @@ body {
 }
 .cashflow-table th,
 .cashflow-table td {
-  padding: 0.3rem 0.5rem;
+  /* #320: compact row padding so the dense monthly table reads tighter. */
+  padding: 0.2rem 0.4rem;
   border-bottom: 1px solid var(--line);
   text-align: right;
   white-space: nowrap;
@@ -1858,6 +1863,14 @@ body {
   flex: 0 0 auto;
   width: 15rem;
   max-width: 42vw;
+}
+/* #320: on desktop the map sits on the LEFT, the content on the RIGHT — a pure CSS
+   `order` flip (DOM/tab order is preserved: content stays first in source). On mobile
+   no order is applied, so the content renders first and the map drops below it. */
+@media (min-width: 700px) {
+  .detail__map {
+    order: -1;
+  }
 }
 /* a11y section heading for the KPIs tab panel (keeps the h1→h2 chain). */
 .detail__panel-heading {
@@ -3208,6 +3221,13 @@ body {
   stroke-linejoin: round;
 }
 
+/* Per-point hover targets (#320): invisible (transparent) discs sized for an easy
+   pointer hit; the native <title> shows "Year N: $…" on hover. No fill so they
+   never alter the trajectory's appearance. */
+.sparkline__point {
+  fill: transparent;
+}
+
 .sparkline__y5-label {
   font-size: 9px;
   fill: var(--text-muted);
@@ -3448,9 +3468,11 @@ body {
 }
 
 /* --- D1 metric bar: Income sparkline · Capital (RED) · Payback · Break-even - */
+/* #320: ONE row of equal-width tiles (nowrap); each cell flexes equally and may
+   shrink (min-width:0) so the four tiles never wrap to a second row on desktop. */
 .metric-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 1.25rem;
   align-items: flex-start;
   padding: 0.75rem 0 0;
@@ -3463,7 +3485,18 @@ body {
   gap: var(--label-gap);
   padding: var(--space-1) var(--space-5);
   border-right: 1px solid var(--line);
-  min-width: 7rem;
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* #320: only the smallest phones wrap the tiles (4 equal cells crush below ~480px). */
+@media (max-width: 480px) {
+  .metric-bar {
+    flex-wrap: wrap;
+  }
+  .metric-bar__cell {
+    flex: 1 1 7rem;
+    min-width: 7rem;
+  }
 }
 .metric-bar__cell:last-child {
   border-right: none;
@@ -3572,6 +3605,28 @@ td.cell-wrap {
   font-size: var(--text-sm);
   color: var(--brand-primary);
   pointer-events: none;
+}
+/* I4 (#322): inline "reset to calculated" on an overridden cell — a tiny ↺ pinned to
+   the cell's top-left (clear of the right-aligned number + the hover pencil). Always
+   visible on an overridden cell so the pin can be cleared without the audit UI. */
+.cell-reset {
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--brand-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.cell-reset:hover,
+.cell-reset:focus-visible {
+  background: var(--surface-alt, #f1efe9);
 }
 /* Legend swatch parity: the Input swatch shows the green left tick. */
 .swatch--input {

@@ -323,8 +323,11 @@ export function CashflowChart({
                   Line item
                 </th>
                 {monthly.map((m) => (
+                  // #320: abbreviate the month headers ("Mo. 5" → "M5") so the dense
+                  // monthly table stays compact; the sr caption + axis carry the full
+                  // "months 0 to 12" context.
                   <th scope="col" key={m.month} className="num">
-                    Mo. {m.month}
+                    M{m.month}
                   </th>
                 ))}
               </tr>

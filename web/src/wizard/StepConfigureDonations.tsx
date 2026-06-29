@@ -102,8 +102,11 @@ export function StepConfigureDonations({ state }: { state: WizardState }) {
 
         {householdsSource === "census_acs" && householdsValue !== null && resolved && (
           <p className="places__provenance">
-            {formatCount(householdsValue)} households · {resolved.trade_area.geography_name} ·
-            U.S. Census ACS {resolved.trade_area.acs_vintage}
+            {/* #324 (households-count-shown-twice): the count is already the confirm
+                value above, so the provenance line drops the leading "N households"
+                and keeps geography · Census · MOE only. */}
+            {resolved.trade_area.geography_name} · U.S. Census ACS{" "}
+            {resolved.trade_area.acs_vintage}
             {resolved.trade_area.moe !== null ? ` · ±${resolved.trade_area.moe} (MOE)` : ""} ·
             estimate
           </p>
