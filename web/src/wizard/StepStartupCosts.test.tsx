@@ -41,9 +41,6 @@ function makeState(overrides?: {
     draft: draft as WizardDraft,
     costSchedule,
     rentSource: "default",
-    rentResearch: null,
-    rentResearchLoading: false,
-    rentResearchError: false,
     setRentPerSqft: vi.fn(),
     set: vi.fn(),
   } as unknown as WizardState;

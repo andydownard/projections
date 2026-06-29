@@ -21,7 +21,6 @@ import {
   type PennyDraftState,
 } from "../api/penny";
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
-import { researchRent } from "../api/research";
 import type { ViewModel } from "../api/viewModel";
 import { setEditToken, setOwnerToken } from "../api/projections";
 import { authHeader } from "../api/authHeader";
@@ -236,44 +235,6 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
   // A polite live region that announces the blocking Generate transition to assistive
   // tech (the only async transition that warrants a between-steps spinner, #15).
   const generateStatus = busy ? "Generating your projection…" : "";
-
-  // #245 — pre-fill rent (shown on the startup-costs step) from the server research
-  // endpoint (extract-only, off the compute hot path). Fires once per resolved-location
-  // + size + lease-basis key (a ref guards against refetch loops) as soon as an address
-  // resolves, so the rate is pre-filled by the time the operator reaches the cost step.
-  // With AI disabled or no resolved location we skip the call and the field stays the
-  // anchored benchmark / manual entry. A failure degrades to manual — research NEVER
-  // blocks the wizard (API_SPEC §19.2).
-  const researchedKey = useRef<string | null>(null);
-  const { resolved, draft, applyRentResearch, onRentResearchStart, onRentResearchError } = wiz;
-  const buildingSqft = draft.buildingSqft;
-  const leaseType = draft.leaseType;
-  useEffect(() => {
-    if (aiOff || !resolved || !(buildingSqft > 0)) return;
-    const basis = leaseType === "gross" ? "gross" : "nnn";
-    const key = `${resolved.location.place_id}|${buildingSqft}|${basis}`;
-    if (researchedKey.current === key) return;
-    researchedKey.current = key;
-    onRentResearchStart();
-    researchRent({
-      buildingSqft,
-      location: {
-        geography_name: resolved.trade_area.geography_name,
-        formatted_address: resolved.location.formatted_address,
-      },
-      basis,
-    })
-      .then((r) => applyRentResearch(r))
-      .catch(() => onRentResearchError());
-  }, [
-    resolved,
-    buildingSqft,
-    leaseType,
-    aiOff,
-    applyRentResearch,
-    onRentResearchStart,
-    onRentResearchError,
-  ]);
 
   // --- Penny (DRAFT mode) ↔ wizard bridge (Spec §5.2) ------------------------
   // She fills/refines any wizard field and builds the cost schedule by mutating the

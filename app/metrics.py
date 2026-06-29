@@ -44,17 +44,13 @@ PROVIDERS: tuple[str, ...] = (
 # Providers that bill per token (so token/cost counters apply).
 LLM_PROVIDERS: tuple[str, ...] = (PROVIDER_ANTHROPIC, PROVIDER_OPENAI)
 
-# Cost-control verification counters (PRD §16.6/§27 — research/narrative caching,
+# Cost-control verification counters (PRD §27 — narrative caching,
 # narrative regeneration cap).
-COUNTER_RESEARCH_CACHE_HIT = "research_cache_hit"
-COUNTER_RESEARCH_CACHE_MISS = "research_cache_miss"
 COUNTER_NARRATIVE_CACHE_HIT = "narrative_cache_hit"
 COUNTER_NARRATIVE_CACHE_MISS = "narrative_cache_miss"
 COUNTER_NARRATIVE_REGEN_BLOCKED = "narrative_regen_blocked"
 
 COUNTERS: tuple[str, ...] = (
-    COUNTER_RESEARCH_CACHE_HIT,
-    COUNTER_RESEARCH_CACHE_MISS,
     COUNTER_NARRATIVE_CACHE_HIT,
     COUNTER_NARRATIVE_CACHE_MISS,
     COUNTER_NARRATIVE_REGEN_BLOCKED,

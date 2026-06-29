@@ -20,30 +20,9 @@ import { useEffect, useRef, useState } from "react";
 
 import { previewCostSchedule, type CostSchedulePreview } from "../api/costSchedule";
 import { CostScheduleEditor } from "../components/CostScheduleEditor";
-import { assumptionSourceLabel } from "../components/displayLabels";
 import { NumberField } from "../components/NumberField";
 import { DEFAULT_OPENING_MONTH_NUMBER, type CostScheduleRow } from "./shareHelper";
-import type { AssumptionSource, WizardState } from "./useWizardState";
-
-/** The verified-vs-estimated badge for a RESEARCH-sourced rent (icon + text, never
- *  color-only). `verified` is the server's flag (fetched source survived AND
- *  confidence != low). */
-function RentBadge({ verified }: { verified: boolean }) {
-  return (
-    <span
-      className={`assumption__badge assumption__badge--${verified ? "verified" : "estimated"}`}
-      data-testid="rent-badge"
-      data-verified={verified ? "true" : "false"}
-    >
-      <span aria-hidden="true">{verified ? "✓" : "≈"}</span>{" "}
-      {verified ? "Verified — local market sources" : "Estimated — regional benchmark"}
-    </span>
-  );
-}
-
-function provenanceText(source: AssumptionSource): string {
-  return assumptionSourceLabel(source);
-}
+import type { WizardState } from "./useWizardState";
 
 export interface StepStartupCostsProps {
   state: WizardState;
@@ -117,10 +96,7 @@ export function StepStartupCosts({
   proposalBusy = false,
   proposalError = null,
 }: StepStartupCostsProps) {
-  const { draft, rentSource, rentResearch, rentResearchLoading, rentResearchError } = state;
-
-  const lowConfidence = rentSource === "research" && rentResearch?.confidence === "low";
-  const showManualNote = rentResearchError || rentResearch?.ai_enabled === false;
+  const { draft } = state;
 
   // Server totals for the grid (decision #15): the client never sums. Debounced + abort
   // so rapid cell edits coalesce; a failure keeps the last good totals (presentation,
@@ -155,7 +131,7 @@ export function StepStartupCosts({
         project month it’s spent.
       </p>
 
-      {/* ---- Rent — research pre-filled, editable (#245) ---- */}
+      {/* ---- Rent — editable $/sq ft (#245) ---- */}
       <div className="assumption" data-testid="assumption-rent">
         <label className="wizard__field" htmlFor="wizard-rent-per-sqft">
           Rent
@@ -170,60 +146,9 @@ export function StepStartupCosts({
             aria-label="Rent per square foot per year"
           />
         </label>
-
         <p className="assumption__provenance" data-testid="rent-provenance">
-          {rentResearchLoading ? null : (
-            <>
-              <span className="assumption__source">{provenanceText(rentSource)}</span>
-              {rentSource === "research" && rentResearch && (
-                <>
-                  {" · "}
-                  <RentBadge verified={rentResearch.verified} />
-                  {rentResearch.low != null && rentResearch.high != null && (
-                    <span className="assumption__range">
-                      {" · "}Range ${rentResearch.low}–${rentResearch.high}/sq ft
-                    </span>
-                  )}
-                </>
-              )}
-            </>
-          )}
+          Enter your local $/sq ft (prefilled with a regional benchmark)
         </p>
-
-        {lowConfidence && (
-          <p className="assumption__warn" data-testid="rent-low-confidence" role="note">
-            <span aria-hidden="true">⚠</span> Low confidence — confirm this against a
-            local quote before relying on it.
-          </p>
-        )}
-
-        {showManualNote && (
-          <p
-            className="assumption__provenance assumption__provenance--manual"
-            data-testid="rent-manual-note"
-          >
-            Couldn’t research local rent automatically — enter your own $/sq ft.
-          </p>
-        )}
-
-        {rentSource === "research" &&
-          rentResearch &&
-          (rentResearch.sources?.length ?? 0) > 0 && (
-            <details className="assumption__sources" data-testid="rent-sources">
-              <summary>{rentResearch.sources.length} source(s)</summary>
-              <ul>
-                {rentResearch.sources.map((s, i) => (
-                  <li key={`${s.url}-${i}`}>
-                    <a href={s.url} target="_blank" rel="noopener noreferrer">
-                      {s.title || s.url}
-                    </a>
-                    {s.source_date ? <span> · {s.source_date}</span> : null}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-
       </div>
 
       {/* #32 — contextual "Upload consultant proposal" → Penny (graceful when AI off). */}
