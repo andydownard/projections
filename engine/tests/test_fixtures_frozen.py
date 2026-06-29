@@ -34,10 +34,14 @@ def test_design_parity_40_fixture_is_byte_stable(design_parity_result):
 
 def test_canonical_is_a_loss_case():
     vm = _load("house_of_hope_canonical_60.json")
-    # margin display negative (parentheses) and reco is not proceed.
+    # Cash-based Net margin display negative (parentheses) and reco is not proceed.
     assert vm["rows"][-1]["y1"]["display"].startswith("(")
     assert vm["reco"]["tag"] != "proceed"
-    assert vm["model_version"] == "2.6.0"
+    assert vm["model_version"] == "2.7.0"
+    # CASH basis (epic #321): the displayed Year-1 Net income includes the one-time
+    # startup hit (operating −$44,433 − $238,500 startup = −$282,933).
+    net = next(r for r in vm["rows"] if r["label"] == "Net income")
+    assert round(net["y1"]["raw"]) == -282933
 
 
 def test_canonical_reco_text_consistent_with_breakeven_metric():
@@ -55,11 +59,19 @@ def test_canonical_reco_text_consistent_with_breakeven_metric():
         assert "base case" in text and "downside" in text
 
 
-def test_design_parity_reproduces_headline():
+def test_design_parity_reproduces_headline(design_parity_result):
     vm = _load("house_of_hope_design_parity_40.json")
-    # margin ~11% and break-even ~month 5 (the labor-driven prototype headline).
-    assert vm["rows"][-1]["y1"]["raw"] > 0.10 and vm["rows"][-1]["y1"]["raw"] < 0.12
+    # The labor-driven prototype headline: break-even ~month 5 (operating).
     assert vm["breakevenMonth"] == 5
+    # CASH basis (epic #321): the DISPLAYED Year-1 Net margin is dragged negative by the
+    # one-time startup hit (operating +$47,359 − $238,500 = −$191,141 over revenue), even
+    # though the OPERATING margin is the ~11% prototype headline. The displayed net + margin
+    # are congruent (both cash), and the payback now resolves to a real Month N (Month 30).
+    assert vm["rows"][-1]["y1"]["raw"] < 0                       # displayed (cash) margin
+    assert round(next(r for r in vm["rows"] if r["label"] == "Net income")["y1"]["raw"]) == -191141
+    assert vm["milestones"]["payback"]["raw"] == 30
+    op_margin = float(design_parity_result.annual[1].margin)
+    assert 0.10 < op_margin < 0.12                              # the ~11% operating headline
 
 
 def test_y1_revenue_identical_across_both_fixtures():

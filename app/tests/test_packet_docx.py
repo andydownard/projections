@@ -439,9 +439,12 @@ def test_exec_summary_fallback_omits_breakeven_when_na():
 
 
 def test_performance_sentence_grounded_year_one():
+    # CASH basis (epic #321): the grounded Year-1 net income includes the one-time
+    # startup hit (operating −$44,433 − $238,500 startup = −$282,933), sourced from the
+    # cash-based "Net income" surface — so the packet sentence reads the board's cash reality.
     vm = _vm5()
     text = _performance_sentence(build_packet(vm))
-    assert "$426,938" in text and "($44,433)" in text
+    assert "$426,938" in text and "($282,933)" in text
     for f in extract_figures(text):
         assert _norm(f) in grounded_figures(vm), f
 

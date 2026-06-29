@@ -199,9 +199,15 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
     first, last = min(exp_rows), max(exp_rows)
     line("Total Expenses", [f"=SUM({c}{first}:{c}{last})" for c in cols], USD, bold=True)
     te = rowmap["Total Expenses"]
+    # Net income (CASH-based, epic #321): write the operating formula for every year now;
+    # the YEAR-1 cell is rewritten below (after the startup block lands its row) to also
+    # subtract the Total Startup Costs cell, so the in-sheet Year-1 net foots to the server
+    # cash net (operating − startup). Years 2-5 stay operating =rev-exp.
     line("Net income", [f"={c}{tr}-{c}{te}" for c in cols], USD, bold=True, fill=TOT_FILL)
     npr = rowmap["Net income"]
-    # net margin = net/totrev (guarded)
+    # net margin = net/totrev (guarded). The Net income cell is the CASH net (Year-1
+    # startup hit folded in by the rewrite below), so the displayed margin is the
+    # congruent cash margin — there is no second (operating) margin.
     line("Net margin",
          [f'=IF({c}{tr}=0,"",{c}{npr}/{c}{tr})' for c in cols], PCT)
 
@@ -232,12 +238,14 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
     stc.fill = TOT_FILL
     startup_total_row = row
     row += 1
-    ws[f"A{row}"] = "Simple payback (years)"
-    ws[f"A{row}"].font = BLACK
-    pc = ws[f"B{row}"]
-    pc.value = f'=IF(B{npr}<=0,"",B{startup_total_row}/B{npr})'
-    pc.number_format = '0.0'
-    row += 1
+    # CASH basis (epic #321): rewrite the Net income YEAR-1 cell to subtract the Total
+    # Startup Costs cell now that its row is known (Excel forward-references resolve on
+    # recalc). The total stays a SUM and the Net margin cell references this same Net
+    # income cell, so the sheet foots and the displayed net + margin agree. The legacy
+    # "Simple payback (years)" cell is REMOVED — payback is surfaced only via the
+    # MILESTONES "Payback" Month-N row below (matching the web view-model + card), which
+    # also drops one guarded =IF(net<=0,"",…) division from the recalc gate.
+    ws.cell(row=npr, column=2).value = f"=B{tr}-B{te}-B{startup_total_row}"
 
     # ---------- MILESTONES (grand opening / break-even / payback) -----------
     # The three timeline milestones (§8 / #117), rendered as the SAME server display
