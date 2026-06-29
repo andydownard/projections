@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CreateProjectionPage } from "./CreateProjectionPage";
 import type { ViewModel } from "../api/viewModel";
+import { OWNER_TOKEN_KEY } from "../api/projections";
 
 // Phase 2 (Epics B/C) — the full-page Create-Projection wizard: one step at a time
 // over a prominent breadcrumb under a subtle "CREATE PROJECTION" eyebrow, the revised
@@ -280,5 +281,63 @@ describe("CreateProjectionPage — Generate lands on the editable detail (owner 
     render(<CreateProjectionPage />);
     const status = screen.getByTestId("generate-status");
     expect(status).toHaveAttribute("aria-live", "polite");
+  });
+});
+
+describe("CreateProjectionPage — sequential creates never orphan the prior projection (B3)", () => {
+  // The data-loss regression (Mutation-Safety-Quad): the create POST must carry the
+  // owner identity. Anonymous create #1 mints + persists a token; create #2 then
+  // sends that token (JOINING the same workspace) and the single localStorage slot is
+  // NEVER overwritten — so the first projection is never orphaned. With Clerk OFF in
+  // tests, authHeader() resolves the owner from localStorage (today's capability path).
+  function wireServer(creates: Array<string | null>) {
+    let mintN = 0;
+    return vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/api/places/autocomplete"))
+        return jsonResponse({ predictions: [{ description: "Dallas, TX, USA", place_id: "PID_DAL" }] });
+      if (url.includes("/api/places/resolve")) return jsonResponse(RESOLVED);
+      if (url.includes("/api/research")) return jsonResponse(RESEARCH);
+      // create (/api/projections): mirror the server — a presented owner Bearer JOINS
+      // that workspace (no new token minted); an anonymous create mints a fresh token.
+      const auth = new Headers(init?.headers as HeadersInit).get("Authorization");
+      creates.push(auth);
+      if (auth) return jsonResponse({ ...VM });
+      mintN += 1;
+      return jsonResponse({ ...VM, owner_token: `minted-${mintN}` });
+    });
+  }
+
+  async function runWizardToGenerate(user: ReturnType<typeof userEvent.setup>) {
+    await resolveAddress(user);
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> households
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> donor market
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> startup costs
+    await user.click(screen.getByRole("button", { name: /generate projections/i }));
+    await waitFor(() => expect(window.location.pathname).toBe("/p/p_new/edit"));
+  }
+
+  it("create #2 sends create #1's minted owner token and never overwrites the slot", async () => {
+    const creates: Array<string | null> = [];
+    wireServer(creates);
+    const user = userEvent.setup();
+
+    // Create #1 — anonymous; the server mints minted-1, which the wizard persists.
+    window.history.replaceState(null, "", "/wizard");
+    const first = render(<CreateProjectionPage />);
+    await runWizardToGenerate(user);
+    expect(localStorage.getItem(OWNER_TOKEN_KEY)).toBe("minted-1");
+    first.unmount();
+
+    // Create #2 — the wizard now carries the existing owner token (JOIN), and the
+    // localStorage slot must be left intact so create #1 is not orphaned.
+    window.history.replaceState(null, "", "/wizard");
+    render(<CreateProjectionPage />);
+    await runWizardToGenerate(user);
+
+    expect(creates[0]).toBeNull(); // create #1 went out anonymous
+    expect(creates[1]).toBe("Bearer minted-1"); // create #2 carried create #1's token
+    expect(localStorage.getItem(OWNER_TOKEN_KEY)).toBe("minted-1"); // slot NOT overwritten
   });
 });

@@ -118,6 +118,7 @@ Limits apply **per IP and per token** (PRD §20/§27), 429 on breach with `Retry
 | `POST /api/feedback` | 5 / hour | — | GitHub-issue spam. |
 | `POST /api/intent` | 5 / hour | — | CRM spam. |
 | `POST /api/projections` (create) | 20 / hour | — | Projection-creation flood. |
+| `POST /api/projections/claim` | 60 / hour | — | Claim/bridge (§4.9); capped before the JWT verify + write. |
 | `POST …/evidence` (file upload) | 30 / hour | 60 / hour / projection | Upload abuse. |
 | `POST …/penny`, `POST /api/penny/draft` | 600 / hour (coarse) | **120 / hour / token, 240 / hour / projection** | Bounded provider tool-use loop — **keyed on token/projection, not the shared proxy IP** (§6.6, issue #189). |
 | `POST /api/penny/proposal` | 120 / hour (coarse) | 60 / hour / token | Upload intake (token-hashed key). |
@@ -377,6 +378,23 @@ Projections are soft-deleted (`status:"trashed"`, `deleted_at` set) and restorab
 - **Capability:** owner only for all three (`owner_required` for edit/view).
 - **Response:** `trash`/`restore` → `200` with the updated view-model (`status` reflected). `DELETE` → `204 No Content`.
 - **Errors:** `428`/`409`; `403`; `DELETE` on an active projection → `409 { "error":"not_trashed" }`.
+
+### 4.9 `POST /api/projections/claim` — link token-owned projections to a Clerk owner
+
+The **claim / bridge** path for the Clerk satellite (`SECURITY.md` §2.8, ship dark behind `CLERK_ENABLED`). When an owner signs in with Clerk, the owner-scoped list (§4.1) keys on the Clerk `sub`, not the hashed capability token — so projections created **before** they signed in would silently vanish from their list. This endpoint backfills the Clerk identity onto those rows so they keep showing.
+
+- **Feature gate:** with `CLERK_ENABLED` off (the default) the endpoint **does not exist → `404`** (never a crash). The capability-token app is byte-for-byte unchanged.
+- **Auth:** the `Authorization: Bearer` MUST resolve to a **verified Clerk identity** (a Clerk session JWT). A capability-token-only caller (or no bearer) → **`401` `{ "error":"clerk_identity_required" }`** — possession of a capability token grants access to that workspace, **not** the right to bind it to an arbitrary Clerk identity. Cookie-blind (the header only). **No `If-Match`** (it touches a set of rows, not one versioned aggregate).
+- **Request body:** the capability owner token whose rows to claim.
+
+```json
+{ "owner_token": "…the localStorage owner token…" }
+```
+
+- **Behavior:** one **atomic conditional UPDATE** — `SET owner_clerk_user_id = <sub>` (and `owner_org_id` when the session is org-scoped) `WHERE owner_token_hash = hash(owner_token) AND owner_clerk_user_id IS NULL`. The `IS NULL` guard makes it **idempotent** (a re-claim links 0 more) and **anti-takeover** (an already-claimed row can never be re-linked to a different Clerk user, even by a caller presenting the same token). Only rows whose `owner_token_hash` matches are touched — the caller must possess the exact owner token (`TENANT`, PRD §20). Parameterized SQL only.
+- **Rate limit:** per-IP (§2.3), enforced **before** the JWT verify + the write.
+- **Response `200`:** `{ "linked": <count> }` — the number of rows newly linked (`0` on a no-op re-claim).
+- **Errors:** `404` (Clerk off); `401` (no verified Clerk identity); `422` (missing/empty `owner_token`); `429` (rate limit).
 
 ---
 

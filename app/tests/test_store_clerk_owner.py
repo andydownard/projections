@@ -100,3 +100,45 @@ def test_clerk_owner_list_excludes_trashed_by_default():
     s.set_status("p1", "trashed", 1)
     assert s.list_by_clerk_owner("user_a") == []
     assert {r["view_slug"] for r in s.list_by_clerk_owner("user_a", include_trashed=True)} == {"s1"}
+
+
+# ---- claim/bridge: token-owned rows backfill onto a Clerk identity --------------
+def test_claim_links_only_matching_token_and_returns_count():
+    s = _store()
+    s.create_projection(_row("p1", "s1", owner_hash="hashA"))  # token A, unclaimed
+    s.create_projection(_row("p2", "s2", owner_hash="hashA"))  # token A, unclaimed
+    s.create_projection(_row("p3", "s3", owner_hash="hashB"))  # a DIFFERENT token
+    linked = s.claim_projections_to_clerk_owner("hashA", "user_a", None)
+    assert linked == 2
+    assert {r["view_slug"] for r in s.list_by_clerk_owner("user_a")} == {"s1", "s2"}
+    # The other token's row is untouched (never a cross-owner backfill).
+    assert s.get_projection_by_slug("s3")["owner_clerk_user_id"] is None
+
+
+def test_claim_is_idempotent_and_anti_takeover():
+    s = _store()
+    s.create_projection(_row("p1", "s1", owner_hash="hashA"))
+    assert s.claim_projections_to_clerk_owner("hashA", "user_a", None) == 1
+    # Re-claim by the same owner links 0 more (already stamped).
+    assert s.claim_projections_to_clerk_owner("hashA", "user_a", None) == 0
+    # A different Clerk user with the same token hash cannot steal a claimed row.
+    assert s.claim_projections_to_clerk_owner("hashA", "user_b", None) == 0
+    assert s.get_projection_by_slug("s1")["owner_clerk_user_id"] == "user_a"
+
+
+def test_claim_stamps_org_id_when_present():
+    s = _store()
+    s.create_projection(_row("p1", "s1", owner_hash="hashA"))
+    assert s.claim_projections_to_clerk_owner("hashA", "user_a", "org_x") == 1
+    got = s.get_projection_by_slug("s1")
+    assert got["owner_clerk_user_id"] == "user_a"
+    assert got["owner_org_id"] == "org_x"
+
+
+def test_claim_noops_on_empty_identity():
+    s = _store()
+    s.create_projection(_row("p1", "s1", owner_hash="hashA"))
+    # Empty/None guards: never backfill the NULL token-owned rows with an empty id.
+    assert s.claim_projections_to_clerk_owner("hashA", "", None) == 0
+    assert s.claim_projections_to_clerk_owner("", "user_a", None) == 0
+    assert s.get_projection_by_slug("s1")["owner_clerk_user_id"] is None

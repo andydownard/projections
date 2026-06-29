@@ -23,6 +23,7 @@ import { newSessionToken, placesAutocomplete, placesResolve } from "../api/place
 import { researchRent } from "../api/research";
 import type { ViewModel } from "../api/viewModel";
 import { setOwnerToken } from "../api/projections";
+import { authHeader } from "../api/authHeader";
 import { PennyDraftAssistant } from "../components/PennyDrawer";
 import { SidePanelProvider } from "../components/sidePanels";
 import {
@@ -408,15 +409,25 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
       } else {
         body.trade_area = { ...body.trade_area, households_source: "manual" };
       }
+      // Send the owner identity (B3 data-loss fix): a signed-in Clerk owner sends
+      // their JWT; an EXISTING capability owner sends their localStorage token so a
+      // 2nd+ create JOINS that same workspace instead of minting a fresh token that
+      // would orphan the prior projection. Capture whether any owner identity already
+      // existed BEFORE this create so we only persist a genuinely new token.
+      const owner = await authHeader();
+      const hadOwnerIdentity = Boolean(owner.Authorization);
       const resp = await fetch("/api/projections", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...owner },
         body: JSON.stringify(body),
       });
       const created = (await resp.json()) as ViewModel & { owner_token?: string };
-      // Persist the minted owner token so /p/<slug>/edit is owner-authorized with no
-      // secret in the URL — the same path the owner list's Edit uses (#143).
-      if (created.owner_token) {
+      // Persist a minted owner token ONLY when the request went out anonymous (no
+      // pre-existing owner). Never overwrite an existing owner token — that single
+      // localStorage slot is the only handle on the prior projection, and clobbering
+      // it orphans that projection (the B3 data-loss bug). A Clerk-owned create also
+      // returns a token, but the row is Clerk-scoped, so we likewise do not store it.
+      if (created.owner_token && !hadOwnerIdentity) {
         setOwnerToken(created.owner_token);
       }
       // Land directly on the editable projection (owner Decision 12).

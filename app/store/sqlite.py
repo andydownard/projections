@@ -394,6 +394,32 @@ class SqliteStore:
         sql += " ORDER BY updated_at DESC"
         return [dict(r) for r in self._read_conn().execute(sql, (clerk_user_id,))]
 
+    def claim_projections_to_clerk_owner(
+        self, owner_token_hash: str, clerk_user_id: str, org_id: str | None = None
+    ) -> int:
+        """Backfill a verified Clerk owner onto every UNCLAIMED row owned by this
+        capability token hash (the claim/bridge path, SECURITY §2.8).
+
+        ONE atomic conditional UPDATE — never check-then-act (no TOCTOU). The
+        ``owner_clerk_user_id IS NULL`` guard makes it (1) idempotent (a re-claim
+        links 0 more) and (2) anti-takeover (an already-claimed row can NEVER be
+        re-linked to a different Clerk user, even by a caller presenting the same
+        token). It can only touch rows whose ``owner_token_hash`` matches — i.e. the
+        caller must possess the exact owner token (TENANT, PRD §20). Parameterized
+        SQL only. Empty identity/hash is a no-op so a blank can never backfill the
+        NULL token-owned rows. Returns the number of rows linked.
+        """
+        if not owner_token_hash or not clerk_user_id:
+            return 0
+        sql = (
+            "UPDATE projections SET owner_clerk_user_id = ?, owner_org_id = ? "
+            "WHERE owner_token_hash = ? AND owner_clerk_user_id IS NULL"
+        )
+        with self._write_lock:
+            cur = self._conn.execute(sql, (clerk_user_id, org_id, owner_token_hash))
+            self._conn.commit()
+            return cur.rowcount
+
     def list_card_summaries(
         self, owner_token_hash: str, *, include_trashed: bool = False
     ) -> list[dict]:
