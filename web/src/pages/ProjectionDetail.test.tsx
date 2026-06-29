@@ -637,4 +637,39 @@ describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
     const form = await screen.findByTestId("override-comment-form");
     expect(within(form).getByLabelText(/why did you override payroll, year 1\?/i)).toBeInTheDocument();
   });
+
+  // P1 REGRESSION (#284): activating an editable cell in the 3-year table was a
+  // dead no-op — ProjectionDetail never wired ProjectionTab's onEditCell, so the
+  // cell button only took a focus ring and never opened the override editor. The
+  // value-change entry point (the whole reason a component cell is editable) was
+  // lost when the Override Inspector was removed. Activating the cell must open an
+  // inline editor and pin the typed value via the EXISTING overrides.set contract
+  // (the §12.2 guardrail then slides Penny out for the note — covered above).
+  it("activating an editable component cell opens an inline editor and pins the typed value via overrides.set", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(overrideVm());
+    const { bodies, ifMatches } = patchCapture();
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+
+    // The editable Payroll cell in the 3-year table is a button (focus ring only,
+    // pre-fix). Activating it must OPEN an inline editor — not be a silent no-op.
+    const cell = screen.getByTestId("cell-Payroll-y1");
+    expect(cell.tagName).toBe("BUTTON");
+    await user.click(cell);
+
+    // An inline editor mounts, seeded with the cell's raw value, and is focused.
+    const input = await screen.findByTestId("cell-Payroll-y1-input");
+    expect(input).toHaveFocus();
+    await user.clear(input);
+    await user.type(input, "130000{Enter}");
+
+    // Persists via the EXISTING override contract — overrides.set {node,year,value},
+    // carrying the optimistic-concurrency If-Match. No data-model/server change.
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    expect(bodies[0]).toEqual({
+      overrides: { set: [{ node: "payroll", year: 1, value: "130000" }] },
+    });
+    expect(ifMatches[0]).toBe("3");
+  });
 });

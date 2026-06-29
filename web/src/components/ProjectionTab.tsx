@@ -18,7 +18,7 @@
 //
 // The "2nd tile set" (server kpis[]) moved OUT to KpiStrip (the KPIs tab). NO client
 // math: every figure is the server's { display } string.
-import { type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 
 import { CashflowChart } from "./CashflowChart";
 import { FieldChange, type FieldChangeActor } from "./FieldChange";
@@ -46,8 +46,12 @@ export interface ProjectionTabProps {
   vm: ViewModel;
   /** Live-region text for an autosave/recompute settle (a11y: recompute announced). */
   recomputeStatus?: string;
-  /** Activate an editable (input) driver/override cell — keyboard + click. */
-  onEditCell?: (node: string, year: number) => void;
+  /** Commit a new value for an editable (input/override) cell — fired when the
+   *  inline editor the cell opens on activation (click / Enter / Space) settles.
+   *  `node` is the DAG node identity (`row.node ?? row.label`) the override
+   *  contract keys on; `value` is the raw string the owner typed. Omit to render
+   *  the editable cells read-only (no inline editor mounts). */
+  onEditCell?: (node: string, year: number, value: string) => void;
   /** Recent per-field changes keyed by {@link fieldChangeKey} (PE7). */
   fieldChanges?: Record<string, FieldChangeInfo>;
   /** Per-field undo: revert THAT cell to its previous value via a forward PATCH
@@ -263,7 +267,7 @@ function ThreeYearRow({
   onUndoField,
 }: {
   row: Row;
-  onEditCell?: (node: string, year: number) => void;
+  onEditCell?: (node: string, year: number, value: string) => void;
   fieldChanges?: Record<string, FieldChangeInfo>;
   onUndoField?: (node: string, year: number) => void;
 }) {
@@ -295,7 +299,7 @@ function Cell({
 }: {
   row: Row;
   year: 1 | 2 | 3;
-  onEditCell?: (node: string, year: number) => void;
+  onEditCell?: (node: string, year: number, value: string) => void;
   fieldChanges?: Record<string, FieldChangeInfo>;
   onUndoField?: (node: string, year: number) => void;
 }) {
@@ -319,41 +323,27 @@ function Cell({
   // focusable, Enter/Space activatable. Derived/computed cells are read-only and
   // marked aria-disabled (also server-enforced as non-pinnable, PRD §14).
   if (row.editable) {
-    const activate = () => onEditCell?.(row.label, year);
-    const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        activate();
-      }
-    };
+    // Activating the cell opens an inline editor so the owner can change the value
+    // right in the table (the #284-regression fix: the cell button used to be a
+    // dead no-op). Commit pins the typed value through the host's override contract
+    // (onEditCell → PATCH overrides.set / inputs); a §12.2 guardrail then slides
+    // Penny out for the note. The editor only mounts when a commit seam is wired.
+    const editable = !!onEditCell;
     return (
-      <td className="cell-wrap" data-changed={change ? "true" : undefined}>
-        <button
-          type="button"
-          data-testid={testid}
-          className={cls}
-          data-negative={negative}
-          // Recent-change prominence (not color alone — the FieldChange badge
-          // carries icon + text). Inline so it never collides with tokens.css.
-          style={change ? { fontWeight: 700, outline: "2px solid #35644f", outlineOffset: 1 } : undefined}
-          onClick={activate}
-          onKeyDown={onKey}
-          aria-label={`${row.label}, Year ${year}: ${display}`}
-        >
-          {display}
-        </button>
-        {change && (
-          <FieldChange
-            label={`${row.label}, Year ${year}`}
-            current={display}
-            previous={change.previous}
-            by={change.by}
-            reverted={change.reverted}
-            showCurrent={false}
-            onUndo={onUndoField ? () => onUndoField(nodeId, year) : undefined}
-          />
-        )}
-      </td>
+      <EditableCell
+        nodeId={nodeId}
+        label={row.label}
+        year={year}
+        display={display}
+        raw={value ? value.raw : 0}
+        cls={cls}
+        testid={testid}
+        negative={negative}
+        change={change}
+        canEdit={editable}
+        onEditCell={onEditCell}
+        onUndoField={onUndoField}
+      />
     );
   }
 
@@ -371,6 +361,127 @@ function Cell({
         {display}
       </span>
       {display}
+    </td>
+  );
+}
+
+// An editable component/driver cell: a keyboard-focusable button that, on activation
+// (click / Enter / Space), swaps to an inline editor so the owner can change the value
+// in place. Committing (Enter or blur) raises onEditCell with the DAG node identity +
+// the typed value; the host PATCHes it through the EXISTING override contract and a
+// §12.2 guardrail then slides Penny out for the note. Escape cancels. With no
+// onEditCell wired the cell stays a focusable button whose activation is a no-op
+// (read-only), so the legacy keyboard-focusable contract holds either way. Extracted
+// from Cell so the edit-state hooks are unconditional (Rules of Hooks).
+function EditableCell({
+  nodeId,
+  label,
+  year,
+  display,
+  raw,
+  cls,
+  testid,
+  negative,
+  change,
+  canEdit,
+  onEditCell,
+  onUndoField,
+}: {
+  nodeId: string;
+  label: string;
+  year: 1 | 2 | 3;
+  display: string;
+  raw: number;
+  cls: string;
+  testid: string;
+  negative?: "true";
+  change?: FieldChangeInfo;
+  canEdit: boolean;
+  onEditCell?: (node: string, year: number, value: string) => void;
+  onUndoField?: (node: string, year: number) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  // Guards a single edit session so an Enter-commit immediately followed by the
+  // input's unmount blur never fires the override PATCH twice.
+  const openRef = useRef(false);
+
+  const start = () => {
+    if (!canEdit) return;
+    openRef.current = true;
+    setEditing(true);
+  };
+  const cancel = () => {
+    openRef.current = false;
+    setEditing(false);
+  };
+  const commit = (next: string) => {
+    if (!openRef.current) return;
+    openRef.current = false;
+    setEditing(false);
+    const trimmed = next.trim();
+    // Only pin when the owner actually changed the value (never a no-op override).
+    if (trimmed !== "" && trimmed !== String(raw)) onEditCell?.(nodeId, year, trimmed);
+  };
+
+  if (editing) {
+    return (
+      <td className="cell-wrap">
+        <input
+          data-testid={`${testid}-input`}
+          className={cls}
+          defaultValue={String(raw)}
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus
+          inputMode="decimal"
+          aria-label={`${label}, Year ${year} value`}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit(e.currentTarget.value);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancel();
+            }
+          }}
+          onBlur={(e) => commit(e.currentTarget.value)}
+        />
+      </td>
+    );
+  }
+
+  const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      start();
+    }
+  };
+  return (
+    <td className="cell-wrap" data-changed={change ? "true" : undefined}>
+      <button
+        type="button"
+        data-testid={testid}
+        className={cls}
+        data-negative={negative}
+        // Recent-change prominence (not color alone — the FieldChange badge carries
+        // icon + text). Inline so it never collides with tokens.css.
+        style={change ? { fontWeight: 700, outline: "2px solid #35644f", outlineOffset: 1 } : undefined}
+        onClick={start}
+        onKeyDown={onKey}
+        aria-label={`${label}, Year ${year}: ${display}`}
+      >
+        {display}
+      </button>
+      {change && (
+        <FieldChange
+          label={`${label}, Year ${year}`}
+          current={display}
+          previous={change.previous}
+          by={change.by}
+          reverted={change.reverted}
+          showCurrent={false}
+          onUndo={onUndoField ? () => onUndoField(nodeId, year) : undefined}
+        />
+      )}
     </td>
   );
 }

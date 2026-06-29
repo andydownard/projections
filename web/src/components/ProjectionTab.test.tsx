@@ -220,13 +220,39 @@ describe("ProjectionTab a11y", () => {
     expect(total).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("activates an editable cell via keyboard (Enter) and reports the node", async () => {
+  it("opens an inline editor on keyboard activation (Enter) and commits the typed value with the node identity", async () => {
     const seen: string[] = [];
-    render(<ProjectionTab vm={vm()} onEditCell={(node, year) => seen.push(`${node}#${year}`)} />);
+    render(
+      <ProjectionTab
+        vm={vm()}
+        onEditCell={(node, year, value) => seen.push(`${node}#${year}=${value}`)}
+      />,
+    );
+    const share = screen.getByTestId("cell-Donor market share-y1");
+    share.focus();
+    // Enter opens the inline editor (no immediate commit) — it must replace the
+    // button, land focus on the input, and only PATCH once the value settles.
+    await userEvent.keyboard("{Enter}");
+    const input = screen.getByTestId("cell-Donor market share-y1-input");
+    expect(input).toHaveFocus();
+    expect(seen).toHaveLength(0);
+    await userEvent.clear(input);
+    await userEvent.type(input, "0.07{Enter}");
+    expect(seen).toContain("Donor market share#1=0.07");
+  });
+
+  it("does not commit when the inline edit is cancelled with Escape", async () => {
+    const seen: string[] = [];
+    render(<ProjectionTab vm={vm()} onEditCell={(node, year, value) => seen.push(`${node}#${year}=${value}`)} />);
     const share = screen.getByTestId("cell-Donor market share-y1");
     share.focus();
     await userEvent.keyboard("{Enter}");
-    expect(seen).toContain("Donor market share#1");
+    const input = screen.getByTestId("cell-Donor market share-y1-input");
+    await userEvent.clear(input);
+    await userEvent.type(input, "0.09{Escape}");
+    expect(seen).toHaveLength(0);
+    // The editor closes back to the value button (no PATCH).
+    expect(screen.getByTestId("cell-Donor market share-y1").tagName).toBe("BUTTON");
   });
 
   it("gives the table an accessible name and uses row headers (AA structure)", () => {
