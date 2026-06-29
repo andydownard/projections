@@ -3111,3 +3111,214 @@ body {
     animation: none;
   }
 }
+
+/* ============================================================================
+   EPIC D — detail-page redesign (additive). Header title row + inline pencil
+   rename + top downloads (D1/D9), the 4-cell metric bar (D1), the merged
+   KPIs+drivers grid (D11), the editable/derived cell legend + cursor (D6), and
+   the cashflow milestone leader line (D3). New rules only — nothing above is
+   removed; the D6 cursor/legend rules are MORE SPECIFIC so they layer on top.
+   ============================================================================ */
+
+/* --- D1/D9 header title row: name + pencil + top downloads ----------------- */
+.detail__title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.detail__name-heading {
+  margin: 0;
+  font-size: var(--text-lg);
+  line-height: 1.2;
+  font-weight: 700;
+}
+.detail__rename-btn {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--brand-primary);
+  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  line-height: 1;
+  cursor: pointer;
+  font-size: var(--text-base);
+}
+.detail__rename-btn:hover {
+  background: var(--surface-alt);
+}
+.detail__name-input {
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.6rem;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  min-width: 12rem;
+  max-width: 24rem;
+}
+.detail__downloads {
+  display: inline-flex;
+  gap: 0.4rem;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.btn--download {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.6rem;
+  font-size: var(--text-sm);
+}
+.btn__icon {
+  font-size: var(--text-base);
+  line-height: 1;
+}
+.detail__address {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+}
+.detail__updated {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* --- D1 metric bar: Income sparkline · Capital (RED) · Payback · Break-even - */
+.metric-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  align-items: flex-start;
+  padding: 0.75rem 0 0;
+  margin: 0;
+  border: none;
+}
+.metric-bar__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 6rem;
+}
+.metric-bar__label {
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.metric-bar__value {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+/* Capital you must raise — error color as an attention cue, PAIRED with the
+   "Capital required" label + "money to raise" sub so it is never color-alone.
+   The value is a large/bold hero figure, so AA large-text contrast (3:1) holds. */
+.metric-bar__value--capital {
+  color: var(--error);
+}
+.metric-bar__sub {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.metric-bar__cell--income .sparkline {
+  margin-top: 0.1rem;
+}
+
+/* --- D11 merged "Key metrics & drivers" grid ------------------------------- */
+.kpis-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.kpis-grid__cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.5rem;
+}
+.kpis-grid__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.kpis-grid__cell--derived {
+  background: var(--surface);
+}
+.kpis-grid__cell--driver {
+  background: var(--surface-alt);
+}
+.kpis-grid__label {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.kpis-grid__value {
+  font-size: var(--text-base);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.kpis-grid__sub {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.kpis-grid__edit-icon {
+  color: var(--brand-primary);
+}
+
+/* --- D6 cell legend + cursor (more specific, additive) --------------------- */
+/* The hand cursor appears ONLY on a truly-editable cell; a derived cell or a
+   read-only editable-typed cell reads as non-actionable (no dead hand). */
+.cell-wrap .cell:not(.cell--editable) {
+  cursor: default;
+}
+.three-year-table td[aria-disabled="true"],
+.three-year-table td[aria-disabled="true"] .cell {
+  cursor: default;
+}
+/* Input = pale green + a 2px green LEFT tick (a non-color shape cue). */
+.three-year-table .cell--input {
+  border-left: 2px solid var(--success);
+}
+/* Overridden = stronger amber tint + a dotted underline (non-color cue). */
+.three-year-table .cell--overridden {
+  background: #e7dccb;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+/* The editable cell shows a small pencil on hover/focus (non-color affordance). */
+td.cell-wrap {
+  position: relative;
+}
+.cell--editable:hover::after,
+.cell--editable:focus-visible::after {
+  content: "✎";
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: var(--text-sm);
+  color: var(--brand-primary);
+  pointer-events: none;
+}
+/* Legend swatch parity: the Input swatch shows the green left tick. */
+.swatch--input {
+  border-left-width: 2px;
+  border-left-color: var(--success);
+}
+
+/* --- D3 cashflow milestone leader line (replaces the full vertical line) ---- */
+.cashflow-chart__milestone-leader {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+}
+.cashflow-chart__milestone-label {
+  fill: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
