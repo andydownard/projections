@@ -3644,3 +3644,191 @@ td.cell-wrap {
 .kpi {
   gap: var(--label-gap);
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * Soft-delete / Trash (feat/v2-soft-delete)
+ * Per-row "⋯" actions menu, confirm dialogs, the Trash view, danger buttons.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/* Danger buttons. Solid (--error bg, white text — AA: white on #dc2626 ≈ 4.8:1)
+ * for the irreversible "Delete permanently"; ghost (red text) for the recoverable
+ * soft-delete affordance in the detail header download row. */
+.btn--danger {
+  border-color: var(--error);
+  background: var(--error);
+  color: #ffffff;
+}
+.btn--danger-ghost {
+  color: var(--error);
+}
+.btn--danger-ghost:hover {
+  border-color: var(--error);
+}
+
+/* List header: the Trash link + New projection sit together upper-right. */
+.list__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* Per-row actions: a small "⋯" trigger + a popover menu. */
+.list__actions-col {
+  width: 2rem;
+}
+.list__actions {
+  text-align: center;
+}
+.row-actions {
+  position: relative;
+  display: inline-flex;
+}
+.row-actions__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+}
+.row-actions__trigger:hover {
+  background: var(--surface-alt);
+  color: var(--text);
+}
+.row-actions__trigger:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 1px;
+}
+.row-actions__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  min-width: 11rem;
+  padding: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.row-actions__item {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  text-align: left;
+  cursor: pointer;
+}
+.row-actions__item:hover {
+  background: var(--surface-alt);
+}
+.row-actions__item--danger {
+  color: var(--error);
+}
+
+/* Confirm dialogs (soft-delete confirm + type-to-confirm purge). Reuse the modal
+ * scrim/panel grammar of the share/feedback modals. */
+.confirm-dialog {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.45);
+  animation: modal-scrim-in 0.15s ease;
+}
+.confirm-dialog__panel {
+  width: 100%;
+  max-width: 26rem;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding: 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  animation: modal-panel-in 0.18s ease;
+}
+.confirm-dialog__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  color: var(--text);
+}
+.confirm-dialog__body {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.5;
+  color: var(--text);
+}
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Permanent-delete (purge): a red top accent marks the irreversible dialog. */
+.confirm-purge .confirm-dialog__panel {
+  border-top: 3px solid var(--error);
+}
+/* Permanent-delete (purge): the "this cannot be undone" warning + type-to-confirm. */
+.confirm-purge__warning {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.5;
+  color: var(--text);
+}
+.confirm-purge__label {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.confirm-purge__input {
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.75rem;
+  background: var(--surface-alt);
+  font: inherit;
+  font-size: var(--text-base);
+  color: var(--text);
+}
+.confirm-purge__input:focus-visible {
+  outline: 2px solid var(--error);
+  outline-offset: 1px;
+}
+
+/* Trash view. */
+.trash {
+  display: block;
+}
+.trash__note {
+  margin: 0.75rem 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.trash__actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}

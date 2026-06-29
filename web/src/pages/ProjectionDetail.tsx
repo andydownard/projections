@@ -27,9 +27,16 @@ import {
   xlsxHref,
   docxHref,
 } from "../api/viewModel";
-import { getEditToken, getOwnerToken } from "../api/projections";
+import {
+  getEditToken,
+  getOwnerToken,
+  trashProjection,
+  LifecycleConflictError,
+} from "../api/projections";
 import { patchProjection, PatchConflictError } from "../api/patch";
 import { ShareModal } from "../components/ShareModal";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useToast } from "../components/Toast";
 import { ProjectionTab, fieldChangeKey, type FieldChangeInfo } from "../components/ProjectionTab";
 import type { FieldChangeActor } from "../components/FieldChange";
 import { TradeAreaMap } from "../components/TradeAreaMap";
@@ -300,6 +307,10 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   // here and never in a URL path/query (it rides the fragment in the link the panel
   // builds). Absent ⇒ the panel offers the read-only link alone.
   const [shareOpen, setShareOpen] = useState(false);
+  // Move-to-Trash (soft delete) confirm + in-flight flag. Owner-only (below).
+  const [confirmTrashOpen, setConfirmTrashOpen] = useState(false);
+  const [trashBusy, setTrashBusy] = useState(false);
+  const { showToast } = useToast();
 
   // PE7: the recent per-field changes (keyed by fieldChangeKey) + the refs that
   // derive them. `prevCellsRef` is the editable-share snapshot from the last vm;
@@ -341,11 +352,38 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       ? readFragmentSecret(window.location.hash) ?? getEditToken(slug) ?? getOwnerToken()
       : null,
   );
+  // Whether THIS device is the OWNER (not an editor opening a share link). An editor's
+  // token arrives in the fragment; the owner's token is the localStorage owner token.
+  // Captured once at first render (before the fragment is scrubbed). Trash/restore/
+  // purge are owner-only on the server (editors get 403), so the Delete affordance is
+  // shown ONLY to the owner — an editor never sees a button that would 403.
+  const isOwner = useRef<boolean>(
+    edit &&
+      readFragmentSecret(window.location.hash) === null &&
+      getOwnerToken() !== null,
+  );
   useEffect(() => {
     if (edit && window.location.hash) {
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
   }, [edit]);
+
+  async function confirmTrash() {
+    setTrashBusy(true);
+    try {
+      await trashProjection({ viewSlug: slug, version });
+      showToast("Moved to Trash");
+      goHome();
+    } catch (err) {
+      if (err instanceof LifecycleConflictError) {
+        showToast("This projection changed in another tab. Refresh and try again.");
+      } else {
+        showToast("Could not move to Trash. Try again.");
+      }
+      setTrashBusy(false);
+      setConfirmTrashOpen(false);
+    }
+  }
 
   // Load the stored snapshot.
   useEffect(() => {
@@ -721,6 +759,19 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
               >
                 <span aria-hidden="true" className="btn__icon">↗</span> Share
               </button>
+              {/* Owner-only: move this projection to Trash (recoverable). Editors who
+                  opened a share link never see this (the server is owner-only too). */}
+              {isOwner.current && (
+                <button
+                  type="button"
+                  className="btn btn--download btn--danger-ghost"
+                  data-testid="trash-projection"
+                  aria-haspopup="dialog"
+                  onClick={() => setConfirmTrashOpen(true)}
+                >
+                  <span aria-hidden="true" className="btn__icon">🗑</span> Delete
+                </button>
+              )}
             </div>
           </div>
 
@@ -868,6 +919,22 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           FRAGMENT only, and only when this device holds it. */}
       {shareOpen && (
         <ShareModal slug={slug} editToken={getEditToken(slug)} onClose={() => setShareOpen(false)} />
+      )}
+
+      {/* Move-to-Trash confirm (soft delete, recoverable). On success we navigate home
+          and a toast confirms; the projection can be restored from the Trash view. */}
+      {confirmTrashOpen && (
+        <ConfirmDialog
+          title="Move to Trash?"
+          confirmLabel="Move to Trash"
+          tone="danger"
+          busy={trashBusy}
+          onConfirm={confirmTrash}
+          onClose={() => setConfirmTrashOpen(false)}
+        >
+          Move <strong>{(name || vm.name || "this projection").trim()}</strong> to Trash.
+          You can restore it later from the Trash view.
+        </ConfirmDialog>
       )}
 
       {/* Penny — the LEFT slide-out assistant (apply-immediately + narrate, Spec B

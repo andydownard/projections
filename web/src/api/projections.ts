@@ -114,3 +114,95 @@ export async function listProjections(): Promise<ProjectionListResponse> {
   }
   return request<ProjectionListResponse>("/projections", { headers });
 }
+
+/**
+ * The Trash view's list — owner-scoped, trashed projections only (API_SPEC §4.8).
+ * Same owner-identity rule as listProjections: no owner identity ⇒ nothing to list.
+ */
+export async function listTrashed(): Promise<ProjectionListResponse> {
+  const headers = await authHeader();
+  if (!headers.Authorization) {
+    return { projections: [] };
+  }
+  return request<ProjectionListResponse>("/projections?trashed=true", { headers });
+}
+
+// ─── Lifecycle mutations: trash / restore / purge (API_SPEC §4.8) ───────────────
+// All three are OWNER-ONLY and carry If-Match (optimistic concurrency). The token
+// rides the Authorization header only (never the URL/path/query/log — Regression
+// #10). A stale version ⇒ HTTP 409, surfaced as a typed LifecycleConflictError so
+// the UI can tell the owner to refresh rather than silently lose the change.
+
+export interface LifecycleArgs {
+  viewSlug: string;
+  /** The version the client last saw — sent as If-Match for optimistic concurrency. */
+  version: number;
+}
+
+/** Thrown on a 409 stale lifecycle mutation; carries the server's current version. */
+export class LifecycleConflictError extends Error {
+  currentVersion?: number;
+  constructor(currentVersion?: number) {
+    super("version_conflict");
+    this.name = "LifecycleConflictError";
+    this.currentVersion = currentVersion;
+  }
+}
+
+/** Parse the integer version from the ETag header, falling back to the body. */
+function versionFromResponse(resp: Response, body: unknown): number {
+  const etag = resp.headers?.get?.("ETag");
+  if (etag) {
+    const n = Number.parseInt(etag.replace(/"/g, ""), 10);
+    if (Number.isFinite(n)) return n;
+  }
+  const v = (body as { version?: unknown })?.version;
+  return typeof v === "number" ? v : NaN;
+}
+
+async function lifecycleFetch(
+  method: "POST" | "DELETE",
+  path: string,
+  version: number,
+): Promise<Response> {
+  const headers = await authHeader();
+  if (!headers.Authorization) {
+    // No owner identity on this device → the server would 403 owner_required.
+    throw new Error("owner_required");
+  }
+  const resp = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", ...headers, "If-Match": String(version) },
+  });
+  if (resp.status === 409) {
+    const body = (await resp.json().catch(() => ({}))) as {
+      detail?: { current_version?: number };
+      current_version?: number;
+    };
+    const detail = body.detail ?? body;
+    throw new LifecycleConflictError(detail?.current_version);
+  }
+  if (!resp.ok) {
+    throw new Error(`API ${resp.status}: ${path}`);
+  }
+  return resp;
+}
+
+/** Soft-delete (move to Trash). Returns the new version. */
+export async function trashProjection({ viewSlug, version }: LifecycleArgs): Promise<number> {
+  const resp = await lifecycleFetch("POST", `/projections/${viewSlug}/trash`, version);
+  const body = await resp.json().catch(() => ({}));
+  return versionFromResponse(resp, body);
+}
+
+/** Restore a trashed projection. Returns the new version. */
+export async function restoreProjection({ viewSlug, version }: LifecycleArgs): Promise<number> {
+  const resp = await lifecycleFetch("POST", `/projections/${viewSlug}/restore`, version);
+  const body = await resp.json().catch(() => ({}));
+  return versionFromResponse(resp, body);
+}
+
+/** Permanently erase a trashed projection and all its data (irreversible, 204). */
+export async function purgeProjection({ viewSlug, version }: LifecycleArgs): Promise<void> {
+  await lifecycleFetch("DELETE", `/projections/${viewSlug}`, version);
+}

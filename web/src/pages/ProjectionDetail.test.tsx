@@ -774,3 +774,58 @@ describe("ProjectionDetail — Share affordance (EPIC SHARE)", () => {
     expect(screen.getByTestId("share-edit-unavailable")).toBeInTheDocument();
   });
 });
+
+describe("ProjectionDetail — Move to Trash (soft delete, owner-only)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  it("shows a Delete affordance for the owner and trashes on confirm → navigates home", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm()); // version 3
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(JSON.stringify({ version: 4, status: "trashed" }), {
+          status: 200,
+          headers: { ETag: "4" },
+        }),
+      );
+    window.history.pushState({}, "", "/p/p_8x/edit");
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit />);
+    await screen.findByTestId("decision-banner");
+
+    await user.click(screen.getByTestId("trash-projection"));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    await user.click(screen.getByTestId("confirm-accept"));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    // POST /trash with the loaded version as If-Match; no secret in the URL.
+    const trashCall = fetchSpy.mock.calls.find(([u]) => String(u).includes("/trash"));
+    expect(trashCall).toBeTruthy();
+    expect(String(trashCall![0])).toContain("/api/projections/p_8x/trash");
+    const init = trashCall![1] as RequestInit;
+    expect((init.headers as Record<string, string>)["If-Match"]).toBe("3");
+    expect(String(trashCall![0])).not.toContain("owner-tok");
+  });
+
+  it("does NOT show the Delete affordance in read-only mode", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("trash-projection")).not.toBeInTheDocument();
+  });
+
+  it("does NOT show the Delete affordance to an editor (share link, not the owner)", async () => {
+    // No owner token on this device; the edit capability rides the fragment → editor,
+    // not owner. Trash is owner-only on the server, so the button is hidden.
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    window.history.pushState({}, "", "/p/p_8x/edit#edit-secret");
+    render(<ProjectionDetail slug="p_8x" edit />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("trash-projection")).not.toBeInTheDocument();
+  });
+});

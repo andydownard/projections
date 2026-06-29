@@ -5,13 +5,22 @@
 // Without a token there is nothing to list — the utilitarian empty state shows.
 // Money arrives as server { display } and is rendered VERBATIM (no client math).
 //
-// v2 (EPIC L): the entire row is the click target → /p/<slug>/edit. No separate
-// "Open" / "Edit" buttons. onRowClick receives the slug and navigates to the
-// editable detail; no secret appears in the URL (owner token is in localStorage).
+// v2 (EPIC L): the entire row is the click target → /p/<slug>/edit. The per-row
+// "⋯" menu offers "Move to Trash" → a confirm dialog → POST /trash (If-Match) →
+// the row drops out of the list and a toast confirms. The header "Trash" link opens
+// the Trash view (/trash) where trashed projections can be restored or permanently
+// deleted. All owner-scoped; no secret in any URL.
 import { useEffect, useState } from "react";
 
-import { listProjections, type ProjectionListItem } from "../api/projections";
+import {
+  LifecycleConflictError,
+  listProjections,
+  trashProjection,
+  type ProjectionListItem,
+} from "../api/projections";
 import { ProjectionsList } from "../components/ProjectionsList";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useToast } from "../components/Toast";
 
 function navigate(path: string) {
   window.history.pushState(null, "", path);
@@ -21,6 +30,10 @@ function navigate(path: string) {
 export function ListPage() {
   const [projections, setProjections] = useState<ProjectionListItem[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // The row the owner is confirming a trash for (null = no dialog open).
+  const [pendingTrash, setPendingTrash] = useState<ProjectionListItem | null>(null);
+  const [busy, setBusy] = useState(false);
+  const { showToast } = useToast();
 
   useEffect(() => {
     let alive = true;
@@ -40,6 +53,27 @@ export function ListPage() {
     };
   }, []);
 
+  async function confirmTrash() {
+    if (!pendingTrash) return;
+    const target = pendingTrash;
+    setBusy(true);
+    try {
+      await trashProjection({ viewSlug: target.view_slug, version: target.version });
+      // Optimistically drop the row from the active list.
+      setProjections((rows) => rows.filter((r) => r.view_slug !== target.view_slug));
+      showToast("Moved to Trash");
+    } catch (err) {
+      if (err instanceof LifecycleConflictError) {
+        showToast("This projection changed in another tab. Refresh and try again.");
+      } else {
+        showToast("Could not move to Trash. Try again.");
+      }
+    } finally {
+      setBusy(false);
+      setPendingTrash(null);
+    }
+  }
+
   if (!loaded) {
     return (
       <section className="list-loading" aria-busy="true">
@@ -49,14 +83,31 @@ export function ListPage() {
   }
 
   return (
-    <ProjectionsList
-      projections={projections}
-      onCreate={() => navigate("/wizard")}
-      // v2 (L2): the entire row is the click target; always routes to the editable
-      // detail (/p/<slug>/edit). No secret in the URL — the owner token in
-      // localStorage authorizes the PATCH (ProjectionDetail's token fallback).
-      onRowClick={(slug) => navigate(`/p/${slug}/edit`)}
-    />
+    <>
+      <ProjectionsList
+        projections={projections}
+        onCreate={() => navigate("/wizard")}
+        // v2 (L2): the entire row is the click target; always routes to the editable
+        // detail (/p/<slug>/edit). No secret in the URL — the owner token in
+        // localStorage authorizes the PATCH (ProjectionDetail's token fallback).
+        onRowClick={(slug) => navigate(`/p/${slug}/edit`)}
+        onTrash={(item) => setPendingTrash(item)}
+        onOpenTrash={() => navigate("/trash")}
+      />
+      {pendingTrash && (
+        <ConfirmDialog
+          title="Move to Trash?"
+          confirmLabel="Move to Trash"
+          tone="danger"
+          busy={busy}
+          onConfirm={confirmTrash}
+          onClose={() => setPendingTrash(null)}
+        >
+          Move <strong>{pendingTrash.name}</strong> to Trash. You can restore it later
+          from the Trash view.
+        </ConfirmDialog>
+      )}
+    </>
   );
 }
 
