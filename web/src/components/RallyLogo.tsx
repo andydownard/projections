@@ -5,10 +5,11 @@
 // Thriftly mark, the Rally wordmark keeps its OWN brand fill (#35644F) AS-IS — it
 // is a partner brand and must NOT be recolored to the host theme (UI rule).
 //
-// It is DECORATIVE (aria-hidden): every place it renders is paired with the
-// visible word "Rally" (e.g. "Sign in with Rally"), so the SVG must not add a
-// second "Rally" to the button's accessible name — that would break WCAG 2.5.3
-// (Label in Name). The visible text carries the accessible name.
+// It is DECORATIVE (aria-hidden): in the sign-in buttons it supplies the VISIBLE
+// "Rally" beside the text "Sign in with", while the button's own aria-label carries
+// the accessible name ("Sign in with Rally"). The SVG must therefore NOT add a
+// second "Rally" to the accessible name — that would break WCAG 2.5.3 (Label in
+// Name) — so it stays aria-hidden and the label is supplied by the button.
 interface RallyLogoProps {
   className?: string;
 }

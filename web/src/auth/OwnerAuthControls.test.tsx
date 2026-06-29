@@ -43,13 +43,16 @@ afterEach(() => {
 });
 
 describe("OwnerAuthControls — satellite sign-in", () => {
-  it("renders a branded 'Sign in with Rally' button for a signed-out owner", () => {
+  it("renders a 'Sign in with' + wordmark button with no duplicate 'Rally' text but the accessible name 'Sign in with Rally' (ITEM A)", () => {
     render(<OwnerAuthControls />);
     const btn = screen.getByRole("button", { name: /sign in with rally/i });
     expect(btn).toBeInTheDocument();
-    // Accessible name == visible text (WCAG 2.5.3 Label in Name) — the wordmark is
-    // decorative, the word "Rally" is in the visible label.
+    // Accessible name carried by aria-label (WCAG 2.5.3 Label in Name); the visible
+    // "Rally" comes from the aria-hidden wordmark, so the literal word is not in the
+    // button's text (no "Rally" twice).
     expect(btn).toHaveAccessibleName("Sign in with Rally");
+    expect(btn).toHaveTextContent("Sign in with");
+    expect(btn).not.toHaveTextContent("Rally");
   });
 
   it("navigates via buildSignInUrl({ redirectUrl }) (NOT a hardcoded href) on click", async () => {
@@ -61,5 +64,21 @@ describe("OwnerAuthControls — satellite sign-in", () => {
     expect(assignMock).toHaveBeenCalledWith(
       "https://rallytasks.com/sign-in?__clerk_synced=true",
     );
+  });
+
+  it("strips any URL fragment from the redirect target (ITEM D / Regression #10)", async () => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...originalLocation,
+        assign: assignMock,
+        href: "https://projections.thriftly.com/p/abc/edit#edit-token-SECRET",
+      },
+    });
+    render(<OwnerAuthControls />);
+    await userEvent.click(screen.getByRole("button", { name: /sign in with rally/i }));
+    expect(buildSignInUrl).toHaveBeenCalledWith({
+      redirectUrl: "https://projections.thriftly.com/p/abc/edit",
+    });
   });
 });

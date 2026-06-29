@@ -95,7 +95,7 @@ describe("ClerkOwnerGate — forced owner sign-in", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("the gate button reads 'Sign in with Rally' and the accessible name matches the visible text", () => {
+  it("shows 'Sign in with' + the Rally wordmark (no duplicate 'Rally' text) yet keeps the accessible name 'Sign in with Rally' (ITEM A)", () => {
     signedIn = false;
     render(
       <ClerkOwnerGate topBar={TOP_BAR} penny={PENNY}>
@@ -103,7 +103,40 @@ describe("ClerkOwnerGate — forced owner sign-in", () => {
       </ClerkOwnerGate>,
     );
     const btn = screen.getByRole("button", { name: /sign in with rally/i });
+    // Accessible name preserved (carried by aria-label) for screen-reader parity.
     expect(btn).toHaveAccessibleName("Sign in with Rally");
+    // The literal word "Rally" is NOT in the visible TEXT — the aria-hidden wordmark
+    // supplies it, so the button never reads "Rally" twice on screen.
+    expect(btn).toHaveTextContent("Sign in with");
+    expect(btn).not.toHaveTextContent("Rally");
+  });
+
+  it("drops the owner helper paragraph entirely (ITEM B)", () => {
+    signedIn = false;
+    render(
+      <ClerkOwnerGate topBar={TOP_BAR} penny={PENNY}>
+        <div>owner page</div>
+      </ClerkOwnerGate>,
+    );
+    expect(
+      screen.queryByText(/This page is for the projection owner/i),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/never need a sign-in/i)).not.toBeInTheDocument();
+  });
+
+  it("places the sign-in button BELOW the 3-step explainer in DOM order (ITEM C)", () => {
+    signedIn = false;
+    render(
+      <ClerkOwnerGate topBar={TOP_BAR} penny={PENNY}>
+        <div>owner page</div>
+      </ClerkOwnerGate>,
+    );
+    const list = screen.getByRole("list");
+    const btn = screen.getByRole("button", { name: /sign in with rally/i });
+    // The button FOLLOWS the <ol> in document order (button below the steps).
+    expect(
+      list.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("moves focus to the Sign-in button and navigates via buildSignInUrl({ redirectUrl }) (never a hardcoded URL)", async () => {
@@ -116,13 +149,41 @@ describe("ClerkOwnerGate — forced owner sign-in", () => {
     const btn = screen.getByRole("button", { name: /sign in with rally/i });
     expect(btn).toHaveFocus();
     await userEvent.click(btn);
-    // SIGNIN-4: an explicit redirectUrl returns the magic-link to this satellite.
+    // SIGNIN-4: an explicit redirectUrl returns the owner to this satellite.
     expect(buildSignInUrl).toHaveBeenCalledWith({
       redirectUrl: "https://projections.thriftly.com/wizard",
     });
     expect(assignMock).toHaveBeenCalledWith(
       "https://rallytasks.com/sign-in?__clerk_synced=true",
     );
+  });
+
+  it("strips the URL fragment from the redirect target so a capability secret never reaches the primary (ITEM D / Regression #10)", async () => {
+    signedIn = false;
+    // A recipient arriving on a share deep link still carries the edit-token in the
+    // fragment when the gate mounts; the redirect_url sent to the primary must NOT
+    // include it.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...originalLocation,
+        assign: assignMock,
+        href: "https://projections.thriftly.com/p/abc/edit#edit-token-SECRET",
+        pathname: "/p/abc/edit",
+        search: "",
+      },
+    });
+    render(
+      <ClerkOwnerGate topBar={TOP_BAR} penny={PENNY}>
+        <div>owner page</div>
+      </ClerkOwnerGate>,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /sign in with rally/i }),
+    );
+    expect(buildSignInUrl).toHaveBeenCalledWith({
+      redirectUrl: "https://projections.thriftly.com/p/abc/edit",
+    });
   });
 
   it("renders a 3-step explainer as a semantic ordered list with one glyph per step (SIGNIN-5)", () => {
