@@ -6,6 +6,7 @@
 // derived server-side from sq ft). Rent lives on the startup-costs step now; this
 // step never shows the rent/utilities/fixtures rates. NO client math — the engine
 // derives occupancy, the utilities line, and the cost-schedule seed (PRD §13).
+import { formatCount } from "../format";
 import type { WizardState } from "./useWizardState";
 
 export function StepSquareFootage({ state }: { state: WizardState }) {
@@ -24,11 +25,17 @@ export function StepSquareFootage({ state }: { state: WizardState }) {
         Building size (sq ft)
         <input
           id="wizard-building-sqft"
-          type="number"
+          // type=text (not number) so the value can render comma-grouped ("12,500")
+          // for display consistency (#18 formatCount, format-only — the server stays
+          // the single math/formatting authority). inputMode=numeric keeps the phone
+          // numeric keypad; the change handler strips separators before parsing.
+          type="text"
           inputMode="numeric"
-          min={1}
-          value={draft.buildingSqft || ""}
-          onChange={(e) => state.setBuildingSqft(Number(e.target.value))}
+          value={draft.buildingSqft ? formatCount(draft.buildingSqft) : ""}
+          onChange={(e) => {
+            const digits = e.target.value.replace(/[^\d]/g, "");
+            state.setBuildingSqft(digits === "" ? 0 : Number(digits));
+          }}
         />
       </label>
 

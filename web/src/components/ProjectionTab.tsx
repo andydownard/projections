@@ -215,9 +215,13 @@ export function ProjectionTab({
           </ul>
         </div>
 
-        <div className="projection-tab__scroll">
-          <table className="three-year-table" data-testid="three-year-table">
-            <caption className="sr-only">3-year projection</caption>
+        {/* A relative wrap so a right-edge scroll-hint fade can pin to the scroll
+            viewport on narrow screens where Year 2/3 don't fit — paired with sticky
+            row labels so the horizontal scroll reads clearly, not "clipped" (QA P2). */}
+        <div className="projection-tab__scroll-wrap">
+          <div className="projection-tab__scroll">
+            <table className="three-year-table" data-testid="three-year-table">
+              <caption className="sr-only">3-year projection</caption>
             <thead>
               <tr>
                 <th scope="col">Line item</th>
@@ -244,6 +248,7 @@ export function ProjectionTab({
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </section>
 

@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("PennyDrawer — collapsed FAB", () => {
-  it("renders an upper-left FAB with dialog a11y semantics and the avatar", () => {
+  it("renders a left-edge FAB with dialog a11y semantics and the avatar", () => {
     render(<PennyDrawer />);
     const fab = screen.getByTestId("penny-fab");
     expect(fab).toHaveAttribute("aria-haspopup", "dialog");
@@ -285,12 +285,19 @@ describe("PennyDrawer — mobile-375 sheet & a11y (PE12, #131)", () => {
     expect(screen.getByRole("button", { name: /send/i })).toHaveStyle({ minHeight: "44px" });
   });
 
-  it("keeps the collapsed FAB a ≥44px touch target flush to the upper-left edge", () => {
+  it("keeps the collapsed FAB a ≥44px touch target flush to the BOTTOM-left edge", () => {
     render(<PennyDrawer />);
     const fab = screen.getByTestId("penny-fab");
-    // 48px pill ≥ the 44px minimum, anchored UPPER-LEFT and flush to the left edge
-    // (left: 0), below the top bar so it never overlaps the brand/home link.
-    expect(fab).toHaveStyle({ height: "48px", position: "fixed", left: "0px", top: "4rem" });
+    // 48px pill ≥ the 44px minimum, flush to the left edge (left: 0) and anchored to
+    // the BOTTOM so the tab never overlaps the page header / breadcrumb / "App
+    // suggestion" band — nor the wizard's Next/Back controls — at any viewport (QA P2).
+    expect(fab).toHaveStyle({
+      height: "48px",
+      position: "fixed",
+      left: "0px",
+      bottom: "1.5rem",
+      transform: "translateY(0)",
+    });
   });
 });
 

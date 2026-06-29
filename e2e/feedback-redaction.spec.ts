@@ -16,7 +16,7 @@ test.describe("feedback redaction", () => {
     await page.getByTestId("idea-fab").click();
     // An idea is just a description — no title field on this form.
     await page.getByLabel(/description/i).fill("Banner says month 5 but chart marks 6.");
-    // Exact "Send" so we don't also match the "Send feedback" idea-fab trigger.
+    // Exact "Send" so we don't also match the "App suggestion" idea-fab trigger.
     await page.getByRole("button", { name: "Send", exact: true }).click();
 
     const success = page.getByTestId("feedback-success");

@@ -117,7 +117,10 @@ export function TopBar({ saveState = "idle", children }: TopBarProps) {
           type="button"
           className="idea-fab"
           data-testid="idea-fab"
-          aria-label="Send feedback"
+          // The accessible name MATCHES the visible label "App suggestion" (WCAG
+          // 2.5.3 Label in Name): the old aria-label "Send feedback" mismatched the
+          // visible text. The lightbulb stays decorative (aria-hidden).
+          aria-label="App suggestion"
           aria-haspopup="dialog"
           aria-expanded={showFeedback}
           onClick={() => setShowFeedback(true)}

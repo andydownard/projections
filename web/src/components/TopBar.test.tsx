@@ -84,7 +84,7 @@ describe("TopBar", () => {
 
     it("is present and focusable (in the tab order) on every route", () => {
       render(<TopBar />);
-      const fab = screen.getByRole("button", { name: /send feedback/i });
+      const fab = screen.getByRole("button", { name: /app suggestion/i });
       expect(fab).toBeInTheDocument();
       // No negative tabindex — it is in the natural tab order.
       expect(fab).not.toHaveAttribute("tabindex", "-1");
@@ -92,11 +92,20 @@ describe("TopBar", () => {
 
     it("reads as a button with a visible label, not a bare icon", () => {
       render(<TopBar />);
-      const fab = screen.getByRole("button", { name: /send feedback/i });
+      const fab = screen.getByRole("button", { name: /app suggestion/i });
       // A visible text label ("App suggestion") sits beside the lightbulb so the
       // control is obviously tappable — not an unlabelled glyph (#2).
       expect(fab).toHaveTextContent(/app suggestion/i);
       expect(fab).toHaveClass("idea-fab");
+    });
+
+    it("the accessible name MATCHES the visible label (WCAG 2.5.3 Label in Name)", () => {
+      // QA P2: the old aria-label was "Send feedback" while the visible text read
+      // "App suggestion" — a label-in-name mismatch. The accessible name must now be
+      // exactly the visible label.
+      render(<TopBar />);
+      expect(screen.getByTestId("idea-fab")).toHaveAccessibleName("App suggestion");
+      expect(screen.queryByRole("button", { name: /send feedback/i })).not.toBeInTheDocument();
     });
 
     it("the modal is closed until the lightbulb is activated", () => {
@@ -107,7 +116,7 @@ describe("TopBar", () => {
     it("opens the FeedbackModal on click", async () => {
       const user = userEvent.setup();
       render(<TopBar />);
-      await user.click(screen.getByRole("button", { name: /send feedback/i }));
+      await user.click(screen.getByRole("button", { name: /app suggestion/i }));
       // The Idea Fab opens the modal in idea mode ("Share an idea").
       expect(screen.getByRole("dialog", { name: /share an idea/i })).toBeInTheDocument();
     });
@@ -115,7 +124,7 @@ describe("TopBar", () => {
     it("opens the FeedbackModal via the keyboard (focus + Enter)", async () => {
       const user = userEvent.setup();
       render(<TopBar />);
-      const fab = screen.getByRole("button", { name: /send feedback/i });
+      const fab = screen.getByRole("button", { name: /app suggestion/i });
       fab.focus();
       expect(fab).toHaveFocus();
       await user.keyboard("{Enter}");
@@ -125,7 +134,7 @@ describe("TopBar", () => {
     it("closes on Esc and restores focus to the trigger (a11y)", async () => {
       const user = userEvent.setup();
       render(<TopBar />);
-      const fab = screen.getByRole("button", { name: /send feedback/i });
+      const fab = screen.getByRole("button", { name: /app suggestion/i });
       await user.click(fab);
       expect(screen.getByRole("dialog")).toBeInTheDocument();
 
@@ -139,7 +148,7 @@ describe("TopBar", () => {
     it("restores focus to the trigger when the modal's own Close/Cancel is used", async () => {
       const user = userEvent.setup();
       render(<TopBar />);
-      const fab = screen.getByRole("button", { name: /send feedback/i });
+      const fab = screen.getByRole("button", { name: /app suggestion/i });
       await user.click(fab);
       await user.click(screen.getByRole("button", { name: /cancel/i }));
       await waitFor(() =>
@@ -151,7 +160,7 @@ describe("TopBar", () => {
     it("submits a redacted idea (description-only, support_id back)", async () => {
       const user = userEvent.setup();
       render(<TopBar />);
-      await user.click(screen.getByRole("button", { name: /send feedback/i }));
+      await user.click(screen.getByRole("button", { name: /app suggestion/i }));
       // Idea mode has no title — just a description.
       await user.type(screen.getByLabelText(/description/i), "Add dark mode.");
       await user.click(screen.getByRole("button", { name: /^send$/i }));

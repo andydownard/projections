@@ -487,8 +487,11 @@ body {
   color: var(--placeholder);
 }
 /* Numeric inputs: tabular and right-aligned so values share one right edge and
- * read down the column like a ledger (the form caps width; no per-input cap). */
-.wizard__field > input[type="number"] {
+ * read down the column like a ledger (the form caps width; no per-input cap).
+ * Covers the comma-grouped sqft field too, which is type=text + inputmode=numeric
+ * so it can render "12,500" (number inputs can't show the separators). */
+.wizard__field > input[type="number"],
+.wizard__field > input[inputmode="numeric"] {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -1229,14 +1232,51 @@ body {
   border-radius: 0;
 }
 
+/* The 3-year table scrolls horizontally WITHIN its panel on narrow screens (Year 2/3
+   don't fit at 375). Two affordances keep that scroll from reading as a broken clip
+   (QA P2): (a) the row-label column is sticky so you always see which line-item a
+   value belongs to while scrolling; (b) a right-edge fade hints there is more to the
+   right. The wrap is the positioning context for that pinned fade. */
+.projection-tab__scroll-wrap {
+  position: relative;
+  /* Clip the wrap to its own width so the inner table's intrinsic overflow can't leak
+     a few px of page-level horizontal scroll on a phone; the inner .__scroll keeps
+     its own overflow-x:auto so the table still scrolls horizontally. */
+  overflow-x: clip;
+}
 .projection-tab__scroll {
   overflow-x: auto;
+}
+/* Right-edge scroll-hint fade — pinned to the scroll viewport, only where the table
+   actually overflows (the narrow phone column). pointer-events:none so it never
+   intercepts taps/clicks on the cells beneath it. */
+@media (max-width: 560px) {
+  .projection-tab__scroll-wrap::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 1.5rem;
+    background: linear-gradient(to left, var(--surface), transparent);
+    pointer-events: none;
+  }
 }
 
 .three-year-table {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--text-base);
+}
+
+/* Keep the row labels (and the header corner) pinned to the left edge so the
+   horizontal scroll reads clearly — the value always stays beside its line-item. */
+.three-year-table th[scope="row"],
+.three-year-table thead th[scope="col"]:first-child {
+  position: sticky;
+  left: 0;
+  background: var(--surface);
+  z-index: 1;
 }
 
 .three-year-table th,
@@ -1533,6 +1573,15 @@ body {
   .cashflow-chart__frame {
     flex-direction: column;
     gap: 0.5rem;
+    /* In the stacked (column) layout the plot must STRETCH to the frame width so its
+       own overflow-x can scroll-contain the 58rem-min chart/table. With the default
+       align-items:flex-start the plot ballooned to its content width (~928px) and
+       blew out the page on a 375 phone (QA P2). */
+    align-items: stretch;
+  }
+  .cashflow-chart__plot {
+    width: 100%;
+    min-width: 0;
   }
   .cashflow-chart__legend {
     flex-direction: row;
@@ -2151,6 +2200,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1.125rem;
+  /* As a grid/flex item, allow the step to shrink below its content's intrinsic
+     width so a wide child (the rows×months cost grid) can scroll-contain inside its
+     own panel instead of blowing the step — and the page — out to ~1500px (QA P2).
+     Without this the default min-width:auto defeats the grid's overflow-x:auto. */
+  min-width: 0;
 }
 .wizard-step__heading {
   margin: 0;

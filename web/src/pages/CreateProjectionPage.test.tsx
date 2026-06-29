@@ -200,9 +200,9 @@ describe("CreateProjectionPage — full flow to Generate", () => {
     await resolveAddress(user);
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
-    // 2. Square footage — defaults 12,500 / 80%
+    // 2. Square footage — defaults 12,500 / 80% (sqft renders comma-grouped, QA P2).
     expect(screen.getByRole("heading", { name: /set square footage/i })).toBeInTheDocument();
-    expect((screen.getByLabelText(/building size/i) as HTMLInputElement).value).toBe("12500");
+    expect((screen.getByLabelText(/building size/i) as HTMLInputElement).value).toBe("12,500");
     await user.click(screen.getByRole("button", { name: /^next$/i }));
 
     // 3. Confirm # of households (resolved static)
