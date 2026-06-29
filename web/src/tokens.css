@@ -51,6 +51,17 @@
 
   /* Shared content frame: the topbar inner row and the main column align to it. */
   --frame: 72rem;
+
+  /* --- v2 UI primitives --- */
+
+  /* Sparkline: zero-baseline line and trajectory line. CSS tokens so theme
+     overrides can change both without touching component markup. */
+  --spark-zero: #9aa39d;    /* subtle muted line for the $0 baseline */
+  --spark-line: #35644f;    /* brand-primary trajectory */
+
+  /* Toast: success surface + text */
+  --toast-bg: #1d4733;      /* brand-deep — intentionally prominent */
+  --toast-text: #ffffff;
 }
 
 * {
@@ -119,6 +130,62 @@ body {
 .notfound {
   padding: 3rem 1.25rem;
   color: var(--text-muted);
+}
+
+/* --- forced owner sign-in gate (Phase 0 B2) ---------------------------------
+ * Shown INSTEAD of owner page content when the Clerk satellite is active and the
+ * owner is signed out. VIEWER routes (/r/<slug>, read-only /p/<slug>, not-found)
+ * are never gated, so this never blocks a capability share-link. Brand-primary
+ * filled button reuses the accepted "white on --brand-primary" combo (AA). */
+.owner-gate {
+  max-width: 32rem;
+  margin: 4rem auto;
+  padding: 0 1.25rem;
+  text-align: center;
+}
+.owner-gate__title {
+  font-size: var(--text-lg);
+  font-weight: var(--w-bold);
+  line-height: var(--lh-tight);
+  color: var(--text);
+  margin: 0 0 0.75rem;
+}
+.owner-gate__body {
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+  color: var(--text-muted);
+  margin: 0 0 1.5rem;
+}
+.owner-gate__sign-in {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* ≥44px tap target (WCAG 2.5.5 / project UI bar). */
+  min-height: 44px;
+  padding: 0 1.5rem;
+  border: 1px solid var(--brand-primary);
+  border-radius: 999px;
+  background: var(--brand-primary);
+  color: #ffffff;
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.owner-gate__sign-in:hover {
+  background: var(--brand-deep);
+  border-color: var(--brand-deep);
+}
+.owner-gate__sign-in:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .owner-gate__sign-in {
+    transition: none;
+  }
 }
 
 /* --- topbar: sticky, brand-led, inner row aligned to the content frame --- */
@@ -2896,6 +2963,151 @@ body {
     transition: none;
   }
   .penny-caret {
+    animation: none;
+  }
+}
+
+/* ─── v2 UI primitives ───────────────────────────────────────────────────── */
+
+/* NumberField — controlled numeric input (v2 redesign, Owner Decision 10/17).
+ * type=text + inputMode so the native spinner never appears. The .num class
+ * (tabular-nums + text-align:right) is applied by default on the input to keep
+ * alignment consistent with every other numeric column in the app. */
+
+.number-field {
+  display: inline-flex;
+  align-items: center;
+}
+
+.number-field--with-unit {
+  /* The unit glues tightly to the input — no gap between them. */
+  gap: 0;
+}
+
+.number-field__input {
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.625rem;
+  background: var(--surface);
+  font-size: var(--text-base);
+  color: var(--text);
+  min-width: 5rem;
+}
+.number-field__input:focus {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+.number-field__input::placeholder {
+  color: var(--placeholder);
+}
+/* When a unit prefix is present, square the left radius to visually join with
+   the unit badge. When suffix, square the right radius. */
+.number-field--with-unit .number-field__input:not(:first-child) {
+  border-radius: 0 8px 8px 0;
+}
+.number-field--with-unit .number-field__input:not(:last-child) {
+  border-radius: 8px 0 0 8px;
+}
+.number-field__input--left {
+  text-align: left;
+  font-variant-numeric: normal;
+}
+
+.number-field__unit {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  white-space: nowrap;
+  user-select: none;
+}
+/* Prefix unit: rounds left corners, merges right border with the input */
+.number-field--with-unit .number-field__unit:first-child {
+  border-radius: 8px 0 0 8px;
+  border-right: none;
+}
+/* Suffix unit: rounds right corners, merges left border with the input */
+.number-field--with-unit .number-field__unit:last-child {
+  border-radius: 0 8px 8px 0;
+  border-left: none;
+}
+
+/* Sparkline — tiny hand-rolled SVG annual-net-income chart (v2 redesign).
+ * Receives server-computed points; renders only geometry. No financial math.
+ * CSS tokens --spark-zero / --spark-line from :root above. */
+
+.sparkline {
+  display: block;
+  overflow: visible;
+}
+
+.sparkline__baseline {
+  stroke: var(--spark-zero);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+
+.sparkline__line {
+  stroke: var(--spark-line);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sparkline__y5-label {
+  font-size: 9px;
+  fill: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Toast — app-global success notification (v2 redesign).
+ * Portaled to document.body; role=status + aria-live=polite; auto-dismisses
+ * after 4 s. The slide-in animation is suppressed with .toast--no-motion when
+ * the user has requested prefers-reduced-motion. */
+
+.toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  padding: 0.625rem 1.25rem;
+  border-radius: 999px;
+  background: var(--toast-bg);
+  color: var(--toast-text);
+  font-size: var(--text-base);
+  font-weight: var(--w-semibold);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+  animation: toast-in 0.22s ease both;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* No animation when the user prefers reduced motion (WCAG 2.1 §2.3).
+ * The .toast--no-motion class is set by the component when matchMedia returns
+ * true for (prefers-reduced-motion: reduce). The @media rule handles the CSS
+ * side; the class is the JS-observable branch tested by Toast.test.tsx. */
+.toast--no-motion {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
     animation: none;
   }
 }

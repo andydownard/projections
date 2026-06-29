@@ -12,7 +12,8 @@ const srcDir = dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(join(srcDir, "tokens.css"), "utf8");
 
 // font-size values that are intentionally NOT on the rem scale (chart internals).
-const ALLOWED_NON_TOKEN = new Set(["11px"]);
+// 11px: CashflowChart axis/milestone labels; 9px: Sparkline Y5 end-point label.
+const ALLOWED_NON_TOKEN = new Set(["11px", "9px"]);
 
 describe("type scale (#22)", () => {
   it("defines the three scale tokens + weights + placeholder in :root", () => {
