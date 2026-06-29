@@ -332,10 +332,14 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const nameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Capture the edit secret from the fragment ONCE on first render (a lazy ref
   // initializer), BEFORE StrictMode's double-invoke can re-read the (scrubbed)
-  // hash. Fall back to the owner token. Then scrub the fragment from the URL so
-  // the secret never lands in history/logs (SECURITY.md §2.5).
+  // hash. Fall back to the per-slug stored edit token (set by App's capture effect
+  // BEFORE the Clerk gate shows, so it's available after a sign-in round-trip), then
+  // to the owner token. Then scrub the fragment from the URL so the secret never
+  // lands in history/logs (SECURITY.md §2.5).
   const token = useRef<string | null>(
-    edit ? readFragmentSecret(window.location.hash) ?? getOwnerToken() : null,
+    edit
+      ? readFragmentSecret(window.location.hash) ?? getEditToken(slug) ?? getOwnerToken()
+      : null,
   );
   useEffect(() => {
     if (edit && window.location.hash) {
