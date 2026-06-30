@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Epic #319 — the account avatar + dropdown that replaces Clerk's <UserButton/>.
 // Identity comes from useUser(); actions (openUserProfile / signOut) from
 // useClerk(). The trigger is a round avatar (image when the user has one, else
-// initials on a brand-tinted circle); the dropdown is a role=menu with "Manage"
+// initials on a brand-tinted circle); the dropdown is a role=menu with "Settings"
 // and a destructive "Logout". a11y: aria-expanded on the trigger, first item
 // focused on open, Escape + outside-click close and restore focus to the trigger.
 
@@ -109,15 +109,15 @@ describe("UserMenu — account avatar + dropdown", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     const menu = screen.getByRole("menu");
     expect(menu).toBeInTheDocument();
-    const manage = screen.getByRole("menuitem", { name: /manage/i });
-    await waitFor(() => expect(manage).toHaveFocus());
+    const settings = screen.getByRole("menuitem", { name: /settings/i });
+    await waitFor(() => expect(settings).toHaveFocus());
   });
 
-  it("'Manage' opens the Clerk user profile and closes the menu", async () => {
+  it("'Settings' opens the Clerk user profile and closes the menu", async () => {
     const user = userEvent.setup();
     render(<UserMenu />);
     await user.click(screen.getByRole("button", { name: /account menu/i }));
-    await user.click(screen.getByRole("menuitem", { name: /manage/i }));
+    await user.click(screen.getByRole("menuitem", { name: /settings/i }));
     expect(openUserProfile).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
   });

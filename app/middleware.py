@@ -52,10 +52,17 @@ _CLERK_IMG_B = "https://images.clerk.dev"  # avatars (legacy host)
 # The widened CSP used ONLY when CLERK_ENABLED is truthy. Every hardening directive
 # from the strict baseline is preserved verbatim; the Clerk origins are added to
 # script/connect/img and the two directives clerk-js needs (frame-src, worker-src).
+# style-src also gains 'unsafe-inline': Clerk's prebuilt components (the <UserProfile>
+# opened by clerk.openUserProfile() — the account "Manage" modal) inject runtime
+# CSS-in-JS, which a 'self'-only style-src blocks, leaving the modal a broken,
+# interaction-trapping overlay (the "Manage freezes the app" bug). Clerk's CSP guide
+# REQUIRES 'unsafe-inline' here. This relaxes inline *styles* only — script-src stays
+# inline-free, so the XSS/exfil posture is unchanged — and it is gated on CLERK_ENABLED
+# (SECURITY.md §8.2); the strict off-baseline keeps style-src locked to 'self'.
 CLERK_CSP = (
     "default-src 'self'; "
     f"script-src 'self' {_CLERK_FAPI} {_CLERK_ACCOUNTS_DEV} {_CLERK_JS} {_TURNSTILE}; "
-    "style-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
     f"img-src 'self' data: {_CLERK_IMG_A} {_CLERK_IMG_B}; "
     "font-src 'self'; "
     f"connect-src 'self' {_CLERK_FAPI} {_CLERK_ACCOUNTS_DEV} {_CLERK_JS}; "
