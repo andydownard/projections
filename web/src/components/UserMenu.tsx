@@ -3,7 +3,7 @@
 // Replaces Clerk's prebuilt <UserButton/> with a project-tokened control (built
 // from timpager's avatar-menu pattern): a round avatar trigger that shows the
 // user's photo when they have one, else their initials on a brand-tinted circle;
-// an absolute role=menu dropdown with "Manage" (opens the Clerk user profile) and
+// an absolute role=menu dropdown with "Settings" (opens the Clerk user profile) and
 // a destructive "Logout" (signs out, then returns to the home route).
 //
 // Identity comes from useUser(); the actions come from useClerk(). This module is
@@ -78,7 +78,7 @@ export function UserMenu() {
   // rather than an empty avatar.
   if (!user) return null;
 
-  const handleManage = () => {
+  const handleSettings = () => {
     setOpen(false);
     clerk.openUserProfile();
   };
@@ -118,9 +118,9 @@ export function UserMenu() {
             type="button"
             role="menuitem"
             className="user-menu__item"
-            onClick={handleManage}
+            onClick={handleSettings}
           >
-            Manage
+            Settings
           </button>
           <div className="user-menu__divider" role="separator" />
           <button
