@@ -647,3 +647,23 @@ def test_tool_runs_through_the_pe3_loop_and_mutates(store, projection):
     row = store.get_projection_by_slug(projection["view_slug"])
     assert row["version"] == 2
     assert store.list_revisions(row["id"])[0]["actor"] == "penny"
+
+
+# review 1.3f follow-up: donations_per_hh is the OTHER int-typed assumption
+# (AssumptionsIn.donations_per_hh: Optional[int]) and had the identical Penny
+# str(value) type-flip -- settings.donationsPerHh echoed the JSON string "4"
+# after a Penny edit vs int 4 from a UI PATCH.
+def test_set_assumption_donations_per_hh_is_int_normalized_not_string(store, projection):
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "set_assumption", {"name": "donations_per_hh", "value": "4"})
+    assert res["applied"] is True
+    row = store.get_projection_by_slug(projection["view_slug"])
+    stored = json.loads(row["assumptions_json"])["donations_per_hh"]
+    assert stored == 4
+    assert isinstance(stored, int), f"donations_per_hh stored as {type(stored)!r}, not int"
+    vm = json.loads(row["computed_json"])
+    for key in ("donationsPerHh", "donationsPerHouseholdPerYear"):
+        assert vm["settings"][key] == 4
+        assert isinstance(vm["settings"][key], int), (
+            f"settings.{key} echoed as a string after a Penny edit "
+            f"({vm['settings'][key]!r}) -- type-flips vs the UI PATCH path")

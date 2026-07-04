@@ -418,12 +418,12 @@ def _set_input(store: Store):
 
 # set_assumption stringifies every value by default (the engine's %/decimal knobs
 # — including sensitivity_delta — want a decimal STRING, matching the manual-PATCH
-# shape). reserve_buffer is the one INT-valued assumption (AssumptionsIn.reserve_buffer
-# / engine.compute.Assumptions.reserve_buffer): str(value) would store the STRING
-# "40000" while the manual UI PATCH sends the JSON int 40000, so
-# computed_json.settings.reserveBuffer type-flips depending on which path edited it
-# (review 1.3f, f1). Normalize it to an int here so both paths store/echo identically.
-_INT_ASSUMPTION_FIELDS = {"reserve_buffer"}
+# shape). reserve_buffer and donations_per_hh are the INT-valued assumptions
+# (AssumptionsIn / engine.compute.Assumptions type them int): str(value) would store
+# the STRING "40000"/"4" while the manual UI PATCH sends the JSON int, so the
+# computed_json.settings echo type-flips depending on which path edited it
+# (review 1.3f, f1 + follow-up). Normalize both so all paths store/echo identically.
+_INT_ASSUMPTION_FIELDS = {"reserve_buffer", "donations_per_hh"}
 
 
 def _set_assumption(store: Store):
