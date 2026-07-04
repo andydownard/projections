@@ -424,6 +424,8 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
     const onPatch = conflictingPatch();
     const onSaveAsCopy = vi.fn();
     renderTab({ onPatch, onSaveAsCopy, canSaveAsCopy: false });
+    // Post-merge (3.1): labor lives inside the collapsed cost-structure group.
+    expandGroup("cost-structure");
     fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
     await vi.advanceTimersByTimeAsync(20);
     const banner = await screen.findByRole("alert");

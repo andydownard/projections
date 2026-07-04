@@ -3911,6 +3911,7 @@ td.cell-wrap {
   margin: 0 0 1rem;
   font-size: var(--text-lg);
   line-height: 1.25;
+}
 
 /* 3.3 sensitivity banner */
 .decision-banner__sensitivity {

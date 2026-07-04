@@ -1356,6 +1356,8 @@ describe("ProjectionDetail — Save-as-copy owner token + failure-path preservat
 
     // Reveal the KPIs tab (the merged settings grid) and edit the Labor % driver.
     await user.click(screen.getByRole("tab", { name: /kpis/i }));
+    // Post-merge (3.1): labor lives inside the collapsed cost-structure group.
+    fireEvent.click(screen.getByTestId("settings-group-cost-structure"));
     fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
 
     // The debounced settings PATCH 409s → the SettingsTab banner (role=alert) appears.
