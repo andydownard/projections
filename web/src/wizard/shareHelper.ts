@@ -67,6 +67,9 @@ export interface WizardDraft {
   utilitiesPerSqft: number;
   fixturesPerSqft: number;
   buildoutPerSqft: number;
+  // NNN lease operating expenses (Wave 2 Task 2.2). Only meaningful/shown when
+  // leaseType === "nnn"; not yet sent to the server (task 2.6 wires the mapper).
+  nnnOpexAnnual: number;
   cash: number;
   grant: number;
   loan: number;

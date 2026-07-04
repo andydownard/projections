@@ -30,6 +30,7 @@ const DRAFT: WizardDraft = {
   utilitiesPerSqft: 2.23,
   fixturesPerSqft: 4.5,
   buildoutPerSqft: 5.0,
+  nnnOpexAnnual: 0,
   cash: 150000,
   grant: 50000,
   loan: 0,

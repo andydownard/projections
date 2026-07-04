@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { STEPS, useWizardState } from "./useWizardState";
+import { advancedKey, STEPS, useWizardState } from "./useWizardState";
 import type { TradeAreaResolved } from "../api/places";
 import type { RentResearch } from "../api/research";
 
@@ -312,26 +312,34 @@ describe("useWizardState — W1 furthestReached + W15 new steps", () => {
 // would silently forget whether the operator had it open every time they
 // navigated away and back.
 describe("useWizardState — advancedOpen (Advanced Options disclosure state)", () => {
-  it("starts with every step's advanced group collapsed (empty map)", () => {
+  it("starts with every (step, group) advanced group collapsed (empty map)", () => {
     const { result } = renderHook(() => useWizardState());
     expect(result.current.advancedOpen).toEqual({});
-    expect(result.current.advancedOpen["square-footage"]).toBeFalsy();
-    expect(result.current.advancedOpen["startup-costs"]).toBeFalsy();
+    expect(result.current.advancedOpen[advancedKey("square-footage", "space-rates")]).toBeFalsy();
+    expect(result.current.advancedOpen[advancedKey("startup-costs", "funding")]).toBeFalsy();
   });
 
-  it("toggleAdvanced opens a single step's group without affecting others", () => {
+  it("toggleAdvanced opens a single (step, group) pair without affecting others", () => {
     const { result } = renderHook(() => useWizardState());
-    act(() => result.current.toggleAdvanced("square-footage", true));
-    expect(result.current.advancedOpen["square-footage"]).toBe(true);
-    expect(result.current.advancedOpen["startup-costs"]).toBeFalsy();
+    act(() => result.current.toggleAdvanced("square-footage", "space-rates", true));
+    expect(result.current.advancedOpen[advancedKey("square-footage", "space-rates")]).toBe(true);
+    expect(result.current.advancedOpen[advancedKey("startup-costs", "funding")]).toBeFalsy();
   });
 
-  it("toggleAdvanced can close a step's group again", () => {
+  it("a step with multiple groups (startup-costs) opens/closes each independently", () => {
     const { result } = renderHook(() => useWizardState());
-    act(() => result.current.toggleAdvanced("startup-costs", true));
-    expect(result.current.advancedOpen["startup-costs"]).toBe(true);
-    act(() => result.current.toggleAdvanced("startup-costs", false));
-    expect(result.current.advancedOpen["startup-costs"]).toBe(false);
+    act(() => result.current.toggleAdvanced("startup-costs", "rent-lease", true));
+    expect(result.current.advancedOpen[advancedKey("startup-costs", "rent-lease")]).toBe(true);
+    expect(result.current.advancedOpen[advancedKey("startup-costs", "cost-structure")]).toBeFalsy();
+    expect(result.current.advancedOpen[advancedKey("startup-costs", "funding")]).toBeFalsy();
+  });
+
+  it("toggleAdvanced can close a (step, group) pair again", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.toggleAdvanced("startup-costs", "funding", true));
+    expect(result.current.advancedOpen[advancedKey("startup-costs", "funding")]).toBe(true);
+    act(() => result.current.toggleAdvanced("startup-costs", "funding", false));
+    expect(result.current.advancedOpen[advancedKey("startup-costs", "funding")]).toBe(false);
   });
 
   it("survives goNext()/goBack() — state lives in the hook, not the unmounted step", () => {
@@ -339,13 +347,33 @@ describe("useWizardState — advancedOpen (Advanced Options disclosure state)", 
     act(() => result.current.onResolved(RESOLVED));
     act(() => result.current.goNext()); // → square-footage
     expect(result.current.stepKey).toBe("square-footage");
-    act(() => result.current.toggleAdvanced("square-footage", true));
-    expect(result.current.advancedOpen["square-footage"]).toBe(true);
+    act(() => result.current.toggleAdvanced("square-footage", "space-rates", true));
+    expect(result.current.advancedOpen[advancedKey("square-footage", "space-rates")]).toBe(true);
 
     act(() => result.current.goNext()); // → configure-donations (defaults valid)
     expect(result.current.stepKey).toBe("configure-donations");
     act(() => result.current.goBack()); // → square-footage
     expect(result.current.stepKey).toBe("square-footage");
-    expect(result.current.advancedOpen["square-footage"]).toBe(true); // persisted
+    // persisted
+    expect(result.current.advancedOpen[advancedKey("square-footage", "space-rates")]).toBe(true);
+  });
+});
+
+describe("useWizardState — setBuildoutPerSqft (Task 2.2)", () => {
+  it("updates buildoutPerSqft and re-seeds the Build-out cost row (mirrors setFixturesPerSqft)", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.setBuildoutPerSqft(6));
+    expect(result.current.draft.buildoutPerSqft).toBe(6);
+    const sched = result.current.draft.costSchedule ?? [];
+    const buildout = sched.find((r) => r.category.startsWith("Build-out"));
+    expect(buildout?.amount).toBe(75000); // 6 × 12,500 (default building sqft)
+  });
+
+  it("preserves the fixtures row when only buildout changes", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.setBuildoutPerSqft(6));
+    const sched = result.current.draft.costSchedule ?? [];
+    const fixtures = sched.find((r) => r.category === "Equipment & Fixtures");
+    expect(fixtures?.amount).toBe(56250); // unchanged: 4.50 × 12,500
   });
 });

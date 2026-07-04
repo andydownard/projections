@@ -44,6 +44,15 @@ export { STEPS, STEP_LABELS, type StepKey } from "./steps";
 import { STEPS } from "./steps";
 import type { StepKey } from "./steps";
 
+// The composite key for the per-(step, group) advancedOpen map (Task 2.2+): a
+// step can own more than one advanced group (paramGroups.ts groupsForStep), so
+// the map can't be keyed by step alone. Exported so every Step*.tsx reads/writes
+// the SAME key shape the hook uses — no ad-hoc string concatenation drifting
+// from this one definition.
+export function advancedKey(step: StepKey, groupId: string): string {
+  return `${step}:${groupId}`;
+}
+
 // Wizard-side defaults (owner Decision 9): the building defaults to 12,500 sq ft /
 // 80% sales floor (the engine golden anchor EXAMPLE_BUILDING_SQFT stays 10,000 — this
 // is wizard-side only, no golden regen). The sq-ft-scaled cost rows + occupancy are
@@ -78,6 +87,7 @@ export const DEFAULT_DRAFT: WizardDraft = {
   utilitiesPerSqft: UTILITIES_PER_SQFT,
   fixturesPerSqft: FIXTURES_PER_SQFT,
   buildoutPerSqft: BUILDOUT_PER_SQFT,
+  nnnOpexAnnual: 0,
   cash: 300000,
   grant: 0,
   loan: 0,
@@ -141,6 +151,7 @@ export interface WizardState {
   setRentPerSqft: (n: number) => void;
   setUtilitiesPerSqft: (n: number) => void;
   setFixturesPerSqft: (n: number) => void;
+  setBuildoutPerSqft: (n: number) => void;
   /** Begin a research call (badge → loading). */
   onRentResearchStart: () => void;
   /** Apply a server rent-research result: pre-fill rent + provenance "research". */
@@ -154,14 +165,16 @@ export interface WizardState {
   updateCostRow: (i: number, patch: Partial<CostScheduleRow>) => void;
   removeCostRow: (i: number) => void;
 
-  // --- Advanced Options disclosure (Wave 2 Task 2.1) -------------------------
-  // Per-step open/closed state for the AdvancedOptions component. Lives HERE
-  // (not step-local state) because steps unmount on Next/Back — a step-local
-  // useState would forget whether the operator had it open. All steps default
-  // closed (compact load), keyed by StepKey; toggleAdvanced sets one step's
-  // entry without touching the others.
-  advancedOpen: Partial<Record<StepKey, boolean>>;
-  toggleAdvanced: (step: StepKey, open: boolean) => void;
+  // --- Advanced Options disclosure (Wave 2 Task 2.1, per-GROUP as of 2.2) ----
+  // Per-(step, group) open/closed state for the AdvancedOptions component. Lives
+  // HERE (not step-local state) because steps unmount on Next/Back — a step-local
+  // useState would forget whether the operator had it open. All groups default
+  // closed (compact load). A step can own MORE THAN ONE advanced group (e.g.
+  // startup-costs owns "rent-lease" / "cost-structure" / "funding", Task 2.4) so
+  // the map is keyed by the composite `advancedKey(step, groupId)` string, not
+  // just the step — otherwise opening one group would open them all.
+  advancedOpen: Partial<Record<string, boolean>>;
+  toggleAdvanced: (step: StepKey, groupId: string, open: boolean) => void;
 
   canGenerate: boolean;
 }
@@ -200,12 +213,12 @@ export function useWizardState(
   const [rentResearchLoading, setRentResearchLoading] = useState(false);
   const [rentResearchError, setRentResearchError] = useState(false);
 
-  // Advanced Options disclosure state (Wave 2 Task 2.1) — every step starts
-  // collapsed (empty map reads as falsy per key); lives in the hook so it
-  // survives a step's unmount/remount on Next/Back.
-  const [advancedOpen, setAdvancedOpen] = useState<Partial<Record<StepKey, boolean>>>({});
-  const toggleAdvanced = useCallback((step: StepKey, open: boolean) => {
-    setAdvancedOpen((prev) => ({ ...prev, [step]: open }));
+  // Advanced Options disclosure state (Wave 2 Task 2.1, per-GROUP as of 2.2) —
+  // every (step, group) starts collapsed (empty map reads as falsy per key);
+  // lives in the hook so it survives a step's unmount/remount on Next/Back.
+  const [advancedOpen, setAdvancedOpen] = useState<Partial<Record<string, boolean>>>({});
+  const toggleAdvanced = useCallback((step: StepKey, groupId: string, open: boolean) => {
+    setAdvancedOpen((prev) => ({ ...prev, [advancedKey(step, groupId)]: open }));
   }, []);
 
   const set = useCallback(<K extends keyof WizardDraft>(key: K, value: WizardDraft[K]) => {
@@ -312,6 +325,20 @@ export function useWizardState(
       fixturesPerSqft: n,
       costSchedule: reseedScaledCostRows(
         prev.costSchedule ?? [], prev.buildingSqft, n, prev.buildoutPerSqft,
+      ),
+    }));
+  }, []);
+
+  // Mirrors setFixturesPerSqft (Task 2.2): a build-out $/sq ft edit re-seeds the
+  // same two sq-ft-scaled cost rows (Equipment & Fixtures, Build-out) since
+  // reseedScaledCostRows takes both rates together. No separate provenance
+  // tracking — only utilities/fixtures state a provenance badge (brief 2.2).
+  const setBuildoutPerSqft = useCallback((n: number) => {
+    setDraft((prev) => ({
+      ...prev,
+      buildoutPerSqft: n,
+      costSchedule: reseedScaledCostRows(
+        prev.costSchedule ?? [], prev.buildingSqft, prev.fixturesPerSqft, n,
       ),
     }));
   }, []);
@@ -454,6 +481,7 @@ export function useWizardState(
     setRentPerSqft,
     setUtilitiesPerSqft,
     setFixturesPerSqft,
+    setBuildoutPerSqft,
     onRentResearchStart,
     applyRentResearch,
     onRentResearchError,
