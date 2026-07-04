@@ -202,7 +202,9 @@ body {
 }
 .owner-gate__sign-in {
   display: inline-flex;
-  align-items: center;
+  /* baseline (was center): ties the Rally wordmark to the type baseline so the
+     swoosh behaves like a real descender on "Sign in with" (spec §1.2). */
+  align-items: baseline;
   justify-content: center;
   /* gap leaves room for the inline Rally wordmark beside the "Sign in" text. */
   gap: 0.5rem;
@@ -366,7 +368,8 @@ body {
 
 .owner-auth__sign-in {
   display: inline-flex;
-  align-items: center;
+  /* baseline (was center): ties the Rally wordmark to the type baseline (spec §1.2). */
+  align-items: baseline;
   /* gap leaves room for the inline Rally wordmark beside the "Sign in" text. */
   gap: 0.5rem;
   /* #319 header-compact: 32px control in the ~44px row. */
@@ -4468,9 +4471,20 @@ td.cell-wrap {
    theme, UI rule); this rule only sizes it to sit on the text baseline. */
 .rally-mark {
   display: block;
-  height: 1em;
-  width: auto;
+  /* The "Rally" letterforms occupy only the top ~57% of the 254.22x144 viewBox
+     (ink bbox y 10->92.2 = 0.571); the rest is a swoosh tail below the baseline.
+     Scale the WHOLE artwork up (target-cap 0.717 / letter-fraction 0.571 = 1.26em)
+     so the LETTERS alone match the button-text cap-height (~19px at the 15px text).
+     Optically verified at 1440 + 375: letter baseline within 0.05px of the text
+     baseline, cap-height within ~0.7px (spec §1.2). */
+  height: 1.26em;
+  width: auto; /* preserves the 254.22:144 ratio */
   flex-shrink: 0;
+  /* Baseline seat: the letter baseline sits ~0.36 of the box height above the box
+     bottom (51.8/144); under align-items:baseline the SVG bottom lands on the text
+     baseline, so drop the mark 0.36 x 1.26em ~= 0.45em to seat the LETTER baseline
+     (not the swoosh tip) on the text baseline. */
+  transform: translateY(0.45em);
 }
 
 /* The 3-step explainer above the sign-in action (#318 follow-up: the button now
