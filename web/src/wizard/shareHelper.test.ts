@@ -13,7 +13,7 @@ const ENGINE_DEFAULTS = {
   marketing_pct: "0.0375", //   MARKETING_PCT_OF_REVENUE
   supplies_pct: "0.05", //      SUPPLIES_PCT_OF_REVENUE
   card_pct: "0.02", //          CARD_FEES_PCT_OF_REVENUE
-  payroll_tax_pct: "0.075", //  PAYROLL_TAX_PCT_OF_PAYROLL
+  payroll_tax_pct: "0.08", //   PAYROLL_TAX_PCT_OF_PAYROLL (990-grounded, 2.7.0)
   salvage_pct: "0.008", //      SALVAGE_PCT_OF_RETAIL
   escalator: "0.03", //         RENT_ESCALATOR
   sensitivity_delta: "0.25", // SENSITIVITY_DELTA
@@ -24,7 +24,7 @@ const ENGINE_DEFAULTS = {
   donations_per_hh: 3, //       DONATIONS_PER_HH_PER_YEAR (int)
   fixed_annual: {
     // FIXED_ANNUAL (label -> annual $)
-    "Insurance liability": 2000,
+    "Insurance liability": 10000, // 990-grounded (2.7.0); was 2000
     "Internet, Phones": 3000,
     "Pest control": 300,
     "Repairs/maintenance": 1600,
@@ -70,11 +70,11 @@ const DRAFT: WizardDraft = {
   marketingPct: 3.75,
   suppliesPct: 5,
   cardPct: 2,
-  payrollTaxPct: 7.5,
+  payrollTaxPct: 8, // 990-grounded (2.7.0)
   reserveBuffer: 25000,
   sensitivityDeltaPct: 25,
   fixedAnnual: {
-    "Insurance liability": 2000,
+    "Insurance liability": 10000, // 990-grounded (2.7.0)
     "Internet, Phones": 3000,
     "Pest control": 300,
     "Repairs/maintenance": 1600,
@@ -123,7 +123,7 @@ describe("buildCreatePayload (maps wizard draft → POST /api/projections body)"
     expect(p.assumptions.marketing_pct).toBe(0.0375); //  3.75 / 100
     expect(p.assumptions.supplies_pct).toBe(0.05); //     5 / 100
     expect(p.assumptions.card_pct).toBe(0.02); //         2 / 100
-    expect(p.assumptions.payroll_tax_pct).toBe(0.075); // 7.5 / 100
+    expect(p.assumptions.payroll_tax_pct).toBe(0.08); //  8 / 100 (990-grounded, 2.7.0)
     expect(p.assumptions.escalator).toBe(0.03); //        3 / 100
     expect(p.assumptions.sensitivity_delta).toBe(0.25); // 25 / 100
     // counts / dollars / dict — NOT ÷100:
@@ -220,7 +220,7 @@ describe("toServerCreateBody (nested wizard payload → flat backend body)", () 
     expect(body.assumptions.marketing_pct).toBe("0.0375");
     expect(body.assumptions.supplies_pct).toBe("0.05");
     expect(body.assumptions.card_pct).toBe("0.02");
-    expect(body.assumptions.payroll_tax_pct).toBe("0.075");
+    expect(body.assumptions.payroll_tax_pct).toBe("0.08");
     expect(body.assumptions.escalator).toBe("0.03");
     expect(body.assumptions.sensitivity_delta).toBe("0.25");
     // basket is a $ value (not a %): String() but NO ÷100.
@@ -233,7 +233,7 @@ describe("toServerCreateBody (nested wizard payload → flat backend body)", () 
     expect(body.assumptions.donations_per_hh).toBe(3);
     expect(body.assumptions.fixed_annual["Pest control"]).toBe(300);
     expect(body.assumptions.fixed_annual).toEqual({
-      "Insurance liability": 2000,
+      "Insurance liability": 10000,
       "Internet, Phones": 3000,
       "Pest control": 300,
       "Repairs/maintenance": 1600,
@@ -305,7 +305,7 @@ describe("assumptions anchor — a default draft reproduces the engine/model.py 
     expect(a.marketing_pct).toBe("0.0375");
     expect(a.supplies_pct).toBe("0.05");
     expect(a.card_pct).toBe("0.02");
-    expect(a.payroll_tax_pct).toBe("0.075");
+    expect(a.payroll_tax_pct).toBe("0.08");
     expect(a.escalator).toBe("0.03");
     expect(a.sensitivity_delta).toBe("0.25");
     expect(a.utilities_per_sqft).toBe("2.23");

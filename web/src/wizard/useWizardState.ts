@@ -100,11 +100,11 @@ export const DEFAULT_DRAFT: WizardDraft = {
   marketingPct: 3.75,
   suppliesPct: 5,
   cardPct: 2,
-  payrollTaxPct: 7.5,
+  payrollTaxPct: 8, // 990-grounded (2.7.0); tracks engine PAYROLL_TAX_PCT_OF_PAYROLL
   reserveBuffer: 25000,
   sensitivityDeltaPct: 25,
   fixedAnnual: {
-    "Insurance liability": 2000,
+    "Insurance liability": 10000, // 990-grounded (2.7.0); tracks engine FIXED_ANNUAL
     "Internet, Phones": 3000,
     "Pest control": 300,
     "Repairs/maintenance": 1600,
