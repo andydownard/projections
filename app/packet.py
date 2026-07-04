@@ -124,6 +124,15 @@ _GUARDRAIL_LABELS = {
 }
 
 
+def _humanize_flag_key(key: str) -> str:
+    """Readable fallback label for a ``requires_note`` flag with no hand-authored
+    entry in ``_GUARDRAIL_LABELS`` — e.g. ``some_future_driver_out_of_band`` ->
+    ``"Some future driver out of band"``. Never the empty string, never the raw
+    snake_case key verbatim."""
+    words = key.replace("_", " ").strip()
+    return words[:1].upper() + words[1:] if words else key
+
+
 def _guardrails(vm: dict[str, Any]) -> list[dict[str, str]]:
     """The §12.2 out-of-band drivers + the justification note each requires.
 
@@ -135,12 +144,19 @@ def _guardrails(vm: dict[str, Any]) -> list[dict[str, str]]:
     justification is genuinely owed. This is what makes the packet defensible to a
     skeptical board/funder: an out-of-band input travels in with its required note,
     never silently (PRD §12.2 / §17).
+
+    Iterates ``flags.items()`` (NOT ``_GUARDRAIL_LABELS.items()``, per the batch-2
+    review's I2 finding): any flag whose value is a dict carrying
+    ``requires_note: True`` travels in, using ``_GUARDRAIL_LABELS`` only for a
+    pretty label and a humanized fallback otherwise — so a future flag key that
+    doesn't happen to match a hand-authored map entry can never be silently
+    dropped with no test failing.
     """
     out: list[dict[str, str]] = []
     flags = vm.get("flags") or {}
-    for key, label in _GUARDRAIL_LABELS.items():
-        f = flags.get(key)
+    for key, f in flags.items():
         if isinstance(f, dict) and f.get("requires_note"):
+            label = _GUARDRAIL_LABELS.get(key, _humanize_flag_key(key))
             band = str(f.get("band", ""))
             out.append({
                 "field": key,

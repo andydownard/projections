@@ -12,7 +12,7 @@ view-model the engine produces, never a hand-built stub.
 """
 
 from app.packet import build_packet, render_packet_docx, render_packet_md
-from engine.tests.conftest import build_aggressive_result
+from engine.tests.conftest import build_aggressive_result, build_canonical_result
 from engine.viewmodel import to_view_model
 
 
@@ -78,3 +78,49 @@ def test_guardrails_do_not_alter_the_banner_numbers():
     facts = {f["label"]: f["display"] for f in pkt["sections"]["banner"]["facts"]}
     assert facts["Capital required"]  # present + grounded
     assert pkt["sections"]["banner"]["tag"] == "revise"
+
+
+# ------------------------------------------------------ I2 (batch2-review): the
+# section must iterate the vm's flags dict, not a hard-coded label map, so a
+# future requires_note flag with an unmapped key can never silently fail to
+# travel into the packet.
+def test_unmapped_requires_note_flag_still_travels_into_the_packet():
+    # A synthetic flag key that does NOT exist in app.packet._GUARDRAIL_LABELS.
+    # Pre-fix, `_guardrails` iterated the label map, so this key was silently
+    # dropped with no test failing — the exact failure §12.2 exists to prevent.
+    vm = {
+        "reco": {"tag": "revise"},
+        "flags": {
+            "model_upgrade_available": False,
+            "some_future_driver_out_of_band": {
+                "value": 0.42, "band": "≤ ~10%", "requires_note": True,
+            },
+        },
+    }
+    pkt = build_packet(vm, role="board")
+    guardrails = pkt["sections"]["guardrails"]
+    fields = {g["field"] for g in guardrails}
+    assert "some_future_driver_out_of_band" in fields
+    entry = next(g for g in guardrails if g["field"] == "some_future_driver_out_of_band")
+    assert entry["band"] == "≤ ~10%"
+    assert "justification" in entry["note"].lower()
+    # No hand-authored label exists for this key — a readable fallback (not the
+    # raw snake_case key, not empty) still names the driver.
+    assert entry["label"]
+    assert entry["label"] != "some_future_driver_out_of_band"
+
+
+def test_canonical_occupancy_flag_travels_into_the_packet():
+    # The live proof: Task 6.3's occupancy_ratio_out_of_band flag (already in
+    # _GUARDRAIL_LABELS ahead of time per the batch-2 review) fires for real on
+    # the canonical House of Hope fixture (28.1% occupancy ratio) and must reach
+    # the packet exactly like the pre-existing net-margin/share flags do.
+    vm = to_view_model(build_canonical_result())
+    assert vm["flags"]["occupancy_ratio_out_of_band"]["requires_note"] is True
+
+    pkt = build_packet(vm, role="board")
+    guardrails = pkt["sections"]["guardrails"]
+    fields = {g["field"] for g in guardrails}
+    assert "occupancy_ratio_out_of_band" in fields
+    entry = next(g for g in guardrails if g["field"] == "occupancy_ratio_out_of_band")
+    assert entry["label"] == "Occupancy ratio (Year 1)"
