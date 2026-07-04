@@ -79,6 +79,12 @@ export interface ProjectionListItem {
   payback: MilestoneValue;
   /** Break-even month — server-formatted display string (e.g. "Month 5" / "N/A"). */
   breakeven: MilestoneValue;
+  /** The semantic go/no-go recommendation enum (audit P2: the v2 redesign dropped
+   *  this from the list UI, but the server never stopped emitting it — see
+   *  GET /api/projections `reco_tag` — so the list silently lost its headline
+   *  decision cue for the "decision-and-funding tool, not a calculator" ICP). The
+   *  client maps enum -> CSS token via RecoChip; the API never sends hex. */
+  reco_tag: RecoTag;
   status: string;
   version: number;
   updated_at: string;

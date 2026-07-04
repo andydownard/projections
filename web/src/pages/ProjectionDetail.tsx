@@ -47,6 +47,7 @@ import type {
 import type { SaveState } from "../components/TopBar";
 import type { ConflictBody } from "../state/autosaveReducer";
 import { clearDetailHeader, setDetailHeader } from "../state/detailHeader";
+import { formatListDate } from "../components/displayLabels";
 import type { ServerValue } from "../api/client";
 import type { PatchHandlerArgs } from "../components/SettingsTab";
 import { readFragmentSecret } from "../router/route";
@@ -236,16 +237,15 @@ function settingsVm(s: ViewModel["settings"]) {
 
 /** Format an ISO timestamp as a short "Updated MMM D, YYYY" string for the header.
  *  Display only; rendered ONLY when the server provides `updated_at` (never a
- *  fabricated date). Returns null for a missing/unparseable value. */
+ *  fabricated date). Returns null for a missing/unparseable value. Reuses the SAME
+ *  `formatListDate` helper the list page renders (audit P2: this used to call its
+ *  own `toLocaleDateString(undefined, …)` — locale-dependent and liable to render a
+ *  different calendar day than the list for the exact same `updated_at` timestamp). */
 function updatedLabel(iso?: string): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return `Updated ${d.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  })}`;
+  return `Updated ${formatListDate(iso)}`;
 }
 
 /** The 4-cell header metric bar (D1): Income sparkline · Capital required (RED) ·

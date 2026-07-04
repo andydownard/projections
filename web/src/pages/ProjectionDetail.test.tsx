@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectionDetail } from "./ProjectionDetail";
 import { App } from "../App";
 import { clearDetailHeader } from "../state/detailHeader";
+import { formatListDate } from "../components/displayLabels";
 import type { ViewModel } from "../api/viewModel";
 
 function fullVm(overrides: Partial<ViewModel> = {}): ViewModel {
@@ -460,6 +461,19 @@ describe("ProjectionDetail — D1 header + D9 downloads", () => {
     render(<ProjectionDetail slug="p_8x" edit={false} />);
     expect(await screen.findByTestId("detail-address")).toHaveTextContent("Longview, TX");
     expect(screen.getByTestId("detail-updated")).toHaveTextContent(/updated/i);
+  });
+
+  it("formats the updated date with the SAME helper the list page uses, not a locale-dependent toLocaleDateString (audit P2)", async () => {
+    // A UTC instant that falls on a DIFFERENT calendar day in a negative-offset
+    // local timezone (e.g. US Mountain) than in UTC — the old
+    // `toLocaleDateString(undefined, …)` call rendered the VIEWER's local day,
+    // which can silently disagree with the list page's UTC-pinned formatListDate
+    // for the exact same `updated_at` value.
+    const iso = "2026-06-24T02:00:00Z";
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm({ updated_at: iso }));
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    const updated = await screen.findByTestId("detail-updated");
+    expect(updated).toHaveTextContent(`Updated ${formatListDate(iso)}`);
   });
 
   it("omits the updated date when the server does not provide one (never a fabricated date)", async () => {
