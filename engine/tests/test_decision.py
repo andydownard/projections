@@ -529,6 +529,29 @@ def test_labor_ratio_flag_absent_when_in_band(canonical_result):
     assert "labor_ratio_out_of_band" not in canonical_result.flags
 
 
+def test_advisory_flags_are_override_aware(canonical_inputs):
+    # The 6.3 advisory bands read the RESOLVED Year-1 values (decision.py:341-346),
+    # so a pinned component cell must move the ratio the flag checks -- not the
+    # un-resolved input. Two directions, one invariant:
+    #   * Canonical fires occupancy_ratio_out_of_band ($120k rent / ~$427k rev ~28%).
+    #     Pinning a smaller Rent#1 must CLEAR it ($50k / ~$427k ~11.7% < 20%).
+    #   * Canonical labor is exactly 60% (in band). Pinning a large Payroll#1 must
+    #     FIRE labor_ratio_out_of_band ($400k / ~$427k ~93.7% > 60%).
+    # Without override-awareness (flags reading raw inputs) both assertions fail.
+    inputs, a, demand, trade = canonical_inputs
+
+    rent_pinned = compute(inputs, a, demand, trade,
+                          overrides={"Rent#1": {"value": "50000", "note": "x", "ts": "t"}})
+    assert "occupancy_ratio_out_of_band" not in rent_pinned.flags
+
+    payroll_pinned = compute(inputs, a, demand, trade,
+                             overrides={"Payroll#1": {"value": "400000", "note": "x", "ts": "t"}})
+    flag = payroll_pinned.flags.get("labor_ratio_out_of_band")
+    assert flag is not None
+    assert flag["requires_note"] is True
+    assert Decimal("0.93") < D(str(flag["value"])) < Decimal("0.94")
+
+
 def test_sales_per_sqft_flag_absent_when_in_band(canonical_result):
     # Canonical Y1 sales/sqft (~$426,938 / 7,000 sqft ~= $61) sits inside $50-$300.
     assert "sales_per_sqft_out_of_band" not in canonical_result.flags

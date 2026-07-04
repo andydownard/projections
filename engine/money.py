@@ -38,7 +38,16 @@ def _fmt_dollars(value):
 
 
 def money_view(value):
-    return {"raw": float(D(value)), "display": _fmt_dollars(value)}
+    # Single rounding authority: raw and display are derived from the SAME canonical
+    # value — the exact Decimal the emitted float represents (``D(repr(float(...)))``).
+    # Without this, raw=float(value) and display=round_dollars(Decimal value) round two
+    # DIFFERENT numbers, so a value like 4712.4999… (exact 4712.5) emitted raw=4712.5
+    # (rounds UP to $4,713) while display rounded the fuller Decimal DOWN to $4,712 — the
+    # {raw,display} pair disagreeing by $1 on any half-dollar the float lands on. Quantizing
+    # to the float-visible value ONCE makes display round-trip to raw BY CONSTRUCTION for
+    # every money pair, without changing raw's float semantics (2.7.0; property 4).
+    canonical = D(repr(float(D(value))))
+    return {"raw": float(canonical), "display": _fmt_dollars(canonical)}
 
 
 def pct_view(value):

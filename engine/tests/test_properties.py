@@ -160,29 +160,21 @@ def _parse_money(display: str) -> int:
     return -value if negative else value
 
 
-# The knife-edge counter-example Hypothesis shrank to (verified as a plain,
-# deterministic case in this file below — see test_BUG_lease_deposit_...). Pinned
-# as an @example so this property's failure is DETERMINISTIC, never a seed-dependent
-# flake, so xfail(strict=True) can never spuriously XPASS.
-_LEASE_DEPOSIT_BUG_CASE = {
+# The knife-edge counter-example Hypothesis once shrank to (Wave-4 finding, fixed in
+# Wave-6/2.7.0 — see test_lease_deposit_raw_and_display_agree_... below). Kept as a
+# permanent @example so this property is exercised on the historically-buggy input on
+# EVERY run, never only when a random seed happens to land on it — a deterministic
+# regression pin against the money_view single-rounding-authority regressing.
+_LEASE_DEPOSIT_REGRESSION_CASE = {
     "households": 100, "shares": ["0.0010"] * 5, "basket": "1.00",
     "donation_value": "1.00", "sqft": 500, "rent": "37.70",
     "opening": 1, "schedule": (),
 }
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG (engine numeric discipline — Wave-6 / version-bump scope, NOT fixed here): "
-    "the lease-deposit startup line computes occ1/12*3 (divide-before-multiply), so "
-    "e.g. 18850/12*3 = 4712.4999… where the exact value is 4712.5. money_view then "
-    "emits raw=float(value)=4712.5 (which re-rounds UP to $4,713) but "
-    "display=round_dollars(Decimal 4712.4999…)=\"$4,712\" (rounds DOWN) — the "
-    "{raw,display} money pair is internally inconsistent by $1 whenever the resolved "
-    "occupancy ≡ 2 (mod 4). Reproduced deterministically below. Wave-4 is test-only."
-))
 @settings(max_examples=50, deadline=None)
 @given(case=cases())
-@example(case=_LEASE_DEPOSIT_BUG_CASE)
+@example(case=_LEASE_DEPOSIT_REGRESSION_CASE)
 def test_every_money_display_parses_back_to_rounded_raw(case):
     result, _, _ = _run(case)
     pairs = list(_money_pairs(result.view_model))
@@ -193,17 +185,14 @@ def test_every_money_display_parses_back_to_rounded_raw(case):
         assert _parse_money(pair["display"]) == int(round_dollars(pair["raw"])), pair
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: lease-deposit occ1/12*3 yields 4712.4999… (exact is 4712.5); raw=float=4712.5 "
-    "rounds to $4,713 but display rounds the Decimal to $4,712. Same finding as the "
-    "property above, pinned deterministically. Engine fix is Wave-6 (version bump)."
-))
-def test_BUG_lease_deposit_raw_and_display_disagree_on_a_half_dollar():
-    # A plain, non-Hypothesis reproduction of the property-4 counter-example (per the
-    # task's hard rule: verify the finding is real before xfailing it). occ1 = 500 sq ft
-    # × $37.70 = $18,850; the deposit line = 18850/12*3. The exact value is $4,712.50,
-    # which the display rounds DOWN to $4,712 (because the Decimal is actually 4712.4999…)
-    # while the emitted float raw (4712.5) rounds UP to $4,713.
+def test_lease_deposit_raw_and_display_agree_on_a_half_dollar():
+    # Permanent regression guard for the Wave-4 finding, fixed in 2.7.0. occ1 = 500 sq ft
+    # × $37.70 = $18,850; the deposit line is 3 months of monthly occupancy. The exact
+    # value is $4,712.50. Pre-fix the line computed occ1/12*3 = 4712.4999… (a 28-digit
+    # Decimal just under the half-dollar), so display=round_dollars(Decimal)="$4,712"
+    # (rounds DOWN) disagreed with raw=float=4712.5 (which rounds UP to $4,713). The fix
+    # is twofold: the deposit is now computed occ1*3/12 (exact 4712.5), and money_view
+    # single-sources display+raw from D(repr(float(value))) so the pair can NEVER disagree.
     inputs = Inputs(
         org_name="Prop", city="x", opening_status="pre_launch",
         share_y1="0.001", share_y2="0.001", share_y3="0.001",
@@ -215,8 +204,10 @@ def test_BUG_lease_deposit_raw_and_display_disagree_on_a_half_dollar():
                      TradeArea(basis="city", households="100"), overrides={})
     deposit = next(c for c in result.view_model["startupCosts"]
                    if c["category"].startswith("Lease Deposit"))
-    # The bug: these two SHOULD agree (the {raw,display} contract), but do not.
+    # The {raw,display} contract: display must round-trip to the whole-dollar rounding
+    # of raw. (Underlying quantity is now exactly $4,712.50 → both render $4,713.)
     assert _parse_money(deposit["amount"]["display"]) == int(round_dollars(deposit["amount"]["raw"]))
+    assert deposit["amount"]["display"] == "$4,713"
 
 
 # ------------------------------------------ 5) break-even None or >= opening

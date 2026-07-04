@@ -243,7 +243,10 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
             startup[cat] = startup.get(cat, Decimal("0")) + D(str(item["amount"]))
     else:
         startup = {k: D(v) for k, v in assumptions.startup.items()}
-    startup["Lease Deposit + First Month Rent"] = occ1 / 12 * 3
+    # 3 months of monthly occupancy. Multiply-before-divide (occ1*3/12) keeps the
+    # Decimal exact — occ1/12*3 divides first and yields e.g. 4712.4999… for occ1=18850
+    # where the exact value is 4712.5 (2.7.0 numeric-discipline fix; property 4).
+    startup["Lease Deposit + First Month Rent"] = occ1 * 3 / 12
     startup_total = sum(startup.values(), Decimal("0"))
 
     return years, startup, startup_total, occupancy
@@ -278,7 +281,7 @@ def startup_outflows_by_month(inputs, assumptions, occupancy_y1) -> dict:
     equals ``startup_total`` (no double counting, no dropped startup).
     """
     g = inputs.opening_month_number
-    lease_deposit = occupancy_y1 / 12 * 3
+    lease_deposit = occupancy_y1 * 3 / 12  # exact: multiply-before-divide (2.7.0)
     by_month: dict = {}
     if inputs.cost_schedule:
         for item in inputs.cost_schedule:
