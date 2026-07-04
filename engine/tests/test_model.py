@@ -36,11 +36,12 @@ def test_cost_structure_constants_canonical_labor_60():
     assert Decimal(str(model.PAYROLL_TAX_PCT_OF_PAYROLL)) == Decimal("0.08")
 
 
-def test_default_donation_value_is_990_grounded():
-    # 6.4: the research-grounded default average donation value ($74) — the single
-    # source the seed + engine-parity FE draft reference. (The wizard's user-facing
-    # default is a deliberately-conservative $50 per Owner Decision 4 / W15, distinct
-    # from this research constant.)
+def test_default_donation_value_single_source():
+    # 6.4: the methodology-seed average donation value ($74, 2013-dollar literature
+    # value — NOT observable in the six-EIN 990 sample) — the single source the seed +
+    # engine-parity FE draft reference. (The wizard's user-facing default is a
+    # deliberately-conservative $50 per Owner Decision 4 / W15, distinct from this
+    # constant.)
     assert Decimal(str(model.DEFAULT_DONATION_VALUE)) == Decimal("74")
 
 

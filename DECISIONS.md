@@ -10,7 +10,7 @@
 - **Payroll tax %:** our 7.5% was **contradicted** — all six orgs' employer payroll-tax load fell in **7.85–9.34%**. Raised to **8.0%** (`PAYROLL_TAX_PCT_OF_PAYROLL`). Workers-comp / SUTA-FUTA burden (true ~10–12%) is still **excluded** and tracked separately (#346).
 - **Insurance liability:** $2,000/yr was **5–10× low** for a staffed ~10,000-sqft public-retail store (BOP + GL + nonprofit D&O). Raised to a **$10,000 placeholder** (`FIXED_ANNUAL["Insurance liability"]`); the owner confirms a real market quote (P1). The constant is **per-projection editable**, so this only moves new projections' starting point.
 - Both changes move engine outputs, so they land as a **`MODEL_VERSION` 2.6.0 → 2.7.0 bump with the single golden regen in the same commit** (Task 6.4), never a silent flip.
-- Also in 2.7.0: **`DEFAULT_DONATION_VALUE = "$74"`** is named as the single research-grounded default the seed + engine-parity FE draft reference (the wizard's user-facing default stays a deliberately-conservative **$50** per Owner Decision 4 / W15 — a distinct, intentional value).
+- Also in 2.7.0: **`DEFAULT_DONATION_VALUE = "$74"`** is named as the single methodology-seed default the seed + engine-parity FE draft reference. Evidence caveat: unlike the two constants above, the demand chain is **not observable** in the six-EIN 990 sample, and the $74 is a **2013-dollar literature value** (CPI vintage-stamping = enhancement-backlog item 4 in the owner deliverables doc) — do not cite it as 990-grounded. The wizard's user-facing default stays a deliberately-conservative **$50** per Owner Decision 4 / W15 — a distinct, intentional value.
 
 ---
 

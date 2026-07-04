@@ -79,10 +79,12 @@ AI_NARRATIVE_DISCLOSURE = (
 DONATIONS_PER_HH_PER_YEAR = 3        # §7.3
 AVG_BASKET_VALUE = "17.08"           # §7.3 (resolved §1) -> customers
 SALVAGE_PCT_OF_RETAIL = "0.008"      # §7.3 (0.8%)
-# 990-grounded research default for the average donated-goods value per donation
-# (six-EIN sample, docs/2026-07-03-owner-deliverables.md). The single source the E2E
-# seed + engine-parity FE draft reference. The wizard's user-facing default is a
-# deliberately-conservative $50 (Owner Decision 4 / W15), distinct from this constant.
+# Methodology seed for the average donated-goods value per donation — NOT observable
+# in the six-EIN 990 sample (docs/2026-07-03-owner-deliverables.md §2 marks the demand
+# chain "not observable"; the $74 is a 2013-dollar literature value — CPI vintage-
+# stamping is backlog item 4 there). The single source the E2E seed + engine-parity FE
+# draft reference. The wizard's user-facing default is a deliberately-conservative $50
+# (Owner Decision 4 / W15), distinct from this constant.
 DEFAULT_DONATION_VALUE = "74"
 
 # --- cost structure (% of total revenue unless noted)
