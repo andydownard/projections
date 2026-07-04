@@ -450,7 +450,7 @@ def _set_assumption(store: Store):
             if coerced is None:
                 return {"error": "invalid_inputs", "status": 422,
                         "message": f"{name} must be a whole number"}
-            patch = {str(name): coerced}
+            patch: dict[str, object] = {str(name): coerced}
         else:
             patch = {str(name): str(value)}
         if bucket == "assumptions":

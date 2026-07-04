@@ -39,10 +39,10 @@ def test_canonical_is_a_loss_case():
     assert vm["reco"]["tag"] != "proceed"
     assert vm["model_version"] == "2.8.0"
     # FUSION cash display (2.7.0-A): the displayed Year-1 Net income subtracts the one-time
-    # startup (fused operating net − startup_total). Operating net now carries the 990
-    # constants (2.7.0-B), so the fused cash figure differs from the pre-990 −$282,933.
+    # startup. Fused = operating net (−$53,713.72, with the 990 constants) − startup_total
+    # ($238,500) = −$292,213.72 → −$292,214 (was pre-990 −$282,933).
     net = next(r for r in vm["rows"] if r["label"] == "Net income")
-    assert round(net["y1"]["raw"]) == -282933  # FUSION re-pin (step 3): fused cash Y1 net
+    assert round(net["y1"]["raw"]) == -292214
 
 
 def test_canonical_reco_text_consistent_with_breakeven_metric():
@@ -72,10 +72,13 @@ def test_design_parity_reproduces_headline(design_parity_result):
     # constants lowered it from the pre-990 ~11% prototype headline). The DISPLAYED cash net and
     # the Month-N payback are re-pinned to fused values in step 3.
     assert vm["rows"][-1]["y1"]["raw"] < 0                       # displayed (cash) Net margin
-    assert round(next(r for r in vm["rows"] if r["label"] == "Net income")["y1"]["raw"]) == -191141  # FUSION re-pin (step 3)
+    # Fused cash Y1 net = operating +$38,504.84 − startup $238,500 = −$199,995.16 → −$199,995.
+    assert round(next(r for r in vm["rows"] if r["label"] == "Net income")["y1"]["raw"]) == -199995
     assert vm["breakevenMonth"] == 6                            # OPERATING (6.2 Y1 distribution)
     assert vm["reco"]["tag"] == "raise_cash"                    # OPERATING-driven (capital > funds)
-    assert vm["milestones"]["payback"]["raw"] is not None       # resolves to a real Month N (re-pin step 3)
+    # Month-N payback recomputes over the 60-month series on the 6.2 Y1 window → Month 32
+    # (their pre-fusion goldens read Month 30; the shift is expected — fusion spec §3).
+    assert vm["milestones"]["payback"]["raw"] == 32
     op_margin = float(design_parity_result.annual[1].margin)
     assert 0.08 < op_margin < 0.10                              # ~9.0% operating (990 constants)
 
@@ -99,13 +102,18 @@ def test_aggressive_triggers_the_two_named_guardrail_flags():
     # guardrails, each demanding a justification note that travels into the packet.
     vm = _load("aggressive_flagged.json")
     flags = vm["flags"]
-    assert flags["net_margin_out_of_band"]["requires_note"] is True
+    # FUSION: the §12.2 net-margin guardrail runs on the DISPLAYED (cash) margin (2.7.0-A).
+    # The Year-1 cash margin is dragged down to ~8.9% by the one-time startup, so the >30%
+    # flag no longer fires on Y1 — it fires on the steady-state LATE years (Y4/Y5, where
+    # cash == operating and the aggressive margin is ~37%). The guardrail still fires (spec
+    # §6); the share (>8%) guardrail fires on Y1 as before.
+    assert flags["net_margin_y4_out_of_band"]["requires_note"] is True
+    assert flags["net_margin_y5_out_of_band"]["requires_note"] is True
     assert flags["share_y1_out_of_band"]["requires_note"] is True
-    # Year-1 margin is above the ~30% band (a flag, not a math error) and the
-    # verdict is "revise", never "proceed".
-    assert vm["rows"][-1]["y1"]["raw"] > 0.30
+    # The late-year (steady-state) margin is above the ~30% band; verdict is "revise".
+    assert vm["rows"][-1]["y4"]["raw"] > 0.30
     assert vm["reco"]["tag"] == "revise"
-    assert vm["model_version"] == "2.7.0"
+    assert vm["model_version"] == "2.8.0"
 
 
 # ------------------------------------------------------------- Grace Mission
@@ -131,7 +139,7 @@ def test_grace_is_a_loss_case_with_payback_na_and_one_pinned_payroll():
     assert ov["node"] == "Payroll" and ov["year"] == 1
     assert ov["value"]["raw"] == 110000.0
     assert ov["calculated"]["raw"] != ov["value"]["raw"]  # calc-vs-override, no back-solve
-    assert vm["model_version"] == "2.7.0"
+    assert vm["model_version"] == "2.8.0"
 
 
 # --------------------------------------------------------- NNN gross-check
@@ -154,4 +162,4 @@ def test_nnn_resolution_escalates_and_deposits_on_resolved_occupancy():
                    if c["category"].startswith("Lease Deposit"))
     assert deposit["amount"]["raw"] == 37500.0
     assert deposit["amount"]["display"] == "$37,500"
-    assert vm["model_version"] == "2.7.0"
+    assert vm["model_version"] == "2.8.0"

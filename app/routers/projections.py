@@ -397,10 +397,10 @@ class CostScheduleItemIn(BaseModel):
 # (reserve_buffer, donations_per_hh) are left alone (an int stays an int; pydantic's own
 # lax str->int handles an int-like string). ``bool`` is EXCLUDED (it is an ``int``
 # subclass) so ``true`` never sneaks through as a number -> a bool still 422s.
-_STR_FIELD_CACHE: dict[type, frozenset[str]] = {}
+_STR_FIELD_CACHE: dict[type[BaseModel], frozenset[str]] = {}
 
 
-def _str_typed_fields(model_cls: type) -> frozenset[str]:
+def _str_typed_fields(model_cls: type[BaseModel]) -> frozenset[str]:
     """Field names on ``model_cls`` whose annotation admits ``str`` (``str`` or
     ``Optional[str]``) — i.e. the decimal-string knobs a numeric wire value must
     become. Genuinely-int / dict / list fields are excluded. Cached per class."""
@@ -1758,6 +1758,7 @@ def put_narrative(
     token = _bearer(authorization)
     if not (_is_owner(token, row) or _is_editor(token, row)):
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
+    assert token is not None  # the 403 guard rejects a None token (never owner/editor)
 
     # §10.1: coarse per-token/hr cap (the hashed token is the bucket key, never plaintext).
     limited = _rate_limited(
@@ -1837,6 +1838,7 @@ def regenerate_narrative(
     token = _bearer(authorization)
     if not (_is_owner(token, row) or _is_editor(token, row)):
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
+    assert token is not None  # the 403 guard rejects a None token (never owner/editor)
 
     # §10.1 cost containment: cap the PAID regenerate BEFORE the provider call — per IP +
     # per token (hourly) AND a per-projection DAILY ceiling. A rejected request never

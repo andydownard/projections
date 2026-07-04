@@ -282,7 +282,6 @@ function wireFetchFailingCreate(mode: "500" | "reject" | "empty" | "malformed") 
     if (url.includes("/api/places/autocomplete"))
       return jsonResponse({ predictions: [{ description: "Dallas, TX, USA", place_id: "PID_DAL" }] });
     if (url.includes("/api/places/resolve")) return jsonResponse(RESOLVED);
-    if (url.includes("/api/research")) return jsonResponse(RESEARCH);
     if (url.includes("/api/projections")) {
       if (mode === "reject") return Promise.reject(new TypeError("Failed to fetch"));
       // A 2xx with NO view_slug — the /p/undefined/edit regression. resp.ok is true,
@@ -318,8 +317,9 @@ describe("CreateProjectionPage — Generate failure surfaces an alert w/ retry (
     render(<CreateProjectionPage />);
     await stepToStartupCosts(user);
     await waitFor(() =>
+      // #328 removed the rent auto-research; the field pre-fills the default $12 benchmark.
       expect((screen.getByLabelText(/rent per square foot/i) as HTMLInputElement).value).toBe(
-        "18.00",
+        "12.00",
       ),
     );
 
@@ -332,7 +332,7 @@ describe("CreateProjectionPage — Generate failure surfaces an alert w/ retry (
     expect(window.location.pathname).toBe("/wizard/startup-costs");
     // The draft is intact — the pre-filled rent value survives the failure.
     expect((screen.getByLabelText(/rent per square foot/i) as HTMLInputElement).value).toBe(
-      "18.00",
+      "12.00",
     );
   });
 
@@ -396,7 +396,6 @@ describe("CreateProjectionPage — Generate failure surfaces an alert w/ retry (
       if (url.includes("/api/places/autocomplete"))
         return jsonResponse({ predictions: [{ description: "Dallas, TX, USA", place_id: "PID_DAL" }] });
       if (url.includes("/api/places/resolve")) return jsonResponse(RESOLVED);
-      if (url.includes("/api/research")) return jsonResponse(RESEARCH);
       if (url.includes("/api/projections")) {
         creates += 1;
         if (creates === 1) return Promise.resolve(new Response("{}", { status: 500 }));

@@ -14,6 +14,7 @@ const trashed: ProjectionListResponse = {
       view_slug: "p_trash",
       name: "Grace Mission",
       location: "Tyler city",
+      reco_tag: "do_not_proceed",
       income_series: [],
       y5_income: { raw: 0, display: "$0" },
       capital_required: { raw: 90000, display: "$90,000" },

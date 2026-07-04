@@ -135,7 +135,7 @@ def test_restore_revision_over_cap_returns_429(client, monkeypatch):
 # ---------------------------------------------------------------------- trash
 def test_trash_over_cap_returns_429(client, monkeypatch):
     slug, owner, _v, _b = create_projection(client)
-    monkeypatch.setattr(P, "_MUTATION_IP_LIMIT", 3, raising=False)
+    monkeypatch.setattr(P, "_LIFECYCLE_IP_LIMIT", 3, raising=False)
 
     def _trash():
         return client.post(
@@ -151,7 +151,7 @@ def test_trash_over_cap_returns_429(client, monkeypatch):
 # -------------------------------------------------------------------- restore
 def test_restore_over_cap_returns_429(client, monkeypatch):
     slug, owner, _v, _b = create_projection(client)
-    monkeypatch.setattr(P, "_MUTATION_IP_LIMIT", 3, raising=False)
+    monkeypatch.setattr(P, "_LIFECYCLE_IP_LIMIT", 3, raising=False)
 
     def _restore():
         return client.post(
@@ -167,7 +167,7 @@ def test_restore_over_cap_returns_429(client, monkeypatch):
 # --------------------------------------------------------------------- delete
 def test_delete_over_cap_returns_429(client, monkeypatch):
     slug, owner, _v, _b = create_projection(client)
-    monkeypatch.setattr(P, "_MUTATION_IP_LIMIT", 3, raising=False)
+    monkeypatch.setattr(P, "_LIFECYCLE_IP_LIMIT", 3, raising=False)
 
     # The projection is active (not trashed) ⇒ 409 not_trashed (after the cap check),
     # so nothing is purged; the cap still trips on the (N+1)th.
@@ -190,7 +190,7 @@ def test_trash_over_token_cap_returns_429_across_distinct_ips(client, monkeypatc
     # same-token-across-IPs test (above). Lock the shared helper via trash; the
     # other four are wired identically.
     slug, owner, _v, _b = create_projection(client)
-    monkeypatch.setattr(P, "_MUTATION_TOKEN_LIMIT", 3, raising=False)
+    monkeypatch.setattr(P, "_LIFECYCLE_TOKEN_LIMIT", 3, raising=False)
 
     # Stale If-Match ⇒ 409 (no state mutation), same trick as the IP-cap test above.
     def _trash(ip):

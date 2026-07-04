@@ -30,14 +30,16 @@ def _aggressive_vm() -> dict:
 # --------------------------------------------------------------- structured
 def test_aggressive_packet_has_a_guardrails_section_with_the_two_flags():
     vm = _aggressive_vm()
-    # sanity: the fixture actually fires both §12.2 guardrails.
-    assert vm["flags"]["net_margin_out_of_band"]["requires_note"] is True
+    # sanity: the fixture actually fires both §12.2 guardrails. FUSION: the net-margin
+    # guardrail runs on the DISPLAYED (cash) margin, so the >30% flag fires on the
+    # steady-state LATE years (Y4/Y5) rather than the startup-depressed Year 1.
+    assert vm["flags"]["net_margin_y4_out_of_band"]["requires_note"] is True
     assert vm["flags"]["share_y1_out_of_band"]["requires_note"] is True
 
     pkt = build_packet(vm, role="board")
     guardrails = pkt["sections"]["guardrails"]
     fields = {g["field"] for g in guardrails}
-    assert "net_margin_out_of_band" in fields
+    assert "net_margin_y4_out_of_band" in fields
     assert "share_y1_out_of_band" in fields
     # every rendered guardrail carries the required-justification note text.
     for g in guardrails:

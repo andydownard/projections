@@ -226,7 +226,9 @@ def test_fixed_costs_are_spread_flat_not_revenue_weighted():
     )
     res = compute(inputs, Assumptions(), DemandDrivers(),
                   TradeArea(basis="city", households="31798"), overrides={})
-    ops = [m for m in res.monthly if m.kind == "operating"]
+    # Year-1 operating months only (the fused monthly[] spans 60 months; the 6.2 split
+    # is a Year-1 property, so scope to the first 12 operating months).
+    ops = [m for m in res.monthly if m.kind == "operating"][:12]
     fixed_annual = D(str(res.annual[1].total_exp))  # all expense is fixed at 0 revenue
     assert fixed_annual > 0
     first = D(str(ops[0].expenses))
@@ -268,7 +270,9 @@ def test_expense_streams_split_fixed_payroll_and_pct_of_revenue(canonical_result
     pay_parts = _distribute(pay, _PAYROLL_WEIGHTS)
     fix_parts = _flat_monthly(fix)
     expected = [pct_parts[i] + pay_parts[i] + fix_parts[i] for i in range(12)]
-    ops = [m for m in canonical_result.monthly if m.kind == "operating"]
+    # Year-1 operating months only (fused monthly[] spans 60 months; the three-stream
+    # split is a Year-1 property).
+    ops = [m for m in canonical_result.monthly if m.kind == "operating"][:12]
     for i in range(12):  # every operating month matches component-by-component
         assert D(str(ops[i].expenses)) == expected[i], i
     assert sum((D(str(m.expenses)) for m in ops), Decimal("0")) == D(str(y1.total_exp))
