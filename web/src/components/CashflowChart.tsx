@@ -174,8 +174,13 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   // ── chart geometry (spec §7) ──────────────────────────────────────────────
   const W = narrow ? 380 : 660;
   const H = 300;
-  const padL = 60;
-  const padR = 64;
+  // padL/padR widened from the spec's 60/64: §3.4 mandates FULL comma-form tick
+  // labels ("($300,000)") — ~62px wide — so the narrower spec paddings (sized for
+  // the abbreviated "$300k" labels in the spec's illustrative worked example)
+  // clipped them at both edges. Verified un-clipped in the QA screenshot (§7 says
+  // to confirm padding by screenshot, not formula).
+  const padL = 74;
+  const padR = 82;
   const padT = 44;
   const padB = 28;
   const plotW = W - padL - padR;
