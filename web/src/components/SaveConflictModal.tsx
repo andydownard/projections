@@ -19,6 +19,12 @@ export interface SaveConflictModalProps {
   onOverwrite: () => void;
   onSaveAsCopy: () => void;
   message?: string;
+  /** POST …/duplicate is OWNER-ONLY. When this device holds no owner token (an
+   *  editor-link holder), Save-as-copy is guaranteed to 403 — so it is disabled with
+   *  an explanatory tooltip rather than dangled as a dead button. Defaults to enabled
+   *  so the shared modal keeps offering it in the common owner case. */
+  canSaveAsCopy?: boolean;
+  saveAsCopyTitle?: string;
 }
 
 export function SaveConflictModal({
@@ -26,6 +32,8 @@ export function SaveConflictModal({
   onOverwrite,
   onSaveAsCopy,
   message,
+  canSaveAsCopy = true,
+  saveAsCopyTitle = "Requires the owner account",
 }: SaveConflictModalProps) {
   const dialogRef = useDialog<HTMLDivElement>();
 
@@ -53,7 +61,13 @@ export function SaveConflictModal({
           <button type="button" className="btn" onClick={onOverwrite}>
             Overwrite
           </button>
-          <button type="button" className="btn" onClick={onSaveAsCopy}>
+          <button
+            type="button"
+            className="btn"
+            onClick={onSaveAsCopy}
+            disabled={!canSaveAsCopy}
+            title={canSaveAsCopy ? undefined : saveAsCopyTitle}
+          >
             Save as copy
           </button>
         </div>

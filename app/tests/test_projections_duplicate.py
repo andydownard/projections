@@ -1,4 +1,4 @@
-"""POST /api/projections/{view_slug}/duplicate — server-side copy (API_SPEC §4.4).
+"""POST /api/projections/{view_slug}/duplicate — server-side copy (API_SPEC §4.5).
 
 The 409 modal's "Save as copy" was a client-side no-op and "Overwrite" replayed
 only the name: a conflicting edit was silently lost while the UI claimed "saved"
@@ -184,10 +184,24 @@ def test_duplicate_applies_optional_patch_before_compute(client_store):
 
 def test_duplicate_patch_uses_same_validation_path_422_on_bad_value(client):
     slug, owner, _v, _body = create_projection(client)
+    hdr = {"Authorization": f"Bearer {owner}"}
+    before = {
+        p["view_slug"]
+        for p in client.get("/api/projections", headers=hdr).json()["projections"]
+    }
     # An out-of-range labor_pct (> 1) must 422 through the SAME AssumptionsIn bounds
     # that guard PATCH — the patch flows through _merge_patch, not a bypass.
     r = _dup(client, slug, owner, patch={"assumptions": {"labor_pct": "5.0"}})
     assert r.status_code == 422, r.text
+    # M2 (3.2f): the 422 fires in _merge_patch/_validate_schedule_inputs BEFORE any
+    # durable write, so NO orphan copy row leaks into the owner's workspace. The
+    # validation guards the CREATE (not merely the response), so the owner's list is
+    # byte-for-byte unchanged across the rejected duplicate.
+    after = {
+        p["view_slug"]
+        for p in client.get("/api/projections", headers=hdr).json()["projections"]
+    }
+    assert after == before
 
 
 def test_duplicate_patch_rejects_pinning_a_derived_node_422(client):
@@ -240,3 +254,38 @@ def test_duplicate_inherits_terms_acceptance(client_store):
     # The owner already accepted the planning-estimates caveat for this data; the copy
     # inherits it so exports (.xlsx/packet) are reachable without re-accepting.
     assert copy["terms_accepted_at"] is not None
+
+
+def test_duplicate_of_a_trashed_source_pins_current_behavior(client_store):
+    """CHARACTERIZATION — pins the CURRENT behavior of duplicating a TRASHED source.
+
+    ``get_projection_by_slug`` filters only ``deleted_at`` (hard delete), NOT ``status``
+    — so a *trashed* row is still resolvable and ``_require_owner`` returns it. The copy
+    is then created with the schema default ``status='active'``. This test pins that
+    as-built behavior; it does NOT bless it.
+
+    OPEN PRODUCT DECISION — FLAGGED TO THE OWNER (do not change here): whether
+    duplicating a trashed projection should be *allowed as an undo/recovery path*
+    (current) or *rejected* (404/409, like a gone resource) is an unresolved question
+    surfaced in review slice 3.2f. If the decision is to reject, change the behavior and
+    THIS test together, deliberately — never silently.
+    """
+    client, store = client_store
+    slug, owner, _v, _created = create_projection(client)
+    # Trash the source (owner-only, If-Match required).
+    tr = client.post(
+        f"/api/projections/{slug}/trash",
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+    )
+    assert tr.status_code == 200, tr.text
+    assert store.get_projection_by_slug(slug)["status"] == "trashed"
+
+    r = _dup(client, slug, owner)
+    # AS-BUILT: the trashed source is still duplicable (allow-as-recovery). Pinned, not
+    # endorsed — see the docstring's flagged decision.
+    assert r.status_code == 201, r.text
+    copy = store.get_projection_by_slug(r.json()["view_slug"])
+    # The copy is a normal ACTIVE projection (schema default), NOT trashed.
+    assert copy["status"] == "active"
+    # Duplicating never resurrects the source: it stays trashed.
+    assert store.get_projection_by_slug(slug)["status"] == "trashed"

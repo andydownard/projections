@@ -58,8 +58,11 @@ export interface SettingsTabProps {
   version: number;
   /** Performs the PATCH (carries If-Match); throws PatchConflictError on 409. */
   onPatch: (args: PatchHandlerArgs) => Promise<PatchResult>;
-  /** "Save as copy" recovery — POST …/duplicate (API_SPEC §4.4). */
+  /** "Save as copy" recovery — POST …/duplicate (API_SPEC §4.5). */
   onSaveAsCopy?: () => void;
+  /** /duplicate is owner-only; disable Save-as-copy (with an owner-account tooltip)
+   *  when this device holds no owner token. Defaults to enabled. */
+  canSaveAsCopy?: boolean;
   debounceMs?: number;
 }
 
@@ -138,6 +141,7 @@ export function SettingsTab({
   version,
   onPatch,
   onSaveAsCopy,
+  canSaveAsCopy = true,
   debounceMs = 350,
 }: SettingsTabProps) {
   const [state, dispatch] = useReducer(autosaveReducer, version, initialAutosaveState);
@@ -229,7 +233,12 @@ export function SettingsTab({
             <button type="button" onClick={overwrite}>
               Overwrite with my changes
             </button>
-            <button type="button" onClick={() => onSaveAsCopy?.()}>
+            <button
+              type="button"
+              onClick={() => onSaveAsCopy?.()}
+              disabled={!canSaveAsCopy}
+              title={canSaveAsCopy ? undefined : "Requires the owner account"}
+            >
               Save as a copy
             </button>
           </div>

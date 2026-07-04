@@ -234,6 +234,24 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
     fireEvent.click(screen.getByRole("button", { name: /save as copy|copy/i }));
     expect(onSaveAsCopy).toHaveBeenCalledTimes(1);
   });
+
+  // Wave 3.2f / C1: /duplicate is owner-only. When this device holds no owner token
+  // (an editor-link holder), Save-as-copy is guaranteed to 403 — the banner disables
+  // it with an explanatory tooltip rather than dangling a dead button.
+  it("disables the banner Save-as-copy with an owner-account tooltip when canSaveAsCopy is false", async () => {
+    const onPatch = conflictingPatch();
+    const onSaveAsCopy = vi.fn();
+    renderTab({ onPatch, onSaveAsCopy, canSaveAsCopy: false });
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
+    await vi.advanceTimersByTimeAsync(20);
+    const banner = await screen.findByRole("alert");
+
+    const copyBtn = within(banner).getByRole("button", { name: /save as copy|copy/i });
+    expect(copyBtn).toBeDisabled();
+    expect(copyBtn).toHaveAttribute("title", "Requires the owner account");
+    fireEvent.click(copyBtn);
+    expect(onSaveAsCopy).not.toHaveBeenCalled();
+  });
 });
 
 describe("SettingsTab — mobile-375 review-first layout", () => {

@@ -3,7 +3,7 @@
 // #146: a 404/failed load renders a load-failed DegradedState, never an infinite
 // "Loading…" spinner. #38: the model_version is no longer displayed — even after a
 // successful load, no version chip is rendered (it stays on computed_json).
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -988,5 +988,370 @@ describe("ProjectionDetail — Share affordance (EPIC SHARE)", () => {
     await screen.findByTestId("share-readonly-link");
     expect(screen.queryByTestId("share-edit-link")).not.toBeInTheDocument();
     expect(screen.getByTestId("share-edit-unavailable")).toBeInTheDocument();
+  });
+});
+
+// ============================================================================
+// Wave 3.2f (review-mandated) — two CRITICAL bugs in the landed 409-recovery code:
+//   C1  Save-as-copy sent `token.current` to the OWNER-ONLY POST …/duplicate.
+//       token.current resolves to the per-slug EDIT token, which the owner device
+//       stores at create — so on the real owner device the fork sent the EDIT token
+//       and the server 403'd owner_required ("Save failed"). It must send the OWNER
+//       token; and an editor-link holder (no owner token) must see Save-as-copy
+//       DISABLED with an owner-account tooltip (it is guaranteed to 403).
+//   C2  resolveOverwrite/resolveSaveAsCopy cleared `conflict` + `failedBody` BEFORE
+//       the async call, so a failed Overwrite/duplicate (403/429/500/network) both
+//       DISMISSED the modal AND destroyed the pending edit — the exact P0 this feature
+//       exists to fix, recurring on the failure path. The state must survive until
+//       SUCCESS (cleared in .then), and a failure must keep the modal actionable.
+// ============================================================================
+describe("ProjectionDetail — Save-as-copy owner token + failure-path preservation (3.2f)", () => {
+  afterEach(() => {
+    localStorage.clear();
+    window.history.pushState({}, "", "/");
+    vi.unstubAllGlobals();
+  });
+
+  /** A view-model with an editable Payroll (non-share) component cell. */
+  function payrollVm(version: number, over: Partial<ViewModel> = {}): ViewModel {
+    return fullVm({
+      version,
+      rows: [
+        {
+          label: "Payroll",
+          group: "expenses",
+          node: "payroll",
+          y1: { raw: 120000, display: "$120,000" },
+          y2: null,
+          y3: null,
+          class: "overridden",
+          editable: true,
+        },
+      ],
+      overrides: [
+        {
+          node: "payroll",
+          year: 1,
+          calculated: { raw: 140000, display: "$140,000" },
+          value: { raw: 120000, display: "$120,000" },
+          note: "",
+        },
+      ],
+      staleNodes: [],
+      ...over,
+    });
+  }
+
+  /** A view-model whose settings map carries the editable drivers (labor %, …) so the
+   *  KPIs-tab SettingsTab renders its own conflict banner (the I2 integration path). */
+  function settingsVm(version: number): ViewModel {
+    return fullVm({
+      version,
+      settings: {
+        laborPct: { raw: 0.6, display: "60%" },
+        marketingPct: { raw: 0.0375, display: "3.8%" },
+        suppliesPct: { raw: 0.05, display: "5%" },
+        cardPct: { raw: 0.02, display: "2%" },
+        payrollTaxPct: { raw: 0.075, display: "7.5%" },
+        salvagePct: { raw: 0.008, display: "0.8%" },
+        escalator: { raw: 0.03, display: "3%" },
+        shareY1: { raw: 0.06, display: "6%" },
+        shareY2: { raw: 0.08, display: "8%" },
+        shareY3: { raw: 0.1, display: "10%" },
+      },
+    });
+  }
+
+  const CONFLICT_DETAIL = {
+    error: "version_conflict",
+    message: "This projection changed elsewhere",
+    current_version: 9,
+    your_version: 3,
+    recovery: "reload | overwrite | save_as_copy",
+  };
+  const EXPECTED_EDIT = {
+    overrides: { set: [{ node: "payroll", year: 1, value: "130000" }] },
+  };
+
+  /** Edit the Payroll cell to 130000 and wait for the conflict modal (stale PATCH). */
+  async function editCellIntoConflict(user: ReturnType<typeof userEvent.setup>) {
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+    await user.click(screen.getByTestId("cell-Payroll-y1"));
+    const input = await screen.findByTestId("cell-Payroll-y1-input");
+    await user.clear(input);
+    await user.type(input, "130000{Enter}");
+    await screen.findByTestId("save-conflict-modal");
+  }
+
+  // ---- C1: the OWNER token reaches /duplicate on the real owner device ------------
+  it("C1: Save-as-copy sends the OWNER token to /duplicate even when the per-slug EDIT token is also stored (real owner device)", async () => {
+    // The owner device stores BOTH the owner token AND the per-slug edit token (set at
+    // create) — so token.current resolves to the EDIT token. /duplicate is OWNER-ONLY;
+    // the edit token 403s. The fork must carry the OWNER token.
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    localStorage.setItem("projections.edit_token.p_8x", "edit-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
+    const dupCalls: Array<{ auth: string | null; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/duplicate")) {
+          dupCalls.push({
+            auth: new Headers(init?.headers).get("Authorization"),
+            body: JSON.parse(String(init?.body)),
+          });
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                view_slug: "p_copy",
+                version: 1,
+                name: "House of Hope (copy)",
+                edit_token: "edit_copy",
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: payrollVm(9) } }),
+              { status: 409, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    await editCellIntoConflict(user);
+    await user.click(screen.getByRole("button", { name: /save as copy/i }));
+
+    await waitFor(() => expect(dupCalls).toHaveLength(1));
+    // The decisive proof: the OWNER token, NOT the per-slug EDIT token (which 403s).
+    expect(dupCalls[0].auth).toBe("Bearer owner-tok");
+    expect(dupCalls[0].body).toEqual({ patch: EXPECTED_EDIT });
+  });
+
+  it("C1: disables Save-as-copy with an owner-account tooltip when this device holds no owner token (editor-link holder)", async () => {
+    // Editor-link holder: only the per-slug edit token, NO owner token. /duplicate is
+    // owner-only → guaranteed 403, so the affordance is disabled + explained rather
+    // than dangled as a dead button.
+    localStorage.setItem("projections.edit_token.p_8x", "edit-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: payrollVm(9) } }),
+              { status: 409, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    await editCellIntoConflict(user);
+    const btn = screen.getByRole("button", { name: /save as copy/i });
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("title", "Requires the owner account");
+  });
+
+  // ---- C2: the failure path keeps the modal AND the pending edit ------------------
+  it("C2: a failed duplicate keeps the conflict modal AND the pending edit (Overwrite still replays it)", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
+    const bodies: Array<Record<string, unknown>> = [];
+    const ifMatches: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/duplicate")) {
+          // The fork fails (owner-only 403 / rate-limit / network) — the edit must
+          // NOT be silently destroyed and the modal must NOT vanish.
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: "forbidden" }), {
+              status: 403,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
+        }
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          const ifMatch = new Headers(init?.headers).get("If-Match") ?? "";
+          ifMatches.push(ifMatch);
+          bodies.push(JSON.parse(String(init?.body)));
+          if (ifMatch === "3") {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: payrollVm(9) } }),
+                { status: 409, headers: { "Content-Type": "application/json" } },
+              ),
+            );
+          }
+          const next = Number(ifMatch) + 1;
+          return Promise.resolve(
+            new Response(JSON.stringify(payrollVm(next)), {
+              status: 200,
+              headers: { "Content-Type": "application/json", ETag: `"${next}"` },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    await editCellIntoConflict(user);
+
+    await user.click(screen.getByRole("button", { name: /save as copy/i }));
+    // The fork rejected: the modal STAYS (the pending edit is not thrown away).
+    await waitFor(() =>
+      expect(screen.getByTestId("save-conflict-modal")).toBeInTheDocument(),
+    );
+
+    // Proof the pending edit survived: Overwrite now replays the EXACT failed body with
+    // the server's fresh If-Match — impossible if failedBody had been cleared.
+    await user.click(screen.getByRole("button", { name: /overwrite/i }));
+    await waitFor(() => expect(screen.queryByTestId("save-conflict-modal")).toBeNull());
+    expect(bodies[bodies.length - 1]).toEqual(EXPECTED_EDIT);
+    expect(ifMatches[ifMatches.length - 1]).toBe("9");
+  });
+
+  it("C2: a failed Overwrite (server 500 / network) keeps the conflict modal AND the pending edit for retry", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
+    const bodies: Array<Record<string, unknown>> = [];
+    const ifMatches: string[] = [];
+    let overwriteAttempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          const ifMatch = new Headers(init?.headers).get("If-Match") ?? "";
+          ifMatches.push(ifMatch);
+          bodies.push(JSON.parse(String(init?.body)));
+          if (ifMatch === "3") {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: payrollVm(9) } }),
+                { status: 409, headers: { "Content-Type": "application/json" } },
+              ),
+            );
+          }
+          // The force-save (If-Match 9): first attempt fails hard (500), then succeeds.
+          overwriteAttempts += 1;
+          if (overwriteAttempts === 1) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ error: "server_error" }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+              }),
+            );
+          }
+          const next = Number(ifMatch) + 1;
+          return Promise.resolve(
+            new Response(JSON.stringify(payrollVm(next)), {
+              status: 200,
+              headers: { "Content-Type": "application/json", ETag: `"${next}"` },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    await editCellIntoConflict(user);
+
+    // First Overwrite fails (500) — the modal + pending edit MUST survive for retry.
+    await user.click(screen.getByRole("button", { name: /overwrite/i }));
+    await waitFor(() =>
+      expect(screen.getByTestId("save-conflict-modal")).toBeInTheDocument(),
+    );
+
+    // Retry Overwrite — the pending edit is intact, so the force-save lands.
+    await user.click(screen.getByRole("button", { name: /overwrite/i }));
+    await waitFor(() => expect(screen.queryByTestId("save-conflict-modal")).toBeNull());
+    expect(bodies[bodies.length - 1]).toEqual(EXPECTED_EDIT);
+    expect(ifMatches[ifMatches.length - 1]).toBe("9");
+  });
+
+  // ---- I2: the SettingsTab banner's Save-as-copy carries the driver edit ----------
+  it("I2: a settings-driver (labor %) 409 → SettingsTab banner Save-as-copy POSTs /duplicate with {patch:{assumptions:{labor_pct}}} + the owner token", async () => {
+    // Realistic owner-device config: BOTH the owner token AND the per-slug edit token.
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    localStorage.setItem("projections.edit_token.p_8x", "edit-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(settingsVm(3));
+    const dupCalls: Array<{ auth: string | null; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/duplicate")) {
+          dupCalls.push({
+            auth: new Headers(init?.headers).get("Authorization"),
+            body: JSON.parse(String(init?.body)),
+          });
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                view_slug: "p_copy",
+                version: 1,
+                name: "House of Hope (copy)",
+                edit_token: "edit_copy",
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          // Every settings PATCH is stale → 409, so the only way to keep the labor
+          // edit is Save-as-copy from the SettingsTab banner.
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: settingsVm(9) } }),
+              { status: 409, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+
+    // Reveal the KPIs tab (the merged settings grid) and edit the Labor % driver.
+    await user.click(screen.getByRole("tab", { name: /kpis/i }));
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
+
+    // The debounced settings PATCH 409s → the SettingsTab banner (role=alert) appears.
+    const banner = await screen.findByRole("alert");
+    const copyBtn = within(banner).getByRole("button", { name: /save as (a )?copy/i });
+    await user.click(copyBtn);
+
+    // The fork carries the conflicted labor edit as {patch} with the OWNER Bearer.
+    await waitFor(() => expect(dupCalls).toHaveLength(1));
+    expect(dupCalls[0].auth).toBe("Bearer owner-tok");
+    expect(dupCalls[0].body).toEqual({ patch: { assumptions: { labor_pct: 0.45 } } });
   });
 });

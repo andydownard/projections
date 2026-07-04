@@ -604,36 +604,54 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     // Replay the EXACT body that lost the race, with the SERVER's current version as
     // the fresh If-Match — force-saving the conflicting edit (not just the name). The
     // {name} fallback only covers a conflict raised before any body was captured.
+    // C2 (3.2f): keep `conflict` + `failedBody` until the force-save SUCCEEDS. Clearing
+    // them up-front destroyed the pending edit AND dismissed the modal the moment the
+    // overwrite failed (403/429/500/network) — the exact P0 recurring on the failure
+    // path. On success we clear in .then(); on failure onSaveError re-stashes a fresh
+    // 409 or (for any other error) leaves the modal up so the owner can retry.
     const v = conflict?.current_version ?? version;
     const body: PatchBody = failedBody ?? { name };
-    setConflict(null);
-    setFailedBody(null);
     setSaveLabel("Saving…");
     doPatch(body as Record<string, unknown>, v)
-      .then(() => setSaveLabel("All changes saved"))
+      .then(() => {
+        setConflict(null);
+        setFailedBody(null);
+        setSaveLabel("All changes saved");
+      })
       .catch(onSaveError);
   }
 
   function resolveSaveAsCopy() {
     // The real fork: POST …/duplicate carrying the conflicted edit as {patch}, so the
     // copy is born WITH the user's unsaved change (server-side compute), then land on
-    // it. Owner-only; the token stays in the header. The copy's fresh edit token is
-    // retained on this device so its Share panel can rebuild the editable link.
+    // it. The copy's fresh edit token is retained on this device so its Share panel can
+    // rebuild the editable link.
+    // C1 (3.2f): /duplicate is OWNER-ONLY. `token.current` resolves to the per-slug
+    // EDIT token (which the owner device stores at create), so sending it 403'd
+    // owner_required on the real owner device. Send the OWNER token; fall back to
+    // token.current only for the (rare) case a device has an owner-capable bearer that
+    // is not in the owner-token slot. The button is disabled when no owner token exists.
+    // C2 (3.2f): keep `conflict` + `failedBody` until the fork SUCCEEDS — a failed
+    // duplicate (403/429/network) must NOT dismiss the modal or drop the pending edit.
     const pending = failedBody ?? undefined;
-    setConflict(null);
-    setFailedBody(null);
+    const dupToken = getOwnerToken() ?? token.current ?? "";
     setSaveLabel("Saving…");
-    duplicateProjection(slug, token.current ?? "", pending)
+    duplicateProjection(slug, dupToken, pending)
       .then((res) => {
         if (res.edit_token) setEditToken(res.view_slug, res.edit_token);
         // A capability owner joins their workspace (no owner_token). Only store a
         // minted one (Clerk/anon) when this device holds none — never clobber the
         // existing owner token that anchors the owner's other projections.
         if (res.owner_token && !getOwnerToken()) setOwnerToken(res.owner_token);
+        setConflict(null);
+        setFailedBody(null);
         setSaveLabel("All changes saved");
         window.history.pushState(null, "", `/p/${res.view_slug}/edit`);
         window.dispatchEvent(new PopStateEvent("popstate"));
       })
+      // The fork failed: leave the modal up + the edit stashed so the owner can retry
+      // or choose Overwrite/Reload instead. (The button is owner-only-gated, so this is
+      // a transient 429/network/5xx, not the edit-token 403 the gate already prevents.)
       .catch(() => setSaveLabel("Save failed — retry"));
   }
 
@@ -652,6 +670,12 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   if (!vm) {
     return <div className="detail detail--loading">Loading…</div>;
   }
+
+  // POST …/duplicate is OWNER-ONLY (an edit token 403s owner_required). Save-as-copy is
+  // therefore only offered when this device holds the owner token; an editor-link holder
+  // sees it disabled with an owner-account tooltip (C1, 3.2f). Read fresh each render so
+  // a just-minted owner token (Clerk/anon fork) flips it on.
+  const canSaveAsCopy = getOwnerToken() != null;
 
   return (
     <div className="detail">
@@ -852,6 +876,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
                   version={version}
                   onPatch={onSettingsPatch}
                   onSaveAsCopy={resolveSaveAsCopy}
+                  canSaveAsCopy={canSaveAsCopy}
                 />
               </div>
             </div>
@@ -885,6 +910,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           onReload={resolveReload}
           onOverwrite={resolveOverwrite}
           onSaveAsCopy={resolveSaveAsCopy}
+          canSaveAsCopy={canSaveAsCopy}
           message={conflict.message}
         />
       )}
