@@ -252,7 +252,7 @@ def test_monthly_tab_emits_a_row_per_project_month_1_to_n(tmp_path):
     expected = [m.index for m in res.monthly]
     assert sorted(rowmap) == expected
     assert expected[0] == 1
-    assert len(expected) == res.inputs.opening_month_number + 11  # N = G + 11
+    assert len(expected) == res.inputs.opening_month_number + 59  # N = G + 59
 
 
 def test_monthly_tab_has_scheduled_costs_column(tmp_path):
@@ -459,12 +459,13 @@ def test_scheduled_costs_are_never_negative(tmp_path):
 
 
 def test_default_no_schedule_has_no_pre_opening_rows(tmp_path):
-    # The default inputs open on month 1, so there are no pre-opening months.
+    # The default inputs open on month 1, so there are no pre-opening months; the tab
+    # spans the full 60-month horizon (CASH model 2.7.0).
     res, path = _build(tmp_path)
     wb = openpyxl.load_workbook(path)
     ws = wb["Monthly Cash Flow"]
     rowmap = _month_row_map(ws)
-    assert sorted(rowmap) == list(range(1, 13))
+    assert sorted(rowmap) == list(range(1, 61))
     assert all(m.kind == "operating" for m in res.monthly)
 
 
@@ -478,14 +479,14 @@ def test_default_no_schedule_places_whole_lump_on_opening_month(tmp_path):
     # opening is month 1; the entire startup total lands there.
     assert abs(float(ws.cell(row=rowmap[1], column=sched_col).value)
                - float(res.startup_total)) < 0.5
-    # every other month carries no scheduled cost.
-    for month in range(2, 13):
+    # every other month (across the full 60-month horizon) carries no scheduled cost.
+    for month in range(2, 61):
         assert float(ws.cell(row=rowmap[month], column=sched_col).value) == 0.0
 
 
 def test_post_open_scheduled_cost_extends_the_timeline(tmp_path):
-    # A support cost beyond the 12-month operating window must still get a row on
-    # its own month number; N extends to cover it.
+    # A support cost beyond the 60-month operating window must still get a row on its
+    # own month number; N extends to cover it (N = max(G+59, last scheduled month)).
     inputs = Inputs(
         org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
         share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
@@ -494,7 +495,7 @@ def test_post_open_scheduled_cost_extends_the_timeline(tmp_path):
         opening_month_number=2,
         cost_schedule=(
             {"category": "Consultant", "month": 1, "amount": "15000"},
-            {"category": "Post-open support", "month": 16, "amount": "9000"},
+            {"category": "Post-open support", "month": 64, "amount": "9000"},
         ),
     )
     res = compute(inputs, Assumptions(), DemandDrivers(),
@@ -506,9 +507,9 @@ def test_post_open_scheduled_cost_extends_the_timeline(tmp_path):
     headers = _headers(ws)
     sched_col = headers.index("Scheduled costs") + 1
     rowmap = _month_row_map(ws)
-    assert max(rowmap) == 16
-    assert sorted(rowmap) == list(range(1, 17))
-    assert float(ws.cell(row=rowmap[16], column=sched_col).value) == 9000.0
+    assert max(rowmap) == 64
+    assert sorted(rowmap) == list(range(1, 65))
+    assert float(ws.cell(row=rowmap[64], column=sched_col).value) == 9000.0
 
 
 def test_expense_row_skipped_when_label_absent_from_annual(tmp_path):

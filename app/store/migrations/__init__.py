@@ -21,6 +21,8 @@ from app.store.migrations import (
     m0010_clerk_owner,
     m0011_feedback_creator,
     m0012_recover_longview,
+    m0013_rebind_longview_clerk_sub,
+    m0014_share_grants,
 )
 
 # Ordered list of (name, ddl) migrations. Append-only.
@@ -37,4 +39,6 @@ MIGRATIONS = [
     ("0010_clerk_owner", m0010_clerk_owner.SQL),
     ("0011_feedback_creator", m0011_feedback_creator.SQL),
     ("0012_recover_longview", m0012_recover_longview.SQL),
+    ("0013_rebind_longview_clerk_sub", m0013_rebind_longview_clerk_sub.SQL),
+    ("0014_share_grants", m0014_share_grants.SQL),
 ]

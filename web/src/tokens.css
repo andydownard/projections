@@ -48,10 +48,12 @@
   /* --- type scale (#22): EXACTLY THREE sizes ---------------------------------
    * Hierarchy comes from WEIGHT / CASE / COLOR, never from extra sizes. Every
    * page holds to this budget (Home LG/BASE/SM · Wizard BASE/SM · Detail LG/
-   * BASE/SM). The ONE documented data-density exception is the dense M0–M12
-   * monthly cash-flow table (.cashflow-table), which stays at --text-sm because
-   * it scrolls (owner Decision #18). SVG chart glyphs keep their px sizing so
-   * they scale with the chart viewBox, not the document type scale. */
+   * BASE/SM). The ONE documented data-density exception is the dense first-year
+   * monthly cash-flow table (.cashflow-table), which stays at --text-sm (owner
+   * Decision #18). #320: it is transposed to months-as-rows so it fits the desktop
+   * column at that size with NO horizontal scroll (only a narrow phone scrolls the
+   * table). SVG chart glyphs keep their px sizing so they scale with the chart
+   * viewBox, not the document type scale. */
   --text-lg: 1.5rem; /* display headings + hero figures */
   --text-base: 0.9375rem; /* body copy, inputs, labels (15px) */
   --text-sm: 0.75rem; /* captions, eyebrows, micro-labels, dense table (12px) */
@@ -198,33 +200,38 @@ body {
   color: var(--text);
   margin: 0 0 0.75rem;
 }
-.owner-gate__body {
-  font-size: var(--text-base);
-  line-height: var(--lh-base);
-  color: var(--text-muted);
-  margin: 0 0 1.5rem;
-}
 .owner-gate__sign-in {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* gap leaves room for the inline Rally wordmark beside the "Sign in" text. */
+  gap: 0.5rem;
+  /* The primary action now sits BELOW the 3-step explainer (#318 follow-up), so it
+     carries its own top margin to separate from the list. */
+  margin-top: 2rem;
   /* ≥44px tap target (WCAG 2.5.5 / project UI bar). */
   min-height: 44px;
   padding: 0 1.5rem;
   border: 1px solid var(--brand-primary);
   border-radius: 999px;
-  background: var(--brand-primary);
-  color: #ffffff;
+  /* White/outlined "Sign in with X" treatment so the Rally wordmark (its own
+     brand green #35644F) stays visible. A filled brand-primary background would
+     hide a same-color mark. Mirrors .owner-auth__sign-in. */
+  background: var(--surface);
+  color: var(--brand-primary);
   font: inherit;
   font-size: var(--text-base);
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 .owner-gate__sign-in:hover {
-  background: var(--brand-deep);
+  /* Keep the light background on hover so the green Rally mark stays visible;
+     deepen the border + text for the affordance. */
+  background: var(--surface);
   border-color: var(--brand-deep);
+  color: var(--brand-deep);
 }
 .owner-gate__sign-in:focus-visible {
   outline: var(--focus-ring);
@@ -248,7 +255,10 @@ body {
 .topbar__inner {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  /* #319 header-compact: tighter gap + vertical padding and a ~44px row (was
+     56px) so the chrome is denser while the row itself still gives every control
+     a comfortable >=44px-tall hit band. */
+  gap: 0.5rem;
   /* #195: wrap rather than clip on phones. Without this the row overflows 375px
      and slices the Idea Fab (the right-most item) off the right edge. Wrapping
      lets the chips + Idea Fab fall to a second row — always fully on-screen and
@@ -257,8 +267,8 @@ body {
   row-gap: 0.5rem;
   max-width: var(--frame);
   margin: 0 auto;
-  padding: 0.625rem 1.25rem;
-  min-height: 56px;
+  padding: 0.375rem 1.25rem;
+  min-height: 44px;
 }
 
 /* #195: below ~480px claw back horizontal space (tighter padding + gap) so the
@@ -281,7 +291,8 @@ body {
 
 .topbar__logo {
   display: block;
-  height: 22px;
+  /* #319 header-compact: shave the wordmark a touch with the denser row. */
+  height: 20px;
   width: auto;
 }
 
@@ -307,7 +318,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  height: 36px;
+  /* #319 header-compact: 32px control in the ~44px row (still AA target size). */
+  height: 32px;
   padding: 0 0.75rem;
   border: 1px solid var(--brand-primary);
   border-radius: 999px;
@@ -355,7 +367,10 @@ body {
 .owner-auth__sign-in {
   display: inline-flex;
   align-items: center;
-  height: 36px;
+  /* gap leaves room for the inline Rally wordmark beside the "Sign in" text. */
+  gap: 0.5rem;
+  /* #319 header-compact: 32px control in the ~44px row. */
+  height: 32px;
   padding: 0 0.875rem;
   border: 1px solid var(--brand-primary);
   border-radius: 999px;
@@ -1519,6 +1534,10 @@ body {
 .three-year-table th,
 .three-year-table td {
   padding: 0.4rem 0.75rem;
+  /* #320: ONE right edge for headers + read-only + editable + input cells. The
+     editable cell's inner button + the inline editor already use --field-pad-x, so
+     matching the read-only/header right padding lines every numeric column up. */
+  padding-right: var(--field-pad-x);
   border-bottom: 1px solid var(--line);
   text-align: right;
 }
@@ -1716,12 +1735,15 @@ body {
 
 /* --- detail page: cash-flow dual-encoding, monthly table, shell (crown jewel) - */
 .cashflow-chart {
-  /* Shared month geometry (#40): the SVG left gutter AND the monthly table's label
-     column are both this fraction of the width, so the chart's month bands sit
-     directly above the table's month columns. The plot is wide + scrolls so the 13
-     equal columns never crush their figures; the chart scrolls WITH the table. */
+  /* --cf-label-col is the SVG left gutter (kept for the chart geometry).
+     #320: the chart spans the FULL 60-month horizon (fluid, fills its column, never
+     scrolls on desktop) while the monthly TABLE is transposed to months-as-ROWS with
+     the four line items as wide value COLUMNS. With only ~4 value columns the
+     six-figure cumulative-cash numbers fit the dense --text-sm font with NO horizontal
+     scroll on desktop; only a narrow phone falls back to --cf-table-min and scrolls
+     (just the table, via .cashflow-table__scroll, never the chart). */
   --cf-label-col: 14%;
-  --cf-plot-min: 58rem;
+  --cf-table-min: 26rem;
   margin: 0;
   display: flex;
   flex-direction: column;
@@ -1765,22 +1787,23 @@ body {
   background: var(--success);
   opacity: 0.6;
 }
-/* The chart + monthly table share ONE horizontal scroll so they stay aligned. */
+/* The chart + first-year monthly table stack in one column. #320: only the TABLE
+   may overflow-scroll (its first-year width); the chart is fluid and never forces a
+   scroll on desktop, so this container keeps min-width:0 and lets the table own its
+   own horizontal scroll below. */
 .cashflow-chart__plot {
   flex: 1 1 auto;
   min-width: 0;
-  overflow-x: auto;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 /* #196: the SVG follows its viewBox aspect (660:240) instead of a pinned 240px
-   height. The min-width keeps the 13 month bands wide enough to align with the
-   table columns (both share --cf-plot-min); on a narrow column the plot scrolls. */
+   height. #320: NO min-width, so the full 60-month line scales fluidly to fill the
+   column and never needs horizontal scroll on desktop. */
 .cashflow-chart__svg {
   display: block;
   width: 100%;
-  min-width: var(--cf-plot-min);
   height: auto;
 }
 .cashflow-chart__axis {
@@ -1863,11 +1886,14 @@ body {
   overflow-x: auto;
 }
 .cashflow-table {
-  /* table-layout:fixed + equal month columns + the shared label gutter line the
-     columns up under the chart's month bands (#40). min-width matches the chart
-     so both scroll together inside .cashflow-chart__plot. */
+  /* #320: months-as-rows (.cashflow-table--by-month). table-layout:fixed gives the
+     month label column a small share (--cf-label-col) and splits the rest across the
+     four value columns, which are then wide enough for the six-figure cumulative-cash
+     figures at --text-sm. width:100% fills the desktop column with NO horizontal
+     scroll; min-width is a small floor so only a narrow phone scrolls (and only the
+     table, inside its own .cashflow-table__scroll wrapper). */
   width: 100%;
-  min-width: var(--cf-plot-min, 58rem);
+  min-width: var(--cf-table-min, 26rem);
   table-layout: fixed;
   border-collapse: collapse;
   font-size: var(--text-sm);
@@ -1878,7 +1904,8 @@ body {
 }
 .cashflow-table th,
 .cashflow-table td {
-  padding: 0.3rem 0.5rem;
+  /* #320: compact row padding so the dense monthly table reads tighter. */
+  padding: 0.2rem 0.4rem;
   border-bottom: 1px solid var(--line);
   text-align: right;
   white-space: nowrap;
@@ -1895,6 +1922,27 @@ body {
   position: sticky;
   left: 0;
   background: var(--surface);
+}
+/* #320: the small "Showing year 1 ... see the chart for the full horizon" note under
+   the first-year table. */
+.cashflow-table__note {
+  margin: 0.5rem 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+/* #320: the grand-opening month row is flagged with a background tint + an inset
+   brand accent on the sticky month cell + the visible ⚑ glyph and sr-only text, so
+   it is never told apart by color alone. */
+.cashflow-table--by-month tr[data-grand-opening="true"] td,
+.cashflow-table--by-month tr[data-grand-opening="true"] th {
+  background: var(--surface-alt);
+}
+.cashflow-table--by-month tr[data-grand-opening="true"] .cashflow-table__label {
+  box-shadow: inset 3px 0 0 var(--brand-primary);
+}
+.cashflow-table__open {
+  color: var(--brand-primary);
+  font-weight: 600;
 }
 
 .kpi__sub {
@@ -1938,6 +1986,14 @@ body {
   flex: 0 0 auto;
   width: 15rem;
   max-width: 42vw;
+}
+/* #320: on desktop the map sits on the LEFT, the content on the RIGHT — a pure CSS
+   `order` flip (DOM/tab order is preserved: content stays first in source). On mobile
+   no order is applied, so the content renders first and the map drops below it. */
+@media (min-width: 700px) {
+  .detail__map {
+    order: -1;
+  }
 }
 /* a11y section heading for the KPIs tab panel (keeps the h1→h2 chain). */
 .detail__panel-heading {
@@ -3277,6 +3333,13 @@ body {
   stroke-linejoin: round;
 }
 
+/* Per-point hover targets (#320): invisible (transparent) discs sized for an easy
+   pointer hit; the native <title> shows "Year N: $…" on hover. No fill so they
+   never alter the trajectory's appearance. */
+.sparkline__point {
+  fill: transparent;
+}
+
 .sparkline__y5-label {
   font-size: 9px;
   fill: var(--text-muted);
@@ -3517,9 +3580,11 @@ body {
 }
 
 /* --- D1 metric bar: Income sparkline · Capital (RED) · Payback · Break-even - */
+/* #320: ONE row of equal-width tiles (nowrap); each cell flexes equally and may
+   shrink (min-width:0) so the four tiles never wrap to a second row on desktop. */
 .metric-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 1.25rem;
   align-items: flex-start;
   padding: 0.75rem 0 0;
@@ -3532,7 +3597,18 @@ body {
   gap: var(--label-gap);
   padding: var(--space-1) var(--space-5);
   border-right: 1px solid var(--line);
-  min-width: 7rem;
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* #320: only the smallest phones wrap the tiles (4 equal cells crush below ~480px). */
+@media (max-width: 480px) {
+  .metric-bar {
+    flex-wrap: wrap;
+  }
+  .metric-bar__cell {
+    flex: 1 1 7rem;
+    min-width: 7rem;
+  }
 }
 .metric-bar__cell:last-child {
   border-right: none;
@@ -3703,6 +3779,28 @@ td.cell-wrap {
   font-size: var(--text-sm);
   color: var(--brand-primary);
   pointer-events: none;
+}
+/* I4 (#322): inline "reset to calculated" on an overridden cell — a tiny ↺ pinned to
+   the cell's top-left (clear of the right-aligned number + the hover pencil). Always
+   visible on an overridden cell so the pin can be cleared without the audit UI. */
+.cell-reset {
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--brand-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.cell-reset:hover,
+.cell-reset:focus-visible {
+  background: var(--surface-alt, #f1efe9);
 }
 /* Legend swatch parity: the Input swatch shows the green left tick. */
 .swatch--input {
@@ -3935,4 +4033,332 @@ td.cell-wrap {
   margin-top: var(--space-1);
   display: inline-flex;
   width: fit-content;
+}
+/* ───────────────────────────────────────────────────────────────────────────
+ * Soft-delete / Trash (feat/v2-soft-delete)
+ * Per-row "⋯" actions menu, confirm dialogs, the Trash view, danger buttons.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/* Danger buttons. Solid (--error bg, white text — AA: white on #dc2626 ≈ 4.8:1)
+ * for the irreversible "Delete permanently"; ghost (red text) for the recoverable
+ * soft-delete affordance in the detail header download row. */
+.btn--danger {
+  border-color: var(--error);
+  background: var(--error);
+  color: #ffffff;
+}
+.btn--danger-ghost {
+  color: var(--error);
+}
+.btn--danger-ghost:hover {
+  border-color: var(--error);
+}
+
+/* List header: the Trash link + New projection sit together upper-right. */
+.list__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* Per-row actions: a small "⋯" trigger + a popover menu. */
+.list__actions-col {
+  width: 2rem;
+}
+.list__actions {
+  text-align: center;
+}
+.row-actions {
+  position: relative;
+  display: inline-flex;
+}
+.row-actions__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+}
+.row-actions__trigger:hover {
+  background: var(--surface-alt);
+  color: var(--text);
+}
+.row-actions__trigger:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 1px;
+}
+.row-actions__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  min-width: 11rem;
+  padding: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.row-actions__item {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  text-align: left;
+  cursor: pointer;
+}
+.row-actions__item:hover {
+  background: var(--surface-alt);
+}
+.row-actions__item--danger {
+  color: var(--error);
+}
+
+/* Confirm dialogs (soft-delete confirm + type-to-confirm purge). Reuse the modal
+ * scrim/panel grammar of the share/feedback modals. */
+.confirm-dialog {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.45);
+  animation: modal-scrim-in 0.15s ease;
+}
+.confirm-dialog__panel {
+  width: 100%;
+  max-width: 26rem;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding: 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  animation: modal-panel-in 0.18s ease;
+}
+.confirm-dialog__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  color: var(--text);
+}
+.confirm-dialog__body {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.5;
+  color: var(--text);
+}
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Permanent-delete (purge): a red top accent marks the irreversible dialog. */
+.confirm-purge .confirm-dialog__panel {
+  border-top: 3px solid var(--error);
+}
+/* Permanent-delete (purge): the "this cannot be undone" warning + type-to-confirm. */
+.confirm-purge__warning {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.5;
+  color: var(--text);
+}
+.confirm-purge__label {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.confirm-purge__input {
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.75rem;
+  background: var(--surface-alt);
+  font: inherit;
+  font-size: var(--text-base);
+  color: var(--text);
+}
+.confirm-purge__input:focus-visible {
+  outline: 2px solid var(--error);
+  outline-offset: 1px;
+}
+
+/* Trash view. */
+.trash {
+  display: block;
+}
+.trash__note {
+  margin: 0.75rem 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.trash__actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* --- sign-in page chrome (Epic #318) ---------------------------------------- */
+
+/* The Rally partner wordmark inside the "Sign in with Rally" buttons. It keeps
+   its OWN brand fill (#35644F, set on the SVG paths — NOT recolored to the host
+   theme, UI rule); this rule only sizes it to sit on the text baseline. */
+.rally-mark {
+  display: block;
+  height: 1em;
+  width: auto;
+  flex-shrink: 0;
+}
+
+/* The 3-step explainer above the sign-in action (#318 follow-up: the button now
+   sits below the steps). A semantic <ol>; numbering is suppressed because each row
+   leads with its own glyph + prose. */
+.owner-gate__steps {
+  list-style: none;
+  margin: 2rem auto 0;
+  padding: 0;
+  max-width: 26rem;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.owner-gate__step {
+  display: flex;
+  /* Vertically center each glyph against the CENTER of its text block, so a
+     2-line description has its icon centered against both lines (#318). */
+  align-items: center;
+  gap: 0.75rem;
+}
+.owner-gate__step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  border: 1px solid var(--line);
+  color: var(--brand-primary);
+}
+.owner-gate__step-text {
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+  color: var(--text);
+}
+
+/* --- owner account avatar + dropdown (Epic #319, user-avatar-dropdown) -------
+   Project-tokened replacement for Clerk's <UserButton/>. Round trigger, absolute
+   right-aligned menu, destructive Logout. Semantic tokens only (no brand theme
+   leakage), so meaning never depends on the brand layer. */
+.user-menu {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.user-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 0;
+}
+.user-menu__trigger:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+.user-menu__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.user-menu__avatar--initials {
+  background: var(--brand-primary);
+  color: #ffffff;
+  font-size: var(--text-sm);
+  font-weight: var(--w-bold);
+  text-transform: uppercase;
+  line-height: 1;
+}
+.user-menu__dropdown {
+  position: absolute;
+  top: calc(100% + 0.375rem);
+  right: 0;
+  z-index: 30;
+  min-width: 9rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+}
+.user-menu__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  /* >=36px-tall menu rows (comfortable touch). */
+  min-height: 36px;
+  padding: 0 0.625rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  text-align: left;
+  cursor: pointer;
+}
+.user-menu__item:hover {
+  background: var(--surface-alt);
+}
+.user-menu__item:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+.user-menu__item--danger {
+  color: var(--error);
+}
+.user-menu__item--danger:hover {
+  background: rgba(220, 38, 38, 0.08);
+}
+.user-menu__divider {
+  height: 1px;
+  margin: 0.25rem 0;
+  background: var(--line);
 }

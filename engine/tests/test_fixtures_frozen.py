@@ -34,10 +34,15 @@ def test_design_parity_40_fixture_is_byte_stable(design_parity_result):
 
 def test_canonical_is_a_loss_case():
     vm = _load("house_of_hope_canonical_60.json")
-    # margin display negative (parentheses) and reco is not proceed.
+    # Cash-based Net margin display negative (parentheses) and reco is not proceed.
     assert vm["rows"][-1]["y1"]["display"].startswith("(")
     assert vm["reco"]["tag"] != "proceed"
-    assert vm["model_version"] == "2.7.0"
+    assert vm["model_version"] == "2.8.0"
+    # FUSION cash display (2.7.0-A): the displayed Year-1 Net income subtracts the one-time
+    # startup (fused operating net − startup_total). Operating net now carries the 990
+    # constants (2.7.0-B), so the fused cash figure differs from the pre-990 −$282,933.
+    net = next(r for r in vm["rows"] if r["label"] == "Net income")
+    assert round(net["y1"]["raw"]) == -282933  # FUSION re-pin (step 3): fused cash Y1 net
 
 
 def test_canonical_reco_text_consistent_with_breakeven_metric():
@@ -57,17 +62,22 @@ def test_canonical_reco_text_consistent_with_breakeven_metric():
     assert "not reached" not in vm["metrics"]["reasonBreakeven"].lower()
 
 
-def test_design_parity_reproduces_headline():
+def test_design_parity_reproduces_headline(design_parity_result):
     vm = _load("house_of_hope_design_parity_40.json")
-    # The labor-driven prototype SHAPE (40% labor, positive Y1, early break-even). At
-    # 2.7.0 the 990-grounded constants (payroll tax 8%, Insurance $10k) lower the margin
-    # to ~9.0% (was ~11%) and push break-even to month 6 (was 5). *** The reco also
-    # flips proceed -> raise_cash (capital $302,238 > the $300k design-parity funds by
-    # $2,238) — an OWNER-VISIBLE change flagged for the whole-branch reviewer. *** The
-    # prototype "Proceed / ~11% / month 5" numbers were calibrated to the pre-990 basis.
-    assert 0.085 < vm["rows"][-1]["y1"]["raw"] < 0.095
-    assert vm["breakevenMonth"] == 6
-    assert vm["reco"]["tag"] == "raise_cash"
+    # FUSION: DISPLAY layer is cash (2.7.0-A) — the Year-1 Net margin ROW is dragged negative
+    # by the one-time startup hit even though the OPERATING margin is positive. OPERATING layer
+    # is the branch's 6.2/990 distribution (2.7.0-B): break-even month 6 (was 5 pre-990), reco
+    # raise_cash (capital $302,238 > the $300k design-parity funds by $2,238 — an OWNER-VISIBLE
+    # flip from the prototype "proceed", flagged for the reviewer), operating margin ~9.0% (990
+    # constants lowered it from the pre-990 ~11% prototype headline). The DISPLAYED cash net and
+    # the Month-N payback are re-pinned to fused values in step 3.
+    assert vm["rows"][-1]["y1"]["raw"] < 0                       # displayed (cash) Net margin
+    assert round(next(r for r in vm["rows"] if r["label"] == "Net income")["y1"]["raw"]) == -191141  # FUSION re-pin (step 3)
+    assert vm["breakevenMonth"] == 6                            # OPERATING (6.2 Y1 distribution)
+    assert vm["reco"]["tag"] == "raise_cash"                    # OPERATING-driven (capital > funds)
+    assert vm["milestones"]["payback"]["raw"] is not None       # resolves to a real Month N (re-pin step 3)
+    op_margin = float(design_parity_result.annual[1].margin)
+    assert 0.08 < op_margin < 0.10                              # ~9.0% operating (990 constants)
 
 
 def test_y1_revenue_identical_across_both_fixtures():

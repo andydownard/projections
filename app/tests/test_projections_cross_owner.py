@@ -175,3 +175,55 @@ def test_slug_still_grants_read_to_anyone(client):
     r = client.get(f"/api/projections/{slug}")
     assert r.status_code == 200
     assert r.json()["view_slug"] == slug
+
+
+# --- Lifecycle routes (trash / restore / purge) — Mutation Safety Quad (b) -------
+# A second, perfectly valid owner token must NOT be able to trash, restore, or purge
+# a projection it does not own (Override TENANT, regression #4). 403 forbidden, and
+# the victim's state is byte-for-byte unchanged.
+
+def test_other_owner_cannot_trash(client, store):
+    victim = _create_fresh_workspace(client)
+    attacker = _create_fresh_workspace(client)
+    slug = victim["view_slug"]
+    r = client.post(
+        f"/api/projections/{slug}/trash",
+        headers={"Authorization": f"Bearer {attacker['owner_token']}", "If-Match": "1"},
+    )
+    assert r.status_code == 403, r.text
+    assert r.json().get("detail", r.json())["error"] == "forbidden"
+    after = store.get_projection_by_slug(slug)
+    assert after is not None and after["status"] == "active"  # not trashed
+    assert after["version"] == 1                              # untouched
+
+
+def test_other_owner_cannot_restore(client, store):
+    victim = _create_fresh_workspace(client)
+    # The victim trashes their own projection.
+    client.post(
+        f"/api/projections/{victim['view_slug']}/trash",
+        headers={"Authorization": f"Bearer {victim['owner_token']}", "If-Match": "1"},
+    )
+    attacker = _create_fresh_workspace(client)
+    r = client.post(
+        f"/api/projections/{victim['view_slug']}/restore",
+        headers={"Authorization": f"Bearer {attacker['owner_token']}", "If-Match": "2"},
+    )
+    assert r.status_code == 403, r.text
+    assert store.get_projection_by_slug(victim["view_slug"])["status"] == "trashed"
+
+
+def test_other_owner_cannot_purge(client, store):
+    victim = _create_fresh_workspace(client)
+    client.post(
+        f"/api/projections/{victim['view_slug']}/trash",
+        headers={"Authorization": f"Bearer {victim['owner_token']}", "If-Match": "1"},
+    )
+    attacker = _create_fresh_workspace(client)
+    r = client.delete(
+        f"/api/projections/{victim['view_slug']}",
+        headers={"Authorization": f"Bearer {attacker['owner_token']}", "If-Match": "2"},
+    )
+    assert r.status_code == 403, r.text
+    # the victim's row + financials are NOT erased
+    assert store.get_projection_by_slug(victim["view_slug"]) is not None

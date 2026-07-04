@@ -22,7 +22,12 @@ function fullVm(overrides: Partial<ViewModel> = {}): ViewModel {
       breakeven: { raw: 5, display: "Month 5" },
     },
     kpis: [
+      // "Total revenue" / "Capital required" are #324 echoes the detail page filters
+      // out (single home: the 5-year table / the header MetricBar). "Labor ratio" is a
+      // genuine ratio that survives the dedup.
       { label: "Total revenue", value: { raw: 426911, display: "$426,911" }, sub: "Year 1" },
+      { label: "Capital required", value: { raw: 277990, display: "$277,990" }, sub: "incl. reserve" },
+      { label: "Labor ratio", value: { raw: 0.6, display: "60.0%" }, sub: "payroll / revenue" },
     ],
     monthly: [
       { month: 0, revenue: { raw: 0, display: "$0" }, expenses: { raw: 31870, display: "($31,870)" }, net: { raw: -14793, display: "($14,793)" }, cumulativeCash: { raw: -199793, display: "($199,793)" } },
@@ -403,10 +408,15 @@ describe("ProjectionDetail — Epic G reorg", () => {
     expect(screen.getByTestId("metric-payback")).toBeInTheDocument();
   });
 
-  it("renders the 2nd tile set (KPIs) inline on the read page so kpi-revenue is visible", async () => {
+  it("renders the 2nd tile set (KPIs) inline on the read page, deduped of decision + Year-1 echoes (#324)", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     render(<ProjectionDetail slug="p_8x" edit={false} />);
-    expect(await screen.findByTestId("kpi-revenue")).toBeInTheDocument();
+    // A genuine ratio survives the dedup and renders inline.
+    expect(await screen.findByTestId("kpi-Labor ratio")).toBeInTheDocument();
+    // The Year-1 echo (Total revenue → kpi-revenue) and the decision-metric echo
+    // (Capital required) are dropped — single home is the 5-year table / header bar.
+    expect(screen.queryByTestId("kpi-revenue")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("kpi-Capital required")).not.toBeInTheDocument();
     // No Settings on the read page.
     expect(screen.queryByTestId("settings-tab")).not.toBeInTheDocument();
   });
@@ -435,7 +445,8 @@ describe("ProjectionDetail — Epic G reorg", () => {
     expect(screen.getByTestId("settings-tab")).not.toBeVisible();
     await user.click(screen.getByRole("tab", { name: /kpis/i }));
     expect(screen.getByTestId("settings-tab")).toBeVisible();
-    expect(screen.getByTestId("kpi-revenue")).toBeVisible();
+    // #324: a surviving ratio renders in the merged grid (the Year-1 echoes are dropped).
+    expect(screen.getByTestId("kpi-Labor ratio")).toBeVisible();
     // D10: the standalone "Pinned overrides" audit block is gone from the KPIs tab.
     expect(screen.queryByTestId("kpis-override-audit")).not.toBeInTheDocument();
     localStorage.clear();
@@ -601,7 +612,9 @@ describe("ProjectionDetail — 409 Overwrite resolves (does not loop) #188", () 
 // Its function moved into Penny (the focused justification capture) + the KPIs tab
 // (the at-a-glance audit). The override DATA model + server contract are unchanged:
 // reset PATCHes overrides.clear; a saved justification re-pins the SAME value with the
-// note via overrides.set. A §12.2 guardrail that needs a note slides Penny OUT.
+// note via overrides.set. I1/I4 (#322): the override audit is now flag-gated
+// (VITE_OVERRIDES_UI, default OFF) and the guardrail NEVER auto-opens Penny (notes
+// are optional); inline cell editing + the inline reset stay unflagged.
 // ============================================================================
 describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
   beforeEach(() => {
@@ -610,6 +623,7 @@ describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
   afterEach(() => {
     localStorage.clear();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   /** A view-model carrying one pinned override (Payroll, Year 1). */
@@ -686,24 +700,33 @@ describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
     expect(screen.getByTestId("settings-tab")).toBeVisible();
   });
 
-  it("slides Penny OUT with the prompt + saves the justification (overrides.set) when a §12.2 guardrail needs an unrecorded note", async () => {
+  it("I1 (#322): a §12.2 guardrail does NOT auto-open Penny or force a justification (notes optional)", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(
       overrideVm({ flags: { net_margin_out_of_band: { value: 0.39, band: "≤ ~30%", requires_note: true } } }),
     );
-    const { bodies } = patchCapture();
-    const user = userEvent.setup();
     render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
-    // No FAB click: the guardrail auto-opens Penny straight onto the justification.
-    const form = await screen.findByTestId("override-comment-form");
-    const input = within(form).getByLabelText(/why did you override payroll, year 1\?/i);
-    await user.type(input, "signed two hires");
-    await user.click(within(form).getByTestId("override-comment-save"));
+    await screen.findByTestId("penny-fab");
+    // The guardrail no longer slides Penny out demanding a note — the prompt never
+    // auto-appears (the owner is never nagged for a justification).
+    expect(screen.queryByTestId("override-comment-form")).not.toBeInTheDocument();
+  });
 
-    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
-    // The note persists on the pin by re-setting the SAME value (no data-model change).
-    expect(bodies[0]).toEqual({
-      overrides: { set: [{ node: "payroll", year: 1, value: "120000", note: "signed two hires" }] },
-    });
+  it("I4 (#322): the override audit is reachable in Penny ONLY when VITE_OVERRIDES_UI is on (default off = chat only)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(overrideVm());
+    const user = userEvent.setup();
+
+    // Default (flag OFF): opening Penny shows chat — never the override audit.
+    const { unmount } = render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await user.click(await screen.findByTestId("penny-fab"));
+    await screen.findByRole("dialog");
+    expect(screen.queryByTestId("override-audit")).not.toBeInTheDocument();
+    unmount();
+
+    // Flag ON: the relocated audit mounts inside Penny's drawer.
+    vi.stubEnv("VITE_OVERRIDES_UI", "true");
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await user.click(await screen.findByTestId("penny-fab"));
+    expect(await screen.findByTestId("override-audit")).toBeInTheDocument();
   });
 
   // P1 REGRESSION (#284): activating an editable cell in the 3-year table was a
@@ -1648,5 +1671,59 @@ describe("ProjectionDetail — metric bar sensitivity + confidence (w5)", () => 
     render(<ProjectionDetail slug="p_8x" edit={false} />);
     await screen.findByTestId("sensitivity-downside");
     expect(screen.queryByTestId("confidence-chip")).not.toBeInTheDocument();
+  });
+});
+describe("ProjectionDetail — Move to Trash (soft delete, owner-only)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  it("shows a Delete affordance for the owner and trashes on confirm → navigates home", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm()); // version 3
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(JSON.stringify({ version: 4, status: "trashed" }), {
+          status: 200,
+          headers: { ETag: "4" },
+        }),
+      );
+    window.history.pushState({}, "", "/p/p_8x/edit");
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit />);
+    await screen.findByTestId("decision-banner");
+
+    await user.click(screen.getByTestId("trash-projection"));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    await user.click(screen.getByTestId("confirm-accept"));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    // POST /trash with the loaded version as If-Match; no secret in the URL.
+    const trashCall = fetchSpy.mock.calls.find(([u]) => String(u).includes("/trash"));
+    expect(trashCall).toBeTruthy();
+    expect(String(trashCall![0])).toContain("/api/projections/p_8x/trash");
+    const init = trashCall![1] as RequestInit;
+    expect((init.headers as Record<string, string>)["If-Match"]).toBe("3");
+    expect(String(trashCall![0])).not.toContain("owner-tok");
+  });
+
+  it("does NOT show the Delete affordance in read-only mode", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("trash-projection")).not.toBeInTheDocument();
+  });
+
+  it("does NOT show the Delete affordance to an editor (share link, not the owner)", async () => {
+    // No owner token on this device; the edit capability rides the fragment → editor,
+    // not owner. Trash is owner-only on the server, so the button is hidden.
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    window.history.pushState({}, "", "/p/p_8x/edit#edit-secret");
+    render(<ProjectionDetail slug="p_8x" edit />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("trash-projection")).not.toBeInTheDocument();
   });
 });

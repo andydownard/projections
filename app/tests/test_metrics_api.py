@@ -62,7 +62,7 @@ def test_metrics_returns_rolling_counters_for_owner(client, monkeypatch):
     metrics.record_llm_usage(
         metrics.PROVIDER_ANTHROPIC, input_tokens=1000, output_tokens=500
     )
-    metrics.incr(metrics.COUNTER_RESEARCH_CACHE_HIT)
+    metrics.incr(metrics.COUNTER_NARRATIVE_CACHE_HIT)
 
     r = client.get(
         "/api/metrics", headers={"Authorization": "Bearer metrics-owner-secret-123"}
@@ -72,7 +72,7 @@ def test_metrics_returns_rolling_counters_for_owner(client, monkeypatch):
     assert body["providers"][metrics.PROVIDER_PLACES]["calls"] == 1
     assert body["providers"][metrics.PROVIDER_CENSUS]["errors"] == 1
     assert body["providers"][metrics.PROVIDER_ANTHROPIC]["input_tokens"] == 1000
-    assert body["counters"][metrics.COUNTER_RESEARCH_CACHE_HIT] == 1
+    assert body["counters"][metrics.COUNTER_NARRATIVE_CACHE_HIT] == 1
     assert "llm_cost_usd" in body["totals"]
 
 

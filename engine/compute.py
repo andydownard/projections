@@ -252,6 +252,30 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
     return years, startup, startup_total, occupancy
 
 
+def cash_net(result, year: int) -> Decimal:
+    """Displayed CASH net income for a year (epic #321 — the projection is cash-based).
+
+    The one-time startup is a CASH outflow that hits when paid (Year 1): the displayed
+    Year-1 net subtracts the whole ``startup_total``; Years 2-5 are operating net. This
+    is the ONE definition every income-display surface (the 5-year row, the KPI, the
+    incomeSeries, the card y1_net, the ``.xlsx`` Net-income Year-1 cell) sources from, so
+    the displayed net and margin can never diverge. The INTERNAL operating net
+    (``AnnualYear.net``) is unchanged and still drives the go/no-go verdict.
+    """
+    net = D(str(result.annual[year].net))
+    return net - D(str(result.startup_total)) if year == 1 else net
+
+
+def cash_margin(result, year: int) -> Decimal | None:
+    """Displayed CASH net margin = ``cash_net / total_rev`` (congruent with cash_net).
+
+    Both displayed numbers are cash-based and therefore AGREE — there is no second
+    (operating) margin and no footnote. ``None`` (N/A) when revenue is 0 (§8 guard).
+    """
+    rev = D(str(result.annual[year].total_rev))
+    return (cash_net(result, year) / rev) if rev != 0 else None
+
+
 def unpinned_node_values(inputs, assumptions, demand_drivers, trade_area) -> dict:
     """Every pinnable (node, year) cell's calculated value with NO overrides.
 
@@ -357,7 +381,7 @@ def compute(inputs, assumptions=None, demand_drivers=None, trade_area=None, over
 
     startup_by_month = startup_outflows_by_month(inputs, assumptions, occupancy[1])
     monthly_rows, breakeven = build_monthly(
-        years[1], assumptions, inputs.opening_month_number, startup_by_month)
+        years, assumptions, inputs.opening_month_number, startup_by_month)
 
     result = ComputeResult(
         annual=years, startup=startup, startup_total=startup_total,

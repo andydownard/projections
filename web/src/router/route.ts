@@ -17,11 +17,14 @@ export type Route =
   | { kind: "wizard"; aiOff: boolean; step: StepKey | null }
   | { kind: "detail"; slug: string; edit: boolean; aiOff: boolean }
   | { kind: "role"; slug: string }
+  // The owner Trash view: soft-deleted projections, restore / permanent delete.
+  | { kind: "trash" }
   | { kind: "notfound" };
 
 export function parseRoute(pathname: string, search = ""): Route {
   const aiOff = new URLSearchParams(search).get("ai") === "off";
   if (pathname === "/" || pathname === "") return { kind: "home" };
+  if (pathname === "/trash" || pathname === "/trash/") return { kind: "trash" };
   // /wizard            -> wizard, no specific step (redirect to step 1)
   // /wizard/<slug>     -> wizard at that step (unknown slug -> step: null -> redirect)
   if (pathname === "/wizard" || pathname === "/wizard/") {

@@ -182,9 +182,20 @@ export function CostScheduleEditor({
             <tr className="cost-matrix__go-row" aria-hidden="true">
               <td /> {/* corner */}
               {months.map((m) => (
+                // #320: the FULL column header accepts the drop — this go-row cell
+                // (where the handle visibly sits) is a drop target too, so releasing
+                // anywhere over the column header sets the grand-opening month. The
+                // keyboard equivalent stays on the handle's slider (WCAG), so this
+                // aria-hidden, mouse-only target adds no a11y obligation.
                 <td
                   key={m}
+                  data-testid={`go-col-${m}`}
                   className={`cost-matrix__go-cell ${columnClass(m)}`.trim()}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    onChangeOpeningMonth(m);
+                  }}
                 >
                   {m === opening && handle}
                 </td>

@@ -58,6 +58,10 @@ def test_overridden_row_class_when_pinned():
     vm = to_view_model(res)
     payroll_rows = [r for r in vm["rows"] if r["label"] == "Payroll"]
     assert payroll_rows and payroll_rows[0]["class"] == "overridden"
+    # I3 (#322): a pinned component row STAYS editable so the owner can re-edit the
+    # pin in place (the cell is the override entry point). The "overridden" class is
+    # the orange highlight; editability is independent of the pin.
+    assert payroll_rows[0]["editable"] is True
     assert vm["overrides"], "overrides[] must list the pin"
     assert vm["overrides"][0]["node"] == "Payroll"
 
@@ -96,7 +100,9 @@ def test_override_inspector_fields_calc_value_affected():
 def test_monthly_rows_shape(canonical_result):
     vm = to_view_model(canonical_result)
     ops = [m for m in vm["monthly"] if m["month"] >= 1]
-    assert len(ops) == 12
+    # CASH-based model 2.7.0: the monthly series spans the full 60-month horizon so the
+    # cash-flow chart shows the payback crossing (was 12; default opening at month 1).
+    assert len(ops) == 60
     for m in ops:
         for k in ("month", "revenue", "expenses", "net", "cumulativeCash"):
             assert k in m
@@ -165,11 +171,10 @@ def test_view_model_is_json_serializable(canonical_result):
 
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
-    assert vm["model_version"] == "2.7.0"
-    # 1.6.0: +sensitivity scenarios + delta, +confidence{ramp}, +settings knobs
-    # (sensitivityDelta/fixedAnnual/nnnOpexAnnual/buildingSqft/salesfloorPct). 1.5.0 had
-    # added startupCosts/startupTotal. Additive shape change, no math change.
-    assert vm["compute_schema_version"] == "1.6.0"
+    assert vm["model_version"] == "2.8.0"     # FUSION: cash display (A) × params/gaps operating (B)
+    # 1.7.0: cash income/margin surfaces + monthly[] 60 rows + Month-N payback (A) UNION
+    # +sensitivity+delta +confidence{ramp} + editable settings knobs (B).
+    assert vm["compute_schema_version"] == "1.7.0"
     assert "utilitiesPerSqft" in vm["settings"]
     assert "rentPerSqft" in vm["settings"]
 
@@ -293,7 +298,7 @@ def test_monthly_covers_all_project_months_one_to_n_with_preopening():
     res = _preopening_result(opening_month_number=3)
     vm = to_view_model(res)
     months = [m["month"] for m in vm["monthly"]]
-    n = res.inputs.opening_month_number + 11
+    n = res.inputs.opening_month_number + 59   # N = G + 59 (60 operating months)
     assert months == list(range(1, n + 1))  # 1..N, x-axis from month 1
     m1 = vm["monthly"][0]
     # The monthly view mirrors the xlsx columns: scheduled one-time costs are their

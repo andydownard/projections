@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ListPage } from "./ListPage";
@@ -79,5 +80,122 @@ describe("ListPage", () => {
     await screen.findByText("House of Hope — Longview, TX");
     const init = fetchSpy.mock.calls[0][1] as RequestInit;
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer owner-abc");
+  });
+
+  it("trashes a row (confirm → POST /trash with If-Match) and removes it from the list", async () => {
+    localStorage.setItem("projections.owner_token", "owner-abc");
+    const trashCalls: Array<[string, RequestInit | undefined]> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((url, init) => {
+      const u = String(url);
+      if (u.includes("/trash")) {
+        trashCalls.push([u, init]);
+        return Promise.resolve(
+          new Response(JSON.stringify({ version: 8, status: "trashed" }), {
+            status: 200,
+            headers: { ETag: "8" },
+          }),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify(populated), { status: 200 }));
+    });
+
+    render(<ListPage />);
+    await screen.findByText("House of Hope — Longview, TX");
+
+    // Open the row's "⋯" menu and choose Move to Trash.
+    await userEvent.click(screen.getByTestId("row-actions-trigger"));
+    await userEvent.click(screen.getByTestId("row-action-trash"));
+    // The confirm dialog names the projection; accept it.
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("confirm-accept"));
+
+    // The row drops out of the list.
+    await waitFor(() =>
+      expect(screen.queryByText("House of Hope — Longview, TX")).toBeNull(),
+    );
+    // The POST went to /trash with the row's current version as If-Match.
+    expect(trashCalls).toHaveLength(1);
+    const [u, init] = trashCalls[0];
+    expect(u).toContain("/api/projections/p_8x/trash");
+    expect((init?.headers as Record<string, string>)["If-Match"]).toBe("7");
+    // The secret never appears in the URL.
+    expect(u).not.toContain("owner-abc");
+  });
+
+  it("keeps the row when the trash 409s (stale version)", async () => {
+    localStorage.setItem("projections.owner_token", "owner-abc");
+    vi.spyOn(globalThis, "fetch").mockImplementation((url) => {
+      if (String(url).includes("/trash")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ detail: { error: "version_conflict", current_version: 9 } }), {
+            status: 409,
+          }),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify(populated), { status: 200 }));
+    });
+
+    render(<ListPage />);
+    await screen.findByText("House of Hope — Longview, TX");
+    await userEvent.click(screen.getByTestId("row-actions-trigger"));
+    await userEvent.click(screen.getByTestId("row-action-trash"));
+    await userEvent.click(screen.getByTestId("confirm-accept"));
+
+    // The conflict means nothing changed — the row stays and the dialog closes.
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.getByText("House of Hope — Longview, TX")).toBeInTheDocument();
+  });
+
+  it("renders a 'Shared with me' section for shared rows with no owner-only affordances (#323)", async () => {
+    localStorage.setItem("projections.owner_token", "owner-abc");
+    const sharedRow = {
+      ...populated.projections[0],
+      view_slug: "p_shared",
+      name: "Partner Co — Dallas, TX",
+      owner: false,
+      shared: true,
+      editable: true,
+    };
+    const ownerRow = { ...populated.projections[0], owner: true, shared: false };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ projections: [ownerRow, sharedRow] }), { status: 200 }),
+    );
+    render(<ListPage />);
+
+    // The shared row appears under its own "Shared with me" heading.
+    expect(
+      await screen.findByRole("heading", { name: /shared with me/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Partner Co — Dallas, TX")).toBeInTheDocument();
+    // Owner-only affordances render ONLY on the owner row: exactly one actions "⋯"
+    // trigger (the owner row), none on the shared row.
+    expect(screen.getAllByTestId("row-actions-trigger")).toHaveLength(1);
+  });
+
+  it("omits the 'Shared with me' section when there are no shared rows", async () => {
+    localStorage.setItem("projections.owner_token", "owner-abc");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(populated), { status: 200 }),
+    );
+    render(<ListPage />);
+    await screen.findByText("House of Hope — Longview, TX");
+    expect(screen.queryByRole("heading", { name: /shared with me/i })).toBeNull();
+  });
+
+  it("cancelling the confirm keeps the row in the list and makes no request", async () => {
+    localStorage.setItem("projections.owner_token", "owner-abc");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(populated), { status: 200 }),
+    );
+    render(<ListPage />);
+    await screen.findByText("House of Hope — Longview, TX");
+
+    await userEvent.click(screen.getByTestId("row-actions-trigger"));
+    await userEvent.click(screen.getByTestId("row-action-trash"));
+    await userEvent.click(screen.getByTestId("confirm-cancel"));
+
+    expect(screen.getByText("House of Hope — Longview, TX")).toBeInTheDocument();
+    // Only the initial list GET — no trash POST.
+    expect(fetchSpy.mock.calls.every(([u]) => !String(u).includes("/trash"))).toBe(true);
   });
 });

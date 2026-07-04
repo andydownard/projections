@@ -56,6 +56,26 @@ class PostgresStore:
     ) -> int:
         self._stub("claim_projections_to_clerk_owner")
 
+    def create_share_grant(
+        self,
+        projection_id: str,
+        grantee_clerk_user_id: str,
+        *,
+        role: str = "editor",
+        grantee_owner_token_hash: str | None = None,
+    ) -> bool:
+        self._stub("create_share_grant")
+
+    def has_share_grant(
+        self, projection_id: str, grantee_clerk_user_id: str
+    ) -> bool:
+        self._stub("has_share_grant")
+
+    def list_shared_card_summaries_by_clerk_owner(
+        self, clerk_user_id: str, *, include_trashed: bool = False
+    ) -> list[dict]:
+        self._stub("list_shared_card_summaries_by_clerk_owner")
+
     def create_projection(self, p: dict) -> dict:
         self._stub("create_projection")
 

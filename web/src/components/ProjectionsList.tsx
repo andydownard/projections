@@ -19,6 +19,7 @@
 import type { ProjectionListItem } from "../api/projections";
 import { RecoChip } from "./RecoChip";
 import { Sparkline } from "./Sparkline";
+import { RowActionsMenu } from "./RowActionsMenu";
 import { formatListDate, isNegative } from "./displayLabels";
 
 export interface ProjectionsListProps {
@@ -27,22 +28,59 @@ export interface ProjectionsListProps {
   /** Called with the view_slug when a row is activated → routes to /p/<slug>/edit.
    *  The list is owner-scoped, so every listed row is owner-editable. */
   onRowClick: (viewSlug: string) => void;
+  /** Owner chose "Move to Trash" on a row's actions menu. When omitted, the per-row
+   *  menu is not rendered (e.g. the "Shared with me" section — owner-only affordances
+   *  never appear on a shared row). */
+  onTrash?: (item: ProjectionListItem) => void;
+  /** Navigate to the Trash view. When omitted, the header Trash link is hidden. */
+  onOpenTrash?: () => void;
+  /** Section heading. Defaults to "Projections" (the owner list). The "Shared with
+   *  me" section (#323) passes its own heading. */
+  heading?: string;
+  /** Unique id for the heading element (aria-labelledby target). Defaulted so a
+   *  second instance on the page never duplicates the id. */
+  headingId?: string;
+  /** Whether to render the "New projection" action. Hidden on the shared section. */
+  showCreate?: boolean;
 }
 
 export function ProjectionsList({
   projections,
   onCreate,
   onRowClick,
+  onTrash,
+  onOpenTrash,
+  heading = "Projections",
+  headingId = "list-heading",
+  showCreate = true,
 }: ProjectionsListProps) {
+  const headerActions = (
+    <div className="list__header-actions">
+      {onOpenTrash && (
+        <button
+          type="button"
+          className="btn btn--ghost"
+          data-testid="open-trash"
+          onClick={onOpenTrash}
+        >
+          Trash
+        </button>
+      )}
+      {showCreate && (
+        <button type="button" className="btn btn--primary" onClick={onCreate}>
+          New projection
+        </button>
+      )}
+    </div>
+  );
+
   if (projections.length === 0) {
     return (
-      <section className="list-empty" aria-labelledby="list-heading">
+      <section className="list-empty" aria-labelledby={headingId}>
         {/* L1: h1 is "Projections" on both empty and populated states (v2). */}
         <header className="list__header">
-          <h1 id="list-heading">Projections</h1>
-          <button type="button" className="btn btn--primary" onClick={onCreate}>
-            New projection
-          </button>
+          <h1 id={headingId}>{heading}</h1>
+          {headerActions}
         </header>
         <p>No projections yet. Build a board-ready projection from a few inputs.</p>
       </section>
@@ -50,13 +88,11 @@ export function ProjectionsList({
   }
 
   return (
-    <section className="list" aria-labelledby="list-heading">
+    <section className="list" aria-labelledby={headingId}>
       {/* L1: h1 is "Projections" (drop "Your"). */}
       <header className="list__header">
-        <h1 id="list-heading">Projections</h1>
-        <button type="button" className="btn btn--primary" onClick={onCreate}>
-          New projection
-        </button>
+        <h1 id={headingId}>{heading}</h1>
+        {headerActions}
       </header>
       <table className="list__table">
         <thead>
@@ -77,6 +113,10 @@ export function ProjectionsList({
             <th scope="col" className="num">
               Breakeven
             </th>
+            {/* Actions column (per-row "⋯" menu): present only when onTrash is wired. */}
+            {onTrash && (
+              <th scope="col" className="list__actions-col" aria-label="Actions"></th>
+            )}
             {/* Caret column: no visible label; aria-label tells screen readers this
                 column holds the row-open affordance. */}
             <th scope="col" className="list__caret-col" aria-label="Open"></th>
@@ -154,6 +194,14 @@ export function ProjectionsList({
                 {/* L3 col 5: Breakeven — server display string verbatim, right-aligned
                     tabular-nums (same audit P2 fix). */}
                 <td className="num">{p.breakeven.display}</td>
+
+                {/* Actions cell: the per-row "⋯" menu (Move to Trash). It stops event
+                    propagation so opening it never triggers the row navigation. */}
+                {onTrash && (
+                  <td className="list__actions">
+                    <RowActionsMenu name={p.name} onTrash={() => onTrash(p)} />
+                  </td>
+                )}
 
                 {/* L3 col 6: Caret — visual affordance for the row click target.
                     aria-hidden because the row's own aria-label already names the

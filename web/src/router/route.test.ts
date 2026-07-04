@@ -7,6 +7,11 @@ describe("parseRoute", () => {
     expect(parseRoute("/")).toEqual({ kind: "home" });
   });
 
+  it("maps /trash to the owner Trash view", () => {
+    expect(parseRoute("/trash")).toEqual({ kind: "trash" });
+    expect(parseRoute("/trash/")).toEqual({ kind: "trash" });
+  });
+
   it("maps bare /wizard to the wizard with no specific step (redirect target)", () => {
     expect(parseRoute("/wizard")).toEqual({ kind: "wizard", aiOff: false, step: null });
     expect(parseRoute("/wizard/")).toEqual({ kind: "wizard", aiOff: false, step: null });

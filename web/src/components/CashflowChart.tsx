@@ -166,6 +166,23 @@ export function CashflowChart({
     { y: yLine(trough.cumulativeCash.raw), label: trough.cumulativeCash.display },
   ].filter((t, i, arr) => arr.findIndex((o) => Math.abs(o.y - t.y) < 6) === i);
 
+  // #320: the monthly TABLE shows ONLY the FIRST PROJECT YEAR so it stays compact
+  // and fits with NO horizontal scroll on desktop. Engine 2.7.0 now emits the full
+  // 60-month horizon, which crushed 61 columns to ~12px and forced heavy scroll. The
+  // first year is the pre-opening months 1..G-1 PLUS the 12 operating months G..G+11,
+  // i.e. every month up to `opening_month_number + 11`. The CHART above keeps the FULL
+  // 60-month series (a line renders fine at any length and carries the journey to
+  // break-even and payback). This is a DISPLAY-ONLY slice of the server's monthly
+  // array, no client math (PRD §13).
+  const openingMonth = milestones?.grandOpening?.raw ?? null;
+  // When the opening month is unknown (a legacy snapshot without milestones), the
+  // first 13 months is a safe proxy: a typical month 1 to 2 opening plus 12 operating.
+  const firstYearCutoff = openingMonth != null ? openingMonth + 11 : 13;
+  const tableMonthly = monthly.filter((m) => m.month <= firstYearCutoff);
+  const sliced = tableMonthly.length < monthly.length;
+  const firstShown = tableMonthly[0]?.month ?? 1;
+  const lastShown = tableMonthly[tableMonthly.length - 1]?.month ?? tableMonthly.length;
+
   return (
     <figure className="cashflow-chart" data-testid="cashflow-chart">
       <div className="cashflow-chart__frame">
@@ -312,49 +329,91 @@ export function CashflowChart({
                 )}
           </svg>
 
-          {/* The dense monthly detail — aligned to the chart, and the chart's
-              accessible data table. table-layout:fixed + the shared label gutter
-              keep the columns under the chart's month bands. */}
-          <table className="cashflow-table" data-testid="cashflow-table">
-            <caption className="sr-only">Monthly cash-flow, months 0 to 12</caption>
+          {/* The first-year monthly detail and the chart's accessible data table.
+              #320: MONTHS ARE ROWS (the owner asked for "compact month rows") and the
+              four line items are the COLUMNS. With only ~4 wide value columns the
+              six-figure cumulative-cash figures fit at the mandated dense font size
+              (--text-sm, owner Decision #18 type-scale budget) with NO horizontal
+              scroll on desktop. The earlier months-as-columns layout could not: 12+
+              columns of $200k-plus figures cannot fit a 960px page at 12px without
+              overlap or scroll. The chart above still spans the full 60-month horizon.
+              The wrapper keeps its own overflow so only a narrow phone scrolls the
+              table, never the (fluid) chart. */}
+          <div className="cashflow-table__scroll">
+          <table className="cashflow-table cashflow-table--by-month" data-testid="cashflow-table">
+            <caption className="sr-only">
+              {`First-year monthly cash-flow, months ${firstShown} to ${lastShown}`}
+            </caption>
             <thead>
               <tr>
                 <th scope="col" className="cashflow-table__label">
-                  Line item
+                  Month
                 </th>
-                {monthly.map((m) => (
-                  <th scope="col" key={m.month} className="num">
-                    Mo. {m.month}
+                {ROWS.map((r) => (
+                  <th scope="col" key={r.label} className="num">
+                    {r.label}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {ROWS.map((r) => (
-                <tr key={r.label}>
-                  <th scope="row" className="cashflow-table__label">
-                    {r.label}
-                  </th>
-                  {monthly.map((m) => {
-                    const cell = r.pick(m);
-                    // #148: a loss reads as a loss — error color PAIRED with the
-                    // server's parentheses (the non-color cue), never color alone.
-                    return (
-                      <td
-                        key={m.month}
-                        className="num"
-                        data-negative={isNegative(cell) ? "true" : undefined}
-                      >
-                        {cell.display}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
+              {tableMonthly.map((m) => {
+                // Keep the grand-opening month flagged when it falls in the shown
+                // range (it always does: the range starts at month 1 and the cut is
+                // grand opening + 11). The chart marks it on the timeline too.
+                const isOpening = openingMonth != null && m.month === openingMonth;
+                return (
+                  <tr
+                    key={m.month}
+                    data-grand-opening={isOpening ? "true" : undefined}
+                    data-testid={`cashflow-month-${m.month}`}
+                  >
+                    <th scope="row" className="cashflow-table__label">
+                      {/* #320: compact "M5" month labels; the sr caption carries the
+                          full project-month range. */}
+                      M{m.month}
+                      {isOpening && (
+                        <span className="cashflow-table__open" title="Grand Opening">
+                          {" "}
+                          <span aria-hidden="true">⚑</span>
+                          <span className="sr-only">(grand opening)</span>
+                        </span>
+                      )}
+                    </th>
+                    {ROWS.map((r) => {
+                      const cell = r.pick(m);
+                      // #148: a loss reads as a loss, error color PAIRED with the
+                      // server's parentheses (the non-color cue), never color alone.
+                      return (
+                        <td
+                          key={r.label}
+                          className="num"
+                          data-negative={isNegative(cell) ? "true" : undefined}
+                        >
+                          {cell.display}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
+
+      {/* #320: when the full series is longer than the first project year, a small
+          note tells the reader the table is scoped to year 1 and points them to the
+          chart for the rest of the horizon. Server display strings only (no math). */}
+      {sliced && (
+        <p className="cashflow-table__note" data-testid="cashflow-year1-note">
+          Showing year 1 (months {firstShown} to {lastShown}).{" "}
+          {milestones?.payback?.raw != null
+            ? `Payback at ${milestones.payback.display}; see the chart for the full horizon.`
+            : "See the chart for the full horizon."}
+        </p>
+      )}
 
       {/* D5: the bottom "Cash low point … · Break-even …" figcaption is REMOVED —
           break-even lives on the chart + in the header metric bar, and the lowest

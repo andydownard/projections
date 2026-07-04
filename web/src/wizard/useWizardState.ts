@@ -12,7 +12,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 
 import type { ResolveErrorKind, TradeAreaResolved } from "../api/places";
-import type { RentResearch } from "../api/research";
 import {
   DEFAULT_COST_SCHEDULE,
   DEFAULT_OPENING_MONTH_NUMBER,
@@ -32,10 +31,9 @@ export type Basis = "city" | "county";
 
 // WHO/WHAT set a sq-ft cost assumption (feature #245) — the same provenance
 // language as households_source, surfaced on the rent field:
-//   research → server-grounded rent pre-fill (verified or estimated benchmark)
-//   user     → the operator adjusted it (overrides the research/default)
-//   default  → the anchored regional constant (utilities/fixtures, or AI-off rent)
-export type AssumptionSource = "research" | "user" | "default";
+//   user     → the operator adjusted it (overrides the default)
+//   default  → the anchored regional constant (utilities/fixtures, or initial rent)
+export type AssumptionSource = "user" | "default";
 
 // The ordered step set + labels live in ./steps (the single source of truth shared
 // with the path router, Epic B #261). Re-exported here so existing
@@ -176,29 +174,17 @@ export interface WizardState {
   setHouseholds: (n: number) => void;
 
   // --- Square footage + rent (feature #245) ----------------------------------
-  // Rent tracks its provenance (research|user|default) like households_source, so the
+  // Rent tracks its provenance (user|default) like households_source, so the
   // startup-costs step can STATE who/what set it.
   rentSource: AssumptionSource;
   utilitiesSource: AssumptionSource;
   fixturesSource: AssumptionSource;
-  // The last server rent-research result (drives the verified-vs-estimated badge,
-  // sources, and confidence) — null until a research call returns. The client
-  // renders the server's fields verbatim (no client math, PRD §13).
-  rentResearch: RentResearch | null;
-  rentResearchLoading: boolean;
-  rentResearchError: boolean;
   setBuildingSqft: (n: number) => void;
   setSalesfloorPct: (n: number) => void;
   setRentPerSqft: (n: number) => void;
   setUtilitiesPerSqft: (n: number) => void;
   setFixturesPerSqft: (n: number) => void;
   setBuildoutPerSqft: (n: number) => void;
-  /** Begin a research call (badge → loading). */
-  onRentResearchStart: () => void;
-  /** Apply a server rent-research result: pre-fill rent + provenance "research". */
-  applyRentResearch: (r: RentResearch) => void;
-  /** Research failed/unavailable: keep the manual benchmark, flag the degraded note. */
-  onRentResearchError: () => void;
 
   // cost schedule (basic; the editor ticket enriches the step UI)
   costSchedule: CostScheduleRow[];
@@ -327,13 +313,10 @@ export function useWizardState(
   const [resolveError, setResolveError] = useState<ResolveErrorKind | null>(null);
 
   // Rent provenance (feature #245). Starts at the anchored default; a manual edit
-  // flips to "user", a research pre-fill flips rent to "research".
+  // flips to "user".
   const [rentSource, setRentSource] = useState<AssumptionSource>("default");
   const [utilitiesSource, setUtilitiesSource] = useState<AssumptionSource>("default");
   const [fixturesSource, setFixturesSource] = useState<AssumptionSource>("default");
-  const [rentResearch, setRentResearch] = useState<RentResearch | null>(null);
-  const [rentResearchLoading, setRentResearchLoading] = useState(false);
-  const [rentResearchError, setRentResearchError] = useState(false);
 
   // Advanced Options disclosure state (Wave 2 Task 2.1, per-GROUP as of 2.2) —
   // every (step, group) starts collapsed (empty map reads as falsy per key);
@@ -417,16 +400,10 @@ export function useWizardState(
 
   const setSalesfloorPct = useCallback((n: number) => set("salesfloorPct", n), [set]);
 
-  // A ref shadow of rentSource so applyRentResearch can decide whether to clobber
-  // WITHOUT calling a state setter inside another setter's updater (an impure update
-  // that can crash render). The ref is kept in lock-step with every rent-source write.
-  const rentSourceRef = useRef<AssumptionSource>("default");
-
-  // A manual rent edit overrides whatever set it (research or default) → "user".
+  // A manual rent edit overrides the default → "user".
   const setRentPerSqft = useCallback(
     (n: number) => {
       set("rentPerSqft", n);
-      rentSourceRef.current = "user";
       setRentSource("user");
     },
     [set],
@@ -463,32 +440,6 @@ export function useWizardState(
         prev.costSchedule ?? [], prev.buildingSqft, prev.fixturesPerSqft, n,
       ),
     }));
-  }, []);
-
-  const onRentResearchStart = useCallback(() => {
-    setRentResearchLoading(true);
-    setRentResearchError(false);
-  }, []);
-
-  // Pre-fill rent from a server result + flag provenance "research". A prior manual
-  // edit wins (never silently clobber the operator's number) — mirrors households.
-  const applyRentResearch = useCallback(
-    (r: RentResearch) => {
-      setRentResearch(r);
-      setRentResearchLoading(false);
-      setRentResearchError(false);
-      if (rentSourceRef.current === "user") return; // keep the operator's value
-      if (typeof r.rent_per_sqft === "number") set("rentPerSqft", r.rent_per_sqft);
-      rentSourceRef.current = "research";
-      setRentSource("research");
-    },
-    [set],
-  );
-
-  const onRentResearchError = useCallback(() => {
-    setRentResearchLoading(false);
-    setRentResearchError(true);
-    // The field keeps the anchored benchmark and stays manually editable.
   }, []);
 
   // --- cost schedule helpers (the editor ticket enriches the UI) -------------
@@ -595,18 +546,12 @@ export function useWizardState(
     rentSource,
     utilitiesSource,
     fixturesSource,
-    rentResearch,
-    rentResearchLoading,
-    rentResearchError,
     setBuildingSqft,
     setSalesfloorPct,
     setRentPerSqft,
     setUtilitiesPerSqft,
     setFixturesPerSqft,
     setBuildoutPerSqft,
-    onRentResearchStart,
-    applyRentResearch,
-    onRentResearchError,
     costSchedule: draft.costSchedule ?? [],
     addCostRow,
     updateCostRow,

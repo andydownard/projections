@@ -147,12 +147,20 @@ def test_view_model_rows_carry_five_year_cells_and_net_income_label():
 
 
 def test_income_series_is_annual_net_income_y1_to_y5():
+    # CASH-based (epic #321): incomeSeries Y1 includes the one-time startup hit
+    # (operating net − startup_total); Years 2-5 are operating net (== cash). The
+    # series and year5Income are the displayed Net-income surfaces, so they match the
+    # cash basis of the 5-year row / KPI exactly.
+    from engine.compute import cash_net
     res = _compute()
     vm = res.view_model
     assert len(vm["incomeSeries"]) == 5
     for i, y in enumerate((1, 2, 3, 4, 5)):
-        assert vm["incomeSeries"][i]["raw"] == float(D(str(res.annual[y].net)))
-    assert vm["year5Income"]["raw"] == float(D(str(res.annual[5].net)))
+        assert vm["incomeSeries"][i]["raw"] == float(cash_net(res, y))
+    # Year 1 really is startup-reduced, not the operating net.
+    assert vm["incomeSeries"][0]["raw"] == float(
+        D(str(res.annual[1].net)) - D(str(res.startup_total)))
+    assert vm["year5Income"]["raw"] == float(cash_net(res, 5))
     # the series is server-formatted {raw,display} (one format authority).
     assert all("display" in cell for cell in vm["incomeSeries"])
 

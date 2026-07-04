@@ -13,7 +13,9 @@ import { ListPage } from "./pages/ListPage";
 import { CreateProjectionPage } from "./pages/CreateProjectionPage";
 import { ProjectionDetail } from "./pages/ProjectionDetail";
 import { RoleView } from "./pages/RoleView";
+import { TrashPage } from "./pages/TrashPage";
 import { clerkActive } from "./auth/clerkToken";
+import { capturePostSignInRedirect } from "./auth/postSignInRedirect";
 import { setEditToken } from "./api/projections";
 import { useDetailHeader } from "./state/detailHeader";
 import "./tokens.css";
@@ -61,6 +63,7 @@ export function appProvidesGeneralPenny(route: Route): boolean {
 export function isOwnerSurface(route: Route): boolean {
   if (route.kind === "home") return true;
   if (route.kind === "wizard") return true;
+  if (route.kind === "trash") return true;
   if (route.kind === "detail" && route.edit) return true;
   return false;
 }
@@ -90,6 +93,14 @@ export function App() {
     const secret = readFragmentSecret(window.location.hash);
     if (!secret) return;
     setEditToken(editSlug, secret);
+    // Shared deep link (#323): a recipient arriving with an edit-token fragment is the
+    // ONLY case we auto-redirect after sign-in. Capture the destination path (NOT the
+    // fragment secret — already saved to localStorage above) so the forced owner gate
+    // can return the recipient here once they sign in. A signed-in recipient never
+    // round-trips, so the captured path is harmlessly consumed as a no-op.
+    if (clerkActive()) {
+      capturePostSignInRedirect(window.location.pathname + window.location.search);
+    }
     history.replaceState(null, "", window.location.pathname + window.location.search);
   }, [editSlug]);
 
@@ -103,6 +114,7 @@ export function App() {
   const content = (
     <>
       {route.kind === "home" && <ListPage />}
+      {route.kind === "trash" && <TrashPage />}
       {route.kind === "wizard" && (
         <CreateProjectionPage aiOff={route.aiOff} step={route.step} />
       )}
@@ -114,6 +126,12 @@ export function App() {
     </>
   );
 
+  // The persistent chrome. When the gate is active these are handed INTO
+  // ClerkOwnerGate so the signed-IN branch renders today's chrome verbatim and the
+  // signed-OUT branch renders the minimal sign-in page WITHOUT Penny (SIGNIN-1).
+  const topBar = <TopBar saveState={isDetail ? detailHeader.saveState : "idle"} />;
+  const penny = generalPenny ? <PennyGeneralAssistant aiEnabled={!aiOff} /> : null;
+
   // Forced owner sign-in gate (Phase 0 B2). Only on OWNER surfaces, and only when
   // the Clerk satellite is active — otherwise (ship dark / local / CI / tests) the
   // content renders directly, byte-for-byte as today, and the Clerk import path is
@@ -121,22 +139,29 @@ export function App() {
   // so a signed-in owner is never trapped (fail-safe).
   const gated = clerkActive() && isOwnerSurface(route);
 
+  // When gated, App renders ONLY the gate (it owns the chrome for both branches).
+  // The skip-link + .app shell stay constant so #main is always a valid target.
+  // With Clerk off, the else branch is byte-for-byte today's shell.
   return (
     <div className="app">
       <a className="skip-link" href="#main">
         Skip to content
       </a>
-      <TopBar saveState={isDetail ? detailHeader.saveState : "idle"} />
-      <main id="main" className="app__main" tabIndex={-1}>
-        {gated ? (
-          <Suspense fallback={null}>
-            <ClerkOwnerGate>{content}</ClerkOwnerGate>
-          </Suspense>
-        ) : (
-          content
-        )}
-      </main>
-      {generalPenny && <PennyGeneralAssistant aiEnabled={!aiOff} />}
+      {gated ? (
+        <Suspense fallback={null}>
+          <ClerkOwnerGate topBar={topBar} penny={penny}>
+            {content}
+          </ClerkOwnerGate>
+        </Suspense>
+      ) : (
+        <>
+          {topBar}
+          <main id="main" className="app__main" tabIndex={-1}>
+            {content}
+          </main>
+          {penny}
+        </>
+      )}
     </div>
   );
 }

@@ -6,21 +6,45 @@ the point of use; these module constants name the *default* assumption values.
 """
 from __future__ import annotations
 
-MODEL_VERSION = "2.7.0"          # math/shape change => bump (2.7.0: the Wave-6 close-out.
-# This single bump carries every output-moving change made across Tasks 6.1–6.4 whose
-# golden regen was deferred to one place: (6.1) advisory-flag scaffolding; (6.2) the
-# monthly cash-flow SPLIT — fixed operating costs are charged flat across the 12
-# operating months and payroll taxes ride the payroll ramp (not a flat 1/12), which
-# reshapes the Year-1 cumulative-cash trough and therefore capital / break-even month;
-# (6.3) the occupancy-, labor- and sales-per-sqft advisory bands now emit
-# override-aware flags (occupancy_ratio_out_of_band / labor_ratio_out_of_band /
-# sales_per_sqft_out_of_band) + the break_even_revenue "N/A — variable-cost rate ≥ 100%"
-# guard; (6.4) 990-grounded constants — employer PAYROLL_TAX_PCT_OF_PAYROLL 7.5%->8% and
-# FIXED_ANNUAL Insurance liability $2,000->$10,000 (six-EIN sample, docs/2026-07-03-owner-
-# deliverables.md) — plus the money_view single-rounding-authority (raw & display derive
-# from one canonical value) and the exact lease-deposit arithmetic (occ1*3/12). NNN is
-# resolved as documented (escalator + lease deposit both apply to the resolved occupancy
-# INCLUDING nnn_opex_annual — the conservative reading; DECISIONS.md). 2.6.0: the ANNUAL P&L
+MODEL_VERSION = "2.8.0"          # math change => bump. 2.8.0 = THE FUSION of two
+# independently-stamped 2.7.0 engines (see the both-lineages block below). Composition:
+# the DISPLAY layer is CASH-BASED (lineage A) and the OPERATING layer uses this branch's
+# 6.2 Year-1 monthly split (lineage B). The DISPLAYED Net income AND Net margin subtract the
+# one-time Year-1 startup and are congruent (cash_net[1]=operating_net[1]−startup_total,
+# cash_net[y>=2]=operating_net[y], net_margin[y]=cash_net[y]/total_rev[y]); the INTERNAL
+# operating net (AnnualYear.net) is UNCHANGED and still drives the verdict (_recommend gates,
+# simple_payback, sensitivity re-runs, monthly operating roll-up). monthly[] spans the full
+# 60-month horizon; Year-1 uses the 6.2 three-stream split (fixed flat 1/12, payroll+taxes on
+# the payroll ramp, %-of-revenue on revenue weights), Years 2–5 uniform 1/12; every year rolls
+# up to the penny. capital / break-even / first-year cash gap are Year-1-anchored and computed
+# ON the 6.2 distribution. payback = first project-month cumulative cash >= 0 after going
+# negative ("Month N") over the 60-month series. The §12.2 net-margin guardrail runs on the
+# DISPLAYED (cash) margin. 990-grounded constants (PAYROLL_TAX_PCT_OF_PAYROLL 8%, Insurance
+# $10k), the 6.3 advisory flags + break_even_revenue guard (OPERATING-layer), money_view
+# single-rounding-authority, exact lease-deposit arithmetic, and the conservative NNN
+# resolved-occupancy reading all carry over. The .xlsx Year-1 Net-income cell subtracts the
+# Total Startup Costs cell; the "Simple payback (years)" cell is removed (payback rides the
+# MILESTONES Month-N row).
+#
+# --- 2.7.0-A (DEPLOYED to prod as "2.7.0", epic #321): the projection is CASH-BASED — no
+# amortization, no capitalization. The one-time startup is a CASH outflow that hits when paid
+# (Year 1, at/around opening). The DISPLAYED Net income and Net margin are BOTH cash-based and
+# congruent. The INTERNAL operating net drives the verdict. The monthly model spans the full
+# 60-month horizon so PAYBACK resolves across years. The §12.2 net-margin guardrail runs on
+# the DISPLAYED (cash) margin. The .xlsx Year-1 Net-income cell subtracts Total Startup Costs;
+# the "Simple payback (years)" cell is removed (payback via the MILESTONES Month-N row).
+#
+# --- 2.7.0-B (this branch's pre-fusion state, NEVER deployed, also stamped "2.7.0"): the
+# Wave-6 close-out carrying every output-moving change across Tasks 6.1–6.4: (6.1) advisory-flag
+# scaffolding; (6.2) the monthly cash-flow SPLIT — fixed operating costs charged flat across the
+# 12 operating months, payroll taxes on the payroll ramp — reshaping the Year-1 trough → capital
+# / break-even; (6.3) override-aware occupancy/labor/sales-per-sqft advisory flags + the
+# break_even_revenue "N/A — variable-cost rate ≥ 100%" guard; (6.4) 990-grounded constants
+# (PAYROLL_TAX_PCT_OF_PAYROLL 7.5%->8%, FIXED_ANNUAL Insurance $2,000->$10,000), the money_view
+# single-rounding-authority, the exact lease-deposit arithmetic (occ1*3/12), and NNN resolved to
+# the resolved occupancy INCLUDING nnn_opex_annual (conservative reading; DECISIONS.md).
+#
+# 2.6.0: the ANNUAL P&L
 # extends from a 3-year to a 5-year horizon — Year 4 / Year 5 are driven by their own
 # explicit donor-share inputs (share_y4 / share_y5) through the SAME driver chain and
 # the existing compounding rent escalator; the revenue CAGR is now Y1->Y5 and the
@@ -52,13 +76,18 @@ MODEL_VERSION = "2.7.0"          # math/shape change => bump (2.7.0: the Wave-6 
 # 1.5.0: +startupCosts (one-time startup line items as [{category, amount{raw,display}}])
 # and +startupTotal {raw,display} for the Board Packet .docx startup-costs table (EPIC
 # DOCX) — additive shape change, no math change (MODEL_VERSION stays 2.6.0);
-# 1.6.0: +sensitivity{base,downside,upside}{net{raw,display}, breakeven int|None,
-# capital{raw,display}} + sensitivity.delta and +confidence{ramp} — surfacing the §12.2
-# ±stress scenarios and the ramp low-confidence flag that decision.py already computes
-# but the view-model previously dropped (audit P0). settings also gain the full editable
-# knob set: sensitivityDelta, fixedAnnual (label->annual-$), nnnOpexAnnual, buildingSqft,
-# salesfloorPct. Additive shape change, no math change (MODEL_VERSION stays 2.6.0))
-COMPUTE_SCHEMA_VERSION = "1.6.0"
+# 1.7.0: THE FUSION — the union of both 1.6.0 lineages:
+#   1.6.0-B (this branch): +sensitivity{base,downside,upside}{net{raw,display}, breakeven
+#     int|None, capital{raw,display}} + sensitivity.delta and +confidence{ramp} — surfacing the
+#     §12.2 ±stress scenarios and the ramp low-confidence flag decision.py already computes but
+#     the view-model previously dropped (audit P0); settings gain the full editable knob set
+#     sensitivityDelta, fixedAnnual (label->annual-$), nnnOpexAnnual, buildingSqft, salesfloorPct.
+#   1.6.0-A (deployed): the displayed Net income (row + KPI + incomeSeries[0] + year5Income +
+#     card y1_net) and Net margin (row + KPI) are CASH-based (Year-1 subtracts the one-time
+#     startup total); monthly[] grows from 12 to 60 rows (full horizon) so the cash-flow series
+#     spans the payback crossing; payback is the Month-N cash-recovery milestone.
+# The NUMBERS move with model 2.8.0, so this rides the single fusion regeneration.)
+COMPUTE_SCHEMA_VERSION = "1.7.0"
 
 # --- export trust copy (#192). Single source for the "planning estimates, not
 # advice" disclaimer + AI-narrative disclosure that the terms gate exists to

@@ -122,10 +122,11 @@ Limits apply **per IP and per token** (PRD §20/§27), 429 on breach with `Retry
 | `POST /api/intent` | 5 / hour | — | CRM spam. |
 | `POST /api/projections` (create) | 20 / hour | — | Projection-creation flood. |
 | `POST /api/projections/claim` | 60 / hour | — | Claim/bridge (§4.9); capped before the JWT verify + write. |
+| `POST …/claim-share` | 60 / hour | 120 / hour / token | Editable-share grant (§4.10, #323); capped before the JWT verify + constant-time compare + write. |
 | `POST …/evidence` (file upload) | 30 / hour | 60 / hour / projection | Upload abuse. |
 | `POST …/penny`, `POST /api/penny/draft` | 600 / hour (coarse) | **120 / hour / token, 240 / hour / projection** | Bounded provider tool-use loop — **keyed on token/projection, not the shared proxy IP** (§6.6, issue #189). |
 | `POST /api/penny/proposal` | 120 / hour (coarse) | 60 / hour / token | Upload intake (token-hashed key). |
-| `PATCH …` (autosave) | 600 / 5 min | 600 / 5 min / projection | High by design (debounced autosave); serialized server-side. Client debounces ~300–400 ms. |
+| `PATCH …` (autosave) | 600 / 5 min | 600 / 5 min / token | High by design (debounced autosave); serialized server-side. Client debounces ~300–400 ms. Per-token key = the presented bearer (owner/edit capability token, or the Clerk grantee's JWT, #323). |
 | `GET …/xlsx`, `GET …/packet` | 60 / hour | — | Export cost (LibreOffice/render). |
 | `POST /api/cost-schedule/preview` | 600 / 5 min | — | Read-only grid-totals compute; fires as the user edits the startup-costs grid (general-read cadence). |
 | All other `GET` | 600 / 5 min | — | General read. |
@@ -221,7 +222,7 @@ Notes:
 - **`milestones`** (`compute_schema_version ≥ 1.2.0`) is the three detail-page milestones — `grandOpening`, `breakEven`, `payback` — each `{raw, display}` (the server formats "Month 6"; the client renders it verbatim, no client math). An unreached milestone is `{raw:null, display:"N/A", reason}` (N/A-with-reason, **never 0**); `payback` adds a `duration` ("25 months") when reached. The **Payback period** KPI is sourced from `milestones.payback`; the old `simple_payback_years` KPI is gone from the wire surface (ENGINE_CONTRACT §6.6).
 - **`monthly`** is an array over **project months `1..N`** (`N = opening_month_number + 11`); each entry is `{month, revenue, expenses, scheduledCosts, net, cumulativeCash}` with `net = revenue − expenses − scheduledCosts` (same columns as the `.xlsx` Monthly tab). `breakevenMonth` is a sibling top-level field.
 - **`reco.tag`** is a **semantic enum**, not a hex color: `proceed | revise | find_cheaper_rent | raise_cash | delay | do_not_proceed` (§12.3). The client maps enum → design token (brand vs semantic separation). The API never emits hex.
-- **`row.class`** ∈ `input | computed | overridden | estimated`; `row.node` is the DAG node key used by overrides. Derived rows and KPIs have `editable:false` and are **non-pinnable** (server rejects pin attempts — §6.1).
+- **`row.class`** ∈ `input | computed | overridden | estimated`; `row.node` is the DAG node key used by overrides. Derived rows and KPIs have `editable:false` and are **non-pinnable** (server rejects pin attempts — §6.1). A **pinnable component row stays `editable:true` even when pinned** (#322): the cell is the override entry point, so the owner can re-edit the pin in place; the `overridden` class drives the orange highlight independently of editability (this is a `editable` *value* change, the field shape is unchanged).
 - **Override keys** are `"{node}#{year}"` in storage (`overrides_json`, [DATA_MODEL.md](./DATA_MODEL.md)); the `overrides[]` array splits them into `node`+`year` for the inspector.
 - **`model_version`** + **`compute_schema_version`** are tracked separately: the former changes when the math changes; the latter when the view-model shape changes. `upgrade_available` is true when the stored `model_version` is older than the deployed engine — but the body is still the **stored snapshot** (no silent recompute, §13).
 - For a **read-only** request `role` reflects the share-link role (`board`/`funder`/`advisor`); `settings` editability and CTAs are tailored, and write-only fields may be elided.
@@ -235,9 +236,9 @@ Notes:
 
 ### 4.1 `GET /api/projections` — list (owner-scoped)
 
-- **Auth:** owner token (Bearer). **Capability:** owner only. There is **no** view/edit access to the list and **no global index** (PRD §19.1/§20).
-- **Request:** no body. Query: `?status=active|trashed` (default `active`).
-- **Response `200`:** a lightweight list (not the full view-model per row):
+- **Auth:** owner token **or** verified Clerk owner (Bearer). **Capability:** owner only. There is **no** view/edit access to the list and **no global index** (PRD §19.1/§20).
+- **Request:** no body. Query: `?trashed=true` (default: active only).
+- **Response `200`:** a lightweight list (not the full view-model per row). Each row is tagged with the caller's relationship to it: `owner` (the caller owns it), `shared` (another owner granted the caller editable access — #323), `editable`.
 
 ```json
 { "projections": [
@@ -247,10 +248,15 @@ Notes:
     "y1_net":{"raw":47100,"display":"$47,100"},
     "capital_required":{"raw":277990,"display":"$277,990"},
     "reco_tag":"proceed", "status":"active", "version":7,
-    "updated_at":"2026-06-24T17:03:21Z" }
+    "owner":true, "shared":false, "editable":true,
+    "updated_at":"2026-06-24T17:03:21Z" },
+  { "view_slug":"p_sh…", "name":"Partner Co — Dallas, TX",
+    "owner":false, "shared":true, "editable":true,
+    "status":"active", "version":3, "updated_at":"2026-06-25T09:00:00Z" }
 ] }
 ```
 
+- **"Shared with me" (#323):** for a **verified Clerk owner**, the active list UNIONs the rows another owner granted them editable access to (a `share_grant` on the caller's Clerk `sub`). Grant-scoped to the caller — **never global** (Override TENANT / PRD §20) — and only on the active list (Trash stays owner-only). Shared rows carry `{ "shared": true, "editable": true, "owner": false }`; the client renders them in a separate **"Shared with me"** section with **no** owner-only affordances (trash/rotate/delete — those are server-side owner-only regardless). Owner-token (non-Clerk) callers see only their own rows (no shared section).
 - **Errors:** `401` no bearer; `403` if the bearer is an edit token (edit tokens cannot list — `owner_required`).
 
 ### 4.2 `POST /api/projections` — create
@@ -306,7 +312,7 @@ The frontend MUST surface the **one-time recovery code** forcefully (key loss = 
 
 The core editing endpoint. Drives autosave (debounced) and every Settings/driver edit.
 
-- **Auth:** owner or edit (Bearer). **Capability:** owner/edit. **Requires `If-Match: <version>`.**
+- **Auth:** owner or edit token (Bearer), **or** — when `CLERK_ENABLED` — a **verified Clerk identity that OWNS the row or holds a `share_grant`** for it (editable shares that follow a Clerk account, #323). **Capability:** owner/edit/clerk-grantee. **Requires `If-Match: <version>`.** Cookie-blind: the identity resolves from `Authorization: Bearer` only (never `request.cookies`). A Clerk user with **no** grant and no ownership → `403 forbidden` (the negative cross-owner wall). Per-IP + per-token rate limit (Mutation Safety Quad (d)).
 - **Request body:** a partial of the editable surface — any subset of `inputs`, `assumptions` (the `settings` sliders), `trade_area`, `demand_drivers`, `name`, and **`overrides`** (pin/unpin operations):
 
 ```json
@@ -392,13 +398,15 @@ Projections are soft-deleted (`status:"trashed"`, `deleted_at` set) and restorab
 
 | Route | Method | Auth | If-Match | Effect |
 |---|---|---|---|---|
-| `…/{view_slug}/trash` | `POST` | owner | required | `status → trashed`, set `deleted_at`. Hidden from the default list; excluded from non-owner `GET` (returns `404`). |
-| `…/{view_slug}/restore` | `POST` | owner | required | `status → active`, clear `deleted_at`. |
-| `…/{view_slug}` | `DELETE` | owner | required | **Hard delete** — purge the projection and its revisions/evidence/narratives. Irreversible. Only permitted when already `trashed` (else `409 not_trashed`). |
+| `…/{view_slug}/trash` | `POST` | owner | required | `status → trashed`. Hidden from the default owner list; excluded from non-owner `GET` (returns `404`). |
+| `…/{view_slug}/restore` | `POST` | owner | required | `status → active`. |
+| `…/{view_slug}` | `DELETE` | owner | required | **Hard delete / purge** — irreversibly erases the projection AND cascades to every child row it owns (`revisions`, `narratives`, `evidence`, `penny_transcripts`, `actuals`, `role_links`), all in one transaction, so no orphaned financial data or Penny conversation survives (#202). Only permitted when already `trashed` (else `409 not_trashed`). |
 
 - **Capability:** owner only for all three (`owner_required` for edit/view).
-- **Response:** `trash`/`restore` → `200` with the updated view-model (`status` reflected). `DELETE` → `204 No Content`.
-- **Errors:** `428`/`409`; `403`; `DELETE` on an active projection → `409 { "error":"not_trashed" }`.
+- **Listing trashed:** `GET /api/projections?trashed=true` returns this owner's trashed projections only (owner-scoped, never global — the Trash view). The default `GET /api/projections` excludes them.
+- **Rate limit (Mutation Safety Quad d):** each route is per-IP + per-token capped (its own bucket); over the cap → `429 { "error":"rate_limited", … }` with `Retry-After`, evaluated AFTER the owner check (so it never leaks existence) but BEFORE the state change.
+- **Response:** `trash`/`restore` → `200` with the updated view-model (`status` reflected) + the new `ETag`. `DELETE` → `204 No Content`.
+- **Errors:** `428`/`409`; `403`; `429` over the cap; `DELETE` on an active projection → `409 { "error":"not_trashed" }`; a stale `If-Match` on `DELETE` → `409 { "error":"version_conflict", … }` (nothing erased).
 
 ### 4.9 `POST /api/projections/claim` — link token-owned projections to a Clerk owner
 
@@ -416,6 +424,23 @@ The **claim / bridge** path for the Clerk satellite (`SECURITY.md` §2.8, ship d
 - **Rate limit:** per-IP (§2.3), enforced **before** the JWT verify + the write.
 - **Response `200`:** `{ "linked": <count> }` — the number of rows newly linked (`0` on a no-op re-claim).
 - **Errors:** `404` (Clerk off); `401` (no verified Clerk identity); `422` (missing/empty `owner_token`); `429` (rate limit).
+
+### 4.10 `POST /api/projections/{view_slug}/claim-share` — bind an editable share to a Clerk account
+
+The **editable-shares-follow-the-account** path (#323, ship dark behind `CLERK_ENABLED`). A recipient who opened a share link (`/p/<slug>/edit#<edit-token>`) signs in and calls this **once per shared projection**; the server mints a `share_grant` on their Clerk `sub`. From then on the projection shows in their **"Shared with me"** list (§4.1) and they may edit it via their JWT on **any device** (the grant-based PATCH path, §4.4).
+
+- **Feature gate:** with `CLERK_ENABLED` off → `404` (the path does not exist).
+- **Auth:** the `Authorization: Bearer` MUST resolve to a **verified Clerk identity**; an opaque capability token (or no bearer) → **`401` `{ "error":"clerk_identity_required" }`**. Cookie-blind. **No `If-Match`** (it inserts a grant row, it does not version-mutate the projection).
+- **Request body:** the edit token for **this** projection — in the **body**, never the path/query/log (Regression #10):
+
+```json
+{ "edit_token": "…the edit token from the share-link fragment…" }
+```
+
+- **Behavior — the grant is minted ONLY from a VALID edit token for THIS slug:** the presented `edit_token` is compared **constant-time** against that slug's `edit_token_hash`. On match, `create_share_grant(projection_id, clerk_sub)` writes one `share_grant` (role `editor`). **Idempotent** — `UNIQUE(projection_id, grantee_clerk_user_id)` + a SELECT-then-INSERT means a re-claim writes nothing. **Cross-owner wall:** an unknown slug → `404`; a wrong or **foreign** edit token (a valid token for a *different* projection presented against this slug) → `403` and **no grant**.
+- **Rate limit:** per-IP + per-token (the presented edit token), enforced **before** the JWT verify + the constant-time compare + the write (Mutation Safety Quad (d)).
+- **Response `200`:** `{ "granted": <bool>, "view_slug": "<slug>", "role": "editor" }` — `granted:false` on an idempotent re-claim.
+- **Errors:** `404` (Clerk off / unknown slug); `401` (no verified Clerk identity); `403` `invalid_edit_token` (wrong/foreign/absent edit token); `422` (missing/empty `edit_token`); `429` (rate limit).
 
 ---
 

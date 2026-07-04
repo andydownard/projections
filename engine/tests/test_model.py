@@ -5,19 +5,20 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    # 2.7.0 (Task 6.4 + the 6.1/6.2/6.3 outputs that deferred their single regen to
-    # here): 990-grounded constants (payroll tax 7.5%->8%, Insurance liability
-    # $2k->$10k), the monthly-split cash-flow distribution (6.2), the occupancy/labor/
-    # sales-per-sqft advisory flags (6.3), and the money_view single-rounding-authority
-    # + exact lease-deposit arithmetic (6.4/commit-1). All move engine OUTPUTS, so
-    # MODEL_VERSION bumps (not just the schema).
-    assert model.MODEL_VERSION == "2.7.0"
-    # 1.6.0: +sensitivity{base,downside,upside} scenarios + delta, +confidence{ramp}
-    # (surfacing the already-computed §12.2 ±stress + the ramp low-confidence flag the
-    # view-model previously dropped, audit P0); settings gain sensitivityDelta,
-    # fixedAnnual, nnnOpexAnnual, buildingSqft, salesfloorPct. 1.5.0 had added
-    # startupCosts/startupTotal. Additive shape change, no math change.
-    assert model.COMPUTE_SCHEMA_VERSION == "1.6.0"
+    # 2.8.0 = THE FUSION of two 2.7.0 lineages: DISPLAY layer cash-based (2.7.0-A, deployed —
+    # displayed Net income + Net margin subtract the one-time Year-1 startup and are congruent;
+    # monthly[] spans the full 60-month horizon; payback = Month-N cash recovery; the §12.2
+    # guardrail runs on the cash margin) × OPERATING layer params/gaps (2.7.0-B, this branch —
+    # 990-grounded constants payroll tax 8% + Insurance $10k, the 6.2 monthly three-stream
+    # split, the 6.3 advisory flags, money_view single-rounding-authority + exact lease-deposit
+    # arithmetic). The internal operating net still drives the verdict; capital / break-even /
+    # first-year cash gap are Year-1-anchored on the 6.2 distribution. Both move OUTPUTS, so
+    # MODEL_VERSION bumps to the fused 2.8.0.
+    assert model.MODEL_VERSION == "2.8.0"
+    # 1.7.0 = the union of both 1.6.0 lineages: cash income/margin surfaces + monthly[] 60 rows
+    # + Month-N milestone (A) and +sensitivity{base,downside,upside}+delta +confidence{ramp} +
+    # the full editable settings knob set (B). The NUMBERS change with model 2.8.0.
+    assert model.COMPUTE_SCHEMA_VERSION == "1.7.0"
 
 
 def test_demand_constants():

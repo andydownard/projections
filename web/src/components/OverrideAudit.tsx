@@ -101,9 +101,9 @@ function CommentForm({
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    const note = draft.trim();
-    if (!note) return;
-    onSubmit?.(target.node, target.year, note);
+    // I1 (#322): the note is OPTIONAL — an empty justification saves cleanly (the
+    // server never required it). No early-return on an empty draft.
+    onSubmit?.(target.node, target.year, draft.trim());
   }
 
   return (
@@ -146,10 +146,11 @@ function CommentForm({
         }}
       />
       <div style={{ display: "flex", gap: "0.5rem" }}>
+        {/* I1 (#322): the note is OPTIONAL — Save is NEVER disabled for an empty draft
+            (the server never required a justification; the owner may clear or skip it). */}
         <button
           type="submit"
           data-testid="override-comment-save"
-          disabled={draft.trim().length === 0}
           className="override-audit__pill override-audit__pill--primary"
         >
           Save justification

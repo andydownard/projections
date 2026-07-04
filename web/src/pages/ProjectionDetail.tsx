@@ -24,6 +24,7 @@ import {
   fetchProjection,
   type ViewModel,
   type OverrideEntry,
+  type Kpi,
   xlsxHref,
   docxHref,
 } from "../api/viewModel";
@@ -33,9 +34,14 @@ import {
   getOwnerToken,
   setEditToken,
   setOwnerToken,
+  trashProjection,
+  LifecycleConflictError,
 } from "../api/projections";
 import { patchProjection, PatchConflictError, type PatchBody } from "../api/patch";
+import { clerkActive, getClerkToken } from "../auth/clerkToken";
 import { ShareModal } from "../components/ShareModal";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useToast } from "../components/Toast";
 import { ProjectionTab, fieldChangeKey, type FieldChangeInfo } from "../components/ProjectionTab";
 import type { FieldChangeActor } from "../components/FieldChange";
 import { TradeAreaMap } from "../components/TradeAreaMap";
@@ -88,6 +94,86 @@ function labelToSaveState(label: SaveLabel): SaveState {
 function goHome() {
   window.history.pushState(null, "", "/");
   window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+// I4 (#322): the overrides AUDIT apparatus (the audit list + the justification capture
+// in Penny) ships dark behind a default-OFF env flag, mirroring the VITE_ convention.
+// With it off, Penny is just chat; inline cell editing + the per-cell orange highlight
+// + the inline "reset to calculated" affordance stay ON (unflagged). Read at render
+// time so a build with the flag set (and the test stub) takes effect.
+function overridesUiEnabled(): boolean {
+  return import.meta.env.VITE_OVERRIDES_UI === "true";
+}
+
+// #324: the KPI tiles must not RESTATE figures shown elsewhere. The header MetricBar
+// is the single home for the decision metrics, and the 5-year table's Y1 column is the
+// home for the Year-1 income lines — so the 2nd tile set drops those echoes (CLIENT-SIDE
+// only; the server kpis[] array is golden-frozen and never mutated, PRD §13).
+const KPI_ECHO_LABELS = new Set<string>([
+  // decision metrics — the header MetricBar is their single home
+  "Capital required",
+  "Break-even month",
+  "Payback period",
+  // Year-1 echoes of the 5-year table's Y1 column
+  "Total revenue",
+  "Net income",
+  "Net margin",
+]);
+
+/** Drop the duplicated KPI tiles (decision-metric + Year-1 echoes) for display.
+ *  A pure filter over a COPY — the server array is never mutated. */
+function dedupeKpis(kpis: Kpi[]): Kpi[] {
+  return kpis.filter((k) => !KPI_ECHO_LABELS.has(k.label));
+}
+
+/** Inline download glyph (Lucide `download`) for the Excel + Word buttons — replaces
+ *  the ambiguous Unicode table glyphs with a recognizable download affordance (#320).
+ *  Decorative: the visible button label carries the meaning. */
+function DownloadIcon() {
+  return (
+    <svg
+      className="btn__icon"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" x2="12" y1="15" y2="3" />
+    </svg>
+  );
+}
+
+/** Inline share glyph (Lucide `share-2`) for the Share button (#320). Decorative. */
+function ShareIcon() {
+  return (
+    <svg
+      className="btn__icon"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <line x1="8.59" x2="15.42" y1="13.51" y2="17.49" />
+      <line x1="15.41" x2="8.59" y1="6.51" y2="10.49" />
+    </svg>
+  );
 }
 
 // Epic G (#41): the owner detail page is a Projection | KPIs tablist — Settings is
@@ -280,6 +366,9 @@ function MetricBar({ vm }: { vm: ViewModel }) {
           <Sparkline
             points={points}
             y5Label={year5Income?.display}
+            // #320: per-point hover tooltips — the server display string per year, so
+            // hovering a point reads "Year N: $…" (no client math).
+            labels={(incomeSeries ?? []).map((s) => s.display)}
             aria-label={`Annual net income Year 1 to Year ${points.length}${
               year5Income ? `, ending at ${year5Income.display}` : ""
             }`}
@@ -294,7 +383,8 @@ function MetricBar({ vm }: { vm: ViewModel }) {
         >
           {metrics.capital.display}
         </span>
-        <span className="metric-bar__sub">money to raise</span>
+        {/* FB2: the redundant "money to raise" sub-label is removed — the "Capital
+            required" label + the RED value already carry the meaning. */}
       </div>
       {payback && (
         <div className="metric-bar__cell">
@@ -365,6 +455,10 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   // here and never in a URL path/query (it rides the fragment in the link the panel
   // builds). Absent ⇒ the panel offers the read-only link alone.
   const [shareOpen, setShareOpen] = useState(false);
+  // Move-to-Trash (soft delete) confirm + in-flight flag. Owner-only (below).
+  const [confirmTrashOpen, setConfirmTrashOpen] = useState(false);
+  const [trashBusy, setTrashBusy] = useState(false);
+  const { showToast } = useToast();
 
   // PE7: the recent per-field changes (keyed by fieldChangeKey) + the refs that
   // derive them. `prevCellsRef` is the editable-share snapshot from the last vm;
@@ -377,12 +471,12 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const pendingActorRef = useRef<{ by: FieldChangeActor; reverted: boolean } | null>(null);
 
   // Epic G2 (#42): the Override Inspector is eliminated — Penny slides OUT to capture
-  // an override justification, so the detail page controls Penny's open state and the
-  // override currently being justified. `autoPromptedRef` debounces the guardrail
-  // auto-open so Penny only nags once per pin, not on every recompute.
+  // an override justification (only when the override audit UI is enabled), so the
+  // detail page controls Penny's open state and the override currently being justified.
+  // I1 (#322): the guardrail NO LONGER auto-opens Penny (notes are optional), so the
+  // owner is never nagged for a justification.
   const [pennyOpen, setPennyOpen] = useState(false);
   const [commentTarget, setCommentTarget] = useState<OverrideCommentTarget | null>(null);
-  const autoPromptedRef = useRef<Set<string>>(new Set());
 
   // Roving tab navigation (WAI-ARIA tabs): Left/Right move + focus the next tab.
   function onTabKey(e: KeyboardEvent<HTMLButtonElement>) {
@@ -406,11 +500,38 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       ? readFragmentSecret(window.location.hash) ?? getEditToken(slug) ?? getOwnerToken()
       : null,
   );
+  // Whether THIS device is the OWNER (not an editor opening a share link). An editor's
+  // token arrives in the fragment; the owner's token is the localStorage owner token.
+  // Captured once at first render (before the fragment is scrubbed). Trash/restore/
+  // purge are owner-only on the server (editors get 403), so the Delete affordance is
+  // shown ONLY to the owner — an editor never sees a button that would 403.
+  const isOwner = useRef<boolean>(
+    edit &&
+      readFragmentSecret(window.location.hash) === null &&
+      getOwnerToken() !== null,
+  );
   useEffect(() => {
     if (edit && window.location.hash) {
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
   }, [edit]);
+
+  async function confirmTrash() {
+    setTrashBusy(true);
+    try {
+      await trashProjection({ viewSlug: slug, version });
+      showToast("Moved to Trash");
+      goHome();
+    } catch (err) {
+      if (err instanceof LifecycleConflictError) {
+        showToast("This projection changed in another tab. Refresh and try again.");
+      } else {
+        showToast("Could not move to Trash. Try again.");
+      }
+      setTrashBusy(false);
+      setConfirmTrashOpen(false);
+    }
+  }
 
   // Load the stored snapshot.
   useEffect(() => {
@@ -475,21 +596,10 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     pendingActorRef.current = null;
   }, [vm]);
 
-  // Epic G2 (#42): when a §12.2 guardrail demands a justification an override doesn't
-  // yet carry, SLIDE Penny OUT with the focused prompt — the note that travels into
-  // the board packet is captured in the drawer, not a standalone inspector. Debounced
-  // per pin (autoPromptedRef) so a later recompute never re-nags a pin the owner is
-  // already — or has finished — justifying.
-  useEffect(() => {
-    if (!edit || !vm) return;
-    const needing = auditItems(vm).find((o) => o.needsNote);
-    if (!needing) return;
-    const key = `${needing.node}#${needing.year}`;
-    if (autoPromptedRef.current.has(key)) return;
-    autoPromptedRef.current.add(key);
-    setCommentTarget({ node: needing.node, year: needing.year, label: needing.label });
-    setPennyOpen(true);
-  }, [vm, edit]);
+  // I1 (#322): the guardrail auto-prompt is REMOVED — a §12.2 guardrail no longer
+  // slides Penny out to demand a justification (notes are optional everywhere). The
+  // owner can still add a justification manually from the override audit when the
+  // override UI is enabled (VITE_OVERRIDES_UI).
 
   // One place to fan a save failure into the recovery UI: a 409 opens the conflict
   // modal AND stashes the exact body that failed, so Overwrite can replay it (not
@@ -585,10 +695,23 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       .catch(onSaveError);
   }
 
+  // Resolve the PATCH bearer: the per-device capability token (edit/owner) is
+  // preferred — byte-for-byte today's behavior. When this device has NONE (a grantee
+  // who opened their "Shared with me" row on a second device, EPIC #323) fall back to
+  // the short-lived Clerk JWT; the server's share-grant auth authorizes the edit.
+  async function resolvePatchBearer(): Promise<string> {
+    if (token.current) return token.current;
+    if (clerkActive()) {
+      const jwt = await getClerkToken();
+      if (jwt) return jwt;
+    }
+    return "";
+  }
+
   async function doPatch(body: Record<string, unknown>, ver: number) {
     const res = await patchProjection({
       viewSlug: slug,
-      token: token.current ?? "",
+      token: await resolvePatchBearer(),
       version: ver,
       body,
     });
@@ -844,7 +967,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
                 href={xlsxHref(slug)}
                 download
               >
-                <span aria-hidden="true" className="btn__icon">▦</span> Excel
+                <DownloadIcon /> Excel
               </a>
               <a
                 className="btn btn--download"
@@ -853,7 +976,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
                 href={docxHref(slug)}
                 download
               >
-                <span aria-hidden="true" className="btn__icon">▤</span> Word
+                <DownloadIcon /> Word
               </a>
               <button
                 type="button"
@@ -862,8 +985,21 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
                 aria-haspopup="dialog"
                 onClick={() => setShareOpen(true)}
               >
-                <span aria-hidden="true" className="btn__icon">↗</span> Share
+                <ShareIcon /> Share
               </button>
+              {/* Owner-only: move this projection to Trash (recoverable). Editors who
+                  opened a share link never see this (the server is owner-only too). */}
+              {isOwner.current && (
+                <button
+                  type="button"
+                  className="btn btn--download btn--danger-ghost"
+                  data-testid="trash-projection"
+                  aria-haspopup="dialog"
+                  onClick={() => setConfirmTrashOpen(true)}
+                >
+                  <span aria-hidden="true" className="btn__icon">🗑</span> Delete
+                </button>
+              )}
             </div>
           </div>
 
@@ -888,7 +1024,6 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           <TradeAreaMap
             slug={slug}
             location={vm.location}
-            basis={vm.trade_area?.basis}
             geography={vm.trade_area?.geography_name}
             size="detail"
           />
@@ -909,13 +1044,19 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
             fieldChanges={fieldChanges}
             onEditCell={edit ? onEditCell : undefined}
             onUndoField={edit ? onUndoField : undefined}
+            // I4 (#322): the inline "reset to calculated" affordance is UNFLAGGED, so a
+            // pin can always be cleared from the cell (PATCH overrides.clear) even when
+            // the override audit UI is hidden.
+            onResetCell={edit ? onResetPin : undefined}
           />
         );
         if (!edit) {
           return (
             <>
               {projection}
-              <KpiStrip kpis={vm.kpis} />
+              {/* #324: drop the decision-metric + Year-1 echo tiles (single home: the
+                  header MetricBar + the 5-year table). Server array untouched. */}
+              <KpiStrip kpis={dedupeKpis(vm.kpis)} />
             </>
           );
         }
@@ -963,7 +1104,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
                   lives in Penny's drawer). */}
               <div data-testid="settings-tab">
                 <SettingsTab
-                  kpis={vm.kpis}
+                  kpis={dedupeKpis(vm.kpis)}
                   settings={settingsVm(vm.settings)}
                   version={version}
                   onPatch={onSettingsPatch}
@@ -1016,6 +1157,22 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
         <ShareModal slug={slug} editToken={getEditToken(slug)} onClose={() => setShareOpen(false)} />
       )}
 
+      {/* Move-to-Trash confirm (soft delete, recoverable). On success we navigate home
+          and a toast confirms; the projection can be restored from the Trash view. */}
+      {confirmTrashOpen && (
+        <ConfirmDialog
+          title="Move to Trash?"
+          confirmLabel="Move to Trash"
+          tone="danger"
+          busy={trashBusy}
+          onConfirm={confirmTrash}
+          onClose={() => setConfirmTrashOpen(false)}
+        >
+          Move <strong>{(name || vm.name || "this projection").trim()}</strong> to Trash.
+          You can restore it later from the Trash view.
+        </ConfirmDialog>
+      )}
+
       {/* Penny — the LEFT slide-out assistant (apply-immediately + narrate, Spec B
           §2/§5.1). Mounted only in edit mode (her mutate path needs the owner/edit
           token); with ?ai=off she degrades to the muted Settings FAB (never a
@@ -1023,11 +1180,12 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           which the PE7 diff (above) surfaces as the per-field "recent change / was X
           / undo" affordance on the share cells. */}
       {/* Epic G2 (#42): the standalone right-edge Override Inspector is ELIMINATED.
-          Penny is now the only side panel; she slides OUT (controlled open) to capture
-          an override justification through the focused "why did you override …?" prompt
-          and hosts the relocated audit (reset + add/edit justification). The note
-          persists on the pin through the EXISTING overrides contract — no data-model or
-          server-contract change — and travels into the packet exactly as today. */}
+          Penny is now the only side panel. I4 (#322): the override AUDIT apparatus
+          (the audit list + the justification capture) is flag-gated behind
+          VITE_OVERRIDES_UI. With it OFF (the default) NO override props are passed, so
+          OverrideAudit never mounts and Penny is just chat; with it ON she hosts the
+          relocated audit (reset + add/edit justification) through the EXISTING overrides
+          contract — no data-model or server-contract change. */}
       {edit && (
         <PennyAssistant
           viewSlug={slug}
@@ -1035,21 +1193,23 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           aiEnabled={!aiOff}
           settingsHref={`/p/${encodeURIComponent(slug)}/edit`}
           onApplied={() => refreshViewModel()}
-          overrides={auditItems(vm)}
-          onResetPin={onResetPin}
-          onComment={openComment}
-          commentTarget={commentTarget}
-          commentInitial={
-            commentTarget
-              ? vm.overrides?.find(
-                  (o) => o.node === commentTarget.node && o.year === commentTarget.year,
-                )?.note ?? ""
-              : ""
-          }
-          onSubmitComment={onCommentOverride}
-          onCancelComment={() => setCommentTarget(null)}
           open={pennyOpen}
           onOpenChange={setPennyOpen}
+          {...(overridesUiEnabled()
+            ? {
+                overrides: auditItems(vm),
+                onResetPin,
+                onComment: openComment,
+                commentTarget,
+                commentInitial: commentTarget
+                  ? vm.overrides?.find(
+                      (o) => o.node === commentTarget.node && o.year === commentTarget.year,
+                    )?.note ?? ""
+                  : "",
+                onSubmitComment: onCommentOverride,
+                onCancelComment: () => setCommentTarget(null),
+              }
+            : {})}
         />
       )}
     </div>

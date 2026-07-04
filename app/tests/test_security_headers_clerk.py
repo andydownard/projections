@@ -80,8 +80,11 @@ def test_build_csp_on_keeps_the_hardening_baseline():
     assert d["base-uri"] == ["'self'"]
     assert d["frame-ancestors"] == ["'none'"]
     assert d["form-action"] == ["'self'"]
-    # No blanket inline-script relaxation — the XSS posture is unchanged.
-    assert "'unsafe-inline'" not in on
+    # No inline-SCRIPT relaxation — the XSS/exfil posture is unchanged. (Inline *styles*
+    # ARE allowed for Clerk's CSS-in-JS components; see the dedicated style-src test.)
+    assert "'unsafe-inline'" not in d["script-src"]
+    assert "'unsafe-inline'" not in d["default-src"]
+    assert "'unsafe-inline'" not in d["connect-src"]
 
 
 def test_build_csp_on_widens_script_src_for_clerk_js():
@@ -127,6 +130,20 @@ def test_build_csp_on_adds_worker_src_blob():
     assert "blob:" in d["worker-src"]
 
 
+def test_build_csp_on_allows_inline_styles_for_clerk_components():
+    # clerk.openUserProfile() mounts Clerk's <UserProfile> ("Manage" modal), which
+    # injects runtime CSS-in-JS. A 'self'-only style-src blocks it and the modal
+    # renders as a broken, interaction-trapping overlay (the "Manage freezes the app"
+    # bug). Clerk's CSP guide requires 'unsafe-inline' on style-src for its components.
+    on = build_csp({"CLERK_ENABLED": "1"})
+    style = _directives(on)["style-src"]
+    assert "'self'" in style
+    assert "'unsafe-inline'" in style
+    # ...but ONLY when Clerk is on — the strict (off) baseline keeps styles locked.
+    off = _directives(build_csp({}))["style-src"]
+    assert "'unsafe-inline'" not in off
+
+
 # --- live response header: both states on a real response ----------------------
 def test_response_header_off_is_strict_baseline(monkeypatch):
     client = _client(monkeypatch)  # Clerk unset => off (today's behavior)
@@ -150,7 +167,10 @@ def test_response_header_on_includes_clerk_origins(monkeypatch):
     # The hardening baseline rides along unchanged.
     assert "default-src 'self'" in csp
     assert "frame-ancestors 'none'" in csp
-    assert "'unsafe-inline'" not in csp
+    # Inline scripts stay forbidden (XSS posture unchanged); inline styles are allowed
+    # ONLY for Clerk's CSS-in-JS components (asserted in the dedicated style-src test).
+    assert "'unsafe-inline'" not in _directives(csp)["script-src"]
+    assert "'unsafe-inline'" in _directives(csp)["style-src"]
 
 
 def test_kill_switch_flips_without_restart(monkeypatch):

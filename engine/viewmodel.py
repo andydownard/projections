@@ -11,6 +11,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from engine import dag
+from engine.compute import cash_margin, cash_net
 from engine.money import D, money_view, na_view, number_view, pct_view
 
 _RECO_HEADLINES = {
@@ -153,8 +154,12 @@ def to_view_model(result):
     kpis = [
         {"label": "Total revenue", "value": money_view(y1.total_rev), "sub": "Year 1",
          "color": "text"},
-        {"label": "Net income", "value": money_view(y1.net), "sub": "Year 1", "color": "text"},
-        {"label": "Net margin", "value": _pct_or_na(y1.margin), "sub": "Year 1", "color": "text"},
+        # Net income + Net margin are CASH-based (epic #321): Year 1 includes the
+        # one-time startup hit; both displayed numbers agree (one congruent margin).
+        {"label": "Net income", "value": money_view(cash_net(result, 1)), "sub": "Year 1",
+         "color": "text"},
+        {"label": "Net margin", "value": _pct_or_na(cash_margin(result, 1)), "sub": "Year 1",
+         "color": "text"},
         {"label": "Sales / sq ft", "value": _money_or_na(sales_per_sqft),
          "sub": "Year 1", "color": "text"},
         {"label": "Capital required", "value": money_view(dec.startup_capital_required),
@@ -195,15 +200,29 @@ def to_view_model(result):
             "y4": money_view(annual[4].expenses[label]),
             "y5": money_view(annual[5].expenses[label]),
             "class": _row_class(label, pinned_by_label),
-            "editable": label in _EDITABLE_ROWS and label not in pinned_by_label,
+            # I3 (#322): a pinnable component row stays editable even when pinned, so
+            # the owner can re-edit the pin in place (the cell is the override entry
+            # point). The "overridden" class drives the orange highlight; editability
+            # is independent of the pin. Goldens are override-free, so this is a no-op
+            # for them (nothing is in `pinned_by_label`).
+            "editable": label in _EDITABLE_ROWS,
         })
     rows.append(_driver_row("Total Expenses", annual, "total_exp", group="expenses", computed=True))
-    rows.append(_driver_row("Net income", annual, "net", group="expenses", computed=True))
+    # Net income + Net margin rows are CASH-based (epic #321). The label stays "Net
+    # income" / "Net margin" — only the NUMBERS are cash-based (Year-1 subtracts the
+    # one-time startup; Years 2-5 are operating, == cash). The two are congruent by
+    # construction (margin == net / revenue), so the board never sees a second margin.
+    rows.append({
+        "label": "Net income", "group": "expenses",
+        "y1": money_view(cash_net(result, 1)), "y2": money_view(cash_net(result, 2)),
+        "y3": money_view(cash_net(result, 3)), "y4": money_view(cash_net(result, 4)),
+        "y5": money_view(cash_net(result, 5)), "class": "computed", "editable": False,
+    })
     rows.append({
         "label": "Net margin", "group": "expenses",
-        "y1": _pct_or_na(annual[1].margin), "y2": _pct_or_na(annual[2].margin),
-        "y3": _pct_or_na(annual[3].margin), "y4": _pct_or_na(annual[4].margin),
-        "y5": _pct_or_na(annual[5].margin), "class": "computed", "editable": False,
+        "y1": _pct_or_na(cash_margin(result, 1)), "y2": _pct_or_na(cash_margin(result, 2)),
+        "y3": _pct_or_na(cash_margin(result, 3)), "y4": _pct_or_na(cash_margin(result, 4)),
+        "y5": _pct_or_na(cash_margin(result, 5)), "class": "computed", "editable": False,
     })
 
     # ---- monthly (project months 1..N; the SAME columns the .xlsx tab renders, so
@@ -277,9 +296,10 @@ def to_view_model(result):
     }
 
     # ---- annual net-income series Y1..Y5 ({raw,display}) — feeds the list/detail
-    # sparkline. The engine/server is the single format authority, so the client
-    # renders these display strings and never re-derives the trend line.
-    income_series = [money_view(annual[y].net) for y in (1, 2, 3, 4, 5)]
+    # sparkline. CASH-based (epic #321): Year 1 includes the one-time startup hit, Years
+    # 2-5 are operating net (== cash). The engine/server is the single format authority,
+    # so the client renders these display strings and never re-derives the trend line.
+    income_series = [money_view(cash_net(result, y)) for y in (1, 2, 3, 4, 5)]
 
     # ---- one-time startup costs (schema 1.5.0) — the per-category line items + the
     # total, surfaced as {raw,display} so the Board Packet .docx (EPIC DOCX) renders a
@@ -323,7 +343,7 @@ def to_view_model(result):
         "monthly": monthly,
         "breakevenMonth": result.monthly_breakeven,
         "incomeSeries": income_series,
-        "year5Income": money_view(annual[5].net),
+        "year5Income": money_view(cash_net(result, 5)),
         "startupCosts": startup_costs,
         "startupTotal": money_view(result.startup_total),
         "rows": rows,
