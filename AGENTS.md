@@ -11,7 +11,7 @@ A server-authoritative tool that helps a first-time nonprofit thrift-store opera
 
 **Read first:** [reference/PRD.md](./reference/PRD.md) (authoritative requirements) → this file → [ARCHITECTURE.md](./ARCHITECTURE.md) → [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) → [BUILD_PLAN.md](./BUILD_PLAN.md) → [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) (the bar).
 
-**Status:** built & deployed (engine 2.6.0, 5-year horizon, redesign v2). The Python script in `reference/` is a *calibration seed*, not the v1 engine — see [The engine is a rewrite](#the-engine-is-a-rewrite-not-a-reuse-read-before-touching-m1).
+**Status:** built & deployed (engine 2.7.0, 5-year horizon, redesign v2). The Python script in `reference/` is a *calibration seed*, not the v1 engine — see [The engine is a rewrite](#the-engine-is-a-rewrite-not-a-reuse-read-before-touching-m1).
 
 ---
 
@@ -31,7 +31,7 @@ A server-authoritative tool that helps a first-time nonprofit thrift-store opera
 
 ## Commands
 
-test: `pytest -q` · golden: `pytest engine/tests/test_golden_gate.py -q` (3-way reconcile) · recalc: `python reference/thrift-store-projections-skill/scripts/recalc.py <xlsx>` (assert `status=="success"` **and** `total_errors==0`; fail closed on an `{"error":…}` dict) · ratio: `python scripts/ratio.py` · front: `npm test -- --run` / `npm run typecheck` / `npm run lint` · health: `GET /api/health` shows the **new build SHA**.
+test: `pytest -q` · golden: `pytest engine/tests/test_golden_gate.py -q` (3-way reconcile) · recalc: `python reference/thrift-store-projections-skill/scripts/recalc.py <xlsx>` (assert `status=="success"` **and** `total_errors==0`; fail closed on an `{"error":…}` dict) · ratio: `python scripts/ratio.py` · front: `npm test -- --run` / `npm run typecheck` (no web lint gate — eslint was never configured; #374) · health: `GET /api/health` shows the **new build SHA**.
 This is the project's concrete `VERIFY` proof set; the full Verification Bar table is the single home in [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md).
 
 ## Beachhead ICP (judge everything against it)

@@ -28,8 +28,11 @@ EXAMPLE_OWNER_TOKEN = "owner-secret"
 ROLE_SLUG = "board-slug"
 ROLE_NAME = "board"
 
-# Design-parity (40% labor) House of Hope — the Appendix-D headline the prototype
-# screenshots use (reco=proceed, capital ~ $278k, break-even ~month 5).
+# Design-parity (40% labor) House of Hope. Under engine 2.7.0 (990 constants +
+# monthly split) this seed computes reco=raise_cash — capital ~$302k crosses its
+# $300k funds by ~$2.2k (Y1 net still positive; the capital>funds gate, not store
+# health). The prototype-era "proceed / ~$278k / BE ~month 5" headline no longer
+# holds; see DECISIONS.md (2.7.0) and owner decision #345.
 _INPUTS: dict[str, Any] = dict(
     org_name="House of Hope",
     city="Longview, Texas",

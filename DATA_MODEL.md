@@ -405,7 +405,7 @@ Drivers adjust **confidence** (and seasonality feeds the monthly ramp), not the 
   "marketing_pct": 0.0375,
   "supplies_pct": 0.05,
   "card_pct": 0.02,
-  "payroll_tax_pct": 0.075,
+  "payroll_tax_pct": 0.08,
   "salvage_pct": 0.008,
   "escalator": 0.03,
   "donations_per_hh": 3,
@@ -415,7 +415,7 @@ Drivers adjust **confidence** (and seasonality feeds the monthly ramp), not the 
   "rent_per_sqft": null,
   "ramp": { "shape": "scurve", "months": 5 },
   "fixed": {
-    "Insurance liability": 2000, "Internet, Phones": 3000, "Pest control": 300,
+    "Insurance liability": 10000, "Internet, Phones": 3000, "Pest control": 300,
     "Repairs/maintenance": 1600, "Security system": 900, "Utilities/trash service": 22300
   },
   "startup": {
@@ -436,7 +436,7 @@ Drivers adjust **confidence** (and seasonality feeds the monthly ramp), not the 
 | **Marketing & outreach % of revenue** | `0.0375` | **New line** introduced by the design (`marketing = total_rev × 0.0375`). |
 | **Supplies & processing % of revenue** | `0.05` | **Reclassifies** the legacy fixed `Store/office supplies $3,700` into a % of revenue. The fixed supplies line is removed from `fixed`. |
 | Credit-card fees % of revenue | `0.02` | unchanged. |
-| Payroll tax % of payroll | `0.075` | unchanged. |
+| Payroll tax % of payroll | `0.08` | raised from 7.5% in engine 2.7.0 (990-grounded; see DECISIONS.md). |
 | Salvage % of retail | `0.008` | unchanged. |
 | **Annual rent escalator** | `0.03` | **New** — compounding: `rent[y] = rent_y1 × (1 + escalator)^(y-1)` for `y ∈ {1,2,3}`. Applies Y2–Y3. |
 | Cash reserve buffer | `$25,000` | feeds startup-capital-required (PRD §12.1). |
@@ -536,13 +536,13 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
   ],
   "settings": {
     "laborPct": 0.40, "marketingPct": 0.0375, "suppliesPct": 0.05, "cardPct": 0.02,
-    "payrollTaxPct": 0.075, "salvagePct": 0.008, "escalator": 0.03,
+    "payrollTaxPct": 0.08, "salvagePct": 0.008, "escalator": 0.03,
     "utilitiesPerSqft": 2.23, "rentPerSqft": null, "basket": 17.08,
     "donationsPerHh": 3, "donationValue": 74.0, "donationsPerHouseholdPerYear": 3,
     "shareY1": 0.06, "shareY2": 0.08, "shareY3": 0.10, "shareY4": 0.11, "shareY5": 0.12,
     "occupancyAnnual": 90000, "leaseType": "nnn", "salesfloorSqft": 7000, "reserveBuffer": 25000,
     "sensitivityDelta": 0.25,
-    "fixedAnnual": { "Insurance liability": 2000, "Internet, Phones": 3000, "Pest control": 300,
+    "fixedAnnual": { "Insurance liability": 10000, "Internet, Phones": 3000, "Pest control": 300,
                      "Repairs/maintenance": 1600, "Security system": 900 },
     "nnnOpexAnnual": 0.0, "buildingSqft": 10000.0, "salesfloorPct": 0.70
   },
