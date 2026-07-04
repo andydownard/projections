@@ -59,7 +59,7 @@ def test_patch_fixed_annual_merges_and_shifts_expenses(client):
     vm = r.json()
     fa = vm["settings"]["fixedAnnual"]
     assert fa["Pest control"] == 600            # the edited line
-    assert fa["Insurance liability"] == 10000   # the other defaults SURVIVE the merge (990-grounded $10k)
+    assert fa["Insurance liability"] == 10000   # other defaults SURVIVE (990-grounded $10k)
     # Pest control 300 -> 600 with revenue unchanged -> Y1 total expenses +300 exactly.
     assert _row_y1_raw(vm, "Total Expenses") == pytest.approx(before_exp + 300)
 

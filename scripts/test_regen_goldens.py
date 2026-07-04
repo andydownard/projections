@@ -7,7 +7,6 @@ against, before any engine math is allowed to move. If regen ever diverges
 from the checked-in bytes with no engine change in the diff, that is a bug in
 the regenerator (or an unintentional drift in the goldens), not a green light.
 """
-import pathlib
 
 from scripts.regen_goldens import GOLDEN_DIR, main, regen
 

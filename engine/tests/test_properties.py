@@ -25,7 +25,6 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 
-import pytest
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
@@ -206,7 +205,9 @@ def test_lease_deposit_raw_and_display_agree_on_a_half_dollar():
                    if c["category"].startswith("Lease Deposit"))
     # The {raw,display} contract: display must round-trip to the whole-dollar rounding
     # of raw. (Underlying quantity is now exactly $4,712.50 → both render $4,713.)
-    assert _parse_money(deposit["amount"]["display"]) == int(round_dollars(deposit["amount"]["raw"]))
+    assert _parse_money(deposit["amount"]["display"]) == int(
+        round_dollars(deposit["amount"]["raw"])
+    )
     assert deposit["amount"]["display"] == "$4,713"
 
 

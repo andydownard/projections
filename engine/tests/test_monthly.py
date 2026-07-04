@@ -210,9 +210,13 @@ def test_expense_streams_split_fixed_payroll_and_pct_of_revenue(canonical_result
     # marketing / supplies ride the revenue S-curve (_REVENUE_WEIGHTS); every other
     # (fixed) line spreads flat (_flat_monthly). Reconstruct the three streams with the
     # engine's own helpers and assert the per-month expense equals their sum, exactly.
-    from engine.monthly import (_distribute, _flat_monthly,
-                                _PAYROLL_WEIGHTS, _PCT_OF_REVENUE_LABELS,
-                                _REVENUE_WEIGHTS)
+    from engine.monthly import (
+        _PAYROLL_WEIGHTS,
+        _PCT_OF_REVENUE_LABELS,
+        _REVENUE_WEIGHTS,
+        _distribute,
+        _flat_monthly,
+    )
     y1 = canonical_result.annual[1]
     pct = sum((D(str(v)) for k, v in y1.expenses.items() if k in _PCT_OF_REVENUE_LABELS),
               Decimal("0"))
