@@ -23,7 +23,7 @@ import secrets
 import tempfile
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional
+from typing import Any, Optional, get_args, get_origin
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -334,6 +334,60 @@ class CostScheduleItemIn(BaseModel):
         extra = "forbid"
 
 
+# ---- numeric -> string coercion for the deployed wire contract (fix 1.3g) --------
+# The deployed SettingsTab (buildBody) and every deployed-era stored row send the
+# legacy decimal-string knobs (labor_pct, marketing/supplies/card/payroll_tax/salvage
+# pcts, the rent escalator, the donor shares, donation_value, basket) as JSON NUMBERS
+# (``humanValue / scale`` -> a float). Pydantic 2.13 does NOT coerce number ->
+# ``Optional[str]``, so the merge re-validation (``_revalidate_assumptions`` /
+# ``_revalidate_inputs``) 422'd every legacy autosave and made stored-float rows
+# permanently un-PATCHable (even a rename revalidates the stored dict). The two models
+# below carry a ``mode="before"`` validator that coerces int/float -> str for their
+# str-typed fields BEFORE field validation, so the bounds/allowlist checks still run on
+# the coerced value. It is scoped to str-typed fields ONLY: the genuinely-int knobs
+# (reserve_buffer, donations_per_hh) are left alone (an int stays an int; pydantic's own
+# lax str->int handles an int-like string). ``bool`` is EXCLUDED (it is an ``int``
+# subclass) so ``true`` never sneaks through as a number -> a bool still 422s.
+_STR_FIELD_CACHE: dict[type, frozenset[str]] = {}
+
+
+def _str_typed_fields(model_cls: type) -> frozenset[str]:
+    """Field names on ``model_cls`` whose annotation admits ``str`` (``str`` or
+    ``Optional[str]``) — i.e. the decimal-string knobs a numeric wire value must
+    become. Genuinely-int / dict / list fields are excluded. Cached per class."""
+    cached = _STR_FIELD_CACHE.get(model_cls)
+    if cached is None:
+        names = set()
+        for fname, finfo in model_cls.model_fields.items():
+            ann = finfo.annotation
+            args = get_args(ann) if get_origin(ann) is not None else (ann,)
+            if str in args:
+                names.add(fname)
+        cached = frozenset(names)
+        _STR_FIELD_CACHE[model_cls] = cached
+    return cached
+
+
+def _coerce_numeric_str_fields(model_cls: type, data: Any) -> Any:
+    """Coerce ``int``/``float`` -> ``str`` for each str-typed field of ``model_cls``.
+
+    Runs as a ``mode="before"`` model validator so the coerced string flows through
+    field validation and the ``mode="after"`` bounds check. ``bool`` is excluded so it
+    still fails str validation (422). Returns ``data`` untouched when it is not a dict
+    or carries no numeric str-field values (never mutates the caller's dict)."""
+    if not isinstance(data, dict):
+        return data
+    coerced = None
+    for key in _str_typed_fields(model_cls):
+        if key in data:
+            value = data[key]
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if coerced is None:
+                    coerced = dict(data)
+                coerced[key] = str(value)
+    return coerced if coerced is not None else data
+
+
 class InputsIn(BaseModel):
     org_name: str = ""
     city: str
@@ -361,6 +415,13 @@ class InputsIn(BaseModel):
     target_opening_date: Optional[str] = None
     opening_month_number: int = Field(default=DEFAULT_OPENING_MONTH_NUMBER, ge=1)
     cost_schedule: Optional[list[CostScheduleItemIn]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_numeric_strs(cls, data: Any) -> Any:
+        # Accept the deployed numeric wire shape (share_y*, donation_value, ...); see
+        # _coerce_numeric_str_fields (fix 1.3g).
+        return _coerce_numeric_str_fields(cls, data)
 
 
 # Inputs keys that are part of the saved projection but are NOT positional args of
@@ -482,6 +543,15 @@ class AssumptionsIn(BaseModel):
     # defaults in ``_build_engine_args_from_dicts`` (so lines never touched at all
     # keep their default). Optional -> the full engine default map.
     fixed_annual: Optional[dict[str, float]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_numeric_strs(cls, data: Any) -> Any:
+        # Accept the deployed numeric wire shape (labor_pct, the cost %s, escalator,
+        # basket, ...) BEFORE the bounds check below runs; see
+        # _coerce_numeric_str_fields (fix 1.3g). reserve_buffer / donations_per_hh are
+        # int-typed and left untouched.
+        return _coerce_numeric_str_fields(cls, data)
 
     @model_validator(mode="after")
     def _check_bounds(self) -> AssumptionsIn:
