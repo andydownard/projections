@@ -2090,6 +2090,10 @@ def rotate_tokens(
         "owner_token_hash": hash_token(new_owner),
         "edit_token_hash": hash_token(new_edit),
         "view_slug": new_slug,
+        # Plain dumps (not dumps_finite) is intentional here, not an oversight
+        # (batch3-review finding A / Minor 4): new_role_map is built entirely from
+        # secrets.token_urlsafe() slugs -> role-name strings, no numerics, so there
+        # is no float for allow_nan=False to guard against.
         "role_tokens_json": json.dumps(new_role_map),
     }
     # The capability re-hash (same version-checked UPDATE as rotate_tokens) and its

@@ -87,6 +87,12 @@ def seed_example(store) -> None:
         return
     vm = example_view_model()
     now = _utcnow()
+    # Plain json.dumps (not dumps_finite) throughout this row is intentional, not an
+    # oversight (batch3-review finding A / Minor 1): every value here is either a
+    # static seed constant (_LOCATION/_TRADE/_INPUTS/_ASSUMPTIONS, hand-authored, no
+    # floats that could be non-finite) or `vm`, the engine's own view-model, which
+    # always emits explicit `null` — never NaN/Infinity (PRD §12.4) — and this whole
+    # path only runs under the non-prod E2E_SEED gate, never a real user PATCH.
     row = {
         "id": "seed-example-" + secrets.token_hex(4),
         "view_slug": EXAMPLE_SLUG,
@@ -128,6 +134,8 @@ def reset_example(store) -> bool:
         seed_example(store)
         return False
     vm = example_view_model()
+    # Plain json.dumps exemption: same reasoning as seed_example() above (static seed
+    # constants + the engine's own null-not-NaN vm, non-prod E2E gate only).
     patch = {
         "name": "House of Hope",
         "inputs_json": json.dumps(_INPUTS),
