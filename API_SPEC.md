@@ -42,11 +42,13 @@ A token is always scoped to **one** projection except the owner token, which add
 
 | Condition | Status | Body `error` |
 |---|---|---|
-| Mutation route with no `Authorization` header | `401` | `auth_required` |
-| `Authorization` present but token matches neither owner nor edit hash for this projection | `403` | `forbidden` |
+| Capability mutation with no `Authorization` header (or a bearer matching no token for this projection) | `403` | `forbidden` |
 | Read-only (`view`) capability attempts a mutation | `403` | `read_only` |
-| Edit token attempts an owner-only route (list, rotate, delete, trash, revisions list/restore) | `403` | `owner_required` |
+| Edit token attempts an owner-only route (list, rotate, delete, trash, duplicate, revisions list/restore) | `403` | `owner_required` |
+| Verified-Clerk-identity route (`POST …/claim`, §4.9) with no Clerk JWT | `401` | `clerk_identity_required` |
 | Secret detected in URL path or query string | `400` | `secret_in_url` (defense-in-depth; secrets only via header/fragment) |
+
+**Convention (as-built):** the capability-token routes return **`403`** on every missing/mismatched bearer — `forbidden`, or `owner_required` when an edit token hits an owner-only route, or `read_only` for a view token. There is **no `401` path for a capability token**; the sole `401` is the Clerk-identity route `POST …/claim` (`clerk_identity_required`), where possession of a capability token does not authorize binding a workspace to an arbitrary Clerk identity.
 
 Bodies: `{ "error": "<code>", "message": "<human readable>", "support_hint": "<optional>" }`. Never echo the token. Never log `Authorization` headers or URL fragments (§20).
 
@@ -83,7 +85,7 @@ On any stale mutation the server returns **HTTP 409** with the **current server 
 - `current_version` is the authoritative server version; `your_version` echoes the rejected `If-Match`.
 - `current_state` is the **complete view-model** (identical shape to the §3 `200` body) so the UI can render the latest without a follow-up `GET`.
 - **Overwrite** path: the client re-issues the same `PATCH` with `If-Match: <current_version>` (it has it from this body). The server does **not** auto-merge.
-- **Save-as-copy** path: the client calls `POST …/duplicate` (§4.4), which mints a fresh owner token and forks the projection at its own version 1.
+- **Save-as-copy** path: the client (holding the **owner** token — the route is owner-only) calls `POST …/duplicate` (§4.5), forking the projection into a fresh `view_slug` at its own `version 1` and carrying the conflicted edit as the optional `{ "patch": … }`. The fork **joins the owner's workspace** — no fresh owner token is minted for a capability owner (§4.5).
 
 ---
 
@@ -353,11 +355,11 @@ A **read-only what-if**: merge the same editable-surface partial as `PATCH` (§4
 
 ### 4.5 `POST /api/projections/{view_slug}/duplicate`
 
-- **Auth:** owner or edit (Bearer) on the source. **Capability:** owner/edit. **No `If-Match`** (creates a new resource).
-- **Behavior:** deep-copies inputs/assumptions/overrides/trade_area into a **new** projection, recomputes at the current engine, mints **fresh** owner/edit/view tokens and a recovery code, sets the copy's `version=1`. Powers "Save as copy" from the 409 flow (§1.4) and the list "Duplicate" action.
-- **Request body (optional):** `{ "name": "House of Hope (copy)" }`.
-- **Response `201`:** the new projection's view-model + `tokens` block (same shape as §4.2).
-- **Errors:** `403`; `429` create limit.
+- **Auth:** **owner only** — the owner token Bearer, or a verified Clerk owner of the source. **Capability:** owner. An **edit** token → `403 owner_required`; a view/anonymous/wrong-owner bearer → `403 forbidden` (like rotate/trash/delete; this router has no `401` path for a capability bearer). **No `If-Match`** — it creates a new row and never version-mutates the source, exactly like create.
+- **Behavior:** deep-copies inputs/assumptions/overrides/trade_area into a **new** projection and recomputes at the current engine. Mints a **fresh** `view_slug` and **fresh** edit token (never the source's — a shared slug/edit token would leak the source), sets the copy's `version=1`, and appends **one** revision (`change_summary="duplicated"`). The caller is the owner, so the copy **joins the caller's workspace** — it is owner-scoped to the same owner (`owner_token_hash` copied) and appears in the owner's list. **No fresh owner token is minted** for a capability owner (identity-join, mirroring create §4.2); a Clerk/anonymous owner receives a one-time `owner_token` exactly as create does. There is **no recovery code**. The copy inherits the source's `terms_accepted_at` (exports stay reachable without re-accepting). Powers "Save as copy" from the 409 flow (§1.4) and the list "Duplicate" action.
+- **Request body (optional):** `{ "patch": <PatchProjectionIn> }` — the same editable-surface partial `PATCH` accepts (§4.4). On a 409 the client's "Save as copy" sends the conflicted edit here so it lands on the fork instead of being dropped; the patch flows through the **same** `_merge_patch` + validation path as `PATCH` (override-DAG rejection of derived/total nodes, `AssumptionsIn`/`InputsIn` bounds, `fixed_annual` accumulation over the source's map). Omitted / `{}` / `null` → a **verbatim** copy of the source's editable surface. A stray key → `422` (the body is `extra="forbid"`).
+- **Response `201`:** the copy's compute view-model (§3) plus `view_slug`, `version: 1`, `name: "<source name> (copy)"`, a one-time `edit_token`, and — for a Clerk/anonymous owner **only** — a one-time `owner_token`. (Same shape as the §4.2 create response.)
+- **Errors:** `403` (`owner_required` for an edit token; `forbidden` otherwise); `404` unknown slug; `422` `invalid_inputs` / `node_not_pinnable` / out-of-bounds patch (same validation as `PATCH`); `429` create limit.
 
 ### 4.6 `POST /api/projections/{view_slug}/upgrade-model`
 
@@ -759,7 +761,7 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `GET …/{slug}` | owner/edit/view | — | no | read |
 | `PATCH …/{slug}` | owner/edit | **yes** | yes | autosave |
 | `POST …/{slug}/preview` | owner/edit | no | **no (read-only)** | read |
-| `POST …/{slug}/duplicate` | owner/edit | no | create | create |
+| `POST …/{slug}/duplicate` | owner | no | create | create |
 | `POST …/{slug}/upgrade-model` | owner/edit | **yes** | yes | read |
 | `POST …/{slug}/rotate-tokens` | owner | **yes** | yes | read |
 | `POST …/{slug}/trash` · `…/restore` | owner | **yes** | yes | read |

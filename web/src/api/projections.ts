@@ -128,7 +128,7 @@ export interface DuplicateResult {
 }
 
 /**
- * The real "Save as copy" (API_SPEC §4.4): POST …/{slug}/duplicate copies the
+ * The real "Save as copy" (API_SPEC §4.5): POST …/{slug}/duplicate copies the
  * projection into a FRESH server row (new id / view_slug / edit token, one revision)
  * and applies the optional `patch` (the conflicted edit) to the copy before compute,
  * so the user's unsaved change lands on the fork instead of being dropped. Owner-only

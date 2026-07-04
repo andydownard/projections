@@ -1010,7 +1010,7 @@ def create_projection(
 
 
 class DuplicateIn(BaseModel):
-    """Optional edit applied to the COPY before compute (API_SPEC §4.4).
+    """Optional edit applied to the COPY before compute (API_SPEC §4.5).
 
     ``patch`` is the SAME partial the autosave PATCH accepts. On a 409 the client's
     "Save as copy" sends the conflicted edit here so it lands on the fork instead of
@@ -1031,7 +1031,7 @@ def duplicate_projection(
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
 ):
-    """Server-side copy into a FRESH row — the real "Save as copy" (API_SPEC §4.4).
+    """Server-side copy into a FRESH row — the real "Save as copy" (API_SPEC §4.5).
 
     Owner-only (``_require_owner``): edit/view/anonymous -> 403, exactly like
     rotate/trash/delete (capability routes have no 401 path). The copy is a NEW
