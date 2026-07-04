@@ -37,8 +37,14 @@ MODEL_VERSION = "2.6.0"          # math/shape change => bump (2.6.0: the ANNUAL 
 # income Y1..Y5 {raw,display}) and +year5Income for the list/detail sparkline;
 # 1.5.0: +startupCosts (one-time startup line items as [{category, amount{raw,display}}])
 # and +startupTotal {raw,display} for the Board Packet .docx startup-costs table (EPIC
-# DOCX) — additive shape change, no math change (MODEL_VERSION stays 2.6.0))
-COMPUTE_SCHEMA_VERSION = "1.5.0"
+# DOCX) — additive shape change, no math change (MODEL_VERSION stays 2.6.0);
+# 1.6.0: +sensitivity{base,downside,upside}{net{raw,display}, breakeven int|None,
+# capital{raw,display}} + sensitivity.delta and +confidence{ramp} — surfacing the §12.2
+# ±stress scenarios and the ramp low-confidence flag that decision.py already computes
+# but the view-model previously dropped (audit P0). settings also gain the full editable
+# knob set: sensitivityDelta, fixedAnnual (label->annual-$), nnnOpexAnnual, buildingSqft,
+# salesfloorPct. Additive shape change, no math change (MODEL_VERSION stays 2.6.0))
+COMPUTE_SCHEMA_VERSION = "1.6.0"
 
 # --- export trust copy (#192). Single source for the "planning estimates, not
 # advice" disclaimer + AI-narrative disclosure that the terms gate exists to

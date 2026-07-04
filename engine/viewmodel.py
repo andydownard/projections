@@ -266,6 +266,14 @@ def to_view_model(result):
         "reserveBuffer": a.reserve_buffer,
         "leaseType": result.inputs.lease_type,
         "salesfloorSqft": float(D(result.inputs.building_sqft) * D(result.inputs.salesfloor_pct)),
+        # 1.6.0: the remaining editable knobs the view-model previously dropped (audit
+        # P0) — the ± stress fraction, the fixed-annual operating map, the NNN opex
+        # add-on, and the building/salesfloor geometry the sq-ft-scaled lines derive from.
+        "sensitivityDelta": float(D(a.sensitivity_delta)),
+        "fixedAnnual": {label: float(v) for label, v in a.fixed_annual.items()},
+        "nnnOpexAnnual": float(D(result.inputs.nnn_opex_annual)),
+        "buildingSqft": float(D(result.inputs.building_sqft)),
+        "salesfloorPct": float(D(result.inputs.salesfloor_pct)),
     }
 
     # ---- annual net-income series Y1..Y5 ({raw,display}) — feeds the list/detail
@@ -283,6 +291,30 @@ def to_view_model(result):
         for label, amount in result.startup.items()
     ]
 
+    # ---- sensitivity scenarios (schema 1.6.0) — the §12.2 ±stress base/downside/upside
+    # runs decision.py already computes, serialized verbatim (no second math surface):
+    # net + capital as {raw,display} money views, break-even as a plain project-month
+    # int (or None when never reached), and the ± fraction delta. The client renders the
+    # robustness view from these; it never re-runs the stress.
+    sensitivity = {
+        scenario: {
+            "net": money_view(vals["net"]),
+            "breakeven": vals["breakeven"],
+            "capital": money_view(vals["capital"]),
+        }
+        for scenario, vals in (
+            ("base", dec.sensitivity["base"]),
+            ("downside", dec.sensitivity["downside"]),
+            ("upside", dec.sensitivity["upside"]),
+        )
+    }
+    sensitivity["delta"] = float(D(a.sensitivity_delta))
+
+    # ---- confidence (schema 1.6.0) — the ramp low-confidence flag build_flags sets,
+    # surfaced as a label the client can render next to the ramp-dependent metrics
+    # (audit P0: the flag was computed but never reached the view-model).
+    confidence = {"ramp": "low" if result.flags.get("ramp_low_confidence") else "high"}
+
     return {
         "reco": reco,
         "metrics": metrics,
@@ -297,6 +329,8 @@ def to_view_model(result):
         "rows": rows,
         "overrides": ov_list,
         "settings": settings,
+        "sensitivity": sensitivity,
+        "confidence": confidence,
         "evidence": [],
         "flags": _jsonable(result.flags),
         "staleNodes": list(result.stale_nodes),

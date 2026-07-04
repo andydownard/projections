@@ -11,8 +11,8 @@ from engine.viewmodel import to_view_model
 def test_top_level_fields_present(canonical_result):
     vm = to_view_model(canonical_result)
     for key in ("reco", "metrics", "kpis", "monthly", "rows", "overrides",
-                "settings", "flags", "version", "model_version",
-                "compute_schema_version", "breakevenMonth"):
+                "settings", "sensitivity", "confidence", "flags", "version",
+                "model_version", "compute_schema_version", "breakevenMonth"):
         assert key in vm, key
 
 
@@ -109,9 +109,52 @@ def test_settings_block(canonical_result):
               "payrollTaxPct", "salvagePct", "escalator", "basket",
               "donationsPerHh", "shareY1", "shareY2", "shareY3",
               "shareY4", "shareY5", "donationValue",
-              "donationsPerHouseholdPerYear", "reserveBuffer"):
+              "donationsPerHouseholdPerYear", "reserveBuffer",
+              # 1.6.0: the full editable knob set (audit P0)
+              "sensitivityDelta", "fixedAnnual", "nnnOpexAnnual",
+              "buildingSqft", "salesfloorPct"):
         assert k in s
     assert abs(s["laborPct"] - 0.60) < 1e-9
+    assert abs(s["sensitivityDelta"] - 0.25) < 1e-9
+    assert abs(s["buildingSqft"] - 10000.0) < 1e-9
+    assert abs(s["salesfloorPct"] - 0.70) < 1e-9
+    assert abs(s["nnnOpexAnnual"] - 0.0) < 1e-9
+    # fixedAnnual is the label -> annual-$ operating map (Insurance liability = 2000).
+    assert s["fixedAnnual"]["Insurance liability"] == 2000.0
+
+
+def test_sensitivity_block_serialized(canonical_result):
+    # schema 1.6.0: the §12.2 ±stress scenarios (already computed in decision.py) are
+    # serialized so the client renders the tornado/robustness view without recomputing.
+    vm = to_view_model(canonical_result)
+    sens = vm["sensitivity"]
+    assert set(sens) == {"base", "downside", "upside", "delta"}
+    # delta is the ± stress fraction (0.25 default), the single source read by the engine.
+    assert abs(sens["delta"] - 0.25) < 1e-9
+    for scenario in ("base", "downside", "upside"):
+        block = sens[scenario]
+        assert set(block) == {"net", "breakeven", "capital"}
+        # net + capital are dual-value {raw, display} money views (single format authority).
+        for money_key in ("net", "capital"):
+            assert set(block[money_key]) >= {"raw", "display"}
+            assert isinstance(block[money_key]["raw"], float)
+            assert isinstance(block[money_key]["display"], str)
+        # break-even is a plain project-month int, or None when never reached.
+        assert block["breakeven"] is None or isinstance(block["breakeven"], int)
+    # The serialized values are the engine's decision.sensitivity verbatim (no re-math).
+    dec_sens = canonical_result.decision.sensitivity
+    assert sens["downside"]["net"]["raw"] == float(dec_sens["downside"]["net"])
+    assert sens["downside"]["capital"]["raw"] == float(dec_sens["downside"]["capital"])
+    assert sens["downside"]["breakeven"] == dec_sens["downside"]["breakeven"]
+    assert sens["base"]["net"]["raw"] == float(dec_sens["base"]["net"])
+
+
+def test_confidence_block_from_ramp_flag(canonical_result):
+    # schema 1.6.0: the ramp low-confidence flag (build_flags) is surfaced as a
+    # confidence label the client can render (audit P0 — it was previously dropped).
+    vm = to_view_model(canonical_result)
+    assert canonical_result.flags["ramp_low_confidence"] is True
+    assert vm["confidence"] == {"ramp": "low"}
 
 
 def test_view_model_is_json_serializable(canonical_result):
@@ -122,10 +165,10 @@ def test_view_model_is_json_serializable(canonical_result):
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
     assert vm["model_version"] == "2.6.0"
-    # 1.5.0: +startupCosts/startupTotal (Board Packet .docx startup table). 1.4.0 had
-    # added y4/y5 row cells, shareY4/Y5 + editable donation drivers, incomeSeries/
-    # year5Income. Additive shape change.
-    assert vm["compute_schema_version"] == "1.5.0"
+    # 1.6.0: +sensitivity scenarios + delta, +confidence{ramp}, +settings knobs
+    # (sensitivityDelta/fixedAnnual/nnnOpexAnnual/buildingSqft/salesfloorPct). 1.5.0 had
+    # added startupCosts/startupTotal. Additive shape change, no math change.
+    assert vm["compute_schema_version"] == "1.6.0"
     assert "utilitiesPerSqft" in vm["settings"]
     assert "rentPerSqft" in vm["settings"]
 

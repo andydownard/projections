@@ -1,6 +1,9 @@
 {
   "breakevenMonth": 9,
-  "compute_schema_version": "1.5.0",
+  "compute_schema_version": "1.6.0",
+  "confidence": {
+    "ramp": "low"
+  },
   "evidence": [],
   "flags": {
     "model_upgrade_available": false,
@@ -1024,21 +1027,68 @@
       }
     }
   ],
+  "sensitivity": {
+    "base": {
+      "breakeven": 9,
+      "capital": {
+        "display": "$321,940",
+        "raw": 321939.7347072
+      },
+      "net": {
+        "display": "($44,433)",
+        "raw": -44432.9056672
+      }
+    },
+    "delta": 0.25,
+    "downside": {
+      "breakeven": null,
+      "capital": {
+        "display": "$371,850",
+        "raw": 371849.6792504
+      },
+      "net": {
+        "display": "($100,850)",
+        "raw": -100849.6792504
+      }
+    },
+    "upside": {
+      "breakeven": 6,
+      "capital": {
+        "display": "$304,398",
+        "raw": 304397.61552228
+      },
+      "net": {
+        "display": "$11,984",
+        "raw": 11983.867916
+      }
+    }
+  },
   "settings": {
     "basket": 17.08,
+    "buildingSqft": 10000.0,
     "cardPct": 0.02,
     "donationValue": 74.0,
     "donationsPerHh": 3,
     "donationsPerHouseholdPerYear": 3,
     "escalator": 0.03,
+    "fixedAnnual": {
+      "Insurance liability": 2000.0,
+      "Internet, Phones": 3000.0,
+      "Pest control": 300.0,
+      "Repairs/maintenance": 1600.0,
+      "Security system": 900.0
+    },
     "laborPct": 0.6,
     "leaseType": "nnn",
     "marketingPct": 0.0375,
+    "nnnOpexAnnual": 0.0,
     "payrollTaxPct": 0.075,
     "rentPerSqft": null,
     "reserveBuffer": 25000,
+    "salesfloorPct": 0.7,
     "salesfloorSqft": 7000.0,
     "salvagePct": 0.008,
+    "sensitivityDelta": 0.25,
     "shareY1": 0.06,
     "shareY2": 0.08,
     "shareY3": 0.1,
