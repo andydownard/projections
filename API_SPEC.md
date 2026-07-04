@@ -114,7 +114,8 @@ Limits apply **per IP and per token** (PRD §20/§27), 429 on breach with `Retry
 | Endpoint | Limit (per IP) | Limit (per token) | Rationale |
 |---|---|---|---|
 | `POST /api/research` | 10 / hour | 20 / hour | LLM + Places + Census cost; cached by location+size key (§16.6). |
-| `POST …/narrative:regenerate` | 10 / hour | 6 / hour / projection | Regeneration cap (§27 cost control). |
+| `POST …/narrative:regenerate` | 10 / hour | 20 / hour + hard cap **50 / day / projection** | Paid-LLM regeneration cap (§27 cost control, SECURITY §10.1). All three caps are enforced **before** the provider call — a rejected request spends no LLM budget. |
+| `PUT …/narrative` | 120 / hour | 120 / hour | Coarse cap on the (local, no-provider) prose save. |
 | `POST /api/feedback` | 5 / hour | — | GitHub-issue spam. |
 | `POST /api/intent` | 5 / hour | — | CRM spam. |
 | `POST /api/projections` (create) | 20 / hour | — | Projection-creation flood. |
@@ -467,10 +468,12 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 ```
 `stale` is true when the stored `computed_hash` ≠ the current `computed_json` hash; the client shows "Out of date" + Regenerate and **never auto-overwrites** user-edited prose (§17). `edit_origin` ∈ `ai | human | null` records how the stored prose was last produced. **`grounded_figures`** is the **server-built** canonical figure list with display variants ($277,990 / $278k / ($41,200)) derived from `computed_json` — the client never re-derives figures with a regex; the grounding validator checks against the same variant set (epic-N N3).
 
-- **`PUT` request:** `{ "body_md":"…markdown…" }`. The server **sanitizes** `body_md` with an allowlist (`p`/headings/`ul`-`ol`-`li`/`strong`/`em`/`blockquote`/`code`/`a[http|https|mailto]`) before storage — no raw HTML, no inline event handlers (stored-XSS → token-theft defense, [SECURITY.md](./SECURITY.md)) — and applies **numeric grounding fail-closed**: an ungrounded figure in a hand-edit is **rejected** (`409 grounding_failed`) and the prior narrative is left untouched (epic-N N4). Sets `edit_origin:"human"`. Response `200`: `{ "body_md":"…sanitized…", "edited":true, "edit_origin":"human", "computed_hash":"…" }`.
+- **Optimistic concurrency (both `PUT` and `:regenerate`):** `If-Match: <version>` is **required** (`428` if absent) and compared to the projection's live `version`. A stale value → **`409 version_conflict`** (same shape as the autosave PATCH: `{ error, current_version, your_version, current_state, recovery }`) so a second editor never silently clobbers the first's board-packet prose. A successful write **bumps the projection `version`** (standard `… SET version = version + 1 WHERE version = ?`, 0 rows → `409`), returns the new value in the `ETag` header and a `"version"` body field, and snapshots one revision (`change_summary` = `narrative_edit` / `narrative_regenerate`).
+
+- **`PUT` request:** `{ "body_md":"…markdown…" }`. The server **sanitizes** `body_md` with an allowlist (`p`/headings/`ul`-`ol`-`li`/`strong`/`em`/`blockquote`/`code`/`a[http|https|mailto]`) before storage — no raw HTML, no inline event handlers (stored-XSS → token-theft defense, [SECURITY.md](./SECURITY.md)) — and applies **numeric grounding fail-closed**: an ungrounded figure in a hand-edit is **rejected** (`409 grounding_failed`) and the prior narrative is left untouched (epic-N N4). Sets `edit_origin:"human"`. Response `200`: `{ "body_md":"…sanitized…", "edited":true, "edit_origin":"human", "computed_hash":"…", "version":<int> }`.
 
 - **`:regenerate` behavior:** low-temperature generation, **Anthropic primary → OpenAI fallback**; the result passes the numeric-grounding validator before it is stored. The `provider` field reflects the **actual** provider used. The prose states rent as an **estimate/range**, never a fact. Query `?confirm=true` is required to regenerate over a hand-edited narrative (confirm-before-discard, N6).
-  - Response `200`: `{ "body_md":"…", "edited":false, "edit_origin":"ai", "computed_hash":"…", "provider":"anthropic" }`.
+  - Response `200`: `{ "body_md":"…", "edited":false, "edit_origin":"ai", "computed_hash":"…", "provider":"anthropic", "version":<int> }`.
   - **`409 grounding_failed`** (validator rejection): `{ "error":"grounding_failed", "ungrounded_figures":["$310,000"] }` — the prior narrative is **not** overwritten.
   - **`409 edited_confirm_required`** when regenerating over `edit_origin:"human"` without `?confirm=true` — user prose is never silently discarded.
   - **`503 ai_unavailable`** when both providers fail (compute and `.xlsx` still work — §21). Body `{ "error":"ai_unavailable" }`.

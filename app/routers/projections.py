@@ -112,6 +112,20 @@ _DUPLICATE_TOKEN_LIMIT = _CREATE_IP_LIMIT
 _DUPLICATE_WINDOW_SECONDS = _CREATE_WINDOW_SECONDS
 _STATICMAP_IP_LIMIT = 120  # cached per (lat,lng,kind); per IP only (view-capability)
 _STATICMAP_WINDOW_SECONDS = 3600
+# Narrative writes (SECURITY.md §10.1). ``narrative:regenerate`` calls a PAID LLM, so
+# it carries the tightest cap on THREE axes: per IP + per token (hourly) AND a
+# per-projection DAILY ceiling, so a single compromised owner/edit token cannot burn a
+# day of provider spend re-drafting one board packet. PUT narrative is a local
+# sanitize + numeric-grounding write (no provider call), so a coarse per-token/hr cap
+# is enough. All are emitted BEFORE the provider/compute (the cheapest rejection).
+_REGEN_IP_LIMIT = 10
+_REGEN_TOKEN_LIMIT = 20
+_REGEN_WINDOW_SECONDS = 3600
+_REGEN_PROJECTION_DAILY_LIMIT = 50
+_REGEN_DAY_SECONDS = 86400
+_NARRATIVE_PUT_IP_LIMIT = 120
+_NARRATIVE_PUT_TOKEN_LIMIT = 120
+_NARRATIVE_PUT_WINDOW_SECONDS = 3600
 
 router = APIRouter(prefix="/api/projections", tags=["projections"])
 
@@ -154,6 +168,82 @@ def _rate_limited(
         content={"error": "rate_limited", "retry_after_seconds": retry_after, "scope": "ip"},
         headers={"Retry-After": str(retry_after)},
     )
+
+
+def _regen_daily_limited(projection_id: str) -> Optional[JSONResponse]:
+    """Per-projection DAILY ceiling on the PAID ``narrative:regenerate`` (SECURITY §10.1):
+    a single owner/edit token cannot burn a day of provider spend re-drafting ONE board
+    packet. Keyed on the projection id in a 24h window; the ip/token scopes are left off
+    (this cap is deliberately per-projection, orthogonal to the hourly caps). Returns a
+    429 JSONResponse over the cap, else None — emitted BEFORE the provider call."""
+    if _rate_limit_bypassed():
+        return None
+    allowed, retry_after = ratelimit.check(
+        "regenerate_narrative_daily",
+        ip_limit=0,  # ip is None -> the ip scope is skipped; only the projection window counts
+        extra_scopes=(("projection", projection_id, _REGEN_PROJECTION_DAILY_LIMIT),),
+        window_seconds=_REGEN_DAY_SECONDS,
+    )
+    if allowed:
+        return None
+    return JSONResponse(
+        status_code=429,
+        content={"error": "rate_limited", "retry_after_seconds": retry_after,
+                 "scope": "projection"},
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def _raise_version_conflict(store: Store, row: dict, if_match: int) -> None:
+    """The one shared optimistic-concurrency 409 (identical shape on PATCH, the token
+    rotation, and the narrative writes): the current server state + the client's stale
+    version + the recovery menu, so a concurrent editor can reload / overwrite /
+    save-as-copy. Always raises (never returns)."""
+    current = store.get_projection_by_slug(row["view_slug"])
+    cur_vm = loads_obj(current["computed_json"]) if current else {}
+    raise HTTPException(status_code=409, detail={
+        "error": "version_conflict",
+        "current_version": current["version"] if current else None,
+        "your_version": if_match,
+        "current_state": {**cur_vm, "view_slug": row["view_slug"],
+                          "version": current["version"] if current else None},
+        "recovery": "reload | overwrite | save_as_copy",
+    })
+
+
+def _narrative_version_bump(
+    store: Store, row: dict, token: str, if_match: int, change_summary: str,
+) -> int:
+    """Advance the projection version + snapshot a revision for a narrative write.
+
+    Closes the audit gap where narrative saves PARSED ``If-Match`` but ignored it: the
+    version-checked ``UPDATE … WHERE version=?`` + its revision commit land in ONE
+    transaction (mirrors the PATCH write path); 0 rows -> **409 version_conflict**, so a
+    concurrent editor that already advanced the version can NEVER silently clobber the
+    board-packet prose. Returns the new version. The caller upserts the narrative row
+    ONLY after this bump succeeds, so a stale writer is rejected before the upsert."""
+    new_version = if_match + 1
+    revision = {
+        "id": _new_id(),
+        "projection_id": row["id"],
+        "seq": new_version,
+        "inputs_json": row.get("inputs_json") or "{}",
+        "assumptions_json": row.get("assumptions_json") or "{}",
+        "overrides_json": row.get("overrides_json") or "{}",
+        "monthly_json": "{}",
+        "computed_json": row.get("computed_json") or "{}",
+        "model_version": row.get("model_version") or "",
+        "actor_token_hash": hash_token(token),
+        "change_summary": change_summary,
+        "created_at": _utcnow(),
+    }
+    # Empty patch: bump version + updated_at only (the prose lives in the narratives
+    # table, written by the caller); the revision is the audit/restore snapshot.
+    affected = store.update_with_version_check_and_revision(
+        row["id"], if_match, {}, revision)
+    if affected == 0:
+        _raise_version_conflict(store, row, if_match)
+    return new_version
 
 
 def _new_id() -> str:
@@ -1403,6 +1493,8 @@ class NarrativeIn(BaseModel):
 def put_narrative(
     view_slug: str,
     body: NarrativeIn,
+    request: Request,
+    response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
@@ -1410,7 +1502,11 @@ def put_narrative(
     """Save user-edited prose. body_md is allowlist-sanitized BEFORE storage.
 
     Sanitization is the stored-XSS -> localStorage-token-theft defense
-    (SECURITY.md §5). Owner/edit only; view-only is 403.
+    (SECURITY.md §5). Owner/edit only; view-only is 403. Optimistic concurrency:
+    ``If-Match`` is compared to the live version and a stale value is a 409
+    (shape identical to PATCH's); a successful save BUMPS the version and snapshots
+    a revision, so a second editor conflicts instead of silently clobbering the
+    board-packet prose. Coarse per-token/hr rate-limited (a local write, no provider).
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
@@ -1418,6 +1514,21 @@ def put_narrative(
     token = _bearer(authorization)
     if not (_is_owner(token, row) or _is_editor(token, row)):
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
+
+    # §10.1: coarse per-token/hr cap (the hashed token is the bucket key, never plaintext).
+    limited = _rate_limited(
+        "put_narrative", request,
+        ip_limit=_NARRATIVE_PUT_IP_LIMIT,
+        token=hash_token(token), token_limit=_NARRATIVE_PUT_TOKEN_LIMIT,
+        window_seconds=_NARRATIVE_PUT_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
+    # Optimistic concurrency: a stale If-Match is rejected up front (before sanitize/
+    # grounding) so a second editor never clobbers the first's prose (audit P0).
+    if if_match != row["version"]:
+        _raise_version_conflict(store, row, if_match)
 
     clean = sanitize_body_md(body.body_md)
     live_vm = loads_obj(row.get("computed_json"))
@@ -1431,6 +1542,11 @@ def put_narrative(
             "error": "grounding_failed",
             "ungrounded_figures": exc.ungrounded,
         }) from exc
+    # Version-checked bump + revision (0 rows -> 409); the bump gates the write, so a
+    # racing editor at the same version is rejected here even if it slipped the check
+    # above. Persist the prose ONLY after the bump succeeds.
+    new_version = _narrative_version_bump(
+        store, row, token, if_match, "narrative_edit")
     store.upsert_narrative(row["id"], {
         "body_md": clean,
         "edited": 1,
@@ -1440,13 +1556,16 @@ def put_narrative(
         "provider": None,
         "model_version": live_vm.get("model_version"),
     })
+    response.headers["ETag"] = str(new_version)
     return {"body_md": clean, "edited": True, "edit_origin": "human",
-            "computed_hash": compute_hash(live_vm)}
+            "computed_hash": compute_hash(live_vm), "version": new_version}
 
 
 @router.post("/{view_slug}/narrative:regenerate")
 def regenerate_narrative(
     view_slug: str,
+    request: Request,
+    response: Response,
     confirm: bool = False,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
@@ -1462,6 +1581,11 @@ def regenerate_narrative(
     narrative is NOT overwritten. A user-edited narrative is NEVER silently
     discarded: regenerating over ``edit_origin == 'human'`` without ``?confirm=true``
     -> 409 edited_confirm_required (confirm-before-discard gate).
+
+    Cost containment (audit P0): this is a PAID-LLM surface, so it is capped per IP +
+    per token (hourly) AND per projection (daily), and a stale ``If-Match`` is a 409,
+    ALL of them BEFORE the provider call — a rejected request never spends LLM budget.
+    A successful regenerate BUMPS the version and snapshots a revision.
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
@@ -1469,8 +1593,30 @@ def regenerate_narrative(
     token = _bearer(authorization)
     if not (_is_owner(token, row) or _is_editor(token, row)):
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
+
+    # §10.1 cost containment: cap the PAID regenerate BEFORE the provider call — per IP +
+    # per token (hourly) AND a per-projection DAILY ceiling. A rejected request never
+    # spends a token of LLM budget.
+    limited = _rate_limited(
+        "regenerate_narrative", request,
+        ip_limit=_REGEN_IP_LIMIT,
+        token=hash_token(token), token_limit=_REGEN_TOKEN_LIMIT,
+        window_seconds=_REGEN_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+    limited = _regen_daily_limited(row["id"])
+    if limited is not None:
+        return limited
+
     if _ai_disabled(row):
         raise HTTPException(status_code=409, detail={"error": "ai_disabled"})
+
+    # Optimistic concurrency BEFORE the provider (audit P0): a stale If-Match is a 409
+    # with NO LLM call, so a concurrent editor's prose is never clobbered and a stale
+    # request never spends provider budget.
+    if if_match != row["version"]:
+        _raise_version_conflict(store, row, if_match)
 
     live_vm = loads_obj(row.get("computed_json"))
 
@@ -1500,6 +1646,10 @@ def regenerate_narrative(
             "error": "edited_confirm_required"})
 
     clean = sanitize_body_md(draft)
+    # Version-checked bump + revision (0 rows -> 409) BEFORE persisting the new prose,
+    # so a regenerate that raced a concurrent edit is rejected, not silently applied.
+    new_version = _narrative_version_bump(
+        store, row, token, if_match, "narrative_regenerate")
     store.upsert_narrative(row["id"], {
         "body_md": clean,
         "edited": 0,
@@ -1509,8 +1659,10 @@ def regenerate_narrative(
         "provider": provider,
         "model_version": live_vm.get("model_version"),
     })
+    response.headers["ETag"] = str(new_version)
     return {"body_md": clean, "edited": False, "edit_origin": "ai",
-            "computed_hash": compute_hash(live_vm), "provider": provider}
+            "computed_hash": compute_hash(live_vm), "provider": provider,
+            "version": new_version}
 
 
 @router.get("/{view_slug}/packet")
@@ -1673,16 +1825,7 @@ def apply_projection_patch(
     affected = store.update_with_version_check_and_revision(
         row["id"], if_match, patch, revision)
     if affected == 0:
-        current = store.get_projection_by_slug(row["view_slug"])
-        cur_vm = loads_obj(current["computed_json"]) if current else {}
-        raise HTTPException(status_code=409, detail={
-            "error": "version_conflict",
-            "current_version": current["version"] if current else None,
-            "your_version": if_match,
-            "current_state": {**cur_vm, "view_slug": row["view_slug"],
-                              "version": current["version"] if current else None},
-            "recovery": "reload | overwrite | save_as_copy",
-        })
+        _raise_version_conflict(store, row, if_match)
     return vm, new_version, name
 
 

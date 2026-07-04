@@ -97,10 +97,11 @@ def test_patch_flips_narrative_stale(client):
 
     assert client.get(f"/api/projections/{slug}/narrative").json()["stale"] is False
 
+    # the narrative save above bumped the version 1->2, so the PATCH uses If-Match 2
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"share_y1": "0.12"}},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
     )
     assert r.status_code == 200, r.text
 
@@ -155,10 +156,11 @@ def test_packet_uses_current_stored_edited_body(client, store):
     cap = vm["metrics"]["capital"]["display"]
     marker = "Board-reviewed and approved by the finance committee."
     edited = f"<p>{marker} Capital required is {cap}.</p>"
+    # _save_grounded above bumped the version 1->2, so this second save uses If-Match 2
     r = client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": edited},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
     )
     assert r.status_code == 200, r.text
 
@@ -184,11 +186,11 @@ def test_packet_uses_edited_body_even_when_stale(client, store):
         headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
     )
 
-    # mutate so the narrative goes stale
+    # mutate so the narrative goes stale (the save above bumped the version 1->2)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"share_y1": "0.12"}},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
     )
     assert r.status_code == 200, r.text
     assert client.get(f"/api/projections/{slug}/narrative").json()["stale"] is True
@@ -258,10 +260,11 @@ def test_was_now_formatter_used_by_stale_diff_and_preview(client):
     created = _create(client)
     slug, edit = created["view_slug"], created["edit_token"]
     _save_grounded(client, slug, edit)
+    # the narrative save above bumped the version 1->2, so the PATCH uses If-Match 2
     client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"share_y1": "0.12"}},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
     )
     diff = client.get(f"/api/projections/{slug}/narrative").json()["stale_diff"]
     assert diff
