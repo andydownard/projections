@@ -57,8 +57,19 @@ function niceDomain(values: number[], targetTicks: number): Domain {
   const lo = Math.min(0, ...values);
   const hi = Math.max(0, ...values);
   const step = niceStep((hi - lo) / targetTicks) || 1;
-  const min = Math.floor(lo / step) * step;
-  const max = Math.ceil(hi / step) * step;
+  let min = Math.floor(lo / step) * step;
+  let max = Math.ceil(hi / step) * step;
+  // Degenerate guard (review C1): a ONE-SIGNED domain puts $0 at the domain edge.
+  // The shared-zero pass then pins zeroY to a plot edge (zeroFrac 0 or 1), which
+  // collapses the OTHER axis's scale to 0 whenever it has data on the starved
+  // side — on the canonical 60%-labor default (payback N/A → cumulative max is
+  // exactly 0) every net bar rendered at the 0.5px floor and all left-axis labels
+  // stacked on one row. One nice-step of headroom past zero keeps every domain
+  // strictly zero-spanning, so both scales stay finite and positive. When both
+  // series genuinely span zero the domains are untouched and the shared-$0 pixel
+  // row is unchanged (test-pinned).
+  if (max === 0) max = step;
+  if (min === 0) min = -step;
   const ticks: number[] = [];
   for (let v = min; v <= max + step / 2; v += step) ticks.push(Math.round(v));
   return { min, max, step, ticks };
@@ -156,7 +167,13 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
     setExpanded((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
 
   // ONE lifted hover/focus state, keyed by the server `month` field (spec §5).
+  // `hovered` is the TRANSIENT pointer/keyboard position; `pinnedMonth` is the
+  // STICKY tap/click pin (spec §5 touch row — the primary interaction at 375).
+  // The rendered highlight is `activeMonth = hovered ?? pinnedMonth`, so a
+  // transient hover temporarily overrides a pin and the display falls back to
+  // the pin when the pointer leaves.
   const [hovered, setHovered] = useState<number | null>(null);
+  const [pinnedMonth, setPinnedMonth] = useState<number | null>(null);
 
   if (!monthly.length) {
     return (
@@ -256,17 +273,49 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
     : "";
   const beLabel = beMonth != null ? `month ${beMonth}` : "not within the horizon";
 
-  const activeIdx = hovered != null ? idxOfMonth(hovered) : -1;
+  const activeMonth = hovered ?? pinnedMonth;
+  const activeIdx = activeMonth != null ? idxOfMonth(activeMonth) : -1;
   const activePt = activeIdx >= 0 ? monthly[activeIdx] : null;
 
+  // Deliberate navigation (keyboard land / tap) into a collapsed group
+  // auto-expands it (spec §5); PASSIVE pointer hover never does.
+  const revealGroupOf = (month: number) => {
+    const g = groups.find((grp) => grp.months.some((m) => m.month === month));
+    if (g) openGroup(g.key);
+  };
+
+  // Tap/click-to-pin (spec §5 touch, review I1): tap pins the month's readout;
+  // tapping the same month again unpins; tapping another month moves the pin.
+  const togglePin = (month: number) => {
+    if (pinnedMonth === month) {
+      setPinnedMonth(null);
+      setHovered(null);
+    } else {
+      setPinnedMonth(month);
+      setHovered(month);
+      revealGroupOf(month);
+    }
+  };
+
+  // Plot→row pointer resolution (review C2): the scrubber rect spans exactly the
+  // plot, so the horizontal fraction across its SCREEN box maps 1:1 onto the n
+  // equal month bands — pure hit-test geometry (no data math). The whole band
+  // column is the hit target (≥24px logical, spec §5).
+  const monthFromClientX = (el: Element, clientX: number): number | null => {
+    const rect = el.getBoundingClientRect();
+    if (!rect.width) return null; // jsdom / zero-layout guard
+    const frac = (clientX - rect.left) / rect.width;
+    const idx = Math.min(n - 1, Math.max(0, Math.floor(frac * n)));
+    return monthly[idx].month;
+  };
+
   // Keyboard scrubber (spec §6): one composite role="slider" tab stop.
-  const currentMonth = hovered ?? trough.month;
+  const currentMonth = activeMonth ?? trough.month;
   const moveTo = (month: number) => {
     const clamped = Math.max(monthly[0].month, Math.min(monthly[n - 1].month, month));
     setHovered(clamped);
     // Deliberate keyboard navigation into a collapsed group auto-expands it (§5).
-    const g = groups.find((grp) => grp.months.some((m) => m.month === clamped));
-    if (g) openGroup(g.key);
+    revealGroupOf(clamped);
   };
   const onScrubberKey = (e: KeyboardEvent<SVGRectElement>) => {
     const first = monthly[0].month;
@@ -407,7 +456,7 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
           {monthly.map((m, i) => {
             const yv = yFor(m.net.raw, sNet);
             const up = m.net.raw >= 0;
-            const active = m.month === hovered;
+            const active = m.month === activeMonth;
             return (
               <rect
                 key={`bar-${m.month}`}
@@ -518,7 +567,11 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
             </g>
           )}
 
-          {/* keyboard scrubber — one composite role=slider tab stop (spec §6) */}
+          {/* keyboard + pointer scrubber — one composite role=slider tab stop
+              (spec §6) AND the plot's single pointer surface (review C2/I1): the
+              rect covers the whole plot, so each month's full band column is the
+              hit target. mousemove = transient hover (passive — never expands a
+              collapsed group); click/tap = pin (deliberate — auto-expands). */}
           <rect
             className="cashflow-chart__scrubber"
             data-testid="cashflow-scrubber"
@@ -535,6 +588,16 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
             aria-valuetext={readout(monthly[idxOfMonth(currentMonth) >= 0 ? idxOfMonth(currentMonth) : 0])}
             onKeyDown={onScrubberKey}
             onBlur={() => setHovered(null)}
+            onMouseMove={(e) => {
+              if (pinnedMonth != null) return; // a pin holds until unpinned/moved
+              const m = monthFromClientX(e.currentTarget, e.clientX);
+              if (m != null) setHovered(m);
+            }}
+            onMouseLeave={() => setHovered(null)}
+            onClick={(e) => {
+              const m = monthFromClientX(e.currentTarget, e.clientX);
+              if (m != null) togglePin(m);
+            }}
           />
         </svg>
       </figure>
@@ -585,7 +648,14 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
                   const flags = MILESTONE_META.filter(
                     (meta) => milestones?.[meta.key]?.raw === m.month,
                   );
-                  const active = m.month === hovered;
+                  const active = m.month === activeMonth;
+                  // No onFocus handler: data rows carry no focusable element, so
+                  // a row focus event can never fire (review I2). Keyboard access
+                  // to per-month data routes through the SINGLE slider scrubber
+                  // (spec Part 6 — one tab stop, not 60), which drives the same
+                  // row highlight. onClick = the spec §5 touch row's tap-to-pin
+                  // parity on the table side (a redundant pointer affordance —
+                  // never the only path to anything).
                   return (
                     <tr
                       key={m.month}
@@ -595,7 +665,7 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
                       className={active ? "cashflow-table__row--active" : undefined}
                       onMouseEnter={() => setHovered(m.month)}
                       onMouseLeave={() => setHovered(null)}
-                      onFocus={() => setHovered(m.month)}
+                      onClick={() => togglePin(m.month)}
                     >
                       <th scope="row" className="cashflow-table__label">
                         M{m.month}

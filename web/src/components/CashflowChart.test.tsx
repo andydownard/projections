@@ -1,8 +1,14 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CashflowChart } from "./CashflowChart";
 import type { Milestones, MonthlyPoint } from "../api/viewModel";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 // A server money value {raw, display} — display matches the server convention
 // (whole dollars, "$", parentheses for negatives) since the module renders it
@@ -312,5 +318,200 @@ describe("CashflowChart module", () => {
     render(<CashflowChart monthly={[]} breakevenMonth={null} />);
     expect(screen.getByTestId("cashflow-chart")).toBeInTheDocument();
     expect(screen.getByText(/no monthly cash-flow data/i)).toBeInTheDocument();
+  });
+});
+
+// ── review C1: the shared-zero pass must stay NON-DEGENERATE when a series is
+// one-signed. On the CANONICAL 60%-labor default (payback N/A → cumulative never
+// reaches $0 → cum.max === 0) the unguarded pass yielded zeroFrac=1 → zeroY=padT
+// → sNet=0: all 60 net bars collapsed to the 0.5px floor and every left-axis
+// label stacked on one y. Pinned to the REAL golden fixture, not a synthetic. ──
+describe("shared-zero degenerate guard (review C1)", () => {
+  const golden = JSON.parse(
+    readFileSync(
+      join(here, "..", "..", "..", "engine", "tests", "golden", "house_of_hope_canonical_60.json"),
+      "utf8",
+    ),
+  ) as { monthly: MonthlyPoint[]; breakevenMonth: number | null; milestones: Milestones };
+
+  it("canonical 60%-labor golden: net bars are visible and VARY; left tick ys are distinct", () => {
+    const { container } = render(
+      <CashflowChart
+        monthly={golden.monthly}
+        breakevenMonth={golden.breakevenMonth}
+        milestones={golden.milestones}
+      />,
+    );
+    const heights = Array.from(container.querySelectorAll(".cashflow-chart__bar")).map((b) =>
+      parseFloat(b.getAttribute("height") ?? "0"),
+    );
+    expect(heights).toHaveLength(60);
+    // The bars must not all sit at the 0.5px degenerate floor: they vary, and the
+    // deep month-1 loss bar is tall.
+    expect(new Set(heights.map((h) => h.toFixed(1))).size).toBeGreaterThan(1);
+    expect(Math.max(...heights)).toBeGreaterThan(20);
+    // Left (net) axis tick labels render on DISTINCT rows, never stacked.
+    const leftYs = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--left")).map(
+      (t) => t.getAttribute("y"),
+    );
+    expect(leftYs.length).toBeGreaterThan(1);
+    expect(new Set(leftYs).size).toBe(leftYs.length);
+    // The shared-$0 property is PRESERVED: both axes' $0 on the same pixel row.
+    const zeroY = (sel: string) =>
+      Array.from(container.querySelectorAll(sel))
+        .find((t) => t.textContent === "$0")!
+        .getAttribute("y");
+    expect(zeroY(".cashflow-chart__axis-tick--right")).toBe(zeroY(".cashflow-chart__axis-tick--left"));
+  });
+
+  it("mirror case: both series entirely non-negative stays well-formed (bars vary, ticks distinct, $0 on both axes)", () => {
+    // A profitable-from-day-1 shape: every net >= 0, cumulative never below 0
+    // (min === 0 on both domains — the zeroFrac=0 mirror of the C1 case).
+    const pts: MonthlyPoint[] = [];
+    let cum = 0;
+    for (let m = 1; m <= 24; m++) {
+      const net = 1000 * m;
+      cum += net;
+      pts.push(pt(m, 2000 * m, 1000 * m, net, cum));
+    }
+    const { container } = render(<CashflowChart monthly={pts} breakevenMonth={1} />);
+    const heights = Array.from(container.querySelectorAll(".cashflow-chart__bar")).map((b) =>
+      parseFloat(b.getAttribute("height") ?? "0"),
+    );
+    expect(new Set(heights.map((h) => h.toFixed(1))).size).toBeGreaterThan(1);
+    expect(Math.max(...heights)).toBeGreaterThan(20);
+    const leftYs = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--left")).map(
+      (t) => t.getAttribute("y"),
+    );
+    expect(new Set(leftYs).size).toBe(leftYs.length);
+    const rightTicks = Array.from(
+      container.querySelectorAll(".cashflow-chart__axis-tick--right"),
+    ).map((t) => t.textContent);
+    expect(rightTicks).toContain("$0");
+  });
+});
+
+// ── review C2 + I1: plot→row pointer hover and tap/click-to-pin. The scrubber
+// rect is the single pointer surface (the whole month band = the ≥24px hit
+// target). jsdom has no layout, so the rect's box is mocked. ──
+function mockScrubberRect(scrubber: Element) {
+  vi.spyOn(scrubber, "getBoundingClientRect").mockReturnValue({
+    left: 0,
+    top: 0,
+    x: 0,
+    y: 0,
+    width: 600,
+    height: 228,
+    right: 600,
+    bottom: 228,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+// The mocked plot is 600px wide over 60 months → each band 10px; band center of
+// month m is at (m - 0.5) * 10.
+const bandX = (month: number) => (month - 0.5) * 10;
+
+describe("plot→row pointer hover (review C2)", () => {
+  function setup() {
+    const utils = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const scrubber = screen.getByTestId("cashflow-scrubber");
+    mockScrubberRect(scrubber);
+    return { ...utils, scrubber };
+  }
+
+  it("mousemove over a month band highlights that month's table row + crosshair + point + tooltip", () => {
+    const { container, scrubber } = setup();
+    fireEvent.mouseMove(scrubber, { clientX: bandX(2) });
+    expect(screen.getByTestId("cashflow-month-2")).toHaveClass("cashflow-table__row--active");
+    expect(container.querySelector(".cashflow-chart__crosshair")).toBeInTheDocument();
+    expect(container.querySelector(".cashflow-chart__point")).toBeInTheDocument();
+    expect(screen.getByTestId("cashflow-tooltip")).toBeInTheDocument();
+  });
+
+  it("moving to another band moves the linked highlight", () => {
+    const { scrubber } = setup();
+    fireEvent.mouseMove(scrubber, { clientX: bandX(2) });
+    fireEvent.mouseMove(scrubber, { clientX: bandX(5) });
+    expect(screen.getByTestId("cashflow-month-5")).toHaveClass("cashflow-table__row--active");
+    expect(screen.getByTestId("cashflow-month-2")).not.toHaveClass("cashflow-table__row--active");
+  });
+
+  it("mouseleave clears the transient hover (no pin)", () => {
+    const { container, scrubber } = setup();
+    fireEvent.mouseMove(scrubber, { clientX: bandX(2) });
+    fireEvent.mouseLeave(scrubber);
+    expect(container.querySelector(".cashflow-chart__point")).toBeNull();
+    expect(screen.queryByTestId("cashflow-tooltip")).not.toBeInTheDocument();
+  });
+
+  it("passive hover over a collapsed group does NOT auto-expand it — tooltip still shows (spec §5)", () => {
+    const { scrubber } = setup();
+    // Month 20 lives in Year 2 (months 13-24), which starts collapsed.
+    fireEvent.mouseMove(scrubber, { clientX: bandX(20) });
+    expect(screen.getByTestId("cashflow-group-toggle-year-2")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.getByTestId("cashflow-month-20")).toHaveAttribute("hidden");
+    expect(screen.getByTestId("cashflow-tooltip")).toBeInTheDocument();
+  });
+});
+
+describe("tap/click-to-pin (review I1, spec §5 touch)", () => {
+  function setup() {
+    const utils = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const scrubber = screen.getByTestId("cashflow-scrubber");
+    mockScrubberRect(scrubber);
+    return { ...utils, scrubber };
+  }
+
+  it("click pins the month: highlight + tooltip survive pointer leave; a second click unpins", () => {
+    const { container, scrubber } = setup();
+    fireEvent.click(scrubber, { clientX: bandX(3) });
+    expect(screen.getByTestId("cashflow-month-3")).toHaveClass("cashflow-table__row--active");
+    fireEvent.mouseLeave(scrubber);
+    // Pinned: the readout persists after the pointer leaves.
+    expect(screen.getByTestId("cashflow-month-3")).toHaveClass("cashflow-table__row--active");
+    expect(screen.getByTestId("cashflow-tooltip")).toBeInTheDocument();
+    // Second tap on the same month unpins and dismisses.
+    fireEvent.click(scrubber, { clientX: bandX(3) });
+    expect(screen.queryByTestId("cashflow-tooltip")).not.toBeInTheDocument();
+    expect(container.querySelector(".cashflow-chart__point")).toBeNull();
+  });
+
+  it("tapping another month MOVES the pin", () => {
+    const { scrubber } = setup();
+    fireEvent.click(scrubber, { clientX: bandX(3) });
+    fireEvent.click(scrubber, { clientX: bandX(7) });
+    fireEvent.mouseLeave(scrubber);
+    expect(screen.getByTestId("cashflow-month-7")).toHaveClass("cashflow-table__row--active");
+    expect(screen.getByTestId("cashflow-month-3")).not.toHaveClass("cashflow-table__row--active");
+  });
+
+  it("tapping a month in a collapsed group auto-expands it (deliberate navigation, spec §5)", () => {
+    const { scrubber } = setup();
+    expect(screen.getByTestId("cashflow-month-20")).toHaveAttribute("hidden");
+    fireEvent.click(scrubber, { clientX: bandX(20) });
+    expect(screen.getByTestId("cashflow-group-toggle-year-2")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByTestId("cashflow-month-20")).not.toHaveAttribute("hidden");
+    expect(screen.getByTestId("cashflow-month-20")).toHaveClass("cashflow-table__row--active");
+  });
+
+  it("tapping a table row pins that month (row-side tap parity)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    const row = screen.getByTestId("cashflow-month-4");
+    fireEvent.click(row);
+    fireEvent.mouseLeave(row);
+    // Pinned via the row: the highlight persists after the pointer leaves.
+    expect(row).toHaveClass("cashflow-table__row--active");
+    fireEvent.click(row); // second tap unpins
+    expect(row).not.toHaveClass("cashflow-table__row--active");
   });
 });
