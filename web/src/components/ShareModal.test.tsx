@@ -122,12 +122,16 @@ describe("ShareModal — a11y + dismissal", () => {
 // selected for a manual copy). Same honesty rule as the reject path (3.5 review).
 describe("ShareModal — clipboard fallback", () => {
   it("selects the field and shows the manual hint — never a copied toast — when navigator.clipboard is unavailable", async () => {
+    // ORDER MATTERS: userEvent.setup() installs its own clipboard stub, which
+    // silently re-defines navigator.clipboard and would route the click down the
+    // Clipboard-API path (the pre-fix version of this test had that bug — it never
+    // exercised the no-clipboard branch at all). Remove the API AFTER setup.
+    const user = userEvent.setup();
     Object.defineProperty(navigator, "clipboard", {
       value: undefined,
       configurable: true,
       writable: true,
     });
-    const user = userEvent.setup();
     renderModal({ slug: "p_8x", editToken: null });
     await user.click(screen.getByTestId("share-copy-readonly"));
     expect(await screen.findByText(/press ctrl\+c to copy/i)).toBeInTheDocument();
