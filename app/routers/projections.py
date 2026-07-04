@@ -36,7 +36,6 @@ from app.deps import (
     hash_token,
     parse_if_match,
     resolve_bearer_identity,
-    token_matches,
 )
 from app.geo.client import GeoUpstreamError, static_map_bytes
 from app.jsonutil import loads_obj
@@ -50,6 +49,11 @@ from app.narrative import (
     validate_grounding,
 )
 from app.packet import build_packet, render_packet_docx, render_packet_md
+from app.routers.common import bearer as _bearer
+from app.routers.common import client_ip as _client_ip
+from app.routers.common import is_editor as _is_editor
+from app.routers.common import is_owner as _is_owner
+from app.routers.common import utcnow as _utcnow
 from app.store import Store, get_store
 from engine import dag
 from engine.compute import (
@@ -103,19 +107,6 @@ _STATICMAP_WINDOW_SECONDS = 3600
 router = APIRouter(prefix="/api/projections", tags=["projections"])
 
 
-def _client_ip(request: Request) -> str:
-    """Right-most untrusted hop from X-Forwarded-For, else the socket peer.
-
-    Railway terminates TLS at a single proxy that appends the real client IP as the
-    LAST X-Forwarded-For entry, so the right-most hop is the only one a client cannot
-    spoof (anything it sends arrives to the left of the proxy's append). SECURITY §10.
-    """
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
-
-
 def _rate_limit_bypassed() -> bool:
     """True only under the non-prod E2E seed flag (mirrors app/main.py's seed gate).
 
@@ -156,31 +147,9 @@ def _rate_limited(
     )
 
 
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _new_id() -> str:
     # App-generated, sortable-ish string PK (no DB autoincrement; Postgres-portable).
     return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + secrets.token_hex(8)
-
-
-def _bearer(authorization: Optional[str]) -> Optional[str]:
-    if authorization and authorization.startswith("Bearer "):
-        return authorization[7:].strip() or None
-    return None
-
-
-def _is_owner(token: Optional[str], row: dict) -> bool:
-    return token is not None and token_matches(token, row["owner_token_hash"])
-
-
-def _is_editor(token: Optional[str], row: dict) -> bool:
-    return (
-        token is not None
-        and bool(row.get("edit_token_hash"))
-        and token_matches(token, row["edit_token_hash"])
-    )
 
 
 def _clerk_owns(row: dict, ident: ClerkOwner) -> bool:

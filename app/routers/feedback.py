@@ -25,7 +25,6 @@ import logging
 import os
 import secrets
 from collections.abc import Callable
-from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -43,6 +42,8 @@ from app.feedback.redact import (
     normalize_type,
     redact_text,
 )
+from app.routers.common import client_ip as _client_ip
+from app.routers.common import utcnow as _utcnow
 from app.store import Store, get_store
 from engine.model import MODEL_VERSION
 
@@ -69,18 +70,6 @@ _TYPE_DISPLAY = {"bug": "Bug", "idea": "Idea", "other": "Other"}
 
 def _support_id() -> str:
     return "SUP-" + "".join(secrets.choice(_SUP_ALPHABET) for _ in range(6))
-
-
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _client_ip(request: Request) -> str:
-    """Right-most untrusted hop from X-Forwarded-For, else the socket peer."""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
 
 
 class FeedbackContext(BaseModel):

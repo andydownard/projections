@@ -31,6 +31,8 @@ from app.deps import hash_token
 from app.research.extract import extract_rent
 from app.research.provider import RentProviderError, make_rent_provider
 from app.research.rent import build_rent_snippets, location_label
+from app.routers.common import bearer as _bearer
+from app.routers.common import client_ip as _client_ip
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -63,19 +65,6 @@ class ResearchIn(BaseModel):
 
     class Config:
         extra = "ignore"
-
-
-def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
-
-
-def _bearer(authorization: Optional[str]) -> Optional[str]:
-    if authorization and authorization.startswith("Bearer "):
-        return authorization[7:].strip() or None
-    return None
 
 
 def _cache_key(label: str, building_sqft: str, basis: str) -> str:

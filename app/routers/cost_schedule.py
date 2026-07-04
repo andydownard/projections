@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app import ratelimit
+from app.routers.common import client_ip as _client_ip
 from engine import compute, model
 from engine.money import money_view
 
@@ -36,13 +37,6 @@ router = APIRouter(prefix="/api/cost-schedule", tags=["cost-schedule"])
 # cost/spam gate (cf. API_SPEC §2.3 "All other GET" 600 / 5 min).
 _IP_LIMIT = 600
 _WINDOW_SECONDS = 300
-
-
-def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
 
 
 class CostRow(BaseModel):
