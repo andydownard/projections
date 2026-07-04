@@ -141,3 +141,35 @@ def test_patch_unknown_slug_404(client):
         headers={"Authorization": "Bearer whatever", "If-Match": "1"},
     )
     assert r.status_code == 404, r.text
+
+
+def test_patch_labor_pct_nan_string_is_422_not_500(client):
+    # Decimal("nan") PARSES fine, but any bounds comparison (< lo / > hi) raises
+    # InvalidOperation — which is NOT a ValueError, so pydantic used to let it 500.
+    # A NaN knob must be rejected at the boundary like any other bad value (422).
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"assumptions": {"labor_pct": "nan"}},
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_patch_labor_pct_nan_json_float_is_422_not_500(client):
+    # The deployed numeric wire shape can carry a bare JSON `NaN` token (Python's
+    # json.loads accepts it), which coerces to the string "nan" before the bounds
+    # check. Same fail-closed 422 as the string form — never a 500.
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    r = client.patch(
+        f"/api/projections/{slug}",
+        content='{"assumptions": {"labor_pct": NaN}}',
+        headers={
+            "Authorization": f"Bearer {owner}",
+            "If-Match": "1",
+            "Content-Type": "application/json",
+        },
+    )
+    assert r.status_code == 422, r.text

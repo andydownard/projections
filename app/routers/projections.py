@@ -486,6 +486,10 @@ def _require_fraction(name: str, raw: Optional[str], *, lo: str, hi: str) -> Non
         val = Decimal(str(raw))
     except (InvalidOperation, ValueError) as exc:
         raise ValueError(f"{name} must be a number") from exc
+    # Decimal("nan") PARSES but every comparison below raises InvalidOperation (NaN is
+    # unordered) — reject it as a bad value (422) instead of letting it 500.
+    if val.is_nan():
+        raise ValueError(f"{name} must be a number")
     if val < Decimal(lo) or val > Decimal(hi):
         raise ValueError(f"{name} must be between {lo} and {hi}")
 
@@ -503,6 +507,10 @@ def _require_min(name: str, raw: Optional[str], *, lo: str) -> None:
         val = Decimal(str(raw))
     except (InvalidOperation, ValueError) as exc:
         raise ValueError(f"{name} must be a number") from exc
+    # NaN parses but comparisons raise InvalidOperation (see _require_fraction) — a
+    # NaN would also slip PAST a `< lo` lower-bound-only check, so reject it explicitly.
+    if val.is_nan():
+        raise ValueError(f"{name} must be a number")
     if val < Decimal(lo):
         raise ValueError(f"{name} must be >= {lo}")
 
