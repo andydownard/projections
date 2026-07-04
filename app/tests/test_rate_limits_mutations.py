@@ -55,6 +55,34 @@ def test_patch_over_cap_returns_429(client, monkeypatch):
     _assert_429(_patch())
 
 
+def test_patch_over_token_cap_returns_429_across_distinct_ips(client, monkeypatch):
+    # F5 (batch1 review): every test above monkeypatches only `_PATCH_IP_LIMIT`, so
+    # the independently-enforced TOKEN leg (verified in code — `patch_projection`
+    # passes both `ip_limit` and `token_limit` to `ratelimit.check`, which checks each
+    # scope independently) has no regression coverage: a future change passing
+    # `token=None` would sail through the whole suite untouched. Drive the SAME token
+    # from THREE DISTINCT client IPs (via X-Forwarded-For, matching the repo's XFF-spoof
+    # convention in test_penny_endpoints.py) so the per-IP bucket (240/hr default,
+    # untouched here) never fills — only the per-token bucket can produce the 429.
+    slug, owner, _v, _b = create_projection(client)
+    monkeypatch.setattr(P, "_PATCH_TOKEN_LIMIT", 3, raising=False)
+
+    def _patch(ip):
+        return client.patch(
+            f"/api/projections/{slug}",
+            json={"assumptions": {"labor_pct": "0.45"}},
+            headers={
+                "Authorization": f"Bearer {owner}",
+                "If-Match": "99",
+                "X-Forwarded-For": ip,
+            },
+        )
+
+    for i in range(3):
+        assert _patch(f"10.0.0.{i}").status_code != 429
+    _assert_429(_patch("10.0.0.99"))
+
+
 def test_patch_bypassed_under_e2e_seed_flag(client, monkeypatch):
     # The Playwright autosave path (E2E_SEED=1, non-prod) must never trip the cap.
     slug, owner, _v, _b = create_projection(client)

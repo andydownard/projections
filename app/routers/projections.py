@@ -39,7 +39,7 @@ from app.deps import (
     resolve_bearer_identity,
 )
 from app.geo.client import GeoUpstreamError, static_map_bytes
-from app.jsonutil import loads_obj
+from app.jsonutil import dumps_finite, loads_obj
 from app.narrative import (
     GroundingError,
     canonical_grounded_figures,
@@ -519,8 +519,11 @@ def _require_fraction(name: str, raw: Optional[str], *, lo: str, hi: str) -> Non
     except (InvalidOperation, ValueError) as exc:
         raise ValueError(f"{name} must be a number") from exc
     # Decimal("nan") PARSES but every comparison below raises InvalidOperation (NaN is
-    # unordered) — reject it as a bad value (422) instead of letting it 500.
-    if val.is_nan():
+    # unordered) — reject it as a bad value (422) instead of letting it 500. ±Infinity
+    # parses AND compares cleanly, so a bare `is_nan()` guard lets it slip through here;
+    # `is_finite()` is False for qNaN/sNaN/±Infinity, closing the whole non-finite class
+    # in one predicate (review F1).
+    if not val.is_finite():
         raise ValueError(f"{name} must be a number")
     if val < Decimal(lo) or val > Decimal(hi):
         raise ValueError(f"{name} must be between {lo} and {hi}")
@@ -541,7 +544,11 @@ def _require_min(name: str, raw: Optional[str], *, lo: str) -> None:
         raise ValueError(f"{name} must be a number") from exc
     # NaN parses but comparisons raise InvalidOperation (see _require_fraction) — a
     # NaN would also slip PAST a `< lo` lower-bound-only check, so reject it explicitly.
-    if val.is_nan():
+    # ALSO reject ±Infinity: this helper has no upper bound, so `Decimal("inf") >= lo`
+    # is TRUE and sails straight through a `val < lo` check — the proven bricking bug
+    # (basket:"inf" -> 500 on this and every future read/restore, review F1).
+    # `is_finite()` covers qNaN/sNaN/±Infinity in one predicate.
+    if not val.is_finite():
         raise ValueError(f"{name} must be a number")
     if val < Decimal(lo):
         raise ValueError(f"{name} must be >= {lo}")
@@ -721,7 +728,7 @@ def _schedule_columns(inputs_d: dict) -> dict:
         )
     opening = inputs_d.get("opening_month_number")
     return {
-        "cost_schedule_json": json.dumps(schedule),
+        "cost_schedule_json": dumps_finite(schedule),
         "target_opening_date": inputs_d.get("target_opening_date"),
         "opening_month_number": int(opening) if opening is not None
         else DEFAULT_OPENING_MONTH_NUMBER,
@@ -1090,13 +1097,13 @@ def create_projection(
         "name": name,
         "model_version": vm.get("model_version", ""),
         "compute_schema_version": vm.get("compute_schema_version", ""),
-        "location_json": json.dumps(body.location.model_dump(exclude_none=True)),
-        "trade_area_json": json.dumps(body.trade_area.model_dump()),
-        "inputs_json": json.dumps(inputs_dump),
-        "demand_drivers_json": json.dumps(body.demand or {}),
-        "assumptions_json": json.dumps(body.assumptions.model_dump() if body.assumptions else {}),
-        "overrides_json": json.dumps(body.overrides or {}),
-        "computed_json": json.dumps(vm),
+        "location_json": dumps_finite(body.location.model_dump(exclude_none=True)),
+        "trade_area_json": dumps_finite(body.trade_area.model_dump()),
+        "inputs_json": dumps_finite(inputs_dump),
+        "demand_drivers_json": dumps_finite(body.demand or {}),
+        "assumptions_json": dumps_finite(body.assumptions.model_dump() if body.assumptions else {}),
+        "overrides_json": dumps_finite(body.overrides or {}),
+        "computed_json": dumps_finite(vm),
         # Server-checked terms gate (PRD §21): stamp acceptance now when the operator
         # actively accepted; NULL otherwise so exports correctly 403 terms_required.
         "terms_accepted_at": now if body.terms_accepted else None,
@@ -1219,13 +1226,13 @@ def duplicate_projection(
         "model_version": vm.get("model_version", ""),
         "compute_schema_version": vm.get("compute_schema_version", ""),
         # Copy the source's resolved location verbatim (byte-faithful column copy).
-        "location_json": row.get("location_json") or json.dumps({}),
-        "trade_area_json": json.dumps(trade_d),
-        "inputs_json": json.dumps(inputs_d),
-        "demand_drivers_json": json.dumps(demand_d),
-        "assumptions_json": json.dumps(assumptions_d),
-        "overrides_json": json.dumps(overrides_d),
-        "computed_json": json.dumps(vm),
+        "location_json": row.get("location_json") or dumps_finite({}),
+        "trade_area_json": dumps_finite(trade_d),
+        "inputs_json": dumps_finite(inputs_d),
+        "demand_drivers_json": dumps_finite(demand_d),
+        "assumptions_json": dumps_finite(assumptions_d),
+        "overrides_json": dumps_finite(overrides_d),
+        "computed_json": dumps_finite(vm),
         # The owner already accepted the planning-estimates caveat for this data; the
         # copy inherits it so exports are reachable without a surprising re-accept.
         "terms_accepted_at": row.get("terms_accepted_at"),
@@ -1662,7 +1669,7 @@ def put_narrative(
         "edited": 1,
         "edit_origin": "human",
         "computed_hash": compute_hash(live_vm),
-        "snapshot_json": json.dumps(live_vm),
+        "snapshot_json": dumps_finite(live_vm),
         "provider": None,
         "model_version": live_vm.get("model_version"),
     })
@@ -1765,7 +1772,7 @@ def regenerate_narrative(
         "edited": 0,
         "edit_origin": "ai",
         "computed_hash": compute_hash(live_vm),
-        "snapshot_json": json.dumps(live_vm),
+        "snapshot_json": dumps_finite(live_vm),
         "provider": provider,
         "model_version": live_vm.get("model_version"),
     })
@@ -1904,12 +1911,12 @@ def apply_projection_patch(
 
     patch = {
         "name": name,
-        "inputs_json": json.dumps(inputs_d),
-        "assumptions_json": json.dumps(assumptions_d),
-        "demand_drivers_json": json.dumps(demand_d),
-        "trade_area_json": json.dumps(trade_d),
-        "overrides_json": json.dumps(overrides_d),
-        "computed_json": json.dumps(vm),
+        "inputs_json": dumps_finite(inputs_d),
+        "assumptions_json": dumps_finite(assumptions_d),
+        "demand_drivers_json": dumps_finite(demand_d),
+        "trade_area_json": dumps_finite(trade_d),
+        "overrides_json": dumps_finite(overrides_d),
+        "computed_json": dumps_finite(vm),
         "model_version": vm.get("model_version", ""),
         **_schedule_columns(inputs_d),
     }
@@ -2196,10 +2203,10 @@ def restore_revision(
             "error": "invalid_inputs", "message": str(exc)}) from exc
 
     patch = {
-        "inputs_json": json.dumps(inputs_d),
-        "assumptions_json": json.dumps(assumptions_d),
-        "overrides_json": json.dumps(overrides_d),
-        "computed_json": json.dumps(vm),
+        "inputs_json": dumps_finite(inputs_d),
+        "assumptions_json": dumps_finite(assumptions_d),
+        "overrides_json": dumps_finite(overrides_d),
+        "computed_json": dumps_finite(vm),
         "model_version": vm.get("model_version", ""),
         # keep the denormalized schedule/anchor columns consistent with the
         # restored inputs_json (the canonical copy).
