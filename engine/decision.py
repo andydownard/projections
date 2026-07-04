@@ -177,13 +177,19 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
         cagr = None
         flags["cagr"] = "N/A"
 
-    # sensitivity: base / downside / upside, full re-runs (§6.2).
+    # sensitivity: base / downside / upside, full re-runs (§6.2). The ± stress reads
+    # assumptions.sensitivity_delta (model.SENSITIVITY_DELTA is its default and single
+    # source) — downside stresses rent ×(1+delta) / donations ×(1-delta), upside the
+    # reverse. Default delta 0.25 reproduces the prior 1.25/0.75 literals byte-for-byte.
+    delta = D(assumptions.sensitivity_delta)
+    up_mult = str(Decimal("1") + delta)      # 1.25 at the 0.25 default
+    down_mult = str(Decimal("1") - delta)    # 0.75 at the 0.25 default
     base_net, base_be, base_cap = _scenario_net(
         inputs, assumptions, demand, trade, overrides, "1.0", "1.0")
     down_net, down_be, down_cap = _scenario_net(
-        inputs, assumptions, demand, trade, overrides, "1.25", "0.75")
+        inputs, assumptions, demand, trade, overrides, up_mult, down_mult)
     up_net, up_be, up_cap = _scenario_net(
-        inputs, assumptions, demand, trade, overrides, "0.75", "1.25")
+        inputs, assumptions, demand, trade, overrides, down_mult, up_mult)
     sensitivity = {
         "base": {"net": base_net, "breakeven": base_be, "capital": base_cap},
         "downside": {"net": down_net, "breakeven": down_be, "capital": down_cap},

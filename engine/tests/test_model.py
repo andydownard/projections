@@ -37,6 +37,16 @@ def test_occupancy_and_capital_constants():
     assert Decimal(str(model.SENSITIVITY_DELTA)) == Decimal("0.25")
 
 
+def test_sensitivity_delta_is_the_assumptions_default():
+    # SENSITIVITY_DELTA is the single source for the ± stress: the Assumptions default
+    # reads it, so decision.py derives the downside/upside multipliers from it instead
+    # of the old dead-constant hard-coded 1.25/0.75 literals.
+    from engine.compute import Assumptions
+
+    assert Assumptions().sensitivity_delta == model.SENSITIVITY_DELTA
+    assert Decimal(str(Assumptions().sensitivity_delta)) == Decimal("0.25")
+
+
 def test_fixed_annual_excludes_supplies_and_utilities():
     # Supplies became a %-line (REMOVED); utilities became a sq-ft-derived line so it
     # is no longer a flat fixed-$ entry either (feature #245).

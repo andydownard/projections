@@ -82,6 +82,10 @@ class Assumptions:
     basket: str = model.AVG_BASKET_VALUE
     donations_per_hh: int = model.DONATIONS_PER_HH_PER_YEAR
     reserve_buffer: int = model.CASH_RESERVE_BUFFER
+    # ± stress applied by the sensitivity scenarios (decision.py): downside stresses
+    # rent ×(1+delta) / donations ×(1-delta), upside the reverse. Default 0.25 (§12.2)
+    # reproduces the prior hard-coded 1.25/0.75 literals byte-for-byte.
+    sensitivity_delta: str = model.SENSITIVITY_DELTA
     fixed_annual: dict = field(default_factory=lambda: dict(model.FIXED_ANNUAL))
     startup: dict = field(default_factory=lambda: dict(model.STARTUP))
 

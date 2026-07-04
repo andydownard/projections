@@ -150,7 +150,11 @@ def default_cost_schedule(building_sqft=EXAMPLE_BUILDING_SQFT) -> list[dict]:
 
 # --- capital & cash
 CASH_RESERVE_BUFFER = 25000          # §7.3 / §12.1
-SENSITIVITY_DELTA = "0.25"           # §12.2 ±25% on rent & donations
+# §12.2 ±25% stress on rent & donations. Single source: it is the default of
+# Assumptions.sensitivity_delta, and decision.py derives the downside/upside
+# multipliers ((1±delta)) from it — no longer a dead constant shadowed by hard-coded
+# 1.25/0.75 literals (the "documents a value nothing reads" docstring violation).
+SENSITIVITY_DELTA = "0.25"
 
 # --- guardrail advisory bands (§12.2)
 SHARE_Y1_BAND_MAX = "0.08"           # donor market share ≤ ~8% for a new store

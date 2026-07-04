@@ -10,6 +10,7 @@ import pytest
 from engine import model
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.money import D
+from engine.tests.conftest import build_canonical_inputs
 
 
 def test_first_year_cash_gap_is_most_negative_cumulative(canonical_result):
@@ -141,6 +142,53 @@ def test_sensitivity_capital_has_no_startup_double_count(canonical_result):
     peak = abs(min(Decimal("0"), D(str(dec.first_year_cash_gap))))
     doubled = D(str(canonical_result.startup_total)) + peak + Decimal("25000")
     assert base_cap < doubled
+
+
+def test_sensitivity_delta_assumption_drives_stress():
+    # The ± sensitivity stress reads Assumptions.sensitivity_delta (default 0.25); it
+    # is NO LONGER a hard-coded 1.25/0.75 literal. With delta=0.10 the downside must
+    # stress rent ×(1+0.10)=1.10 and donations ×(1-0.10)=0.90 — proven by equality
+    # with a hand-built _scenario_net at exactly those multipliers, and by differing
+    # from the default 0.25 run.
+    from engine.decision import _scenario_net
+
+    inputs, _default_a, demand, trade = build_canonical_inputs()
+    a10 = Assumptions(labor_pct="0.60", sensitivity_delta="0.10")
+    down10 = compute(inputs, a10, demand, trade, overrides={}).decision.sensitivity[
+        "downside"]
+
+    hand_net, hand_be, hand_cap = _scenario_net(
+        inputs, a10, demand, trade, {}, "1.10", "0.90")
+    assert D(str(down10["net"])) == D(str(hand_net))
+    assert down10["breakeven"] == hand_be
+    assert D(str(down10["capital"])) == D(str(hand_cap))
+
+    # The knob actually moves the stress: a 0.10 delta differs from the default 0.25.
+    a25 = Assumptions(labor_pct="0.60")  # sensitivity_delta defaults to 0.25
+    down25 = compute(inputs, a25, demand, trade, overrides={}).decision.sensitivity[
+        "downside"]
+    assert D(str(down10["net"])) != D(str(down25["net"]))
+
+
+def test_sensitivity_default_unchanged():
+    # Anchor invariant: the default Assumptions (sensitivity_delta=0.25) must
+    # reproduce the prior hard-coded ±25% stress EXACTLY (rent 1.25/donations 0.75 on
+    # the downside, 0.75/1.25 on the upside) — this is what keeps the frozen goldens
+    # byte-identical after wiring SENSITIVITY_DELTA.
+    from engine.decision import _scenario_net
+
+    inputs, a, demand, trade = build_canonical_inputs()  # default delta 0.25
+    sens = compute(inputs, a, demand, trade, overrides={}).decision.sensitivity
+
+    hand = {
+        "base": _scenario_net(inputs, a, demand, trade, {}, "1.0", "1.0"),
+        "downside": _scenario_net(inputs, a, demand, trade, {}, "1.25", "0.75"),
+        "upside": _scenario_net(inputs, a, demand, trade, {}, "0.75", "1.25"),
+    }
+    for scen, (net, be, cap) in hand.items():
+        assert D(str(sens[scen]["net"])) == D(str(net)), scen
+        assert sens[scen]["breakeven"] == be, scen
+        assert D(str(sens[scen]["capital"])) == D(str(cap)), scen
 
 
 def test_reco_tag_is_semantic_enum(canonical_result):
