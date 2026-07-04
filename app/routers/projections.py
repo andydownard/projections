@@ -27,7 +27,7 @@ from typing import Any, Optional, get_args, get_origin
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.background import BackgroundTask
 
 from app import config, narrative_provider, ratelimit
@@ -362,8 +362,7 @@ class CostScheduleItemIn(BaseModel):
     month: int = Field(ge=1)
     amount: float = Field(ge=0)
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 # ---- numeric -> string coercion for the deployed wire contract (fix 1.3g) --------
@@ -487,8 +486,7 @@ class TradeAreaIn(BaseModel):
     households_source: Optional[str] = None  # "census_acs" | "user_edited" | "manual"
     moe: Optional[int] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 # Only these trade-area keys are engine inputs; provenance keys are filtered out
@@ -631,8 +629,7 @@ class LocationIn(BaseModel):
     lng: Optional[float] = None
     formatted_address: Optional[str] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class CreateProjectionIn(BaseModel):
@@ -1136,8 +1133,7 @@ class DuplicateIn(BaseModel):
     ignored."""
     patch: Optional[PatchProjectionIn] = None
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 @router.post("/{view_slug}/duplicate", status_code=201)
@@ -1277,8 +1273,7 @@ class ClaimIn(BaseModel):
     """The capability owner token to link onto the signed-in Clerk identity."""
     owner_token: str = Field(min_length=1)
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 @router.post("/claim")

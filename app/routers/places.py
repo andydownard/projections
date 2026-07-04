@@ -15,7 +15,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app import ratelimit
 from app.geo import client
@@ -50,8 +50,7 @@ class AutocompleteIn(BaseModel):
     query: str
     session_token: Optional[str] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class ResolveIn(BaseModel):
@@ -59,8 +58,7 @@ class ResolveIn(BaseModel):
     basis: str = "city"
     session_token: Optional[str] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 @router.post("/autocomplete")

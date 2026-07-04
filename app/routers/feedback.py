@@ -30,7 +30,7 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app import config, ratelimit
 from app.deps import resolve_clerk_identity
@@ -78,8 +78,8 @@ class FeedbackContext(BaseModel):
     # so it can never bypass the redactor into a sink.
     view_slug: str = ""  # server-only; NEVER reaches GitHub (IDEA_FAB §3.5).
 
-    class Config:
-        extra = "ignore"  # any other context key is dropped silently.
+    # any other context key is dropped silently.
+    model_config = ConfigDict(extra="ignore")
 
 
 class FeedbackIn(BaseModel):

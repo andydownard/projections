@@ -23,7 +23,7 @@ from typing import Optional, Union
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app import ratelimit
 from app.routers.common import client_ip as _client_ip
@@ -46,8 +46,7 @@ class CostRow(BaseModel):
     # so exact Decimal text is preserved (no float poisoning).
     amount: Union[str, float, int] = 0
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class CostSchedulePreviewIn(BaseModel):
@@ -55,8 +54,7 @@ class CostSchedulePreviewIn(BaseModel):
     # Optional; ONLY scales the seeded default fallback when no rows are sent.
     building_sqft: Optional[str] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 @router.post("/preview")

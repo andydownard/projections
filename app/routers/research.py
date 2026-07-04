@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app import ratelimit
 from app.deps import hash_token
@@ -63,8 +63,7 @@ class ResearchIn(BaseModel):
     location_label: Optional[str] = None  # OR a plain label string
     token: Optional[str] = None           # optional owner token for the per-token cap
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 def _cache_key(label: str, building_sqft: str, basis: str) -> str:

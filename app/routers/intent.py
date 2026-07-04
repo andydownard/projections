@@ -15,7 +15,7 @@ import secrets
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from app import ratelimit
 from app.routers.common import client_ip as _client_ip
@@ -37,10 +37,11 @@ class IntentIn(BaseModel):
     request_expert_review: bool = False
     follow_up_consent: bool = False
 
-    class Config:
-        extra = "ignore"  # never accept a financial field or a slug.
+    # never accept a financial field or a slug.
+    model_config = ConfigDict(extra="ignore")
 
-    @validator("email")
+    @field_validator("email")
+    @classmethod
     def _valid_email(cls, v: str) -> str:
         if not _EMAIL_RE.match(v or ""):
             raise ValueError("invalid email")
