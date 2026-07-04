@@ -1,10 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CreateProjectionPage } from "./CreateProjectionPage";
 import type { ViewModel } from "../api/viewModel";
 import { OWNER_TOKEN_KEY } from "../api/projections";
+import { DEFAULT_DRAFT } from "../wizard/useWizardState";
 
 // Mock the toast hook so CreateProjectionPage can call showToast after Generate.
 const mockShowToast = vi.fn();
@@ -458,6 +459,47 @@ describe("CreateProjectionPage — sequential creates never orphan the prior pro
     expect(creates[0]).toBeNull(); // create #1 went out anonymous
     expect(creates[1]).toBe("Bearer minted-1"); // create #2 carried create #1's token
     expect(localStorage.getItem(OWNER_TOKEN_KEY)).toBe("minted-1"); // slot NOT overwritten
+  });
+});
+
+// Wave 2 Task 2.6: the wizard draft is persisted to localStorage (wizard-draft-v1). On
+// return, a NON-default stored draft offers Resume / Start fresh; a successful Generate
+// clears the key (the draft became a real projection).
+describe("CreateProjectionPage — resume an in-progress draft (Task 2.6)", () => {
+  const STORAGE_KEY = "wizard-draft-v1";
+
+  it("offers Resume / Start fresh when a non-default draft is stored; Start fresh dismisses it", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...DEFAULT_DRAFT, name: "Half-finished", buildingSqft: 8000 }),
+    );
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    const banner = screen.getByTestId("wizard-resume");
+    expect(within(banner).getByRole("button", { name: /^resume$/i })).toBeInTheDocument();
+    await user.click(within(banner).getByRole("button", { name: /start fresh/i }));
+    expect(screen.queryByTestId("wizard-resume")).toBeNull();
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("shows no resume banner on a clean start (no stored draft)", () => {
+    render(<CreateProjectionPage />);
+    expect(screen.queryByTestId("wizard-resume")).toBeNull();
+  });
+
+  it("clears the stored draft on a successful Generate", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...DEFAULT_DRAFT, name: "x" }));
+    window.history.replaceState(null, "", "/wizard");
+    wireFetch({});
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await resolveAddress(user);
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> configure-donations
+    await user.click(screen.getByRole("button", { name: /^next$/i })); // -> startup costs
+    await user.click(screen.getByRole("button", { name: /generate projections/i }));
+    await waitFor(() => expect(window.location.pathname).toBe("/p/p_new/edit"));
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 });
 

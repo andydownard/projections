@@ -473,6 +473,9 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
       if (created.edit_token && created.view_slug) {
         setEditToken(created.view_slug, created.edit_token);
       }
+      // Task 2.6: the draft became a real projection — clear the persisted local draft
+      // so a return to /wizard starts clean (nothing left to resume). Success path ONLY.
+      wiz.clearDraft();
       showToast("Projection created.");
       // Land directly on the editable projection (owner Decision 12).
       window.history.pushState(null, "", `/p/${created.view_slug}/edit`);
@@ -539,6 +542,28 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
               Kept a heading so the page still has a labelled landmark. */}
           <h1 className="wizard__eyebrow">Create projection</h1>
         </header>
+
+        {/* Task 2.6: a prior, unfinished draft was restored from localStorage. Resume
+            adopts it; Start fresh discards it. Shown only when the stored draft actually
+            diverges from a pristine wizard (useWizardState.resumeAvailable). */}
+        {wiz.resumeAvailable && (
+          <div
+            className="wizard__resume"
+            role="region"
+            aria-label="Resume your draft"
+            data-testid="wizard-resume"
+          >
+            <p>You have an unfinished projection saved on this device.</p>
+            <div className="wizard__resume-actions">
+              <button type="button" className="btn btn--primary" onClick={wiz.resumeDraft}>
+                Resume
+              </button>
+              <button type="button" className="btn" onClick={wiz.dismissResume}>
+                Start fresh
+              </button>
+            </div>
+          </div>
+        )}
 
         <StepIndicator current={wiz.step} furthestReached={wiz.furthestReached} onJump={wiz.goTo} />
 

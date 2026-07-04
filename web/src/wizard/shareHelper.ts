@@ -107,6 +107,9 @@ export interface CreatePayload {
     building_sqft: number;
     salesfloor_pct: number;
     lease_type: LeaseType;
+    // NNN operating expenses (Task 2.2/2.6). Human $ here; stringified in the flat
+    // backend body. 0 for a gross lease / an unset NNN opex — anchor-clean default.
+    nnn_opex_annual: number;
     donation_value: number;
     // Occupancy = building_sqft × rent_per_sqft, resolved server-side (#245). The
     // flat occupancy_annual is no longer sent; the engine accepts either (it is kept
@@ -129,10 +132,26 @@ export interface CreatePayload {
     opening_month_number?: number;
     cost_schedule?: CostScheduleRow[];
   };
-  // Sq-ft-scaled cost assumptions the engine consumes (#245). Utilities is derived
-  // as building_sqft × utilities_per_sqft, so the wizard ships the adjustable rate.
+  // Engine assumptions the wizard now sends (Wave 2 Task 2.6). Utilities is derived
+  // as building_sqft × utilities_per_sqft (#245); the advanced cost/rent/funding knobs
+  // (Tasks 2.2–2.4) are carried here so the operator's edits reach the engine. Percent
+  // knobs are FRACTIONS in this nested payload (human % ÷ 100 in buildCreatePayload,
+  // the same ÷100 convention the shares use); basket/donations/reserve are counts/$
+  // and fixed_annual is a {label: annual $} dict. NO client math (PRD §13) — shaping only.
   assumptions: {
     utilities_per_sqft: number;
+    basket: number;
+    donations_per_hh: number;
+    salvage_pct: number;
+    labor_pct: number;
+    marketing_pct: number;
+    supplies_pct: number;
+    card_pct: number;
+    payroll_tax_pct: number;
+    escalator: number;
+    reserve_buffer: number;
+    sensitivity_delta: number;
+    fixed_annual: Record<string, number>;
   };
   terms_accepted: boolean;
 }
@@ -171,10 +190,25 @@ export interface ServerCreateBody {
     opening_month_number: number;
     cost_schedule: CostScheduleRow[];
   };
-  // Sq-ft-scaled cost assumptions (#245). The backend AssumptionsIn accepts
-  // utilities_per_sqft; the engine derives the utilities line from it.
+  // Engine assumptions the backend AssumptionsIn accepts (Wave 2 Task 2.6). The %
+  // knobs are STRING fractions (the shares' String(6/100) === "0.06" convention);
+  // basket is a $ string; reserve_buffer / donations_per_hh stay NUMBERS (int) and
+  // fixed_annual stays a {label: annual $} dict. The engine derives the utilities line
+  // from utilities_per_sqft (#245). Nothing here is computed on the client (PRD §13).
   assumptions: {
     utilities_per_sqft: string;
+    basket: string;
+    donations_per_hh: number;
+    salvage_pct: string;
+    labor_pct: string;
+    marketing_pct: string;
+    supplies_pct: string;
+    card_pct: string;
+    payroll_tax_pct: string;
+    escalator: string;
+    reserve_buffer: number;
+    sensitivity_delta: string;
+    fixed_annual: Record<string, number>;
   };
   trade_area: {
     basis: TradeAreaBasis;
@@ -219,12 +253,30 @@ export function toServerCreateBody(p: CreatePayload): ServerCreateBody {
       occupancy_annual: null,
       rent_per_sqft: String(p.inputs.rent_per_sqft),
       lease_type: p.inputs.lease_type,
-      nnn_opex_annual: "0",
+      // NNN operating expenses (Task 2.2/2.6) — a $ string on inputs; "0" for a gross
+      // lease or an unset NNN opex (the draft default), so a create is anchor-clean.
+      nnn_opex_annual: String(p.inputs.nnn_opex_annual),
       target_opening_date: p.inputs.target_opening_date ?? null,
       opening_month_number: p.inputs.opening_month_number ?? DEFAULT_OPENING_MONTH_NUMBER,
       cost_schedule: p.inputs.cost_schedule ?? DEFAULT_COST_SCHEDULE.map((r) => ({ ...r })),
     },
-    assumptions: { utilities_per_sqft: String(p.assumptions.utilities_per_sqft) },
+    assumptions: {
+      utilities_per_sqft: String(p.assumptions.utilities_per_sqft),
+      basket: String(p.assumptions.basket),
+      // % fractions -> string (AssumptionsIn takes str fractions; Decimal-parsed server-side).
+      salvage_pct: String(p.assumptions.salvage_pct),
+      labor_pct: String(p.assumptions.labor_pct),
+      marketing_pct: String(p.assumptions.marketing_pct),
+      supplies_pct: String(p.assumptions.supplies_pct),
+      card_pct: String(p.assumptions.card_pct),
+      payroll_tax_pct: String(p.assumptions.payroll_tax_pct),
+      escalator: String(p.assumptions.escalator),
+      sensitivity_delta: String(p.assumptions.sensitivity_delta),
+      // int / int / {label: $} — stay numbers (AssumptionsIn takes int + a dict here).
+      reserve_buffer: p.assumptions.reserve_buffer,
+      donations_per_hh: p.assumptions.donations_per_hh,
+      fixed_annual: { ...p.assumptions.fixed_annual },
+    },
     trade_area: { basis: p.trade_area.basis, households: String(p.trade_area.households) },
     location: { query: p.location.query },
     terms_accepted: p.terms_accepted,
@@ -248,6 +300,7 @@ export function buildCreatePayload(d: WizardDraft): CreatePayload {
       building_sqft: d.buildingSqft,
       salesfloor_pct: d.salesfloorPct / 100,
       lease_type: d.leaseType,
+      nnn_opex_annual: d.nnnOpexAnnual,
       donation_value: d.donationValue,
       rent_per_sqft: d.rentPerSqft,
       demand: {
@@ -264,7 +317,25 @@ export function buildCreatePayload(d: WizardDraft): CreatePayload {
       opening_month_number: d.openingMonthNumber ?? DEFAULT_OPENING_MONTH_NUMBER,
       cost_schedule: d.costSchedule ?? DEFAULT_COST_SCHEDULE.map((r) => ({ ...r })),
     },
-    assumptions: { utilities_per_sqft: d.utilitiesPerSqft },
+    // Advanced knobs (Wave 2 Tasks 2.2–2.4) — HUMAN units on the draft (60 for 60%,
+    // 0.8 for 0.8%). Percent knobs are shaped to FRACTIONS with the SAME ÷100 convention
+    // the shares use (shareY1 6 -> 0.06); basket/donations/reserve are counts/$ passed
+    // through; fixed_annual is a {label: annual $} dict. Display shaping, NOT client math.
+    assumptions: {
+      utilities_per_sqft: d.utilitiesPerSqft,
+      basket: d.basket,
+      donations_per_hh: d.donationsPerHh,
+      salvage_pct: d.salvagePct / 100,
+      labor_pct: d.laborPct / 100,
+      marketing_pct: d.marketingPct / 100,
+      supplies_pct: d.suppliesPct / 100,
+      card_pct: d.cardPct / 100,
+      payroll_tax_pct: d.payrollTaxPct / 100,
+      escalator: d.escalatorPct / 100,
+      reserve_buffer: d.reserveBuffer,
+      sensitivity_delta: d.sensitivityDeltaPct / 100,
+      fixed_annual: { ...d.fixedAnnual },
+    },
     terms_accepted: d.termsAccepted,
   };
 }

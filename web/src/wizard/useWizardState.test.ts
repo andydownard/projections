@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { advancedKey, STEPS, useWizardState } from "./useWizardState";
+import { advancedKey, DEFAULT_DRAFT, STEPS, useWizardState } from "./useWizardState";
 import type { TradeAreaResolved } from "../api/places";
 import type { RentResearch } from "../api/research";
 
@@ -356,6 +356,105 @@ describe("useWizardState — advancedOpen (Advanced Options disclosure state)", 
     expect(result.current.stepKey).toBe("square-footage");
     // persisted
     expect(result.current.advancedOpen[advancedKey("square-footage", "space-rates")]).toBe(true);
+  });
+});
+
+// Wave 2 Task 2.6: the wizard draft is persisted to localStorage (key
+// "wizard-draft-v1", debounced 500ms) so a reload/return offers a resume. The key is
+// cleared on a successful Generate (the draft became a real projection). This holds
+// inputs only — persistence never computes anything (PRD §13).
+describe("useWizardState — localStorage draft persistence (wizard-draft-v1)", () => {
+  const STORAGE_KEY = "wizard-draft-v1";
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  it("debounces (500ms) a draft edit into localStorage under wizard-draft-v1", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.set("basket", 19.99));
+    // Not written yet — the write is debounced (no thrash on every keystroke).
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    act(() => vi.advanceTimersByTime(500));
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!);
+    expect(stored.basket).toBe(19.99);
+  });
+
+  it("coalesces rapid edits into a single trailing write (the timer resets on each edit)", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.set("shareY1", 7));
+    act(() => vi.advanceTimersByTime(200));
+    act(() => result.current.set("shareY1", 9)); // resets the 500ms window
+    act(() => vi.advanceTimersByTime(499));
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull(); // still within the debounce
+    act(() => vi.advanceTimersByTime(1));
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).shareY1).toBe(9);
+  });
+
+  it("offers a resume when a NON-default draft is already stored on mount", () => {
+    const stored = { ...DEFAULT_DRAFT, name: "Half-finished", buildingSqft: 8000 };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.resumeAvailable).toBe(true);
+  });
+
+  it("does NOT offer a resume when the stored draft equals the default (nothing to resume)", () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_DRAFT));
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.resumeAvailable).toBe(false);
+  });
+
+  it("does NOT offer a resume with an empty store", () => {
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.resumeAvailable).toBe(false);
+  });
+
+  it("resumeDraft() restores the stored draft and dismisses the banner", () => {
+    const stored = { ...DEFAULT_DRAFT, name: "Half-finished", buildingSqft: 8000, laborPct: 45 };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.resumeAvailable).toBe(true);
+    act(() => result.current.resumeDraft());
+    expect(result.current.draft.name).toBe("Half-finished");
+    expect(result.current.draft.buildingSqft).toBe(8000);
+    expect(result.current.draft.laborPct).toBe(45);
+    expect(result.current.resumeAvailable).toBe(false);
+  });
+
+  it("dismissResume() (Start fresh) clears the key + banner and keeps the fresh default draft", () => {
+    const stored = { ...DEFAULT_DRAFT, name: "Half-finished", buildingSqft: 8000 };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.dismissResume());
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    expect(result.current.resumeAvailable).toBe(false);
+    // Start fresh DISCARDS the stored draft — it never adopts it into the working draft.
+    expect(result.current.draft.name).toBe("");
+    expect(result.current.draft.buildingSqft).toBe(DEFAULT_DRAFT.buildingSqft);
+  });
+
+  it("clearDraft() removes the stored key (called on a successful Generate)", () => {
+    const stored = { ...DEFAULT_DRAFT, name: "Half-finished" };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.clearDraft());
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    expect(result.current.resumeAvailable).toBe(false);
+  });
+
+  it("never clobbers the stored draft on mount before the resume decision (skips the first write)", () => {
+    const stored = { ...DEFAULT_DRAFT, name: "Half-finished", buildingSqft: 8000 };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    renderHook(() => useWizardState());
+    // Advancing past the debounce on mount must NOT overwrite the stored draft with the
+    // fresh default — the operator hasn't chosen Resume / Start fresh yet.
+    act(() => vi.advanceTimersByTime(1000));
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).name).toBe("Half-finished");
   });
 });
 

@@ -2623,6 +2623,31 @@ body {
   color: var(--error);
 }
 
+/* Resume-an-in-progress-draft banner (Task 2.6): shown when a non-default draft was
+   restored from localStorage on mount. Subtle highlight panel — Resume adopts the
+   saved inputs, Start fresh discards them. */
+.wizard__resume {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+  margin-bottom: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--brand-primary);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  font-size: var(--text-base);
+  color: var(--text);
+}
+.wizard__resume p {
+  margin: 0;
+}
+.wizard__resume-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 /* Make the current breadcrumb step prominent — the page's de-facto heading (#17). */
 .wizard-steps__item--current .wizard-steps__label,
 .wizard-steps__item--current .wizard-steps__btn {

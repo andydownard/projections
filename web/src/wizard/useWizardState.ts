@@ -9,7 +9,7 @@
 // Address → Square footage → Households → Donor market share → Startup costs.
 // There is NO Review step; terms acceptance is IMPLICIT on Generate (owner
 // Decision 5 — the disclaimer still shows + still stamps artifacts server-side).
-import { useCallback, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 
 import type { ResolveErrorKind, TradeAreaResolved } from "../api/places";
 import type { RentResearch } from "../api/research";
@@ -125,6 +125,28 @@ export const DEFAULT_DRAFT: WizardDraft = {
   ),
 };
 
+// --- localStorage draft persistence (Wave 2 Task 2.6) ------------------------
+// The wizard draft is saved locally (debounced) so a reload/return offers to resume
+// where the operator left off, and cleared once a successful Generate turns the draft
+// into a real projection. This is a convenience cache of INPUTS on the operator's own
+// device — no projection math, no secret (there is no token/slug in a draft), so it is
+// plain localStorage (mirrors the owner-token slot's device-local posture).
+export const WIZARD_DRAFT_STORAGE_KEY = "wizard-draft-v1";
+const DRAFT_WRITE_DEBOUNCE_MS = 500;
+
+/** Read the persisted draft, tolerating an absent/corrupt/unavailable store (never
+ *  throws — a bad cache must degrade to "no resume", never break the wizard). */
+function readStoredWizardDraft(): WizardDraft | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(WIZARD_DRAFT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as WizardDraft) : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface WizardState {
   draft: WizardDraft;
   set: <K extends keyof WizardDraft>(key: K, value: WizardDraft[K]) => void;
@@ -195,6 +217,19 @@ export interface WizardState {
   advancedOpen: Partial<Record<string, boolean>>;
   toggleAdvanced: (step: StepKey, groupId: string, open: boolean) => void;
 
+  // --- localStorage draft persistence + resume (Task 2.6) --------------------
+  // True when a NON-default draft was found in localStorage on mount and the operator
+  // has not yet chosen — drives the resume banner (Resume / Start fresh).
+  resumeAvailable: boolean;
+  /** Adopt the stored draft into the working draft; hide the banner. */
+  resumeDraft: () => void;
+  /** Start fresh: discard the stored draft (clear the key), hide the banner, keep the
+   *  fresh default draft. */
+  dismissResume: () => void;
+  /** Clear the persisted draft — called on a successful Generate (the draft became a
+   *  real projection, so there is nothing left to resume). */
+  clearDraft: () => void;
+
   canGenerate: boolean;
 }
 
@@ -211,6 +246,68 @@ export function useWizardState(
   initialStep = 0,
 ): WizardState {
   const [draft, setDraft] = useState<WizardDraft>({ ...DEFAULT_DRAFT, ...initial });
+
+  // --- localStorage draft persistence + resume (Task 2.6) --------------------
+  // Captured ONCE at mount: the pristine baseline this session started from, and any
+  // draft already persisted from a prior visit. A stored draft identical to the fresh
+  // baseline is "nothing to resume" (offering it would be noise), so the resume banner
+  // only shows when the stored draft actually diverges.
+  const baselineDraftJsonRef = useRef<string>(JSON.stringify({ ...DEFAULT_DRAFT, ...initial }));
+  const storedDraftRef = useRef<WizardDraft | null>(readStoredWizardDraft());
+  const [resumeAvailable, setResumeAvailable] = useState<boolean>(() => {
+    const s = storedDraftRef.current;
+    return s != null && JSON.stringify(s) !== baselineDraftJsonRef.current;
+  });
+  const draftWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Skip the very first effect run (mount) so a stored draft is never overwritten by
+  // the fresh default before the operator chooses Resume / Start fresh.
+  const skipInitialDraftWriteRef = useRef(true);
+
+  useEffect(() => {
+    if (skipInitialDraftWriteRef.current) {
+      skipInitialDraftWriteRef.current = false;
+      return;
+    }
+    if (draftWriteTimerRef.current) clearTimeout(draftWriteTimerRef.current);
+    draftWriteTimerRef.current = setTimeout(() => {
+      try {
+        globalThis.localStorage?.setItem(WIZARD_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+      } catch {
+        // Storage full / unavailable — persistence is best-effort; never block the wizard.
+      }
+    }, DRAFT_WRITE_DEBOUNCE_MS);
+    return () => {
+      if (draftWriteTimerRef.current) clearTimeout(draftWriteTimerRef.current);
+    };
+  }, [draft]);
+
+  const clearStoredDraft = useCallback(() => {
+    if (draftWriteTimerRef.current) clearTimeout(draftWriteTimerRef.current);
+    try {
+      globalThis.localStorage?.removeItem(WIZARD_DRAFT_STORAGE_KEY);
+    } catch {
+      // ignore — a failed clear is harmless (the key is overwritten on the next write).
+    }
+  }, []);
+
+  const resumeDraft = useCallback(() => {
+    const s = storedDraftRef.current;
+    if (s) setDraft(s);
+    setResumeAvailable(false);
+  }, []);
+
+  const dismissResume = useCallback(() => {
+    clearStoredDraft();
+    storedDraftRef.current = null;
+    setResumeAvailable(false);
+  }, [clearStoredDraft]);
+
+  const clearDraft = useCallback(() => {
+    clearStoredDraft();
+    storedDraftRef.current = null;
+    setResumeAvailable(false);
+  }, [clearStoredDraft]);
+
   const [step, setStep] = useState(() =>
     Math.min(Math.max(0, Math.trunc(initialStep)), STEPS.length - 1),
   );
@@ -510,6 +607,10 @@ export function useWizardState(
     removeCostRow,
     advancedOpen,
     toggleAdvanced,
+    resumeAvailable,
+    resumeDraft,
+    dismissResume,
+    clearDraft,
     canGenerate,
   };
 }
