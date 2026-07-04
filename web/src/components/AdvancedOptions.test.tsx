@@ -55,6 +55,40 @@ describe("AdvancedOptions — controlled disclosure", () => {
     expect(badge).toHaveTextContent("3 settings");
   });
 
+  // Review fast-follow: the badge counts VISIBLE settings only. Steps build their
+  // children with conditional `cond && <Field/>` slots (e.g. the NNN-opex field only
+  // when the lease is NNN). A gross lease renders that slot as `false`, and
+  // React.Children.count would count the `false` as a child — an over-count. Counting
+  // Children.toArray(children).length strips null/undefined/boolean slots, so the
+  // badge matches what the operator actually sees.
+  it("counts only the visible children — a false/omitted conditional slot is excluded", () => {
+    render(
+      // The exact shape a gross-lease step passes: a children ARRAY with a `false`
+      // slot where the NNN-only field would render.
+      <AdvancedOptions open={true} onToggle={vi.fn()}>
+        {[<div key="a">Setting A</div>, false, <div key="b">Setting B</div>]}
+      </AdvancedOptions>,
+    );
+    const badge = screen.getByTestId("advanced-options").querySelector(
+      ".advanced-options__badge",
+    );
+    // Two real fields, not three — the `false` slot is not a setting.
+    expect(badge).toHaveTextContent("2 settings");
+  });
+
+  it("pluralizes the badge: a single child reads '1 setting' (not '1 settings')", () => {
+    render(
+      <AdvancedOptions open={true} onToggle={vi.fn()}>
+        <div>Setting A</div>
+      </AdvancedOptions>,
+    );
+    const badge = screen.getByTestId("advanced-options").querySelector(
+      ".advanced-options__badge",
+    );
+    expect(badge).toHaveTextContent("1 setting");
+    expect(badge).not.toHaveTextContent("1 settings");
+  });
+
   it("respects open=true: renders open and shows children", () => {
     render(
       <AdvancedOptions open={true} onToggle={vi.fn()}>
@@ -131,6 +165,9 @@ describe("AdvancedOptions — controlled disclosure", () => {
     summary.focus();
     await user.keyboard("{Enter}");
     expect(onToggle).toHaveBeenCalledWith(true);
+    // Exactly once — a single Enter must not double-toggle (the suppressed native
+    // <details> click could otherwise fire a second synthesized toggle).
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
   it("keyboard: Space on the focused summary toggles", async () => {
@@ -145,6 +182,8 @@ describe("AdvancedOptions — controlled disclosure", () => {
     summary.focus();
     await user.keyboard(" ");
     expect(onToggle).toHaveBeenCalledWith(false);
+    // Exactly once — a single Space must not double-toggle.
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
   it("the summary is keyboard-focusable", () => {

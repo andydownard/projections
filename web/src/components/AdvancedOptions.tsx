@@ -31,7 +31,12 @@ export function AdvancedOptions({
   onToggle,
   children,
 }: AdvancedOptionsProps) {
-  const count = Children.count(children);
+  // Count VISIBLE settings only. Steps compose their children with conditional
+  // `cond && <Field/>` slots (e.g. the NNN-opex field only on an NNN lease); a
+  // gross lease renders that slot as `false`. Children.count would tally the
+  // `false` as a child (an over-count); Children.toArray strips null/undefined/
+  // boolean slots, so the badge matches what the operator actually sees.
+  const count = Children.toArray(children).length;
 
   const requestToggle = () => onToggle(!open);
 
@@ -62,7 +67,9 @@ export function AdvancedOptions({
         onKeyDown={handleKeyDown}
       >
         {label}
-        <span className="advanced-options__badge">{count} settings</span>
+        <span className="advanced-options__badge">
+          {count} {count === 1 ? "setting" : "settings"}
+        </span>
       </summary>
       {open && <div className="advanced-options__grid">{children}</div>}
     </details>
