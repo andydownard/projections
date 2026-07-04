@@ -540,10 +540,22 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
     "utilitiesPerSqft": 2.23, "rentPerSqft": null, "basket": 17.08,
     "donationsPerHh": 3, "donationValue": 74.0, "donationsPerHouseholdPerYear": 3,
     "shareY1": 0.06, "shareY2": 0.08, "shareY3": 0.10, "shareY4": 0.11, "shareY5": 0.12,
-    "occupancyAnnual": 90000, "leaseType": "nnn", "salesfloorSqft": 7000, "reserveBuffer": 25000
+    "occupancyAnnual": 90000, "leaseType": "nnn", "salesfloorSqft": 7000, "reserveBuffer": 25000,
+    "sensitivityDelta": 0.25,
+    "fixedAnnual": { "Insurance liability": 2000, "Internet, Phones": 3000, "Pest control": 300,
+                     "Repairs/maintenance": 1600, "Security system": 900 },
+    "nnnOpexAnnual": 0.0, "buildingSqft": 10000.0, "salesfloorPct": 0.70
   },
-  "sensitivity": { "rent": {"downside": "...", "base": "...", "upside": "..."},
-                   "donations": {"downside": "...", "base": "...", "upside": "..."} },
+  "sensitivity": {
+    "base":     { "net": {"raw": 46900, "display": "$46,900"}, "breakeven": 5,
+                  "capital": {"raw": 277990, "display": "$277,990"} },
+    "downside": { "net": {"raw": -12000, "display": "($12,000)"}, "breakeven": null,
+                  "capital": {"raw": 312000, "display": "$312,000"} },
+    "upside":   { "net": {"raw": 98000, "display": "$98,000"}, "breakeven": 4,
+                  "capital": {"raw": 250000, "display": "$250,000"} },
+    "delta": 0.25
+  },
+  "confidence": { "ramp": "low" },
   "flags": {
     "payback": null,
     "margin": "ok",
@@ -555,6 +567,9 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
 ```
 
 **Contract notes:**
+- **Sensitivity + confidence surfaced, full editable knob set** (`compute_schema_version 1.6.0`, audit P0). Top-level `sensitivity` is the §12.2 ± stress scenarios `decision.py` already computed but the view-model previously dropped: `{base, downside, upside}`, each `{net{raw,display}, breakeven, capital{raw,display}}` (`breakeven` is a plain project-month int or `null` when never reached — never a misleading 0), plus a sibling `sensitivity.delta` (the ± fraction, mirrors `settings.sensitivityDelta`). Top-level `confidence.ramp` (`"low"` | `"high"`) surfaces the ramp low-confidence flag `build_flags` already sets. `settings` gains the remaining editable knobs: `sensitivityDelta` (single source for the stress `delta` — `decision.py` derives `(1 ± delta)` from `Assumptions.sensitivity_delta`, no more hard-coded `1.25`/`0.75` literals), `fixedAnnual` (label→annual-$ map), `nnnOpexAnnual`, `buildingSqft`, `salesfloorPct`. All additive; **no math change** (`model_version` stays `2.6.0`). A pre-1.6.0 snapshot simply lacks these keys.
+  - **API exposure + bounds (`AssumptionsIn`, re-validated on every `PATCH`):** `sensitivity_delta` ∈ `[0, 0.9]` (> 1 would flip the downside donation multiplier negative); `reserve_buffer`, `donations_per_hh`, `basket`, `utilities_per_sqft` are `>= 0`; `fixed_annual` keys are allowlisted to the engine's `FIXED_ANNUAL` labels and each value must be `>= 0`, and a partial PATCH **accumulates** (incoming keys merge over the STORED map, never a flat replace) before merging over the engine defaults for untouched lines. Any violation is **422** `invalid_assumptions` (`API_SPEC.md` §4.4/§11).
+  - **Fail-closed hardening:** because re-validation runs over the **merged** dict (not just the PATCHed keys), a projection row already carrying a legacy out-of-range value — saved before one of these bounds existed — now **422s on the next `PATCH`**, even one touching an unrelated field, until that value is re-sent in-range. This is intentional (fail-closed, not a regression): a bad stored value can no longer silently ride along on an unrelated edit.
 - **Startup costs surfaced** (`compute_schema_version 1.5.0`, EPIC DOCX). Top-level `startupCosts` is the one-time startup line items `[{category, amount{raw,display}}]` (from the engine's `result.startup`, including the computed "Lease Deposit + First Month Rent" line) and `startupTotal` is their sum `{raw,display}`. Additive shape change feeding the Board Packet `.docx` startup-costs table; **no math change** (`model_version` stays `2.6.0`). A pre-1.5.0 snapshot simply lacks these keys and the `.docx` renderer degrades gracefully.
 - **5-year horizon** (`model_version 2.6.0` / `compute_schema_version 1.4.0`→`1.5.0`). Every annual `rows[]` entry carries `y1..y5` cells; `settings` gain `shareY4`/`shareY5` plus the editable donation drivers `donationValue` + `donationsPerHouseholdPerYear` (`donationsPerHh` is retained as an alias). Top-level `incomeSeries` is the annual **net income** Y1..Y5 as `{raw,display}` (the list/detail sparkline) and `year5Income` is the Year-5 figure. The net-total row/KPI is **"Net income"** (was "Net profit"). The decision metrics (`metrics.capital`/`cashGap`/`breakeven`, `milestones`, `monthly[]`) stay **Year-1-anchored and are byte-unchanged**; only the annual table, the Revenue-CAGR KPI (now Y1→Y5), and the §12.2 guardrails (now also Y4/Y5) extend. A legacy 3-year snapshot (`2.5.0`) is read **verbatim** (still three columns); recompute/upgrade auto-extends absent `share_y4`/`share_y5` to the plateau defaults `0.11`/`0.12`.
 - `settings.utilitiesPerSqft` + `settings.rentPerSqft` (`compute_schema_version ≥ 1.3.0`, #245) are additive raw scalars. `utilitiesPerSqft` is the rate the **Utilities/trash service** line is now derived from (`building_sqft × utilitiesPerSqft`, default `$2.23`); `rentPerSqft` echoes the input `rent_per_sqft` when occupancy was entered that way (else `null` — occupancy was entered as a flat annual `$`). Both are display-only context for the wizard/inspector; the engine remains the math authority.

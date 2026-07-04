@@ -200,7 +200,11 @@ Every read or mutation of a projection returns the **same** view-model — the e
     "payrollTaxPct":0.075, "salvagePct":0.008, "escalator":0.03, "basket":17.08,
     "donationsPerHh":3, "donationValue":74.0, "donationsPerHouseholdPerYear":3,
     "shareY1":0.06, "shareY2":0.08, "shareY3":0.10, "shareY4":0.11, "shareY5":0.12,
-    "leaseType":"nnn", "salesfloorSqft":7000, "reserveBuffer":25000
+    "leaseType":"nnn", "salesfloorSqft":7000, "reserveBuffer":25000,
+    "sensitivityDelta":0.25,
+    "fixedAnnual":{"Insurance liability":2000,"Internet, Phones":3000,"Pest control":300,
+                   "Repairs/maintenance":1600,"Security system":900},
+    "nnnOpexAnnual":0.0, "buildingSqft":10000.0, "salesfloorPct":0.70
   },
 
   "flags": { "payback": "na_no_year1_profit" },
@@ -219,6 +223,8 @@ Notes:
 - **`model_version`** + **`compute_schema_version`** are tracked separately: the former changes when the math changes; the latter when the view-model shape changes. `upgrade_available` is true when the stored `model_version` is older than the deployed engine — but the body is still the **stored snapshot** (no silent recompute, §13).
 - For a **read-only** request `role` reflects the share-link role (`board`/`funder`/`advisor`); `settings` editability and CTAs are tailored, and write-only fields may be elided.
 - **`donationsPerHh`** is a legacy alias for `donationsPerHouseholdPerYear`; both are emitted for compatibility, and their values are identical.
+- **`settings.sensitivityDelta` / `fixedAnnual` / `nnnOpexAnnual` / `buildingSqft` / `salesfloorPct`** (`compute_schema_version ≥ 1.6.0`) round out the editable knob set the view-model previously dropped (audit P0): `sensitivityDelta` is the §12.2 ± stress fraction (single source for the `sensitivity` block below); `fixedAnnual` is the label→annual-$ map (`Insurance liability`, `Internet, Phones`, `Pest control`, `Repairs/maintenance`, `Security system`); `nnnOpexAnnual`/`buildingSqft`/`salesfloorPct` are the NNN opex add-on and the building/salesfloor geometry the sq-ft-scaled lines derive from. All additive — a pre-1.6.0 snapshot simply lacks these keys.
+- **`sensitivity`** (`compute_schema_version ≥ 1.6.0`) is the §12.2 ± stress scenarios: `{base, downside, upside}`, each `{net{raw,display}, breakeven, capital{raw,display}}`, plus a sibling `delta` (the ± fraction, mirrors `settings.sensitivityDelta`). **`confidence.ramp`** (`"low"` | `"high"`) flags whether the ramp-dependent metrics (break-even, cash gap) rest on the low-confidence default S-curve. Full shape in [DATA_MODEL.md](./DATA_MODEL.md) §4.8.
 
 ---
 
@@ -315,9 +321,11 @@ The core editing endpoint. Drives autosave (debounced) and every Settings/driver
   - Pinnable nodes are **inputs and expense component lines only**. A pin on a derived/total/margin/KPI node → **422** `{ "error":"node_not_pinnable", "node":"Net income" }`.
   - Recompute is a **topological DAG evaluation**: `resolve(node) = pin.value if pinned else f(resolve(parents))`. **No back-solve** — pinning a downstream node never mutates upstream inputs; upstream rows that no longer drive any pinned downstream node get a **stale flag** surfaced in `flags`/`overrides[].affected`.
   - Setting an override whose value equals the calculated value within tolerance ($0.50) **deletes** the pin (auto-clear-on-equal, matching the design's commit semantics).
+- **Assumption bounds (server re-validates the MERGED `assumptions` dict on every PATCH — `AssumptionsIn`, `compute_schema_version` ≥ 1.6.0):** the labor/marketing/supplies/card/payroll-tax/salvage/escalator percent knobs stay bounded to `[0, 1]`; `sensitivity_delta` (the §12.2 ± stress fraction) is bounded to `[0, 0.9]` — a value > 1 would flip the downside donation multiplier negative; `reserve_buffer`, `donations_per_hh`, `basket`, and `utilities_per_sqft` are bounded to `>= 0` (no upper bound); `fixed_annual` keys are allowlisted to the engine's `FIXED_ANNUAL` labels (an off-list label is rejected, never silently added) and every value must be `>= 0`. Any violation → **422** `{ "error":"invalid_assumptions", "message":"..." }` — rejected before the merged surface ever reaches the engine. Because re-validation runs over the **merged** dict, not just the PATCHed keys, a stored row carrying a legacy out-of-range value (saved before a bound existed) will **422 on the very next PATCH** — even one touching an unrelated field — until that value is re-sent in-range (fail-closed hardening, not a regression).
+  - **`fixed_annual` PATCH semantics ACCUMULATE, never replace:** a partial map (e.g. `{"Pest control": 600}`) deep-merges the incoming keys **over the STORED map** — a line set by an earlier PATCH survives a later PATCH that only touches a different line — and the resolved map then merges over the engine's `FIXED_ANNUAL` defaults for any line never touched at all. (A flat `dict.update` would silently revert every previously-edited line not present in the latest PATCH — fixed as part of the 1.3 review.)
 - **Behavior:** recompute server-side (<50 ms p95 target, §27), persist new `computed_json/monthly_json/overrides_json/flags`, increment `version`, write one revision snapshot (`actor_token_hash`, `change_summary`).
 - **Response `200`:** the recomputed view-model (§3). `ETag: "<new version>"`. `saveLabel:"All changes saved"`.
-- **Errors:** `428` missing `If-Match`; `409` stale (§1.4 shape); `422` invalid override / out-of-domain input; `403` read-only; `400` malformed.
+- **Errors:** `428` missing `If-Match`; `409` stale (§1.4 shape); `422` invalid override / out-of-domain input (`invalid_inputs` / `invalid_assumptions` / `node_not_pinnable`); `403` read-only; `400` malformed.
 
 ### 4.4a `POST /api/projections/{view_slug}/preview` — dry-run (read-only)
 
@@ -587,7 +595,7 @@ Decision #15: keep the **summing and formatting authority server-side** for the 
   ],
   "grandTotal": { "raw": 95000.0, "display": "$95,000" },
   "modelVersion": "2.6.0",
-  "computeSchemaVersion": "1.5.0"
+  "computeSchemaVersion": "1.6.0"
 }
 ```
 - **Errors:** `429 rate_limited` (`{ "error":"rate_limited", "retry_after_seconds": N, "scope":"ip" }` + `Retry-After`); `422` validation (a malformed row).
@@ -731,6 +739,7 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `409` | `grounding_failed` / `ai_disabled` / `not_trashed` | Narrative figure ungrounded; AI opt-out; hard-delete on an active projection. |
 | `413` / `415` | `file_too_large` / `unsupported_media_type` | Evidence upload limits. |
 | `422` | `node_not_pinnable` / `unsupported_basis` / `input_out_of_domain` | Pin on a derived node; radius/ZCTA basis; e.g. 0 sq ft. |
+| `422` | `invalid_inputs` / `invalid_assumptions` | The merged `inputs`/`assumptions` surface fails `InputsIn`/`AssumptionsIn` re-validation (e.g. a percent knob outside `[0,1]`, `sensitivity_delta` outside `[0,0.9]`, a negative `reserve_buffer`/`donations_per_hh`/`basket`/`utilities_per_sqft`, an off-allowlist or negative `fixed_annual` line, an oversized `cost_schedule`). Applies on **every** `PATCH`, including one that merely re-validates a legacy stored value from before a bound existed. |
 | `428` | `if_match_required` | Mutation missing `If-Match`. |
 | `429` | `rate_limited` | Per-IP or per-token limit (carries `retry_after_seconds`). |
 | `502` | `places_unavailable` / `census_unavailable` / `research_unavailable` | Upstream data provider down — client falls back to manual entry. |
