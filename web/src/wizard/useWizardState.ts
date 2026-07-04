@@ -92,6 +92,24 @@ export const DEFAULT_DRAFT: WizardDraft = {
   cash: 300000,
   grant: 0,
   loan: 0,
+  // Rent/cost/funding advanced drivers (Wave 2 Task 2.4) — the owner-decided v1
+  // resolved defaults (CLAUDE.md "Resolved defaults" table / ENGINE_CONTRACT.md §1),
+  // reproducing today's engine defaults byte-for-byte (anchor invariant).
+  escalatorPct: 3,
+  laborPct: 60,
+  marketingPct: 3.75,
+  suppliesPct: 5,
+  cardPct: 2,
+  payrollTaxPct: 7.5,
+  reserveBuffer: 25000,
+  sensitivityDeltaPct: 25,
+  fixedAnnual: {
+    "Insurance liability": 2000,
+    "Internet, Phones": 3000,
+    "Pest control": 300,
+    "Repairs/maintenance": 1600,
+    "Security system": 900,
+  },
   // Terms acceptance is IMPLICIT on Generate now (owner Decision 5): the box is gone,
   // the disclaimer still shows, and create defaults termsAccepted=true so the .xlsx /
   // packet exports stay reachable (EXPORT_DISCLAIMER still stamps artifacts server-side).

@@ -76,6 +76,20 @@ export interface WizardDraft {
   cash: number;
   grant: number;
   loan: number;
+  // Rent/cost/funding advanced drivers (Wave 2 Task 2.4) — HUMAN units (e.g. 60 for
+  // 60%, 25000 for $25,000). Not yet sent to the server (task 2.6 wires the
+  // create-payload mapper). Defaults reproduce today's engine defaults byte-for-byte
+  // (anchor invariant) — see ENGINE_CONTRACT.md §1 for the resolved-default table.
+  escalatorPct: number;
+  laborPct: number;
+  marketingPct: number;
+  suppliesPct: number;
+  cardPct: number;
+  payrollTaxPct: number;
+  reserveBuffer: number;
+  sensitivityDeltaPct: number;
+  // Five fixed annual operating-cost lines, keyed by their exact label (task 2.4).
+  fixedAnnual: Record<string, number>;
   termsAccepted: boolean;
   // Timed cost schedule + opening anchor (Spec §5/§7). Optional so existing
   // callers compile; buildCreatePayload supplies the month-1-lump default.

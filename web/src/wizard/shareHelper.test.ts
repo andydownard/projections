@@ -35,6 +35,21 @@ const DRAFT: WizardDraft = {
   cash: 150000,
   grant: 50000,
   loan: 0,
+  escalatorPct: 3,
+  laborPct: 60,
+  marketingPct: 3.75,
+  suppliesPct: 5,
+  cardPct: 2,
+  payrollTaxPct: 7.5,
+  reserveBuffer: 25000,
+  sensitivityDeltaPct: 25,
+  fixedAnnual: {
+    "Insurance liability": 2000,
+    "Internet, Phones": 3000,
+    "Pest control": 300,
+    "Repairs/maintenance": 1600,
+    "Security system": 900,
+  },
   termsAccepted: true,
 };
 
