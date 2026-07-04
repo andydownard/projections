@@ -3584,7 +3584,12 @@ body {
    shrink (min-width:0) so the four tiles never wrap to a second row on desktop. */
 .metric-bar {
   display: flex;
-  flex-wrap: nowrap;
+  /* wrap (not nowrap): the 4 metric cells (flex: 1 1 0) still share ONE row on desktop
+     since they fit, but the full-width `.metric-bar__footnote` (flex-basis: 100%, our
+     sensitivity/confidence line — spec §12) needs to wrap onto its OWN row below them.
+     A `nowrap` bar keeps the 100%-basis footnote inline and crushes the cells to ~0 width
+     (the fusion #320-nowrap × footnote collision). Mobile ≤480px wraps the cells too. */
+  flex-wrap: wrap;
   gap: 1.25rem;
   align-items: flex-start;
   padding: 0.75rem 0 0;
