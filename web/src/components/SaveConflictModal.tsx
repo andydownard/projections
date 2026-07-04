@@ -25,6 +25,10 @@ export interface SaveConflictModalProps {
    *  so the shared modal keeps offering it in the common owner case. */
   canSaveAsCopy?: boolean;
   saveAsCopyTitle?: string;
+  /** True while a chosen resolution (reload/overwrite/save-as-copy) is in flight.
+   *  Disables every action so a double-click can't fire a second POST …/duplicate or
+   *  a second force-save (wave-3 w1). Defaults to false. */
+  busy?: boolean;
 }
 
 export function SaveConflictModal({
@@ -34,6 +38,7 @@ export function SaveConflictModal({
   message,
   canSaveAsCopy = true,
   saveAsCopyTitle = "Requires the owner account",
+  busy = false,
 }: SaveConflictModalProps) {
   const dialogRef = useDialog<HTMLDivElement>();
 
@@ -55,17 +60,17 @@ export function SaveConflictModal({
             "Someone else saved a newer version. Choose how to resolve your unsaved changes."}
         </p>
         <div className="conflict-modal__actions">
-          <button type="button" className="btn btn--primary" onClick={onReload}>
+          <button type="button" className="btn btn--primary" onClick={onReload} disabled={busy}>
             Reload latest
           </button>
-          <button type="button" className="btn" onClick={onOverwrite}>
+          <button type="button" className="btn" onClick={onOverwrite} disabled={busy}>
             Overwrite
           </button>
           <button
             type="button"
             className="btn"
             onClick={onSaveAsCopy}
-            disabled={!canSaveAsCopy}
+            disabled={!canSaveAsCopy || busy}
             title={canSaveAsCopy ? undefined : saveAsCopyTitle}
           >
             Save as copy

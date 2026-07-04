@@ -3563,6 +3563,16 @@ body {
 .metric-bar__cell--income .sparkline {
   margin-top: 0.1rem;
 }
+/* wave-3 w5: the downside-sensitivity line + low-ramp confidence chip sit on their
+   OWN full-width row below the metric cells (the bar is flex-wrap), stacked like the
+   DecisionBanner verdict column. Reuses .decision-banner__sensitivity/__confidence. */
+.metric-bar__footnote {
+  flex-basis: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
 
 /* --- D11 merged "Key metrics & drivers" grid ------------------------------- */
 .kpis-grid {

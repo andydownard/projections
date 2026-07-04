@@ -99,7 +99,29 @@ describe("autosaveReducer — 409 conflict (API_SPEC §1.4)", () => {
     s = autosaveReducer(s, { type: "OVERWRITE" });
     expect(s.status).toBe("dirty"); // a save is pending again
     expect(s.version).toBe(9); // PATCH will carry If-Match: 9
+    // wave-3 w2: the conflict is RETAINED across OVERWRITE (cleared on SAVE_SUCCESS
+    // only) so a non-409 replay failure keeps the banner actionable.
+    expect(s.conflict).not.toBeNull();
+  });
+
+  it("OVERWRITE → SAVE_SUCCESS clears the retained conflict (success is the only clear)", () => {
+    let s = autosaveReducer(initialAutosaveState(7), { type: "EDIT" });
+    s = autosaveReducer(s, { type: "CONFLICT", conflict: conflictBody });
+    s = autosaveReducer(s, { type: "OVERWRITE" });
+    s = autosaveReducer(s, { type: "SAVE_START" });
+    s = autosaveReducer(s, { type: "SAVE_SUCCESS", version: 10 });
+    expect(s.status).toBe("saved");
     expect(s.conflict).toBeNull();
+  });
+
+  it("OVERWRITE → SAVE_ERROR keeps the conflict so the banner stays actionable (w2)", () => {
+    let s = autosaveReducer(initialAutosaveState(7), { type: "EDIT" });
+    s = autosaveReducer(s, { type: "CONFLICT", conflict: conflictBody });
+    s = autosaveReducer(s, { type: "OVERWRITE" });
+    s = autosaveReducer(s, { type: "SAVE_START" });
+    s = autosaveReducer(s, { type: "SAVE_ERROR" });
+    expect(s.status).toBe("error");
+    expect(s.conflict).not.toBeNull();
   });
 });
 

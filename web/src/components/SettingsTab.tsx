@@ -398,7 +398,11 @@ export function SettingsTab({
         {statusText}
       </div>
 
-      {state.status === "conflict" && state.conflict && (
+      {/* wave-3 w2: the banner shows while a conflict body is held AND the save is
+          not mid-flight/succeeded — i.e. on the initial 409 (status "conflict") OR
+          when an Overwrite replay failed non-409 (status "error", conflict retained).
+          A successful replay clears the conflict (SAVE_SUCCESS) → banner gone. */}
+      {state.conflict && (state.status === "conflict" || state.status === "error") && (
         <div className="settings-tab__conflict" role="alert">
           <p>{state.conflict.message || "This projection changed since you loaded it."}</p>
           <div className="settings-tab__conflict-actions">

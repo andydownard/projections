@@ -11,7 +11,7 @@ import { ProjectionDetail } from "./ProjectionDetail";
 import { App } from "../App";
 import { clearDetailHeader } from "../state/detailHeader";
 import { formatListDate } from "../components/displayLabels";
-import type { ViewModel } from "../api/viewModel";
+import type { Sensitivity, ViewModel } from "../api/viewModel";
 
 function fullVm(overrides: Partial<ViewModel> = {}): ViewModel {
   return {
@@ -1369,5 +1369,172 @@ describe("ProjectionDetail — Save-as-copy owner token + failure-path preservat
     await waitFor(() => expect(dupCalls).toHaveLength(1));
     expect(dupCalls[0].auth).toBe("Bearer owner-tok");
     expect(dupCalls[0].body).toEqual({ patch: { assumptions: { labor_pct: 0.45 } } });
+  });
+
+  // ---- w1: a double-click on Save-as-copy must fork EXACTLY once -----------------
+  it("w1: double-clicking Save-as-copy fires exactly one /duplicate POST (disabled while a resolution is in flight)", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
+    const dupCalls: string[] = [];
+    // The fork HANGS so the second click lands while the first is still in flight —
+    // the exact window in which a double-click used to mint TWO copies.
+    let releaseDup: () => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/duplicate")) {
+          dupCalls.push(u);
+          return new Promise<Response>((resolve) => {
+            releaseDup = () =>
+              resolve(
+                new Response(
+                  JSON.stringify({
+                    view_slug: "p_copy",
+                    version: 1,
+                    name: "House of Hope (copy)",
+                    edit_token: "edit_copy",
+                  }),
+                  { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+              );
+          });
+        }
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: payrollVm(9) } }),
+              { status: 409, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    await editCellIntoConflict(user);
+
+    const btn = screen.getByRole("button", { name: /save as copy/i });
+    await user.click(btn);
+    await user.click(btn); // the button is now disabled (busy) — the second click is inert
+    expect(dupCalls).toHaveLength(1);
+
+    // Release the in-flight fork so the component settles cleanly (navigates to the copy).
+    releaseDup();
+    await waitFor(() => expect(window.location.pathname).toBe("/p/p_copy/edit"));
+  });
+
+  // ---- w4: a SECOND 409 during an Overwrite replay re-stashes the NEW version -----
+  it("w4: a second 409 during an Overwrite replay re-stashes the edit with the NEW current_version", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
+    const ifMatches: string[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          const ifMatch = new Headers(init?.headers).get("If-Match") ?? "";
+          ifMatches.push(ifMatch);
+          bodies.push(JSON.parse(String(init?.body)));
+          if (ifMatch === "3") {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  detail: { ...CONFLICT_DETAIL, current_version: 9, current_state: payrollVm(9) },
+                }),
+                { status: 409, headers: { "Content-Type": "application/json" } },
+              ),
+            );
+          }
+          if (ifMatch === "9") {
+            // A concurrent editor advanced the version AGAIN while we overwrote →
+            // a NEW 409 at v12. The recovery flow must re-stash this fresher version.
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  detail: { ...CONFLICT_DETAIL, current_version: 12, current_state: payrollVm(12) },
+                }),
+                { status: 409, headers: { "Content-Type": "application/json" } },
+              ),
+            );
+          }
+          const next = Number(ifMatch) + 1;
+          return Promise.resolve(
+            new Response(JSON.stringify(payrollVm(next)), {
+              status: 200,
+              headers: { "Content-Type": "application/json", ETag: `"${next}"` },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    await editCellIntoConflict(user);
+
+    // First Overwrite (If-Match 9) hits a SECOND conflict → the modal must persist.
+    await user.click(screen.getByRole("button", { name: /overwrite/i }));
+    await waitFor(() => expect(ifMatches).toContain("9"));
+    expect(screen.getByTestId("save-conflict-modal")).toBeInTheDocument();
+
+    // Proof of re-stash: a further Overwrite now carries the NEW current_version (12),
+    // not the stale 9 — impossible unless the 2nd 409 refreshed conflict + failedBody.
+    await user.click(screen.getByRole("button", { name: /overwrite/i }));
+    await waitFor(() => expect(screen.queryByTestId("save-conflict-modal")).toBeNull());
+    expect(ifMatches).toContain("12");
+    expect(bodies[bodies.length - 1]).toEqual(EXPECTED_EDIT);
+  });
+});
+
+// Wave 3 wrap-up (w5) — the owner detail page's inline MetricBar gains the same
+// downside-sensitivity line + low-ramp confidence chip the RoleView DecisionBanner
+// got in task 3.3. Both come straight from the server (vm.sensitivity/vm.confidence),
+// rendered with the EXACT DecisionBanner classes/format (no client math); a legacy
+// snapshot that carries neither field renders nothing extra.
+describe("ProjectionDetail — metric bar sensitivity + confidence (w5)", () => {
+  const sensitivity: Sensitivity = {
+    base: { net: { raw: 46900, display: "$46,900" }, breakeven: 5, capital: { raw: 277990, display: "$277,990" } },
+    downside: { net: { raw: -12000, display: "($12,000)" }, breakeven: null, capital: { raw: 312000, display: "$312,000" } },
+    upside: { net: { raw: 98000, display: "$98,000" }, breakeven: 4, capital: { raw: 250000, display: "$250,000" } },
+    delta: 0.25,
+  };
+
+  afterEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
+  it("surfaces the downside-sensitivity line + low-ramp confidence chip in the header metric bar", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm({ sensitivity, confidence: { ramp: "low" } }));
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    const line = await screen.findByTestId("sensitivity-downside");
+    expect(line).toHaveTextContent("Downside");
+    // The ± framing comes from sensitivity.delta, never a hard-coded 25.
+    expect(line).toHaveTextContent("rent +25% / donations −25%");
+    expect(line).toHaveTextContent("($12,000)");
+    expect(line).toHaveTextContent("not reached"); // null downside break-even, never "Month 0"
+    expect(line).toHaveTextContent("$312,000");
+    expect(screen.getByTestId("confidence-chip")).toHaveTextContent(/ramp estimate — low/i);
+  });
+
+  it("omits the sensitivity line + confidence chip for a legacy snapshot (fields absent)", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("decision-banner");
+    expect(screen.queryByTestId("sensitivity-downside")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("confidence-chip")).not.toBeInTheDocument();
+  });
+
+  it("hides the confidence chip when ramp is 'high' but still shows the sensitivity line", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fullVm({ sensitivity, confidence: { ramp: "high" } }));
+    render(<ProjectionDetail slug="p_8x" edit={false} />);
+    await screen.findByTestId("sensitivity-downside");
+    expect(screen.queryByTestId("confidence-chip")).not.toBeInTheDocument();
   });
 });

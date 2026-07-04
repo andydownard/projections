@@ -53,7 +53,11 @@ import type {
 import type { SaveState } from "../components/TopBar";
 import type { ConflictBody } from "../state/autosaveReducer";
 import { clearDetailHeader, setDetailHeader } from "../state/detailHeader";
-import { formatListDate } from "../components/displayLabels";
+import {
+  formatListDate,
+  sensitivityBreakevenLabel,
+  sensitivityDeltaLabel,
+} from "../components/displayLabels";
 import type { ServerValue } from "../api/client";
 import type { PatchHandlerArgs } from "../components/SettingsTab";
 import { readFragmentSecret } from "../router/route";
@@ -259,10 +263,11 @@ function updatedLabel(iso?: string): string | null {
  *  testids the rest of the app reads. Every figure is the server's display string
  *  (no client math); the sparkline geometry comes from the server's incomeSeries. */
 function MetricBar({ vm }: { vm: ViewModel }) {
-  const { metrics, milestones, incomeSeries, year5Income } = vm;
+  const { metrics, milestones, incomeSeries, year5Income, sensitivity, confidence } = vm;
   const breakeven = milestones?.breakEven ?? metrics.breakeven;
   const payback = milestones?.payback;
   const points = (incomeSeries ?? []).map((s) => s.raw);
+  const lowRamp = confidence?.ramp === "low";
   return (
     <section
       className="metric-bar decision-banner"
@@ -308,6 +313,27 @@ function MetricBar({ vm }: { vm: ViewModel }) {
           {breakeven.display}
         </span>
       </div>
+      {/* wave-3 w5: the §12.2 downside-stress line + low-ramp confidence chip the
+          RoleView DecisionBanner surfaces (task 3.3). Rendered from the SERVER fields
+          with the EXACT DecisionBanner classes/format (no client math); absent on a
+          legacy snapshot (schema < 1.6.0) → the footnote row is not rendered at all. */}
+      {(sensitivity || lowRamp) && (
+        <div className="metric-bar__footnote">
+          {sensitivity && (
+            <p className="decision-banner__sensitivity" data-testid="sensitivity-downside">
+              {`Downside (${sensitivityDeltaLabel(sensitivity.delta)}): `}
+              {sensitivity.downside.net.display} net · break-even{" "}
+              {sensitivityBreakevenLabel(sensitivity.downside.breakeven)} · capital{" "}
+              {sensitivity.downside.capital.display}
+            </p>
+          )}
+          {lowRamp && (
+            <span className="chip decision-banner__confidence" data-testid="confidence-chip">
+              Confidence: ramp estimate — low
+            </span>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -322,6 +348,12 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   // with the server's fresh If-Match; Save-as-copy carries it onto …/duplicate — so a
   // conflicting settings/override edit is preserved, never dropped.
   const [failedBody, setFailedBody] = useState<PatchBody | null>(null);
+  // wave-3 w1: a chosen 409 resolution (reload/overwrite/save-as-copy) is in flight.
+  // `resolvingRef` blocks a synchronous double-click BEFORE React can re-render
+  // (two clicks in one tick both used to fire, minting TWO copies / two force-saves);
+  // `resolving` disables the modal's buttons for the visual (and subsequent renders).
+  const resolvingRef = useRef(false);
+  const [resolving, setResolving] = useState(false);
   // D1 / Decision 13: the always-on "Store name" input is replaced by an inline
   // pencil-to-rename. `renaming` reveals the inline input; committing returns to the
   // heading. The input keeps aria-label "Store name" so it stays addressable.
@@ -612,13 +644,27 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   }
 
   function resolveReload() {
+    if (resolvingRef.current) return;
+    resolvingRef.current = true;
+    setResolving(true);
     const v = conflict?.current_version ?? version;
     setConflict(null);
-    void fetchProjection(slug).then((data) => {
-      setVm(data);
-      setVersion(data.version);
-      setName(data.name);
-    });
+    // w3: also drop the stashed failed body — Reload DISCARDS the local edit, so the
+    // pending patch must not linger to be replayed by a later Overwrite.
+    setFailedBody(null);
+    void fetchProjection(slug)
+      .then((data) => {
+        setVm(data);
+        setVersion(data.version);
+        setName(data.name);
+      })
+      .catch(() => {
+        /* transient read failure: the modal is already dismissed; keep prior snapshot */
+      })
+      .finally(() => {
+        resolvingRef.current = false;
+        setResolving(false);
+      });
     setVersion(v);
     setSaveLabel("All changes saved");
   }
@@ -632,6 +678,9 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     // overwrite failed (403/429/500/network) — the exact P0 recurring on the failure
     // path. On success we clear in .then(); on failure onSaveError re-stashes a fresh
     // 409 or (for any other error) leaves the modal up so the owner can retry.
+    if (resolvingRef.current) return;
+    resolvingRef.current = true;
+    setResolving(true);
     const v = conflict?.current_version ?? version;
     const body: PatchBody = failedBody ?? { name };
     setSaveLabel("Saving…");
@@ -641,7 +690,13 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
         setFailedBody(null);
         setSaveLabel("All changes saved");
       })
-      .catch(onSaveError);
+      .catch(onSaveError)
+      .finally(() => {
+        // Reset AFTER onSaveError re-stashes a fresh 409 (or leaves the modal up for a
+        // non-409 retry), so the re-armed modal's buttons are clickable again (w1/w4).
+        resolvingRef.current = false;
+        setResolving(false);
+      });
   }
 
   function resolveSaveAsCopy() {
@@ -656,6 +711,11 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     // is not in the owner-token slot. The button is disabled when no owner token exists.
     // C2 (3.2f): keep `conflict` + `failedBody` until the fork SUCCEEDS — a failed
     // duplicate (403/429/network) must NOT dismiss the modal or drop the pending edit.
+    // w1: a synchronous double-click on Save-as-copy used to mint TWO copies; block the
+    // second invocation before the first fork returns (the ref beats React's re-render).
+    if (resolvingRef.current) return;
+    resolvingRef.current = true;
+    setResolving(true);
     const pending = failedBody ?? undefined;
     const dupToken = getOwnerToken() ?? token.current ?? "";
     setSaveLabel("Saving…");
@@ -675,7 +735,11 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       // The fork failed: leave the modal up + the edit stashed so the owner can retry
       // or choose Overwrite/Reload instead. (The button is owner-only-gated, so this is
       // a transient 429/network/5xx, not the edit-token 403 the gate already prevents.)
-      .catch(() => setSaveLabel("Save failed — retry"));
+      .catch(() => setSaveLabel("Save failed — retry"))
+      .finally(() => {
+        resolvingRef.current = false;
+        setResolving(false);
+      });
   }
 
   if (loadError) {
@@ -935,6 +999,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           onSaveAsCopy={resolveSaveAsCopy}
           canSaveAsCopy={canSaveAsCopy}
           message={conflict.message}
+          busy={resolving}
         />
       )}
 

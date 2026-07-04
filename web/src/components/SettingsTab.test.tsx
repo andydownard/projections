@@ -417,6 +417,44 @@ describe("SettingsTab — 409 conflict recovery (API_SPEC §1.4 / PRD §19.4)", 
     expect(onSaveAsCopy).toHaveBeenCalledTimes(1);
   });
 
+  // Wave 3 wrap-up (w2): the banner Overwrite clears the conflict on SUCCESS ONLY.
+  // Previously OVERWRITE nulled the conflict BEFORE the async flush, so a non-409
+  // failure (500/network) stranded "Save failed — retry" with the pending edit
+  // unflushed and NO banner to recover from. Same pattern as ProjectionDetail 3.2f:
+  // keep the banner actionable on failure; only a successful save clears it.
+  it("keeps the conflict banner actionable when an Overwrite replay fails with a non-409 error (clears on success only)", async () => {
+    const onPatch = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new PatchConflictError({
+          error: "version_conflict",
+          message: "This projection changed since you loaded it.",
+          current_version: 9,
+          your_version: 7,
+          current_state: { settings: settingsViewModel() },
+          recovery: ["reload", "overwrite", "save_as_copy"],
+        }),
+      )
+      // The Overwrite replay fails NON-409 (server 500 / network) — the banner must
+      // NOT vanish, and the edit must stay pending for retry.
+      .mockRejectedValueOnce(new Error("network"));
+    renderTab({ onPatch });
+    fireEvent.change(screen.getByLabelText(/year 1 share/i), { target: { value: "45" } });
+    await vi.advanceTimersByTimeAsync(20);
+    const banner = await screen.findByRole("alert");
+
+    fireEvent.click(within(banner).getByRole("button", { name: /overwrite/i }));
+    await vi.advanceTimersByTimeAsync(20);
+    await waitFor(() => expect(onPatch).toHaveBeenCalledTimes(2));
+
+    // The banner stays up + actionable (all three recovery choices), and the failure
+    // surfaces as a retryable error — not a dead "Save failed" with no banner.
+    const banner2 = await screen.findByRole("alert");
+    expect(within(banner2).getByRole("button", { name: /overwrite/i })).toBeInTheDocument();
+    expect(within(banner2).getByRole("button", { name: /reload/i })).toBeInTheDocument();
+    expect(screen.getByTestId("autosave-status")).toHaveTextContent(/save failed/i);
+  });
+
   // Wave 3.2f / C1: /duplicate is owner-only. When this device holds no owner token
   // (an editor-link holder), Save-as-copy is guaranteed to 403 — the banner disables
   // it with an explanatory tooltip rather than dangling a dead button.
