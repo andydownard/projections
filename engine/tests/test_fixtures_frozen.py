@@ -67,3 +67,50 @@ def test_y1_revenue_identical_across_both_fixtures():
     b = _load("house_of_hope_design_parity_40.json")
     # Revenue is labor-independent.
     assert a["kpis"][0]["value"]["raw"] == b["kpis"][0]["value"]["raw"]
+
+
+# --------------------------------------------------------------- Aggressive
+def test_aggressive_fixture_is_byte_stable(aggressive_result):
+    expected = _load("aggressive_flagged.json")
+    actual = json.loads(json.dumps(to_view_model(aggressive_result), sort_keys=True))
+    assert actual == expected
+
+
+def test_aggressive_triggers_the_two_named_guardrail_flags():
+    # AGENTS.md fixture 2: the aggressive shares MUST fire both §12.2 advisory
+    # guardrails, each demanding a justification note that travels into the packet.
+    vm = _load("aggressive_flagged.json")
+    flags = vm["flags"]
+    assert flags["net_margin_out_of_band"]["requires_note"] is True
+    assert flags["share_y1_out_of_band"]["requires_note"] is True
+    # Year-1 margin is above the ~30% band (a flag, not a math error) and the
+    # verdict is "revise", never "proceed".
+    assert vm["rows"][-1]["y1"]["raw"] > 0.30
+    assert vm["reco"]["tag"] == "revise"
+    assert vm["model_version"] == "2.6.0"
+
+
+# ------------------------------------------------------------- Grace Mission
+def test_grace_fixture_is_byte_stable(grace_result):
+    expected = _load("grace_mission_loss.json")
+    actual = json.loads(json.dumps(to_view_model(grace_result), sort_keys=True))
+    assert actual == expected
+
+
+def test_grace_is_a_loss_case_with_payback_na_and_one_pinned_payroll():
+    # AGENTS.md fixture 3: negative Year-1 net rendered in parentheses, payback
+    # N/A-with-reason (never a 0), and exactly one overridden Payroll cell whose
+    # pinned value differs from the calculated value the Inspector shows.
+    vm = _load("grace_mission_loss.json")
+    net_row = next(r for r in vm["rows"] if r["label"] == "Net income")
+    assert net_row["y1"]["raw"] < 0
+    assert net_row["y1"]["display"].startswith("(")   # parentheses for negatives
+    assert vm["flags"]["payback"] == "N/A — no Year 1 profit"
+    assert vm["milestones"]["payback"]["raw"] is None  # explicit null, never a 0
+    assert vm["milestones"]["payback"]["display"] == "N/A"
+    assert len(vm["overrides"]) == 1
+    ov = vm["overrides"][0]
+    assert ov["node"] == "Payroll" and ov["year"] == 1
+    assert ov["value"]["raw"] == 110000.0
+    assert ov["calculated"]["raw"] != ov["value"]["raw"]  # calc-vs-override, no back-solve
+    assert vm["model_version"] == "2.6.0"

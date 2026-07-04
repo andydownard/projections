@@ -107,6 +107,53 @@ def _assumptions(vm: dict[str, Any]) -> dict[str, Any]:
     return {"verified": verified, "estimated": estimated}
 
 
+# §12.2 advisory guardrail flags -> a human-readable label for the packet. Any
+# flag whose value is a dict carrying ``requires_note: True`` is an out-of-band
+# driver a board must see justified (ENGINE_CONTRACT §6.2 / PRD §12.2); the label
+# names the driver + the year so the justification is unambiguous.
+_GUARDRAIL_LABELS = {
+    "net_margin_out_of_band": "Net margin (Year 1)",
+    "net_margin_y4_out_of_band": "Net margin (Year 4)",
+    "net_margin_y5_out_of_band": "Net margin (Year 5)",
+    "share_y1_out_of_band": "Donor market share (Year 1)",
+    "share_y4_out_of_band": "Donor market share (Year 4)",
+    "share_y5_out_of_band": "Donor market share (Year 5)",
+    "occupancy_ratio_out_of_band": "Occupancy ratio (Year 1)",
+    "labor_ratio_out_of_band": "Labor ratio (Year 1)",
+    "sales_per_sqft_out_of_band": "Sales per sq ft (Year 1)",
+}
+
+
+def _guardrails(vm: dict[str, Any]) -> list[dict[str, str]]:
+    """The §12.2 out-of-band drivers + the justification note each requires.
+
+    Reads ONLY the engine's ``flags`` (the flag, its band, and the ``requires_note``
+    marker are all set by ``engine.decision.build_flags``) — the packet invents no
+    threshold and re-derives no number, so the guardrail advisory can never
+    contradict the flag the engine actually raised. A clean projection (no
+    band-violating driver) yields an empty list, so the section is silent unless a
+    justification is genuinely owed. This is what makes the packet defensible to a
+    skeptical board/funder: an out-of-band input travels in with its required note,
+    never silently (PRD §12.2 / §17).
+    """
+    out: list[dict[str, str]] = []
+    flags = vm.get("flags") or {}
+    for key, label in _GUARDRAIL_LABELS.items():
+        f = flags.get(key)
+        if isinstance(f, dict) and f.get("requires_note"):
+            band = str(f.get("band", ""))
+            out.append({
+                "field": key,
+                "label": label,
+                "band": band,
+                "note": (
+                    f"{label} is outside the advisory benchmark band ({band}) and "
+                    "requires a written justification that travels into this packet."
+                ),
+            })
+    return out
+
+
 def _provenance(vm: dict[str, Any]) -> dict[str, Any]:
     """Classify every 3-year row by source: input / computed / overridden / estimated."""
     buckets: dict[str, list[dict[str, str]]] = {
@@ -295,6 +342,9 @@ def build_packet(
     }
     sections["assumptions"] = _assumptions(vm)
     sections["sensitivity"] = _sensitivity(vm)
+    # §12.2 guardrails: any out-of-band driver + the justification note it requires,
+    # so the advisory travels into the packet a board reads (empty when all in band).
+    sections["guardrails"] = _guardrails(vm)
     sections["provenance"] = _provenance(vm)
     sections["kpis"] = _kpis(vm)
     # The .docx 2-pager's two tables (EPIC DOCX): the projected income statement
@@ -365,6 +415,17 @@ def render_packet_md(pkt: dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"_{_md_escape(sens['disclaimer'])}_")
     lines.append("")
+
+    guardrails = s.get("guardrails") or []
+    if guardrails:
+        lines.append("## Guardrails")
+        lines.append(
+            "_These inputs are outside the advisory benchmark bands (§12.2) and "
+            "require a written justification._")
+        for g in guardrails:
+            lines.append(f"- **{_md_escape(g['label'])}** "
+                         f"({_md_escape(g['band'])}): {_md_escape(g['note'])}")
+        lines.append("")
 
     lines.append("## Key metrics")
     for k in s["kpis"]:
@@ -655,6 +716,19 @@ def render_packet_docx(pkt: dict[str, Any]) -> bytes:
 
     doc.add_heading("Interpretation", level=1)
     doc.add_paragraph(_interpretation_para(pkt))
+
+    # §12.2 guardrails: out-of-band drivers + the justification each requires. Only
+    # rendered when a driver is genuinely out of band, so a clean plan stays silent.
+    guardrails = s.get("guardrails") or []
+    if guardrails:
+        doc.add_heading("Assumptions Requiring Justification", level=1)
+        _add_small_para(
+            doc,
+            "The following inputs are outside the advisory benchmark bands (§12.2). "
+            "A written justification is required before relying on this projection.",
+            italic=True)
+        for g in guardrails:
+            doc.add_paragraph(g["note"], style="List Bullet")
 
     disc = s.get("disclaimer") or {}
     # AI authorship is disclosed only when generated prose is actually present —

@@ -502,7 +502,7 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 
 - **Auth:** owner/edit/view. **Capability:** owner/edit/view (role flag tailors emphasis/CTAs — board/funder/advisor, §6.2/§17). **Terms acceptance required** (`403 terms_required` otherwise).
 - **Query:** `?format=pdf|docx` (default `pdf`); `?role=board|funder|advisor` (defaults to the share-link role, else `board`).
-- **Behavior:** the packet **leads with evidence** (§15), then decision recommendation, assumptions (verified vs estimated), citations w/ dates+confidence, sensitivity table, risks, cash need + break-even, monthly cash-flow summary, 5-year P&L, KPIs. Prose is the grounded narrative (§6.1); if AI is disabled, the packet omits generated prose but still includes the structured/evidence sections.
+- **Behavior:** the packet **leads with evidence** (§15), then decision recommendation, assumptions (verified vs estimated), citations w/ dates+confidence, sensitivity table, **§12.2 guardrails** (any out-of-band driver + the justification note it requires — sourced from the engine `flags` that carry `requires_note: true`; empty/silent when every driver is in band), risks, cash need + break-even, monthly cash-flow summary, 5-year P&L, KPIs. Prose is the grounded narrative (§6.1); if AI is disabled, the packet omits generated prose but still includes the structured/evidence sections (guardrails included — they are flag-derived, never AI-derived).
 - **Response `200`:** `application/pdf` or the `.docx` content type; `Content-Disposition: attachment`.
 - **Errors:** `403 terms_required`; `404`; `429`.
 

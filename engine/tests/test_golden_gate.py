@@ -174,6 +174,43 @@ def test_golden_gate_loss_case_recalcs_clean(tmp_path):
     assert _reconcile(res, tmp_path) >= 30
 
 
+def test_golden_gate_aggressive(aggressive_result, tmp_path):
+    # AGENTS.md fixture 2 (the §12.2 guardrail case) reconciles three ways WITHOUT
+    # overrides — the aggressive shares drive large positive figures; every 5-year
+    # cell must foot server == in-sheet formula == LibreOffice recalc, zero errors.
+    assert _reconcile(aggressive_result, tmp_path) >= 30
+
+
+def test_golden_gate_aggressive_with_override(aggressive_inputs, tmp_path):
+    # …and WITH a component pin present: a hard-coded orange Marketing cell, with
+    # totals still live formulas over it, must recalc clean too (§18 with-overrides).
+    inputs, assumptions, demand, trade = aggressive_inputs
+    res = compute(
+        inputs, assumptions, demand, trade,
+        overrides={"Marketing & outreach#1":
+                   {"value": "40000", "note": "campaign", "ts": "t"}},
+    )
+    assert _reconcile(res, tmp_path) >= 30
+
+
+def test_golden_gate_grace_with_payroll_override(grace_result, tmp_path):
+    # AGENTS.md fixture 3 in its canonical (frozen) form: the $14/sq-ft loss case
+    # WITH the one Payroll#1 override. The guarded blank-string payback path
+    # =IF(net<=0,"",...) only exists on the loss path, so this proves LibreOffice
+    # recalcs it with zero #DIV/0! WHILE an override is present.
+    assert grace_result.annual[1].net < 0, "fixture must be a loss case"
+    assert _reconcile(grace_result, tmp_path) >= 30
+
+
+def test_golden_gate_grace_without_override(grace_inputs, tmp_path):
+    # …and the same loss case WITHOUT the override (computed Payroll) still
+    # reconciles three ways (with/without-overrides coverage for the loss fixture).
+    inputs, assumptions, demand, trade = grace_inputs
+    res = compute(inputs, assumptions, demand, trade, overrides={})
+    assert res.annual[1].net < 0
+    assert _reconcile(res, tmp_path) >= 30
+
+
 def test_concurrent_recalc_calls_are_hermetic(
         canonical_result, design_parity_result, tmp_path):
     # #199 regression: two recalc() calls running CONCURRENTLY on distinct workbooks
