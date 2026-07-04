@@ -564,6 +564,64 @@ def test_sales_per_sqft_out_of_band_flag_fires_above_band():
     assert flag["requires_note"] is True
 
 
+# --------------------------------------- cross-module classification tripwire (Wave-6A
+# fable review, Important #1 — same defect class as the batch-2 I2 packet fix): the
+# %-of-revenue expense LINE SET must stay in sync across all three homes that classify
+# it, or a future line silently mis-files in two places at once.
+def test_pct_of_revenue_classification_is_consistent_across_the_three_homes(
+        canonical_result):
+    """Three homes classify "which expense lines are %-of-revenue":
+
+      1. engine.compute.PCT_OF_REVENUE_LINES — the canonical driver-chain list (each
+         entry has its own ``*_pct`` assumption field: card/marketing/labor/supplies).
+      2. engine.monthly._PCT_OF_REVENUE_LABELS — which lines ride the monthly revenue
+         S-curve (vs. a flat lease-style spread). Payroll is the ONE deliberate,
+         documented exception here: it rides its own hire-ramp instead (monthly.py's
+         own module comment explains why), so home 2's set is home 1's MINUS Payroll.
+      3. engine.decision.py's break-even-revenue ``var_rate`` (§12.4) — introspected
+         here from decision.py's own OUTPUTS (break_even_revenue_annual + Year-1
+         total_exp/total_rev), never a hand-copied re-implementation of its formula:
+         solving ``break_even_revenue = (total_exp - total_rev*var_rate) / (1 - var_rate)``
+         for var_rate gives
+         ``var_rate = (break_even_revenue - total_exp) / (break_even_revenue - total_rev)``.
+
+    A future %-of-revenue line added to compute.py's list but forgotten in the other
+    two would otherwise silently flat-spread in the monthly model (mis-classified as
+    a fixed lease obligation instead of riding the revenue ramp) AND drop out of the
+    break-even-revenue math, with no test failing — this is that test.
+    """
+    import engine.compute as compute_mod
+    import engine.monthly as monthly_mod
+
+    canonical_lines = set(compute_mod.PCT_OF_REVENUE_LINES)
+
+    # Home 2: monthly.py's revenue-ramp set == the canonical set minus the one
+    # documented exception (Payroll rides its own ramp, tracked separately).
+    assert set(monthly_mod._PCT_OF_REVENUE_LABELS) == canonical_lines - {"Payroll"}
+
+    # Home 3: introspect the REAL var_rate decision.py's break-even-revenue guard
+    # actually used, purely from its own outputs (no re-implemented formula).
+    y1 = canonical_result.annual[1]
+    dec = canonical_result.decision
+    rev1 = D(str(y1.total_rev))
+    exp1 = D(str(y1.total_exp))
+    ber = dec.break_even_revenue_annual
+    assert ber is not None  # canonical's var_rate < 1 -- a real break-even revenue exists
+    implied_var_rate = (ber - exp1) / (ber - rev1)
+
+    # The dollar total of every canonical %-of-revenue line, PLUS its one DERIVED
+    # %-of-Payroll line ("Payroll taxes" is not itself in PCT_OF_REVENUE_LINES —
+    # it is derived from Payroll, exactly like Rent is derived from occupancy —
+    # but decision.py's var_rate folds it into the Payroll term via
+    # ``labor_pct * (1 + payroll_tax_pct)``), must equal var_rate's entire dollar
+    # coverage. A future line added to home 1 without a matching var_rate term
+    # would push this dollar total above implied_var_rate * rev1 and fail loudly.
+    pct_dollar_total = sum(
+        (D(str(y1.expenses[label])) for label in canonical_lines), Decimal("0")
+    ) + D(str(y1.expenses["Payroll taxes"]))
+    assert abs(pct_dollar_total - implied_var_rate * rev1) < Decimal("0.01")
+
+
 # --------------------------------------- decision text <-> metric consistency (#142/#145)
 def _claims_breakeven_unreached(text: str) -> bool:
     """True when a string flatly asserts break-even was never reached."""
