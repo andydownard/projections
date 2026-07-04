@@ -14,6 +14,9 @@ snapshot is written per settle. The .xlsx export lands in a later slice.
 """
 from __future__ import annotations
 
+import csv
+import io
+
 # ruff: noqa: UP045 -- keep typing.Optional: Pydantic/FastAPI evaluate these
 # annotations at runtime, and PEP 604 `X | None` is unsupported on Python 3.9.
 import json
@@ -1639,6 +1642,88 @@ def export_xlsx(
         media_type=XLSX_CONTENT_TYPE,
         filename=filename,
         background=BackgroundTask(lambda: os.remove(path) if os.path.exists(path) else None),
+    )
+
+
+def _cashflow_group_label(month: int, opening_month: int) -> str:
+    """Bucket a project month into "Pre-opening | Year 1 … Year N" (spec §4.2).
+
+    Pure integer month bucketing — NOT client/server math on a financial figure:
+    `opening_month` is the server's ``milestones.grandOpening.raw`` (G). Months
+    ``1..G-1`` are Pre-opening; ``G..G+11`` Year 1; each subsequent 12-month block a
+    year. G defaults to 1 (legacy snapshots without milestones) so there is no
+    empty pre-opening group.
+    """
+    if month < opening_month:
+        return "Pre-opening"
+    return f"Year {(month - opening_month) // 12 + 1}"
+
+
+@router.get("/{view_slug}/cashflow.csv")
+def export_cashflow_csv(
+    view_slug: str,
+    request: Request,
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
+):
+    """Monthly cash-flow CSV export (spec §4.5).
+
+    Mirrors the sibling ``/xlsx`` and ``/packet`` view-slug exports: the slug alone
+    grants read, terms acceptance is required first (§21) -> 403 terms_required, and
+    the per-IP (+ per-token when a bearer is presented) rate-limit legs fire FIRST.
+    UNLIKE ``/xlsx``, the CSV is served from the STORED ``computed_json`` monthly[]
+    VERBATIM — a read is never a recompute (Regression #12). The four money columns
+    are RAW SIGNED INTEGERS so a spreadsheet can sum them (the ``($23,973)`` display
+    string imports as text and breaks the sum); reformatting is not the CSV's job.
+    """
+    # §10/#168: an uncached CSV render on every call, reachable with just the public
+    # slug -> cap per IP (and per token when a bearer is presented) FIRST.
+    _csv_token = _bearer(authorization)
+    limited = _rate_limited(
+        "export_cashflow_csv", request,
+        ip_limit=_EXPORT_IP_LIMIT,
+        token=hash_token(_csv_token) if _csv_token else None,
+        token_limit=_EXPORT_TOKEN_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    if not row.get("terms_accepted_at"):
+        raise HTTPException(status_code=403, detail={"error": "terms_required"})
+
+    vm = loads_obj(row.get("computed_json"))
+    monthly = vm.get("monthly") or []
+    # G from the stored milestones; legacy snapshots without milestones -> G=1.
+    opening_month = (
+        ((vm.get("milestones") or {}).get("grandOpening") or {}).get("raw") or 1
+    )
+
+    def _int(cell: Any) -> int:
+        return round((cell or {}).get("raw") or 0)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Month", "Group", "Revenue", "Expenses", "Net", "Cumulative Cash"])
+    for m in monthly:
+        month = int(m.get("month"))
+        writer.writerow([
+            month,
+            _cashflow_group_label(month, int(opening_month)),
+            _int(m.get("revenue")),
+            _int(m.get("expenses")),
+            _int(m.get("net")),
+            _int(m.get("cumulativeCash")),
+        ])
+
+    stem = _safe_filename_stem(row.get("name") or "")
+    filename = f"{stem} Cash Flow.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

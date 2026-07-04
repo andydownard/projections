@@ -127,7 +127,7 @@ Limits apply **per IP and per token** (PRD §20/§27), 429 on breach with `Retry
 | `POST …/penny`, `POST /api/penny/draft` | 600 / hour (coarse) | **120 / hour / token, 240 / hour / projection** | Bounded provider tool-use loop — **keyed on token/projection, not the shared proxy IP** (§6.6, issue #189). |
 | `POST /api/penny/proposal` | 120 / hour (coarse) | 60 / hour / token | Upload intake (token-hashed key). |
 | `PATCH …` (autosave) | 600 / 5 min | 600 / 5 min / token | High by design (debounced autosave); serialized server-side. Client debounces ~300–400 ms. Per-token key = the presented bearer (owner/edit capability token, or the Clerk grantee's JWT, #323). |
-| `GET …/xlsx`, `GET …/packet` | 60 / hour | — | Export cost (LibreOffice/render). |
+| `GET …/xlsx`, `GET …/packet`, `GET …/cashflow.csv` | 60 / hour | — | Export cost (LibreOffice/render/serialize). |
 | `POST /api/cost-schedule/preview` | 600 / 5 min | — | Read-only grid-totals compute; fires as the user edits the startup-costs grid (general-read cadence). |
 | All other `GET` | 600 / 5 min | — | General read. |
 
@@ -533,6 +533,14 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 - **Response `200`:** `application/pdf` or the `.docx` content type; `Content-Disposition: attachment`.
 - **Errors:** `403 terms_required`; `404`; `429`.
 
+### 6.4a `GET /api/projections/{view_slug}/cashflow.csv` — monthly cash-flow CSV
+
+- **Auth:** owner/edit/view (mirrors §6.3/§6.4 — the slug alone grants read). **Terms acceptance required** (`403 terms_required` otherwise).
+- **Behavior:** served from the **stored `computed_json` monthly[] verbatim** — a read is **never** a recompute (Regression #12), unlike `/xlsx` which rebuilds the workbook. One row per project month `1..N`. Columns: `Month` (integer), `Group` (`Pre-opening | Year 1 … Year 5`, bucketed by integer month against `milestones.grandOpening.raw` — months `1..G-1` pre-opening, `G..G+11` Year 1, each subsequent 12-month block a year; `G` defaults to `1` for legacy snapshots without milestones), and the four money columns `Revenue, Expenses, Net, Cumulative Cash` as **raw signed integers** (`round(raw)`, e.g. `-263269`) — a spreadsheet must be able to `SUM` the column, so the `($263,269)` display string (which imports as text) is deliberately **not** used. Reformatting is not the CSV's job.
+- **Response `200`:** `text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="<name> Cash Flow.csv"` (via `_safe_filename_stem`, matching the `.xlsx`/packet filename convention).
+- **Rate limit:** the shared export budget — per-IP (`_EXPORT_IP_LIMIT`) + per-token (`_EXPORT_TOKEN_LIMIT`, when a bearer is presented), emitted **first**.
+- **Errors:** `403 terms_required`; `404`; `429`.
+
 ### 6.5 `GET /api/projections/{view_slug}/penny/transcript` — Penny conversation (read seam)
 
 - **Auth:** owner/edit Bearer. **Capability:** owner OR this projection's edit token (Spec B §7/§12). A view-only caller (no/invalid token) or a different owner's token → `403 forbidden`; unknown slug → `404`.
@@ -799,7 +807,7 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `PUT …/{slug}/narrative` | owner/edit | **yes** | yes | read |
 | `POST …/{slug}/narrative:regenerate` | owner/edit | **yes** | yes | regenerate |
 | `POST …/{slug}/evidence` | owner/edit | **yes** | yes | upload |
-| `GET …/{slug}/xlsx` · `…/packet` | owner/edit/view | — | no | export |
+| `GET …/{slug}/xlsx` · `…/packet` · `…/cashflow.csv` | owner/edit/view | — | no | export |
 | `GET …/{slug}/penny/transcript` | owner/edit | — | no | read |
 | `POST …/{slug}/penny` | owner/edit (view = answer-only) | — (loop's internal `PATCH`es carry it) | yes (`actor:penny` via the loop) | penny |
 | `POST /api/penny/draft` | edit Bearer | — | no (persists nothing) | penny |
