@@ -657,16 +657,21 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
         setVm(data);
         setVersion(data.version);
         setName(data.name);
+        // m50: only claim success once the re-fetch actually lands — the modal is
+        // already dismissed, so this is the only remaining signal the reload worked.
+        setSaveLabel("All changes saved");
       })
       .catch(() => {
-        /* transient read failure: the modal is already dismissed; keep prior snapshot */
+        // m50: a transient read failure (network/5xx) after the modal is dismissed
+        // must surface as retryable, never a false "All changes saved" — the prior
+        // snapshot is kept on screen.
+        setSaveLabel("Save failed — retry");
       })
       .finally(() => {
         resolvingRef.current = false;
         setResolving(false);
       });
     setVersion(v);
-    setSaveLabel("All changes saved");
   }
 
   function resolveOverwrite() {

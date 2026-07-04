@@ -956,6 +956,44 @@ describe("ProjectionDetail — 409 modal preserves the edit (#P0 3.2)", () => {
     expect(patchIfMatches.length).toBe(patchesBeforeReload);
     await waitFor(() => expect(vi.mocked(fetchProjection).mock.calls.length).toBeGreaterThan(1));
   });
+
+  // m50: the modal dismisses optimistically on Reload, but the label must track the
+  // RE-FETCH's actual outcome — a failed re-fetch (network/5xx) is a real, visible
+  // failure on the conflict-recovery surface and must never claim success.
+  it("m50: a failed re-fetch after Reload surfaces a retryable error, never a false 'All changes saved'", async () => {
+    vi.mocked(fetchProjection)
+      .mockResolvedValueOnce(payrollVm(3)) // initial load
+      .mockRejectedValueOnce(new Error("network")); // the Reload re-fetch fails
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: payrollVm(9) } }),
+              { status: 409, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    await editCellIntoConflict(user);
+
+    await user.click(screen.getByRole("button", { name: /reload latest/i }));
+    await waitFor(() => expect(screen.queryByTestId("save-conflict-modal")).toBeNull());
+    await waitFor(() => expect(vi.mocked(fetchProjection)).toHaveBeenCalledTimes(2));
+
+    // The re-fetch FAILED — the label must surface as retryable, never success.
+    await waitFor(() =>
+      expect(screen.getByTestId("recompute-status")).toHaveTextContent(/save failed/i),
+    );
+    expect(screen.getByTestId("recompute-status")).not.toHaveTextContent("All changes saved");
+  });
 });
 
 // EPIC SHARE (Decision 12) — the unified Share affordance on the detail header. The
@@ -1490,6 +1528,80 @@ describe("ProjectionDetail — Save-as-copy owner token + failure-path preservat
     await waitFor(() => expect(screen.queryByTestId("save-conflict-modal")).toBeNull());
     expect(ifMatches).toContain("12");
     expect(bodies[bodies.length - 1]).toEqual(EXPECTED_EDIT);
+  });
+
+  // ---- m49 (w3 protective test): Reload's failedBody-clear can't be replayed later ---
+  // A single settings-driver 409 opens BOTH the page-level SaveConflictModal (page
+  // `conflict`/`failedBody`) AND the SettingsTab's own separately-owned inline banner
+  // (from the SAME rejected promise). Resolving ONLY the page modal via Reload must
+  // not leave the page's stashed `failedBody` around for the STILL-OPEN banner's own
+  // Save-as-copy to replay — that would resurrect an edit the owner just discarded.
+  it("m49: Reload clears the page-level failedBody so the SettingsTab's still-open banner can't replay the discarded edit via Save-as-copy", async () => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+    vi.mocked(fetchProjection).mockResolvedValue(settingsVm(3));
+    const dupCalls: Array<{ auth: string | null; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/duplicate")) {
+          dupCalls.push({
+            auth: new Headers(init?.headers).get("Authorization"),
+            body: init?.body ? JSON.parse(String(init.body)) : {},
+          });
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                view_slug: "p_copy",
+                version: 1,
+                name: "House of Hope (copy)",
+                edit_token: "edit_copy",
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          // Every settings PATCH is stale → 409, opening BOTH the page-level modal AND
+          // the SettingsTab's own inline banner from the SAME rejected promise.
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: settingsVm(9) } }),
+              { status: 409, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+
+    // Edit the Labor % driver on the KPIs tab — the debounced PATCH 409s.
+    await user.click(screen.getByRole("tab", { name: /kpis/i }));
+    fireEvent.click(screen.getByTestId("settings-group-cost-structure"));
+    fireEvent.change(screen.getByLabelText(/labor/i), { target: { value: "45" } });
+
+    await screen.findByTestId("save-conflict-modal");
+    const banner = await screen.findByRole("alert");
+
+    // Resolve ONLY the page-level modal via Reload — discarding the labor edit.
+    await user.click(screen.getByRole("button", { name: /reload latest/i }));
+    await waitFor(() => expect(screen.queryByTestId("save-conflict-modal")).toBeNull());
+    // The SettingsTab banner is a separately-owned reducer — still showing.
+    expect(banner).toBeInTheDocument();
+
+    const copyBtn = within(banner).getByRole("button", { name: /save as (a )?copy/i });
+    await user.click(copyBtn);
+
+    // Proof of the w3 clear: the fork carries NO patch — the discarded labor edit is
+    // never replayed onto the copy.
+    await waitFor(() => expect(dupCalls).toHaveLength(1));
+    expect(dupCalls[0].body).toEqual({});
   });
 });
 
