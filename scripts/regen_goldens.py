@@ -34,6 +34,7 @@ from engine.tests.conftest import (  # noqa: E402
     build_canonical_result,
     build_design_parity_result,
     build_grace_result,
+    build_nnn_gross_check_result,
 )
 from engine.viewmodel import to_view_model  # noqa: E402
 
@@ -49,6 +50,9 @@ FIXTURES = {
     # canonical WITH-override form.
     "aggressive_flagged.json": build_aggressive_result,
     "grace_mission_loss.json": build_grace_result,
+    # NNN resolution pin (Task 6.4): escalator + lease deposit both apply to the
+    # resolved occupancy INCLUDING nnn_opex_annual (the conservative reading).
+    "nnn_gross_check.json": build_nnn_gross_check_result,
 }
 
 

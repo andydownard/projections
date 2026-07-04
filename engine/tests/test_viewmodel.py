@@ -119,8 +119,9 @@ def test_settings_block(canonical_result):
     assert abs(s["buildingSqft"] - 10000.0) < 1e-9
     assert abs(s["salesfloorPct"] - 0.70) < 1e-9
     assert abs(s["nnnOpexAnnual"] - 0.0) < 1e-9
-    # fixedAnnual is the label -> annual-$ operating map (Insurance liability = 2000).
-    assert s["fixedAnnual"]["Insurance liability"] == 2000.0
+    # fixedAnnual is the label -> annual-$ operating map (990-grounded Insurance
+    # liability = $10,000 at 2.7.0; was $2,000).
+    assert s["fixedAnnual"]["Insurance liability"] == 10000.0
 
 
 def test_sensitivity_block_serialized(canonical_result):
@@ -164,7 +165,7 @@ def test_view_model_is_json_serializable(canonical_result):
 
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
-    assert vm["model_version"] == "2.6.0"
+    assert vm["model_version"] == "2.7.0"
     # 1.6.0: +sensitivity scenarios + delta, +confidence{ramp}, +settings knobs
     # (sensitivityDelta/fixedAnnual/nnnOpexAnnual/buildingSqft/salesfloorPct). 1.5.0 had
     # added startupCosts/startupTotal. Additive shape change, no math change.
@@ -400,14 +401,26 @@ def test_breakeven_consistency_holds_when_timeline_shifts():
         assert "downside" in vm["reco"]["sub"].lower()
 
 
-def test_proceed_case_keeps_default_breakeven_reason_and_is_consistent(design_parity_result):
-    # A non-do_not_proceed verdict (the design-parity 40% proceed case) is untouched:
-    # reasonBreakeven falls back to the plain definition, reco.sub is the proceed
-    # sub, and the consistency invariant still holds (break-even reached, no "not
-    # reached" claim anywhere).
+def test_proceed_case_keeps_default_breakeven_reason_and_is_consistent():
+    # A genuine proceed verdict: reasonBreakeven falls back to the plain definition,
+    # reco.sub is the proceed sub, and the consistency invariant holds (break-even
+    # reached, no "not reached" claim anywhere). Built inline as the 40%-labor
+    # design-parity SHAPE with adequate funding (source_of_funds > its $302,238 capital
+    # need) — at the 2.7.0 990-grounded basis the design-parity fixture's own $300k
+    # funds now yields raise_cash (capital crosses funds by $2,238), so a dedicated
+    # proceed case is constructed here to keep this branch covered.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     from engine.tests.test_decision import assert_breakeven_text_consistent
     from engine.viewmodel import to_view_model
-    vm = to_view_model(design_parity_result)
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="400000",
+    )
+    result = compute(inputs, Assumptions(labor_pct="0.40"), DemandDrivers(),
+                     TradeArea(basis="city", households="31798"), overrides={})
+    vm = to_view_model(result)
     assert vm["reco"]["tag"] == "proceed"
     assert vm["metrics"]["reasonBreakeven"] == (
         "First month operating net turns and stays non-negative.")

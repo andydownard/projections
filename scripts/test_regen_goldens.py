@@ -14,15 +14,16 @@ from scripts.regen_goldens import GOLDEN_DIR, main, regen
 REAL_GOLDENS = sorted(p.name for p in GOLDEN_DIR.glob("*.json"))
 
 
-def test_golden_dir_has_the_four_named_fixtures():
+def test_golden_dir_has_the_five_named_fixtures():
     # Guards against a typo'd FIXTURES map silently regenerating nothing. The two
-    # House of Hope twins plus the AGENTS.md Aggressive (§12.2 guardrail) and Grace
-    # Mission (§12.4 loss / override) fixtures.
+    # House of Hope twins, the AGENTS.md Aggressive (§12.2 guardrail) and Grace
+    # Mission (§12.4 loss / override) fixtures, plus the Task 6.4 NNN-resolution pin.
     assert REAL_GOLDENS == [
         "aggressive_flagged.json",
         "grace_mission_loss.json",
         "house_of_hope_canonical_60.json",
         "house_of_hope_design_parity_40.json",
+        "nnn_gross_check.json",
     ]
 
 

@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.deps import hash_token
+from engine import model
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.viewmodel import to_view_model
 
@@ -38,7 +39,7 @@ _INPUTS: dict[str, Any] = dict(
     share_y3="0.10",
     share_y4="0.11",
     share_y5="0.12",
-    donation_value="74",
+    donation_value=model.DEFAULT_DONATION_VALUE,  # 990-grounded $74 (single source)
     building_sqft="10000",
     salesfloor_pct="0.70",
     occupancy_annual="120000",

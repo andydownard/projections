@@ -5,11 +5,13 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    # 2.6.0: the annual P&L extends to a 5-year horizon (share_y4/share_y5 drivers +
-    # the compounding escalator through Y5); CAGR is Y1->Y5; the §12.2 guardrails also
-    # check Y4/Y5; "Net profit" is renamed "Net income". Decision metrics stay
-    # Year-1-anchored (capital/break-even/cash-gap byte-unchanged).
-    assert model.MODEL_VERSION == "2.6.0"
+    # 2.7.0 (Task 6.4 + the 6.1/6.2/6.3 outputs that deferred their single regen to
+    # here): 990-grounded constants (payroll tax 7.5%->8%, Insurance liability
+    # $2k->$10k), the monthly-split cash-flow distribution (6.2), the occupancy/labor/
+    # sales-per-sqft advisory flags (6.3), and the money_view single-rounding-authority
+    # + exact lease-deposit arithmetic (6.4/commit-1). All move engine OUTPUTS, so
+    # MODEL_VERSION bumps (not just the schema).
+    assert model.MODEL_VERSION == "2.7.0"
     # 1.6.0: +sensitivity{base,downside,upside} scenarios + delta, +confidence{ramp}
     # (surfacing the already-computed §12.2 ±stress + the ramp low-confidence flag the
     # view-model previously dropped, audit P0); settings gain sensitivityDelta,
@@ -30,7 +32,16 @@ def test_cost_structure_constants_canonical_labor_60():
     assert Decimal(str(model.MARKETING_PCT_OF_REVENUE)) == Decimal("0.0375")
     assert Decimal(str(model.SUPPLIES_PCT_OF_REVENUE)) == Decimal("0.05")
     assert Decimal(str(model.CARD_FEES_PCT_OF_REVENUE)) == Decimal("0.02")
-    assert Decimal(str(model.PAYROLL_TAX_PCT_OF_PAYROLL)) == Decimal("0.075")
+    # 6.4: 990-grounded — the six-EIN sample's employer payroll-tax load is ~8%.
+    assert Decimal(str(model.PAYROLL_TAX_PCT_OF_PAYROLL)) == Decimal("0.08")
+
+
+def test_default_donation_value_is_990_grounded():
+    # 6.4: the research-grounded default average donation value ($74) — the single
+    # source the seed + engine-parity FE draft reference. (The wizard's user-facing
+    # default is a deliberately-conservative $50 per Owner Decision 4 / W15, distinct
+    # from this research constant.)
+    assert Decimal(str(model.DEFAULT_DONATION_VALUE)) == Decimal("74")
 
 
 def test_occupancy_and_capital_constants():
@@ -54,8 +65,9 @@ def test_fixed_annual_excludes_supplies_and_utilities():
     # is no longer a flat fixed-$ entry either (feature #245).
     assert "Store/office supplies" not in model.FIXED_ANNUAL
     assert "Utilities/trash service" not in model.FIXED_ANNUAL
-    assert model.FIXED_ANNUAL["Insurance liability"] == 2000
-    assert sum(model.FIXED_ANNUAL.values()) == 2000 + 3000 + 300 + 1600 + 900
+    # 6.4: Insurance liability re-based to the 990-grounded $10k (was $2k).
+    assert model.FIXED_ANNUAL["Insurance liability"] == 10000
+    assert sum(model.FIXED_ANNUAL.values()) == 10000 + 3000 + 300 + 1600 + 900
 
 
 def test_per_sqft_constants_present_and_anchored():

@@ -136,6 +136,39 @@ def build_grace_result():
     return compute(*build_grace_inputs(), overrides=dict(GRACE_PAYROLL_OVERRIDE))
 
 
+# --------------------------------------------------------- NNN gross-check
+# The NNN-resolution pin (Task 6.4 / DECISIONS.md): the canonical House of Hope with a
+# triple-net lease carrying $30,000/yr of NNN opex on top of the $120,000 base rent.
+# "Code behavior governs" (the conservative reading): the resolved occupancy is
+# rent + NNN = $150,000, the 3% escalator compounds on that resolved figure (Y2 =
+# $150,000 × 1.03 = $154,500), and the lease deposit is 3 months of the RESOLVED
+# occupancy ($150,000 × 3/12 = $37,500) — NNN is not carved out of either. Frozen so
+# any future change to how NNN flows through occupancy/escalator/deposit is caught.
+def build_nnn_gross_check_inputs():
+    inputs = Inputs(
+        org_name="House of Hope",
+        city="Longview, Texas",
+        opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12",
+        donation_value="74",
+        building_sqft="10000",
+        salesfloor_pct="0.70",
+        occupancy_annual="120000",
+        lease_type="nnn",
+        nnn_opex_annual="30000",
+        source_of_funds="300000",
+    )
+    assumptions = Assumptions(labor_pct="0.60")
+    demand = DemandDrivers()
+    trade = TradeArea(basis="city", households="31798")
+    return inputs, assumptions, demand, trade
+
+
+def build_nnn_gross_check_result():
+    return compute(*build_nnn_gross_check_inputs(), overrides={})
+
+
 @pytest.fixture
 def canonical_inputs():
     return build_canonical_inputs()
@@ -174,3 +207,13 @@ def grace_inputs():
 @pytest.fixture
 def grace_result():
     return build_grace_result()
+
+
+@pytest.fixture
+def nnn_gross_check_inputs():
+    return build_nnn_gross_check_inputs()
+
+
+@pytest.fixture
+def nnn_gross_check_result():
+    return build_nnn_gross_check_result()

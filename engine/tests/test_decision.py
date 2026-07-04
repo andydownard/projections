@@ -34,14 +34,18 @@ def test_capital_required_is_peak_shortfall_plus_reserve(canonical_result):
 
 def test_design_parity_capital_matches_appendix_d_headline(design_parity_result):
     # Contract anchor (ENGINE_CONTRACT §6.1 / DESIGN_PROMPT): the 40% design-parity
-    # case is the prototype headline — reco "proceed". The prototype/board
-    # screenshots showed capital ~$277,990; the 6.2 monthly split (fixed costs flat,
-    # payroll taxes on the payroll ramp) deepens the early trough, landing capital
-    # ≈ $299,168 (hand-verified; final numbers re-pinned at the 6.4 regen). A range,
-    # not a to-the-dollar match, since the prototype used a different calc.
+    # case is the prototype headline. Capital trajectory across waves: prototype
+    # screenshots ~$277,990 -> ~$299,168 (6.2 monthly split) -> $302,238.41 (6.4
+    # 990-grounded payroll tax 8% + Insurance $10k). *** OWNER-VISIBLE FLIP (6.4): ***
+    # capital ($302,238) now crosses the design-parity/seed source_of_funds ($300,000)
+    # by $2,238, so the rules-as-written reco flips proceed -> raise_cash (Year-1 net
+    # is still +$38,505 and margins stay in band — it is the capital>funds gate, not a
+    # health problem). The prototype's "Proceed" headline assumed the pre-990 cost
+    # basis; restoring it would require funding the demo above its now-higher capital
+    # need. Flagged for the whole-branch reviewer / owner.
     cap = D(str(design_parity_result.decision.startup_capital_required))
-    assert Decimal("295000") <= cap <= Decimal("302000")
-    assert design_parity_result.decision.reco_tag == "proceed"
+    assert Decimal("300000") < cap <= Decimal("305000")
+    assert design_parity_result.decision.reco_tag == "raise_cash"
 
 
 def test_payback_null_when_y1_net_not_positive(canonical_result):
@@ -278,17 +282,18 @@ def test_canonical_60_labor_is_not_proceed(canonical_result):
 def test_canonical_reco_is_raise_cash_after_monthly_split(canonical_result):
     # Pins the canonical verdict under the 6.2 monthly distribution change (fixed
     # costs charged flat, payroll taxes on the payroll ramp): the downside scenario
-    # now reaches break-even (month 11), so the do_not_proceed rule no longer fires,
-    # and the binding constraint is capital ($342,403) > source of funds ($300,000)
-    # -> raise_cash. The decision RULES are unchanged — only the hand-verified
-    # monthly distribution beneath them; this is rules-as-written output (owner
-    # decision #345 tracks the gate-rebalance question). Any future regression that
-    # flips this verdict must trip THIS assertion loudly, never drift silently.
+    # reaches break-even within the horizon, so the do_not_proceed rule no longer
+    # fires, and the binding constraint is capital > source of funds ($300,000) ->
+    # raise_cash. Re-pinned at the 2.7.0 regen (Task 6.4): the 990-grounded constants
+    # deepen the trough (capital $342,403 -> $347,853.76) and push the downside
+    # break-even from month 11 to month 12 (still inside the horizon). The verdict is
+    # UNCHANGED (raise_cash) — the owner-visible 6.2 flip (owner decision #345) holds.
+    # Any future regression that flips this verdict must trip THIS assertion loudly.
     dec = canonical_result.decision
     assert dec.reco_tag == "raise_cash"
     assert "capital" in dec.reco_reasons
     # The two facts the verdict is built from:
-    assert dec.sensitivity["downside"]["breakeven"] == 11   # downside DOES break even
+    assert dec.sensitivity["downside"]["breakeven"] == 12   # downside DOES break even
     assert D(str(dec.startup_capital_required)) > D(canonical_result.inputs.source_of_funds)
 
 

@@ -6,7 +6,21 @@ the point of use; these module constants name the *default* assumption values.
 """
 from __future__ import annotations
 
-MODEL_VERSION = "2.6.0"          # math/shape change => bump (2.6.0: the ANNUAL P&L
+MODEL_VERSION = "2.7.0"          # math/shape change => bump (2.7.0: the Wave-6 close-out.
+# This single bump carries every output-moving change made across Tasks 6.1–6.4 whose
+# golden regen was deferred to one place: (6.1) advisory-flag scaffolding; (6.2) the
+# monthly cash-flow SPLIT — fixed operating costs are charged flat across the 12
+# operating months and payroll taxes ride the payroll ramp (not a flat 1/12), which
+# reshapes the Year-1 cumulative-cash trough and therefore capital / break-even month;
+# (6.3) the occupancy-, labor- and sales-per-sqft advisory bands now emit
+# override-aware flags (occupancy_ratio_out_of_band / labor_ratio_out_of_band /
+# sales_per_sqft_out_of_band) + the break_even_revenue "N/A — variable-cost rate ≥ 100%"
+# guard; (6.4) 990-grounded constants — employer PAYROLL_TAX_PCT_OF_PAYROLL 7.5%->8% and
+# FIXED_ANNUAL Insurance liability $2,000->$10,000 (six-EIN sample, docs/2026-07-03-owner-
+# deliverables.md) — plus the money_view single-rounding-authority (raw & display derive
+# from one canonical value) and the exact lease-deposit arithmetic (occ1*3/12). NNN is
+# resolved as documented (escalator + lease deposit both apply to the resolved occupancy
+# INCLUDING nnn_opex_annual — the conservative reading; DECISIONS.md). 2.6.0: the ANNUAL P&L
 # extends from a 3-year to a 5-year horizon — Year 4 / Year 5 are driven by their own
 # explicit donor-share inputs (share_y4 / share_y5) through the SAME driver chain and
 # the existing compounding rent escalator; the revenue CAGR is now Y1->Y5 and the
@@ -65,13 +79,19 @@ AI_NARRATIVE_DISCLOSURE = (
 DONATIONS_PER_HH_PER_YEAR = 3        # §7.3
 AVG_BASKET_VALUE = "17.08"           # §7.3 (resolved §1) -> customers
 SALVAGE_PCT_OF_RETAIL = "0.008"      # §7.3 (0.8%)
+# 990-grounded research default for the average donated-goods value per donation
+# (six-EIN sample, docs/2026-07-03-owner-deliverables.md). The single source the E2E
+# seed + engine-parity FE draft reference. The wizard's user-facing default is a
+# deliberately-conservative $50 (Owner Decision 4 / W15), distinct from this constant.
+DEFAULT_DONATION_VALUE = "74"
 
 # --- cost structure (% of total revenue unless noted)
 LABOR_PCT_OF_REVENUE = "0.60"        # §7.3 owner decision (DECISIONS.md) — band 0.25–0.60
 MARKETING_PCT_OF_REVENUE = "0.0375"  # §7.3 — NEW line
 SUPPLIES_PCT_OF_REVENUE = "0.05"     # §7.3 — REPLACES fixed "Store/office supplies"
 CARD_FEES_PCT_OF_REVENUE = "0.02"    # §7.3
-PAYROLL_TAX_PCT_OF_PAYROLL = "0.075"  # §7.3
+PAYROLL_TAX_PCT_OF_PAYROLL = "0.08"  # §7.3; 990-grounded (6.4) — employer payroll-tax
+# load across the six-EIN sample (docs/2026-07-03-owner-deliverables.md); was 7.5%.
 
 # --- occupancy
 RENT_ESCALATOR = "0.03"              # §7.3 — compound, Y2–Y3 (resolved §1)
@@ -91,7 +111,7 @@ DEFAULT_RENT_PER_SQFT = "12.00"      # AI-off manual default — 120,000 / 10,00
 # "Utilities/trash service" is NO LONGER here — it is derived from UTILITIES_PER_SQFT
 # × building_sqft in compute (feature #245), keeping its same pinnable line + slot.
 FIXED_ANNUAL = {
-    "Insurance liability": 2000,
+    "Insurance liability": 10000,  # 990-grounded (6.4) — six-EIN sample; was $2,000
     "Internet, Phones": 3000,
     "Pest control": 300,
     "Repairs/maintenance": 1600,

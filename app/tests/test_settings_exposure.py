@@ -59,7 +59,7 @@ def test_patch_fixed_annual_merges_and_shifts_expenses(client):
     vm = r.json()
     fa = vm["settings"]["fixedAnnual"]
     assert fa["Pest control"] == 600            # the edited line
-    assert fa["Insurance liability"] == 2000    # the other defaults SURVIVE the merge
+    assert fa["Insurance liability"] == 10000   # the other defaults SURVIVE the merge (990-grounded $10k)
     # Pest control 300 -> 600 with revenue unchanged -> Y1 total expenses +300 exactly.
     assert _row_y1_raw(vm, "Total Expenses") == pytest.approx(before_exp + 300)
 
@@ -93,9 +93,10 @@ def test_patch_fixed_annual_accumulates_across_sequential_patches(client):
     # PATCH#1's line must SURVIVE PATCH#2 (accumulate), not silently revert to 300.
     assert fa["Pest control"] == 600
     assert fa["Insurance liability"] == 3000
-    # Pest control 300->600 (+300) and Insurance liability 2000->3000 (+1000) both
-    # land in Total Expenses -- +1300 total vs the pre-patch baseline.
-    assert _row_y1_raw(vm2, "Total Expenses") == pytest.approx(before_exp + 300 + 1000)
+    # Pest control 300->600 (+300) and Insurance liability 10000->3000 (-7000; the
+    # 990-grounded default is $10k at 2.7.0) both land in Total Expenses -- net -6700
+    # vs the pre-patch baseline.
+    assert _row_y1_raw(vm2, "Total Expenses") == pytest.approx(before_exp + 300 - 7000)
 
 
 # ---- (c) an off-allowlist fixed_annual key is rejected (422, not an engine crash)

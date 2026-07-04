@@ -235,14 +235,15 @@ def test_expense_streams_split_fixed_payroll_and_pct_of_revenue(canonical_result
 
 def test_canonical_trough_capital_and_breakeven_shift_with_flat_fixed_costs(canonical_result):
     # Charging fixed costs flat (front-loaded vs the back-loaded revenue S-curve) and
-    # payroll taxes on the payroll ramp deepens the early cash trough. Hand-verified by
-    # the plan's analyst: the canonical trough is now ≈ -$317,403 at project month 7,
-    # capital ≈ $342,403, and operating break-even advances to month 8 (was month 9).
+    # payroll taxes on the payroll ramp deepens the early cash trough. Re-pinned at the
+    # 2.7.0 regen (Task 6.4 — 990-grounded payroll tax 8% + Insurance $10k deepen it
+    # further): the canonical trough is ≈ -$322,854 at project month 7, capital ≈
+    # $347,854, operating break-even month 8. (6.2: -$317,403 / $342,403 / month 8.)
     from engine.money import round_dollars
     troughs = [(m.index, D(str(m.cumulative_cash))) for m in canonical_result.monthly]
     trough_month, trough = min(troughs, key=lambda t: t[1])
     assert trough_month == 7
-    assert round_dollars(trough) == Decimal("-317403")
+    assert round_dollars(trough) == Decimal("-322854")
     cap = D(str(canonical_result.decision.startup_capital_required))
-    assert round_dollars(cap) == Decimal("342403")
+    assert round_dollars(cap) == Decimal("347854")
     assert canonical_result.decision.break_even_month == 8

@@ -211,6 +211,15 @@ def test_golden_gate_grace_without_override(grace_inputs, tmp_path):
     assert _reconcile(res, tmp_path) >= 30
 
 
+def test_golden_gate_nnn_gross_check(nnn_gross_check_result, tmp_path):
+    # Task 6.4 NNN-resolution pin: the canonical store on a triple-net lease with
+    # $30k/yr NNN opex. The resolved occupancy ($120k rent + $30k NNN = $150k) drives
+    # the Rent row, compounds by the escalator (Y2 = $154,500), and the deposit is 3
+    # months of the resolved occupancy ($37,500). The whole 5-year table must still
+    # foot server == in-sheet formula == LibreOffice recalc, zero formula errors.
+    assert _reconcile(nnn_gross_check_result, tmp_path) >= 30
+
+
 def test_concurrent_recalc_calls_are_hermetic(
         canonical_result, design_parity_result, tmp_path):
     # #199 regression: two recalc() calls running CONCURRENTLY on distinct workbooks
