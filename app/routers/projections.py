@@ -126,6 +126,20 @@ _REGEN_DAY_SECONDS = 86400
 _NARRATIVE_PUT_IP_LIMIT = 120
 _NARRATIVE_PUT_TOKEN_LIMIT = 120
 _NARRATIVE_PUT_WINDOW_SECONDS = 3600
+# Mutation-Safety-Quad leg (d): a COARSE per-IP+token abuse cap on every mutating
+# endpoint (SECURITY.md §10.1; CLAUDE.md "Mutation Safety Quad"). PATCH is the hot
+# autosave path — a 350 ms client debounce means worst-case ~170 legit saves/hr, so
+# 240/hr is generous headroom yet still bounds a runaway/compromised writer and the
+# revision-row growth each save appends. The owner-only lifecycle mutations (rotate /
+# revisions-restore / trash / restore / delete) are rare + heavier, so they carry a
+# tighter 60/hr. Compute itself stays cheap + AI-free; this is the abuse brake, not a
+# per-keystroke throttle. Emitted BEFORE the merge/recompute/write (cheapest rejection).
+_PATCH_IP_LIMIT = 240
+_PATCH_TOKEN_LIMIT = 240
+_PATCH_WINDOW_SECONDS = 3600
+_MUTATION_IP_LIMIT = 60
+_MUTATION_TOKEN_LIMIT = 60
+_MUTATION_WINDOW_SECONDS = 3600
 
 router = APIRouter(prefix="/api/projections", tags=["projections"])
 
@@ -167,6 +181,24 @@ def _rate_limited(
         status_code=429,
         content={"error": "rate_limited", "retry_after_seconds": retry_after, "scope": "ip"},
         headers={"Retry-After": str(retry_after)},
+    )
+
+
+def _mutation_rate_limited(
+    endpoint: str, request: Request, authorization: Optional[str],
+) -> Optional[JSONResponse]:
+    """Quad leg (d) for the owner-only lifecycle mutations (rotate-tokens /
+    revisions-restore / trash / restore / delete): a coarse 60/hr per-IP + per-token
+    abuse cap, keyed on the hashed bearer. Called right after the ``_require_owner``
+    check (so a non-owner still gets 403, not a leaked 429) and before any state
+    read/write — the cheapest rejection. Each endpoint gets its own named bucket."""
+    token = _bearer(authorization)
+    return _rate_limited(
+        endpoint, request,
+        ip_limit=_MUTATION_IP_LIMIT,
+        token=hash_token(token) if token else None,
+        token_limit=_MUTATION_TOKEN_LIMIT,
+        window_seconds=_MUTATION_WINDOW_SECONDS,
     )
 
 
@@ -1911,6 +1943,7 @@ def apply_projection_patch(
 def patch_projection(
     view_slug: str,
     body: PatchProjectionIn,
+    request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
@@ -1923,12 +1956,26 @@ def patch_projection(
     returns HTTP 409 with the current server state. One revision snapshot per settle.
     The merge/recompute/persist/audit body lives in :func:`apply_projection_patch`
     so the Penny tool loop converges on the exact same write path (actor:penny).
+
+    Mutation-Safety-Quad leg (d): a coarse per-IP+token abuse cap (240/hr) is emitted
+    BEFORE the merge/recompute so a runaway/compromised writer is bounded before any
+    work; the auth (403) + If-Match (409) legs live in ``apply_projection_patch``.
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
 
     token = _bearer(authorization)
+    limited = _rate_limited(
+        "patch", request,
+        ip_limit=_PATCH_IP_LIMIT,
+        token=hash_token(token) if token else None,
+        token_limit=_PATCH_TOKEN_LIMIT,
+        window_seconds=_PATCH_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
     vm, new_version, name = apply_projection_patch(
         row=row, body=body, store=store, token=token, if_match=if_match)
     response.headers["ETag"] = str(new_version)
@@ -2005,6 +2052,7 @@ def preview_projection(
 @router.post("/{view_slug}/rotate-tokens")
 def rotate_tokens(
     view_slug: str,
+    request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
@@ -2015,9 +2063,13 @@ def rotate_tokens(
     Owner-only. Immediately invalidates every previously-shared link (compromise
     response, SECURITY.md §3): the old owner/edit tokens and the old view_slug all
     die at once. Writes a rotation event to the audit/revision log. The new secrets
-    are returned exactly once (never re-derivable from the server).
+    are returned exactly once (never re-derivable from the server). Quad leg (d): a
+    coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1).
     """
     row = _require_owner(store, view_slug, authorization)
+    limited = _mutation_rate_limited("rotate_tokens", request, authorization)
+    if limited is not None:
+        return limited
 
     new_owner = secrets.token_urlsafe(32)   # ~256-bit
     new_edit = secrets.token_urlsafe(32)
@@ -2110,6 +2162,7 @@ def list_revisions(
 def restore_revision(
     view_slug: str,
     revision_id: str,
+    request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
@@ -2119,8 +2172,12 @@ def restore_revision(
 
     Owner-only. Appends rather than rewinds history: the snapshot's
     inputs/assumptions/overrides are recomputed and persisted at the next version.
+    Quad leg (d): a coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1).
     """
     row = _require_owner(store, view_slug, authorization)
+    limited = _mutation_rate_limited("restore_revision", request, authorization)
+    if limited is not None:
+        return limited
     rev = store.get_revision(revision_id)
     if rev is None or rev["projection_id"] != row["id"]:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -2203,32 +2260,43 @@ def _set_status_and_respond(store, row, view_slug, response, if_match, status):
 @router.post("/{view_slug}/trash")
 def trash_projection(
     view_slug: str,
+    request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
-    """Soft delete (API_SPEC §4.8): status -> trashed. Owner-only, If-Match required."""
+    """Soft delete (API_SPEC §4.8): status -> trashed. Owner-only, If-Match required.
+    Quad leg (d): a coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1)."""
     row = _require_owner(store, view_slug, authorization)
+    limited = _mutation_rate_limited("trash", request, authorization)
+    if limited is not None:
+        return limited
     return _set_status_and_respond(store, row, view_slug, response, if_match, "trashed")
 
 
 @router.post("/{view_slug}/restore")
 def restore_projection(
     view_slug: str,
+    request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
-    """Restore from trash (API_SPEC §4.8): status -> active. Owner-only."""
+    """Restore from trash (API_SPEC §4.8): status -> active. Owner-only. Quad leg (d):
+    a coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1)."""
     row = _require_owner(store, view_slug, authorization)
+    limited = _mutation_rate_limited("restore", request, authorization)
+    if limited is not None:
+        return limited
     return _set_status_and_respond(store, row, view_slug, response, if_match, "active")
 
 
 @router.delete("/{view_slug}", status_code=204)
 def delete_projection(
     view_slug: str,
+    request: Request,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
@@ -2238,8 +2306,11 @@ def delete_projection(
     the projection AND cascades to every child it owns (revisions, narratives,
     evidence, penny_transcripts, actuals, role links) so the confidential financials
     and Penny conversation are actually ERASED, not merely hidden (#202, DATA_MODEL
-    §5.4)."""
+    §5.4). Quad leg (d): a coarse 60/hr abuse cap after the owner check (SECURITY §10.1)."""
     row = _require_owner(store, view_slug, authorization)
+    limited = _mutation_rate_limited("delete", request, authorization)
+    if limited is not None:
+        return limited
     if row.get("status") != "trashed":
         raise HTTPException(status_code=409, detail={"error": "not_trashed"})
     affected = store.purge_projection(row["id"], if_match)

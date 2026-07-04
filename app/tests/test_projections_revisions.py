@@ -118,3 +118,42 @@ def test_restore_unknown_revision_404(client):
         headers={"Authorization": f"Bearer {owner}", "If-Match": "2"},
     )
     assert r.status_code == 404, r.text
+
+
+def test_restore_revision_edit_token_is_owner_required_403(client):
+    # Quad leg (b): restore is OWNER-only. The edit token can PATCH but NOT rewind
+    # history — it gets 403 owner_required BEFORE any revision lookup or version check
+    # (no existence/version leak to a non-owner).
+    created = _create(client)
+    slug, owner, edit = (
+        created["view_slug"], created["owner_token"], created["edit_token"])
+    client.patch(f"/api/projections/{slug}", json={"assumptions": {"labor_pct": "0.45"}},
+                 headers={"Authorization": f"Bearer {owner}", "If-Match": "1"})
+    revs = client.get(f"/api/projections/{slug}/revisions",
+                      headers={"Authorization": f"Bearer {owner}"}).json()["revisions"]
+    target = revs[0]["id"]
+    r = client.post(
+        f"/api/projections/{slug}/revisions/{target}/restore",
+        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
+    )
+    assert r.status_code == 403, r.text
+    assert r.json().get("detail", r.json())["error"] == "owner_required"
+
+
+def test_restore_revision_stale_if_match_409(client):
+    # Quad leg (c): a stale If-Match on restore writes 0 rows -> 409 version_conflict
+    # (the same optimistic-concurrency wall as PATCH), so a concurrent edit is never
+    # silently clobbered by a stale restore.
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    client.patch(f"/api/projections/{slug}", json={"assumptions": {"labor_pct": "0.45"}},
+                 headers={"Authorization": f"Bearer {owner}", "If-Match": "1"})
+    revs = client.get(f"/api/projections/{slug}/revisions",
+                      headers={"Authorization": f"Bearer {owner}"}).json()["revisions"]
+    target = revs[0]["id"]
+    r = client.post(
+        f"/api/projections/{slug}/revisions/{target}/restore",
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "99"},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json().get("detail", r.json())["error"] == "version_conflict"
