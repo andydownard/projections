@@ -117,10 +117,11 @@ describe("ShareModal — a11y + dismissal", () => {
   });
 });
 
-// Guard against a clipboard-less environment: copy must not throw; it should still
-// announce. (Older browsers / insecure contexts have no navigator.clipboard.)
+// Guard against a clipboard-less environment: copy must not throw — and it must
+// NOT claim "Link copied" (nothing reached the clipboard; the field is merely
+// selected for a manual copy). Same honesty rule as the reject path (3.5 review).
 describe("ShareModal — clipboard fallback", () => {
-  it("does not throw when navigator.clipboard is unavailable", async () => {
+  it("selects the field and shows the manual hint — never a copied toast — when navigator.clipboard is unavailable", async () => {
     Object.defineProperty(navigator, "clipboard", {
       value: undefined,
       configurable: true,
@@ -129,7 +130,8 @@ describe("ShareModal — clipboard fallback", () => {
     const user = userEvent.setup();
     renderModal({ slug: "p_8x", editToken: null });
     await user.click(screen.getByTestId("share-copy-readonly"));
-    await waitFor(() => expect(screen.getByTestId("toast")).toBeInTheDocument());
+    expect(await screen.findByText(/press ctrl\+c to copy/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("toast")).not.toBeInTheDocument();
   });
 });
 

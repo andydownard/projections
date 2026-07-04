@@ -77,11 +77,11 @@ export function ShareModal({ slug, editToken, onClose }: ShareModalProps) {
       return;
     }
     // No Clipboard API (older/insecure context): select so the user can copy by
-    // hand. There is no promise here to reject, so this is not the dishonest path
-    // the audit flagged — the field is genuinely ready for a manual copy.
+    // hand. NOTHING reached the clipboard, so "Link copied" would be a lie — show
+    // the same inline manual-copy hint as the reject path (3.5 review, honesty rule).
     field?.focus();
     field?.select();
-    showToast("Link copied");
+    setCopyFailed((s) => ({ ...s, [kind]: true }));
   }
 
   return createPortal(
