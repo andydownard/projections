@@ -166,3 +166,9 @@ SENSITIVITY_DELTA = "0.25"
 SHARE_Y1_BAND_MAX = "0.08"           # donor market share ≤ ~8% for a new store
 NET_MARGIN_FLAG_MAX = "0.30"         # flag > ~30% as unusual for a new store
 OCCUPANCY_RATIO_BAND_MAX = "0.20"
+# labor (payroll/revenue) advisory band — mirrors the LABOR_PCT_OF_REVENUE comment
+# above ("band 0.25-0.60"); Task 6.3 turns that documented band into a real flag.
+LABOR_RATIO_BAND_MIN = "0.25"
+LABOR_RATIO_BAND_MAX = "0.60"
+SALES_PER_SQFT_MIN = 50              # advisory band, Year-1 revenue / salesfloor sqft
+SALES_PER_SQFT_MAX = 300

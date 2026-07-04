@@ -193,7 +193,15 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
                 + D(assumptions.labor_pct) * (Decimal("1") + D(assumptions.payroll_tax_pct))
                 + D(assumptions.supplies_pct))
     fixed = D(str(y1.total_exp)) - (D(str(y1.total_rev)) * var_rate)
-    break_even_revenue = (fixed / (Decimal("1") - var_rate)) if var_rate != 1 else None
+    # var_rate >= 1 (not just == 1): at or above 100% of revenue no revenue level
+    # ever recovers fixed costs, so `fixed / (1 - var_rate)` is either a division
+    # by zero or a nonsense negative "break-even" from a negative denominator —
+    # guard the whole unrecoverable range, not just the exact division-by-zero edge.
+    if var_rate >= 1:
+        break_even_revenue = None
+        flags["break_even_revenue"] = "N/A — variable-cost rate ≥ 100% of revenue"
+    else:
+        break_even_revenue = fixed / (Decimal("1") - var_rate)
 
     # simple payback (years) — N/A when Y1 net <= 0.
     if D(str(y1.net)) > 0:
@@ -329,5 +337,32 @@ def build_flags(result, assumptions, demand):
     # revenue == 0 -> margin/per-unit KPIs null
     if y1.total_rev == 0:
         flags["margin"] = "N/A — no revenue"
+
+    # occupancy / labor / sales-per-sqft advisory bands (§12.2, Task 6.3). All
+    # three read the SAME resolved Year-1 values the KPI strip shows (viewmodel's
+    # occ_ratio/labor_ratio/sales_per_sqft) — override-aware (a pinned Payroll or
+    # Rent cell moves the ratio the flag checks, never the un-resolved input) and
+    # N/A-guarded on zero revenue / zero salesfloor so a degenerate case never
+    # divides by zero or fires spuriously.
+    rev1 = D(str(y1.total_rev))
+    if rev1 != 0:
+        occ_ratio = D(str(y1.expenses.get("Rent", 0))) / rev1
+        if occ_ratio > D(model.OCCUPANCY_RATIO_BAND_MAX):
+            flags["occupancy_ratio_out_of_band"] = {
+                "value": float(occ_ratio), "band": "≤ ~20%", "requires_note": True}
+
+        labor_ratio = D(str(y1.expenses.get("Payroll", 0))) / rev1
+        if (labor_ratio < D(model.LABOR_RATIO_BAND_MIN)
+                or labor_ratio > D(model.LABOR_RATIO_BAND_MAX)):
+            flags["labor_ratio_out_of_band"] = {
+                "value": float(labor_ratio), "band": "25%–60%", "requires_note": True}
+
+        salesfloor_sqft = D(result.inputs.building_sqft) * D(result.inputs.salesfloor_pct)
+        if salesfloor_sqft != 0:
+            sales_per_sqft = rev1 / salesfloor_sqft
+            if (sales_per_sqft < D(str(model.SALES_PER_SQFT_MIN))
+                    or sales_per_sqft > D(str(model.SALES_PER_SQFT_MAX))):
+                flags["sales_per_sqft_out_of_band"] = {
+                    "value": float(sales_per_sqft), "band": "$50–$300", "requires_note": True}
 
     return flags

@@ -481,6 +481,89 @@ def test_aggressive_share_guardrail_fires_at_canonical_labor():
     assert res.decision.reco_tag == "revise"
 
 
+# --------------------------------------- occupancy / labor / sales-per-sqft (Task 6.3)
+def test_occupancy_ratio_out_of_band_flag_fires_on_canonical(canonical_result):
+    # Canonical Y1 occupancy ratio ($120,000 Rent / ~$426,938 revenue) is ~28.1%,
+    # above the 20% advisory band -- the flag must fire with requires_note, even
+    # though _recommend's own inline occ_ratio check never reaches find_cheaper_rent
+    # here (raise_cash wins on precedence -- test_canonical_reco_is_raise_cash...).
+    y1 = canonical_result.annual[1]
+    occ_ratio = D(str(y1.expenses["Rent"])) / D(str(y1.total_rev))
+    assert Decimal("0.28") < occ_ratio < Decimal("0.29")
+    flag = canonical_result.flags.get("occupancy_ratio_out_of_band")
+    assert flag is not None
+    assert flag["requires_note"] is True
+
+
+def test_occupancy_ratio_flag_absent_when_in_band():
+    # Same canonical shape but a smaller resolved rent keeps the ratio under 20%.
+    inputs = Inputs(
+        org_name="House of Hope", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="50000", lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    assert "occupancy_ratio_out_of_band" not in res.flags
+
+
+def test_labor_ratio_out_of_band_flag_and_break_even_revenue_guard():
+    # labor 0.90 pushes the %-of-revenue cost stack (card 2% + marketing 3.75% +
+    # payroll 90%*1.075 + supplies 5%) to var_rate == 1.075 >= 1: break-even revenue
+    # is mathematically undefined (no revenue level ever recovers fixed costs) and
+    # MUST guard to None with a flags reason, alongside the labor-ratio advisory
+    # flag firing (90% is above the 60% band ceiling).
+    inputs, _, demand, trade = build_canonical_inputs()
+    res = compute(inputs, Assumptions(labor_pct="0.90"), demand, trade, overrides={})
+    flag = res.flags.get("labor_ratio_out_of_band")
+    assert flag is not None
+    assert flag["requires_note"] is True
+    assert res.decision.break_even_revenue_annual is None
+    assert res.flags["break_even_revenue"] == (
+        "N/A — variable-cost rate ≥ 100% of revenue")
+
+
+def test_labor_ratio_flag_absent_when_in_band(canonical_result):
+    # Canonical labor is exactly 60% -- the band's upper edge, not outside it.
+    assert "labor_ratio_out_of_band" not in canonical_result.flags
+
+
+def test_sales_per_sqft_flag_absent_when_in_band(canonical_result):
+    # Canonical Y1 sales/sqft (~$426,938 / 7,000 sqft ~= $61) sits inside $50-$300.
+    assert "sales_per_sqft_out_of_band" not in canonical_result.flags
+
+
+def test_sales_per_sqft_out_of_band_flag_fires_below_band():
+    # A tiny donor share on a big salesfloor drives Y1 sales/sqft under $50.
+    inputs = Inputs(
+        org_name="Low Sales", city="x", opening_status="pre_launch",
+        share_y1="0.01", share_y2="0.01", share_y3="0.01", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="50000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    flag = res.flags.get("sales_per_sqft_out_of_band")
+    assert flag is not None
+    assert flag["requires_note"] is True
+
+
+def test_sales_per_sqft_out_of_band_flag_fires_above_band():
+    # A big donor share on a small salesfloor drives Y1 sales/sqft over $300.
+    inputs = Inputs(
+        org_name="High Sales", city="x", opening_status="pre_launch",
+        share_y1="0.20", share_y2="0.20", share_y3="0.20", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="2000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="900000",
+    )
+    res = compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    flag = res.flags.get("sales_per_sqft_out_of_band")
+    assert flag is not None
+    assert flag["requires_note"] is True
+
+
 # --------------------------------------- decision text <-> metric consistency (#142/#145)
 def _claims_breakeven_unreached(text: str) -> bool:
     """True when a string flatly asserts break-even was never reached."""
