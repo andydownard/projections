@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import re as _re
 import secrets
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from app import ratelimit
+from app.routers.common import client_ip as _client_ip
+from app.routers.common import utcnow as _utcnow
 from app.store import Store, get_store
 
 _EMAIL_RE = _re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -26,17 +27,6 @@ _EMAIL_RE = _re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 router = APIRouter(prefix="/api/intent", tags=["intent"])
 
 _IP_LIMIT_PER_HOUR = 10
-
-
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
 
 
 class IntentIn(BaseModel):
@@ -47,10 +37,11 @@ class IntentIn(BaseModel):
     request_expert_review: bool = False
     follow_up_consent: bool = False
 
-    class Config:
-        extra = "ignore"  # never accept a financial field or a slug.
+    # never accept a financial field or a slug.
+    model_config = ConfigDict(extra="ignore")
 
-    @validator("email")
+    @field_validator("email")
+    @classmethod
     def _valid_email(cls, v: str) -> str:
         if not _EMAIL_RE.match(v or ""):
             raise ValueError("invalid email")

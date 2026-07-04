@@ -23,9 +23,10 @@ from typing import Optional, Union
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app import ratelimit
+from app.routers.common import client_ip as _client_ip
 from engine import compute, model
 from engine.money import money_view
 
@@ -38,13 +39,6 @@ _IP_LIMIT = 600
 _WINDOW_SECONDS = 300
 
 
-def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
-
-
 class CostRow(BaseModel):
     category: str = ""
     month: int = 1
@@ -52,8 +46,7 @@ class CostRow(BaseModel):
     # so exact Decimal text is preserved (no float poisoning).
     amount: Union[str, float, int] = 0
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class CostSchedulePreviewIn(BaseModel):
@@ -61,8 +54,7 @@ class CostSchedulePreviewIn(BaseModel):
     # Optional; ONLY scales the seeded default fallback when no rows are sent.
     building_sqft: Optional[str] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 @router.post("/preview")

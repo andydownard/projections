@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { DecisionBanner } from "./DecisionBanner";
-import type { Metrics, Milestones, Reco } from "../api/viewModel";
+import type { Confidence, Metrics, Milestones, Reco, Sensitivity } from "../api/viewModel";
 
 const reco: Reco = { tag: "proceed", headline: "Proceed.", sub: "Healthy plan." };
 const metrics: Metrics = {
@@ -81,6 +81,77 @@ describe("DecisionBanner", () => {
     expect(gap).not.toHaveTextContent(/cash gap/i);
     // Server display rendered verbatim — no client math.
     expect(gap).toHaveTextContent("$40,000");
+  });
+
+  // task 3.3 (audit P0): the §12.2 sensitivity block was computed by decision.py
+  // but dropped before it ever reached the view-model. It must now surface on
+  // the banner — the delta framing sourced from the server field, never hard-coded.
+  const sensitivity: Sensitivity = {
+    base: {
+      net: { raw: 46900, display: "$46,900" },
+      breakeven: 5,
+      capital: { raw: 277990, display: "$277,990" },
+    },
+    downside: {
+      net: { raw: -12000, display: "($12,000)" },
+      breakeven: null,
+      capital: { raw: 312000, display: "$312,000" },
+    },
+    upside: {
+      net: { raw: 98000, display: "$98,000" },
+      breakeven: 4,
+      capital: { raw: 250000, display: "$250,000" },
+    },
+    delta: 0.25,
+  };
+
+  describe("sensitivity + confidence [task 3.3]", () => {
+    it("surfaces the downside line when the server sensitivity block is present", () => {
+      render(<DecisionBanner reco={reco} metrics={metrics} sensitivity={sensitivity} />);
+      const line = screen.getByTestId("sensitivity-downside");
+      expect(line).toHaveTextContent("Downside");
+      expect(line).toHaveTextContent("rent +25% / donations −25%");
+      expect(line).toHaveTextContent("($12,000)");
+      expect(line).toHaveTextContent("$312,000");
+    });
+
+    it("renders the delta framing FROM sensitivity.delta, never a hard-coded 25", () => {
+      const tighter: Sensitivity = { ...sensitivity, delta: 0.1 };
+      render(<DecisionBanner reco={reco} metrics={metrics} sensitivity={tighter} />);
+      const line = screen.getByTestId("sensitivity-downside");
+      expect(line).toHaveTextContent("rent +10% / donations −10%");
+      expect(line).not.toHaveTextContent("25%");
+    });
+
+    it("renders 'not reached' when the downside break-even is null (never a misleading 0)", () => {
+      render(<DecisionBanner reco={reco} metrics={metrics} sensitivity={sensitivity} />);
+      const line = screen.getByTestId("sensitivity-downside");
+      expect(line).toHaveTextContent("not reached");
+      expect(line).not.toHaveTextContent("Month 0");
+    });
+
+    it("hides cleanly for a legacy snapshot with no sensitivity block", () => {
+      render(<DecisionBanner reco={reco} metrics={metrics} />);
+      expect(screen.queryByTestId("sensitivity-downside")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("confidence-chip")).not.toBeInTheDocument();
+    });
+
+    it("shows the low-ramp confidence chip when confidence.ramp is 'low'", () => {
+      const confidence: Confidence = { ramp: "low" };
+      render(
+        <DecisionBanner reco={reco} metrics={metrics} confidence={confidence} />,
+      );
+      const chip = screen.getByTestId("confidence-chip");
+      expect(chip).toHaveTextContent(/Confidence: ramp estimate — low/i);
+    });
+
+    it("hides the confidence chip when ramp is 'high'", () => {
+      const confidence: Confidence = { ramp: "high" };
+      render(
+        <DecisionBanner reco={reco} metrics={metrics} confidence={confidence} />,
+      );
+      expect(screen.queryByTestId("confidence-chip")).not.toBeInTheDocument();
+    });
   });
 
   it("renders an unreached payback as N/A with reason, never a misleading 0", () => {

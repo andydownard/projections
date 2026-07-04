@@ -29,7 +29,9 @@ Process for the **Thrift Store Projection** web app (server-authoritative decisi
 pytest -q                          # unit + integration, zero failures
 pytest engine/tests/golden -q      # engine golden + 3-way reconcile (compute == computed_json == LibreOffice recalc)
 python recalc.py path/to/x.xlsx    # expect {"status":"success","total_errors":0}; an {"error":...} dict is NOT a pass
-npm test -- --run && npm run typecheck && npm run lint
+npm test -- --run && npm run typecheck   # no web lint gate — eslint was never configured (#374)
 ```
+
+> `pyproject.toml` sets `addopts = "-q"`, so bare `pytest` prints no per-test summary — pass `-ra` (or `-v`) when you need pasteable proof output.
 
 The golden/recalc gate needs **LibreOffice (`soffice`) pinned to the build-image version** plus `timeout`/`gtimeout` on PATH (`recalc.py` shells out to a headless `soffice` macro). Assert `status == "success"` AND `total_errors == 0` and **fail closed**. Full proof table and tiers: [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md).

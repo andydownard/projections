@@ -1,6 +1,6 @@
 name: CI
 
-# CI-blocking gates (DEFINITION_OF_DONE): pytest + engine coverage >=90%, frontend
+# CI-blocking gates (DEFINITION_OF_DONE): pytest + engine+app coverage >=90%, frontend
 # tests, the test:code ratio gate (>1.3 on the PR diff AND repo-wide), lint/types,
 # and the three-way golden recalc gate (pinned LibreOffice). Nothing merges red.
 
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend (pytest + engine coverage >=90%)
+    name: Backend (pytest + engine+app coverage >=90%)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
         # TRUNCATE, bulk DELETE, or table-recreate in any shipped migration BEFORE
         # it can run against the single durable volume (OPS_RUNBOOK §8 / #90).
         run: python -m scripts.migration_lint
-      - name: pytest + engine branch coverage gate (fail_under=90)
+      - name: pytest + engine+app branch coverage gate (fail_under=90)
         run: pytest -q --cov --cov-report=term-missing
 
   frontend:

@@ -182,7 +182,10 @@ def test_payback_crosses_zero_in_a_middle_year():
     # repay the startup outflow during Year 2 (not in Year 1, not as late as Year 5).
     res = _projection("0.30")
     pm = res.decision.payback_month
-    assert pm == 23                         # deterministic Month-N, a real finite month
+    # FUSION: the Month-N cash-recovery crossing recomputes over the 60-month series on the
+    # 6.2 Year-1 distribution (was their S-curve), shifting this case Month 23 -> Month 24
+    # (still a real finite middle-year month; spec §3). Year-2 landing is unchanged.
+    assert pm == 24                         # deterministic Month-N, a real finite month
     assert pm != 12 and pm is not None      # not capped at Year-1 end, not N/A
     assert 12 < pm <= 48                    # a middle year (Year 2-4), not Year 1 or 5
     assert (pm - 1) // 12 + 1 == 2          # lands specifically in Year 2

@@ -91,9 +91,13 @@ export function autosaveReducer(state: AutosaveState, action: AutosaveAction): A
     }
 
     case "OVERWRITE": {
-      // Force my values: re-arm a save carrying If-Match: <current_version>.
+      // Force my values: re-arm a save carrying If-Match: <current_version>. RETAIN
+      // the conflict body (wave-3 w2): the banner is cleared on SAVE_SUCCESS ONLY, so
+      // a non-409 failure of the replay (500/network) keeps the banner actionable
+      // rather than stranding "Save failed" with no recovery. A fresh 409 replaces it
+      // via CONFLICT; a new local EDIT clears it (the user moved on).
       const v = state.conflict?.current_version ?? state.version;
-      return { status: "dirty", version: v, conflict: null };
+      return { ...state, status: "dirty", version: v };
     }
 
     default:

@@ -208,3 +208,87 @@ def test_break_even_month_is_first_sustained_nonneg_net(canonical_result):
         target = next(m for m in y1_ops if m.index == be)
         assert target.net >= 0
         assert all(m.net >= 0 for m in y1_ops if m.index >= be)
+
+
+# ----------------------------------------------- Task 6.2: fixed/variable/payroll split
+def test_fixed_costs_are_spread_flat_not_revenue_weighted():
+    # With zero revenue every operating-month expense is pure FIXED cost. The model
+    # spreads fixed lines FLAT (1/12 per operating month, last month absorbs the
+    # residual), so the first 11 operating months are byte-equal — NOT the ascending
+    # revenue-weighted shape the pre-6.2 single "other" stream produced (month 12 would
+    # be ~3x month 1 under the S-curve).
+    from engine.money import round_dollars
+    inputs = Inputs(
+        org_name="Zero", city="x", opening_status="pre_launch",
+        share_y1="0", share_y2="0", share_y3="0", share_y4="0", share_y5="0",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    # Year-1 operating months only (the fused monthly[] spans 60 months; the 6.2 split
+    # is a Year-1 property, so scope to the first 12 operating months).
+    ops = [m for m in res.monthly if m.kind == "operating"][:12]
+    fixed_annual = D(str(res.annual[1].total_exp))  # all expense is fixed at 0 revenue
+    assert fixed_annual > 0
+    first = D(str(ops[0].expenses))
+    for m in ops[:11]:
+        assert D(str(m.expenses)) == first, m.index         # flat: first 11 all equal
+    # the 12th month is the same to the dollar; it only absorbs the sub-dollar cent
+    # residual (NOT the old revenue-weighted shape where month 12 was ~3x month 1).
+    assert round_dollars(D(str(ops[11].expenses))) == round_dollars(first)
+    # each flat month is annual_fixed / 12 (to the dollar).
+    assert round_dollars(first) == round_dollars(fixed_annual / 12)
+    # penny-exact roll-up survives the flat spread.
+    assert sum((D(str(m.expenses)) for m in ops), Decimal("0")) == fixed_annual
+
+
+def test_expense_streams_split_fixed_payroll_and_pct_of_revenue(canonical_result):
+    # ENGINE_CONTRACT §5.2 three-stream split: Payroll AND Payroll taxes ride the
+    # payroll hire-ramp (_PAYROLL_WEIGHTS, NOT the revenue S-curve); card fees /
+    # marketing / supplies ride the revenue S-curve (_REVENUE_WEIGHTS); every other
+    # (fixed) line spreads flat (_flat_monthly). Reconstruct the three streams with the
+    # engine's own helpers and assert the per-month expense equals their sum, exactly.
+    from engine.monthly import (
+        _PAYROLL_WEIGHTS,
+        _PCT_OF_REVENUE_LABELS,
+        _REVENUE_WEIGHTS,
+        _distribute,
+        _flat_monthly,
+    )
+    y1 = canonical_result.annual[1]
+    pct = sum((D(str(v)) for k, v in y1.expenses.items() if k in _PCT_OF_REVENUE_LABELS),
+              Decimal("0"))
+    pay = sum((D(str(y1.expenses.get(k, Decimal("0"))))
+               for k in ("Payroll", "Payroll taxes")), Decimal("0"))
+    fix = D(str(y1.total_exp)) - pct - pay
+    # Payroll taxes must be part of the payroll stream, not %-of-revenue.
+    assert "Payroll taxes" not in _PCT_OF_REVENUE_LABELS
+    assert _PCT_OF_REVENUE_LABELS == frozenset(
+        {"Credit card fees", "Marketing & outreach", "Supplies & processing"})
+    pct_parts = _distribute(pct, _REVENUE_WEIGHTS)
+    pay_parts = _distribute(pay, _PAYROLL_WEIGHTS)
+    fix_parts = _flat_monthly(fix)
+    expected = [pct_parts[i] + pay_parts[i] + fix_parts[i] for i in range(12)]
+    # Year-1 operating months only (fused monthly[] spans 60 months; the three-stream
+    # split is a Year-1 property).
+    ops = [m for m in canonical_result.monthly if m.kind == "operating"][:12]
+    for i in range(12):  # every operating month matches component-by-component
+        assert D(str(ops[i].expenses)) == expected[i], i
+    assert sum((D(str(m.expenses)) for m in ops), Decimal("0")) == D(str(y1.total_exp))
+
+
+def test_canonical_trough_capital_and_breakeven_shift_with_flat_fixed_costs(canonical_result):
+    # Charging fixed costs flat (front-loaded vs the back-loaded revenue S-curve) and
+    # payroll taxes on the payroll ramp deepens the early cash trough. Re-pinned at the
+    # 2.7.0 regen (Task 6.4 — 990-grounded payroll tax 8% + Insurance $10k deepen it
+    # further): the canonical trough is ≈ -$322,854 at project month 7, capital ≈
+    # $347,854, operating break-even month 8. (6.2: -$317,403 / $342,403 / month 8.)
+    from engine.money import round_dollars
+    troughs = [(m.index, D(str(m.cumulative_cash))) for m in canonical_result.monthly]
+    trough_month, trough = min(troughs, key=lambda t: t[1])
+    assert trough_month == 7
+    assert round_dollars(trough) == Decimal("-322854")
+    cap = D(str(canonical_result.decision.startup_capital_required))
+    assert round_dollars(cap) == Decimal("347854")
+    assert canonical_result.decision.break_even_month == 8

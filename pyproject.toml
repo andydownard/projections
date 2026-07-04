@@ -36,16 +36,26 @@ addopts = "-q"
 branch = true
 # The pure math authority is where test density is required (DoD: engine/** >=90%).
 # recalc.py / harness.py shell out to LibreOffice and are exercised by the recalc
-# gate, not unit coverage.
-source = ["engine"]
+# gate, not unit coverage. `app` (the API/store/router layer) joined the gate in
+# Task 4.5 (#batch3) -- it had NO coverage floor at all before this. Measured at
+# the time it was added: app-only (excl. app/tests) 92.33% branch coverage,
+# engine+app combined 93.44% -- both comfortably clear the existing 90% floor
+# below, so fail_under stays at 90 rather than being pinned to the exact measured
+# value (which would be fragile: any single new untested branch could flip the
+# gate red without an actual regression in test *density*, a job the ratio gate
+# already does). 90 remains a real tripwire -- reaching for it would require a
+# meaningfully under-tested new module, not incidental churn.
+source = ["engine", "app"]
 omit = [
     "engine/tests/*",
     "engine/recalc.py",
     "engine/__init__.py",
+    "app/tests/*",
+    "app/__init__.py",
 ]
 
 [tool.coverage.report]
-# CI fails the build if engine math coverage drops below 90% (paired with the
+# CI fails the build if engine+app coverage drops below the floor (paired with the
 # ratio gate so the test:code ratio cannot be gamed by trivial assertions).
 fail_under = 90
 show_missing = true

@@ -430,7 +430,7 @@ Drivers adjust **confidence** (and seasonality feeds the monthly ramp), not the 
   "marketing_pct": 0.0375,
   "supplies_pct": 0.05,
   "card_pct": 0.02,
-  "payroll_tax_pct": 0.075,
+  "payroll_tax_pct": 0.08,
   "salvage_pct": 0.008,
   "escalator": 0.03,
   "donations_per_hh": 3,
@@ -440,7 +440,7 @@ Drivers adjust **confidence** (and seasonality feeds the monthly ramp), not the 
   "rent_per_sqft": null,
   "ramp": { "shape": "scurve", "months": 5 },
   "fixed": {
-    "Insurance liability": 2000, "Internet, Phones": 3000, "Pest control": 300,
+    "Insurance liability": 10000, "Internet, Phones": 3000, "Pest control": 300,
     "Repairs/maintenance": 1600, "Security system": 900, "Utilities/trash service": 22300
   },
   "startup": {
@@ -461,7 +461,7 @@ Drivers adjust **confidence** (and seasonality feeds the monthly ramp), not the 
 | **Marketing & outreach % of revenue** | `0.0375` | **New line** introduced by the design (`marketing = total_rev × 0.0375`). |
 | **Supplies & processing % of revenue** | `0.05` | **Reclassifies** the legacy fixed `Store/office supplies $3,700` into a % of revenue. The fixed supplies line is removed from `fixed`. |
 | Credit-card fees % of revenue | `0.02` | unchanged. |
-| Payroll tax % of payroll | `0.075` | unchanged. |
+| Payroll tax % of payroll | `0.08` | raised from 7.5% in engine 2.7.0 (990-grounded; see DECISIONS.md). |
 | Salvage % of retail | `0.008` | unchanged. |
 | **Annual rent escalator** | `0.03` | **New** — compounding: `rent[y] = rent_y1 × (1 + escalator)^(y-1)` for `y ∈ {1,2,3}`. Applies Y2–Y3. |
 | Cash reserve buffer | `$25,000` | feeds startup-capital-required (PRD §12.1). |
@@ -561,14 +561,26 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
   ],
   "settings": {
     "laborPct": 0.40, "marketingPct": 0.0375, "suppliesPct": 0.05, "cardPct": 0.02,
-    "payrollTaxPct": 0.075, "salvagePct": 0.008, "escalator": 0.03,
+    "payrollTaxPct": 0.08, "salvagePct": 0.008, "escalator": 0.03,
     "utilitiesPerSqft": 2.23, "rentPerSqft": null, "basket": 17.08,
     "donationsPerHh": 3, "donationValue": 74.0, "donationsPerHouseholdPerYear": 3,
     "shareY1": 0.06, "shareY2": 0.08, "shareY3": 0.10, "shareY4": 0.11, "shareY5": 0.12,
-    "occupancyAnnual": 90000, "leaseType": "nnn", "salesfloorSqft": 7000, "reserveBuffer": 25000
+    "occupancyAnnual": 90000, "leaseType": "nnn", "salesfloorSqft": 7000, "reserveBuffer": 25000,
+    "sensitivityDelta": 0.25,
+    "fixedAnnual": { "Insurance liability": 10000, "Internet, Phones": 3000, "Pest control": 300,
+                     "Repairs/maintenance": 1600, "Security system": 900 },
+    "nnnOpexAnnual": 0.0, "buildingSqft": 10000.0, "salesfloorPct": 0.70
   },
-  "sensitivity": { "rent": {"downside": "...", "base": "...", "upside": "..."},
-                   "donations": {"downside": "...", "base": "...", "upside": "..."} },
+  "sensitivity": {
+    "base":     { "net": {"raw": 46900, "display": "$46,900"}, "breakeven": 5,
+                  "capital": {"raw": 277990, "display": "$277,990"} },
+    "downside": { "net": {"raw": -12000, "display": "($12,000)"}, "breakeven": null,
+                  "capital": {"raw": 312000, "display": "$312,000"} },
+    "upside":   { "net": {"raw": 98000, "display": "$98,000"}, "breakeven": 4,
+                  "capital": {"raw": 250000, "display": "$250,000"} },
+    "delta": 0.25
+  },
+  "confidence": { "ramp": "low" },
   "flags": {
     "payback": null,
     "margin": "ok",
@@ -580,7 +592,12 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
 ```
 
 **Contract notes:**
-- **CASH-based net & margin + 60-month monthly + Month-N payback** (`model_version 2.7.0` / `compute_schema_version 1.5.0`→`1.6.0`, epic #321). The projection is **cash-based** — no amortization, no capitalization. The displayed **Net income** (`rows[]` "Net income" + KPI + `incomeSeries[0]` + `year5Income` + the card `y1_net`) and **Net margin** (`rows[]` "Net margin" + KPI) are cash-based and **congruent**: Year-1 subtracts the one-time `startup_total` (`cash_net[1] = operating_net[1] − startup_total`), Years 2–5 are operating net (`== cash`), and `net_margin[y] = cash_net[y] / total_rev[y]`. The **labels are unchanged** ("Net income"/"Net margin") — only the numbers become cash-based; there is **no second margin and no footnote**. The **internal** operating net (`AnnualYear.net`) is unchanged and still drives the go/no-go verdict, so `reco.tag` is unmoved. `monthly[]` grows from **12 to 60 rows** (the full horizon) so the cash curve spans the **payback crossing**, and `milestones.payback`/the **Payback period** KPI resolve to a real **Month N** (first project-month where cumulative cash ≥ 0 after going negative; `null` ⇒ N/A-with-reason). `metrics.capital`/`cashGap`/`breakeven` stay Year-1-anchored and byte-unchanged. Same field shapes — a 2.6.0 snapshot reads **verbatim**; an upgrade/recompute produces the cash-based 2.7.0 numbers as a NEW revision.
+- **`model_version 2.8.0` / `compute_schema_version 1.7.0` — the fusion** of the deployed cash-based `2.7.0-A` (displayed cash net/margin, 60-month monthly, Month-N payback) and this branch's `2.7.0-B` (990 constants + monthly split + sensitivity/confidence surfacing). The **displayed** Net income & Net margin are cash-based (see the cash-based note below); the **operating** layer (verdict, capital, break-even, first-year cash gap) is computed on the branch's 6.2 Y1 distribution. Stored `2.7.0-A` snapshots are read **verbatim** with `upgrade_available: true`.
+- **`model_version 2.7.0-B` — math change, no shape change** (Task 6.4 / Wave-6 close-out, folded into 2.8.0). 990-grounded constants (`PAYROLL_TAX_PCT_OF_PAYROLL` 7.5%→8.0%, `FIXED_ANNUAL["Insurance liability"]` $2,000→$10,000), the 6.2 monthly cash-flow split (fixed costs flat, payroll taxes on the payroll ramp — reshapes the Year-1 trough → capital / break-even), the 6.3 override-aware advisory flags (`occupancy_ratio_out_of_band` / `labor_ratio_out_of_band` / `sales_per_sqft_out_of_band` + the `break_even_revenue` "N/A — variable-cost rate ≥ 100%" guard), the `money_view` single-rounding-authority + exact lease-deposit arithmetic, and NNN resolved to the resolved-occupancy (incl. NNN opex) reading. These MOVE stored numbers, so `model_version` bumps `2.6.0 → 2.7.0`; the **view-model shape is unchanged** (`compute_schema_version` stays `1.6.0`). Stored `2.6.0` snapshots are read **verbatim** with `upgrade_available: true` — never silently recomputed (PRD §13).
+- **Sensitivity + confidence surfaced, full editable knob set** (`compute_schema_version 1.6.0`, audit P0). Top-level `sensitivity` is the §12.2 ± stress scenarios `decision.py` already computed but the view-model previously dropped: `{base, downside, upside}`, each `{net{raw,display}, breakeven, capital{raw,display}}` (`breakeven` is a plain project-month int or `null` when never reached — never a misleading 0), plus a sibling `sensitivity.delta` (the ± fraction, mirrors `settings.sensitivityDelta`). Top-level `confidence.ramp` (`"low"` | `"high"`) surfaces the ramp low-confidence flag `build_flags` already sets. `settings` gains the remaining editable knobs: `sensitivityDelta` (single source for the stress `delta` — `decision.py` derives `(1 ± delta)` from `Assumptions.sensitivity_delta`, no more hard-coded `1.25`/`0.75` literals), `fixedAnnual` (label→annual-$ map), `nnnOpexAnnual`, `buildingSqft`, `salesfloorPct`. All additive; **no math change** (`model_version` stays `2.6.0`). A pre-1.6.0 snapshot simply lacks these keys.
+  - **API exposure + bounds (`AssumptionsIn`, re-validated on every `PATCH`):** `sensitivity_delta` ∈ `[0, 0.9]` (> 1 would flip the downside donation multiplier negative); `reserve_buffer`, `donations_per_hh`, `basket`, `utilities_per_sqft` are `>= 0`; `fixed_annual` keys are allowlisted to the engine's `FIXED_ANNUAL` labels and each value must be `>= 0`, and a partial PATCH **accumulates** (incoming keys merge over the STORED map, never a flat replace) before merging over the engine defaults for untouched lines. Any violation is **422** `invalid_assumptions` (`API_SPEC.md` §4.4/§11).
+  - **Fail-closed hardening:** because re-validation runs over the **merged** dict (not just the PATCHed keys), a projection row already carrying a legacy out-of-range value — saved before one of these bounds existed — now **422s on the next `PATCH`**, even one touching an unrelated field, until that value is re-sent in-range. This is intentional (fail-closed, not a regression): a bad stored value can no longer silently ride along on an unrelated edit.
+- **CASH-based net & margin + 60-month monthly + Month-N payback** (folded into `model_version 2.8.0` / `compute_schema_version 1.7.0`, epic #321 lineage `2.7.0-A`). The projection is **cash-based** — no amortization, no capitalization. The displayed **Net income** (`rows[]` "Net income" + KPI + `incomeSeries[0]` + `year5Income` + the card `y1_net`) and **Net margin** (`rows[]` "Net margin" + KPI) are cash-based and **congruent**: Year-1 subtracts the one-time `startup_total` (`cash_net[1] = operating_net[1] − startup_total`), Years 2–5 are operating net (`== cash`), and `net_margin[y] = cash_net[y] / total_rev[y]`. The **labels are unchanged** ("Net income"/"Net margin") — only the numbers become cash-based; there is **no second margin and no footnote**. The **internal** operating net (`AnnualYear.net`) is unchanged and still drives the go/no-go verdict, so `reco.tag` is unmoved. `monthly[]` grows from **12 to 60 rows** (the full horizon) so the cash curve spans the **payback crossing**, and `milestones.payback`/the **Payback period** KPI resolve to a real **Month N** (first project-month where cumulative cash ≥ 0 after going negative; `null` ⇒ N/A-with-reason). `metrics.capital`/`cashGap`/`breakeven` stay Year-1-anchored and byte-unchanged. Same field shapes — a 2.6.0 snapshot reads **verbatim**; an upgrade/recompute produces the cash-based 2.8.0 numbers as a NEW revision.
 - **Startup costs surfaced** (`compute_schema_version 1.5.0`, EPIC DOCX). Top-level `startupCosts` is the one-time startup line items `[{category, amount{raw,display}}]` (from the engine's `result.startup`, including the computed "Lease Deposit + First Month Rent" line) and `startupTotal` is their sum `{raw,display}`. Additive shape change feeding the Board Packet `.docx` startup-costs table; **no math change** (`model_version` stays `2.6.0`). A pre-1.5.0 snapshot simply lacks these keys and the `.docx` renderer degrades gracefully.
 - **5-year horizon** (`model_version 2.6.0` / `compute_schema_version 1.4.0`→`1.5.0`). Every annual `rows[]` entry carries `y1..y5` cells; `settings` gain `shareY4`/`shareY5` plus the editable donation drivers `donationValue` + `donationsPerHouseholdPerYear` (`donationsPerHh` is retained as an alias). Top-level `incomeSeries` is the annual **net income** Y1..Y5 as `{raw,display}` (the list/detail sparkline) and `year5Income` is the Year-5 figure. The net-total row/KPI is **"Net income"** (was "Net profit"). The decision metrics (`metrics.capital`/`cashGap`/`breakeven`, `milestones`, `monthly[]`) stay **Year-1-anchored and are byte-unchanged**; only the annual table, the Revenue-CAGR KPI (now Y1→Y5), and the §12.2 guardrails (now also Y4/Y5) extend. A legacy 3-year snapshot (`2.5.0`) is read **verbatim** (still three columns); recompute/upgrade auto-extends absent `share_y4`/`share_y5` to the plateau defaults `0.11`/`0.12`.
 - `settings.utilitiesPerSqft` + `settings.rentPerSqft` (`compute_schema_version ≥ 1.3.0`, #245) are additive raw scalars. `utilitiesPerSqft` is the rate the **Utilities/trash service** line is now derived from (`building_sqft × utilitiesPerSqft`, default `$2.23`); `rentPerSqft` echoes the input `rent_per_sqft` when occupancy was entered that way (else `null` — occupancy was entered as a flat annual `$`). Both are display-only context for the wizard/inspector; the engine remains the math authority.

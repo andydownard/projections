@@ -117,18 +117,76 @@ describe("ShareModal — a11y + dismissal", () => {
   });
 });
 
-// Guard against a clipboard-less environment: copy must not throw; it should still
-// announce. (Older browsers / insecure contexts have no navigator.clipboard.)
+// Guard against a clipboard-less environment: copy must not throw — and it must
+// NOT claim "Link copied" (nothing reached the clipboard; the field is merely
+// selected for a manual copy). Same honesty rule as the reject path (3.5 review).
 describe("ShareModal — clipboard fallback", () => {
-  it("does not throw when navigator.clipboard is unavailable", async () => {
+  it("selects the field and shows the manual hint — never a copied toast — when navigator.clipboard is unavailable", async () => {
+    // ORDER MATTERS: userEvent.setup() installs its own clipboard stub, which
+    // silently re-defines navigator.clipboard and would route the click down the
+    // Clipboard-API path (the pre-fix version of this test had that bug — it never
+    // exercised the no-clipboard branch at all). Remove the API AFTER setup.
+    const user = userEvent.setup();
     Object.defineProperty(navigator, "clipboard", {
       value: undefined,
       configurable: true,
       writable: true,
     });
-    const user = userEvent.setup();
     renderModal({ slug: "p_8x", editToken: null });
     await user.click(screen.getByTestId("share-copy-readonly"));
-    await waitFor(() => expect(screen.getByTestId("toast")).toBeInTheDocument());
+    expect(await screen.findByText(/press ctrl\+c to copy/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("toast")).not.toBeInTheDocument();
+  });
+});
+
+// Audit P2 (honesty): "Link copied" must mean the write actually reached the
+// clipboard. Previously the toast fired even when navigator.clipboard.writeText
+// REJECTED (a denied permission / insecure context edge case) — a false claim of
+// success. A rejected write now renders an inline manual-copy hint instead.
+describe("ShareModal — copy honesty (rejects don't lie)", () => {
+  function installRejectingClipboard() {
+    const writeText = vi.fn().mockRejectedValue(new Error("clipboard write denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+    return writeText;
+  }
+
+  it("does not toast on a rejected read-only copy; shows a manual-copy hint instead", async () => {
+    const user = userEvent.setup();
+    const writeText = installRejectingClipboard();
+    renderModal({ slug: "p_8x", editToken: "edit_secret" });
+    await user.click(screen.getByTestId("share-copy-readonly"));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(await screen.findByTestId("share-copy-readonly-manual")).toHaveTextContent(
+      /press ctrl\+c to copy/i,
+    );
+    expect(screen.queryByTestId("toast")).not.toBeInTheDocument();
+  });
+
+  it("does not toast on a rejected editable-link copy; shows a manual-copy hint instead", async () => {
+    const user = userEvent.setup();
+    const writeText = installRejectingClipboard();
+    renderModal({ slug: "p_8x", editToken: "edit_secret" });
+    await user.click(screen.getByTestId("share-copy-edit"));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(await screen.findByTestId("share-copy-edit-manual")).toHaveTextContent(
+      /press ctrl\+c to copy/i,
+    );
+    expect(screen.queryByTestId("toast")).not.toBeInTheDocument();
+  });
+
+  it("clears the manual-copy hint once a later copy of the same link succeeds", async () => {
+    const user = userEvent.setup();
+    installRejectingClipboard();
+    renderModal({ slug: "p_8x", editToken: "edit_secret" });
+    await user.click(screen.getByTestId("share-copy-readonly"));
+    await screen.findByTestId("share-copy-readonly-manual");
+    installClipboard(); // re-install a resolving clipboard
+    await user.click(screen.getByTestId("share-copy-readonly"));
+    await screen.findByTestId("toast");
+    expect(screen.queryByTestId("share-copy-readonly-manual")).not.toBeInTheDocument();
   });
 });

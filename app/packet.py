@@ -107,6 +107,69 @@ def _assumptions(vm: dict[str, Any]) -> dict[str, Any]:
     return {"verified": verified, "estimated": estimated}
 
 
+# §12.2 advisory guardrail flags -> a human-readable label for the packet. Any
+# flag whose value is a dict carrying ``requires_note: True`` is an out-of-band
+# driver a board must see justified (ENGINE_CONTRACT §6.2 / PRD §12.2); the label
+# names the driver + the year so the justification is unambiguous.
+_GUARDRAIL_LABELS = {
+    "net_margin_out_of_band": "Net margin (Year 1)",
+    "net_margin_y4_out_of_band": "Net margin (Year 4)",
+    "net_margin_y5_out_of_band": "Net margin (Year 5)",
+    "share_y1_out_of_band": "Donor market share (Year 1)",
+    "share_y4_out_of_band": "Donor market share (Year 4)",
+    "share_y5_out_of_band": "Donor market share (Year 5)",
+    "occupancy_ratio_out_of_band": "Occupancy ratio (Year 1)",
+    "labor_ratio_out_of_band": "Labor ratio (Year 1)",
+    "sales_per_sqft_out_of_band": "Sales per sq ft (Year 1)",
+}
+
+
+def _humanize_flag_key(key: str) -> str:
+    """Readable fallback label for a ``requires_note`` flag with no hand-authored
+    entry in ``_GUARDRAIL_LABELS`` — e.g. ``some_future_driver_out_of_band`` ->
+    ``"Some future driver out of band"``. Never the empty string, never the raw
+    snake_case key verbatim."""
+    words = key.replace("_", " ").strip()
+    return words[:1].upper() + words[1:] if words else key
+
+
+def _guardrails(vm: dict[str, Any]) -> list[dict[str, str]]:
+    """The §12.2 out-of-band drivers + the justification note each requires.
+
+    Reads ONLY the engine's ``flags`` (the flag, its band, and the ``requires_note``
+    marker are all set by ``engine.decision.build_flags``) — the packet invents no
+    threshold and re-derives no number, so the guardrail advisory can never
+    contradict the flag the engine actually raised. A clean projection (no
+    band-violating driver) yields an empty list, so the section is silent unless a
+    justification is genuinely owed. This is what makes the packet defensible to a
+    skeptical board/funder: an out-of-band input travels in with its required note,
+    never silently (PRD §12.2 / §17).
+
+    Iterates ``flags.items()`` (NOT ``_GUARDRAIL_LABELS.items()``, per the batch-2
+    review's I2 finding): any flag whose value is a dict carrying
+    ``requires_note: True`` travels in, using ``_GUARDRAIL_LABELS`` only for a
+    pretty label and a humanized fallback otherwise — so a future flag key that
+    doesn't happen to match a hand-authored map entry can never be silently
+    dropped with no test failing.
+    """
+    out: list[dict[str, str]] = []
+    flags = vm.get("flags") or {}
+    for key, f in flags.items():
+        if isinstance(f, dict) and f.get("requires_note"):
+            label = _GUARDRAIL_LABELS.get(key, _humanize_flag_key(key))
+            band = str(f.get("band", ""))
+            out.append({
+                "field": key,
+                "label": label,
+                "band": band,
+                "note": (
+                    f"{label} is outside the advisory benchmark band ({band}) and "
+                    "requires a written justification that travels into this packet."
+                ),
+            })
+    return out
+
+
 def _provenance(vm: dict[str, Any]) -> dict[str, Any]:
     """Classify every 3-year row by source: input / computed / overridden / estimated."""
     buckets: dict[str, list[dict[str, str]]] = {
@@ -120,26 +183,66 @@ def _provenance(vm: dict[str, Any]) -> dict[str, Any]:
     return buckets
 
 
+def _month_disp(month: Any) -> str:
+    """Plain-language break-even label for a raw sensitivity-scenario project
+    month (schema >= 1.6.0 emits a bare int, never a {raw,display} pair) — never
+    a misleading 0/blank when the scenario doesn't reach break-even."""
+    return f"Month {month}" if isinstance(month, int) else "Not reached"
+
+
 def _sensitivity(vm: dict[str, Any]) -> dict[str, Any]:
     """A grounded sensitivity table.
 
-    The packet must not fabricate downside math (that is the engine's job), so the
-    table surfaces the engine's already-computed headline figures as the base
-    column and labels each as a sensitivity driver. Every display string here is
-    copied verbatim from ``computed_json`` (grounded by construction); no new
-    arithmetic is performed in the packet layer.
+    When the engine's §12.2 stress block is present (``vm["sensitivity"]``,
+    schema >= 1.6.0), render the FULL base/downside/upside comparison decision.py
+    already computes: three drivers (net income, break-even, capital required)
+    across the three re-run scenarios, plus a disclaimer row explaining the ±
+    stress (sourced from ``sensitivity.delta`` — never a hard-coded "25%"). Every
+    display string is copied verbatim from ``computed_json`` (grounded by
+    construction); no new arithmetic happens in the packet layer.
+
+    A legacy snapshot that predates schema 1.6.0 has no ``sensitivity`` block —
+    this degrades to the prior base-case-only Driver/Base case/Note table
+    (unchanged), never fabricating downside/upside figures that were never
+    computed for that stored snapshot.
     """
+    sens = vm.get("sensitivity")
+    if isinstance(sens, dict) and {"base", "downside", "upside"} <= sens.keys():
+        base, down, up = sens["base"], sens["downside"], sens["upside"]
+        delta_pct = round(float(sens.get("delta") or 0) * 100)
+        rows = [
+            {"driver": "Net income",
+             "cells": [_disp(base.get("net")), _disp(down.get("net")), _disp(up.get("net"))]},
+            {"driver": "Break-even",
+             "cells": [_month_disp(base.get("breakeven")), _month_disp(down.get("breakeven")),
+                       _month_disp(up.get("breakeven"))]},
+            {"driver": "Capital required",
+             "cells": [_disp(base.get("capital")), _disp(down.get("capital")),
+                       _disp(up.get("capital"))]},
+        ]
+        disclaimer = (
+            f"Downside stresses rent +{delta_pct}% and donations −{delta_pct}%; "
+            "Upside applies the reverse. Each scenario is a full engine re-run, "
+            "not a linear scale of the base case."
+        )
+        return {"columns": ["Driver", "Base case", "Downside", "Upside"],
+                "rows": rows, "disclaimer": disclaimer}
+
+    # Legacy fallback (pre-1.6.0 snapshot, no vm["sensitivity"]): the prior
+    # base-case-only headline table — unchanged.
     metrics = vm.get("metrics") or {}
     rows = [
-        {"driver": "Capital required", "base": _disp(metrics.get("capital")),
-         # Source the rationale from the view-model so packet and UI never drift.
-         "note": metrics.get("reasonCapital")
-                 or ("Worst-case cumulative cash trough (already includes "
-                     "one-time startup) plus reserve.")},
-        {"driver": "First-year cash gap", "base": _disp(metrics.get("cashGap")),
-         "note": "Most-negative cumulative cash across the first year."},
-        {"driver": "Break-even", "base": _disp(metrics.get("breakeven")),
-         "note": "First month operating net turns and stays non-negative."},
+        {"driver": "Capital required",
+         "cells": [_disp(metrics.get("capital")),
+                   metrics.get("reasonCapital")
+                   or ("Worst-case cumulative cash trough (already includes "
+                       "one-time startup) plus reserve.")]},
+        {"driver": "First-year cash gap",
+         "cells": [_disp(metrics.get("cashGap")),
+                   "Most-negative cumulative cash across the first year."]},
+        {"driver": "Break-even",
+         "cells": [_disp(metrics.get("breakeven")),
+                   "First month operating net turns and stays non-negative."]},
     ]
     return {"columns": ["Driver", "Base case", "Note"], "rows": rows}
 
@@ -255,6 +358,9 @@ def build_packet(
     }
     sections["assumptions"] = _assumptions(vm)
     sections["sensitivity"] = _sensitivity(vm)
+    # §12.2 guardrails: any out-of-band driver + the justification note it requires,
+    # so the advisory travels into the packet a board reads (empty when all in band).
+    sections["guardrails"] = _guardrails(vm)
     sections["provenance"] = _provenance(vm)
     sections["kpis"] = _kpis(vm)
     # The .docx 2-pager's two tables (EPIC DOCX): the projected income statement
@@ -319,9 +425,23 @@ def render_packet_md(pkt: dict[str, Any]) -> str:
     lines.append("| " + " | ".join(sens["columns"]) + " |")
     lines.append("|" + "|".join(["---"] * len(sens["columns"])) + "|")
     for r in sens["rows"]:
-        lines.append(f"| {_md_escape(r['driver'])} | {_md_escape(r['base'])} "
-                     f"| {_md_escape(r['note'])} |")
+        cells = " | ".join(_md_escape(c) for c in r["cells"])
+        lines.append(f"| {_md_escape(r['driver'])} | {cells} |")
+    if sens.get("disclaimer"):
+        lines.append("")
+        lines.append(f"_{_md_escape(sens['disclaimer'])}_")
     lines.append("")
+
+    guardrails = s.get("guardrails") or []
+    if guardrails:
+        lines.append("## Guardrails")
+        lines.append(
+            "_These inputs are outside the advisory benchmark bands (§12.2) and "
+            "require a written justification._")
+        for g in guardrails:
+            lines.append(f"- **{_md_escape(g['label'])}** "
+                         f"({_md_escape(g['band'])}): {_md_escape(g['note'])}")
+        lines.append("")
 
     lines.append("## Key metrics")
     for k in s["kpis"]:
@@ -612,6 +732,19 @@ def render_packet_docx(pkt: dict[str, Any]) -> bytes:
 
     doc.add_heading("Interpretation", level=1)
     doc.add_paragraph(_interpretation_para(pkt))
+
+    # §12.2 guardrails: out-of-band drivers + the justification each requires. Only
+    # rendered when a driver is genuinely out of band, so a clean plan stays silent.
+    guardrails = s.get("guardrails") or []
+    if guardrails:
+        doc.add_heading("Assumptions Requiring Justification", level=1)
+        _add_small_para(
+            doc,
+            "The following inputs are outside the advisory benchmark bands (§12.2). "
+            "A written justification is required before relying on this projection.",
+            italic=True)
+        for g in guardrails:
+            doc.add_paragraph(g["note"], style="List Bullet")
 
     disc = s.get("disclaimer") or {}
     # AI authorship is disclosed only when generated prose is actually present —

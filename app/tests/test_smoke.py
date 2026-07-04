@@ -24,7 +24,7 @@ def test_health_returns_api_spec_shape(client):
     # API_SPEC §10 response shape.
     assert body["status"] == "ok"
     assert "build_sha" in body
-    assert body["model_version"] == "2.7.0"
+    assert body["model_version"] == "2.8.0"
     assert "db" in body
     assert "litestream" in body
 

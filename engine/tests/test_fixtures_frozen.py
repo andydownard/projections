@@ -37,41 +37,50 @@ def test_canonical_is_a_loss_case():
     # Cash-based Net margin display negative (parentheses) and reco is not proceed.
     assert vm["rows"][-1]["y1"]["display"].startswith("(")
     assert vm["reco"]["tag"] != "proceed"
-    assert vm["model_version"] == "2.7.0"
-    # CASH basis (epic #321): the displayed Year-1 Net income includes the one-time
-    # startup hit (operating −$44,433 − $238,500 startup = −$282,933).
+    assert vm["model_version"] == "2.8.0"
+    # FUSION cash display (2.7.0-A): the displayed Year-1 Net income subtracts the one-time
+    # startup. Fused = operating net (−$53,713.72, with the 990 constants) − startup_total
+    # ($238,500) = −$292,213.72 → −$292,214 (was pre-990 −$282,933).
     net = next(r for r in vm["rows"] if r["label"] == "Net income")
-    assert round(net["y1"]["raw"]) == -282933
+    assert round(net["y1"]["raw"]) == -292214
 
 
 def test_canonical_reco_text_consistent_with_breakeven_metric():
-    # #142 regression guard at the FROZEN-FIXTURE layer: the shipped default output
-    # can never again encode a "break-even not reached" reco next to a real Month-N
-    # break-even metric. The base case reaches break-even (do_not_proceed is driven
-    # by the DOWNSIDE), so the reco/reason text must name both — never contradict it.
+    # #142 regression guard at the FROZEN-FIXTURE layer: the shipped default output can
+    # never encode a "break-even not reached" reco next to a real Month-N break-even
+    # metric. At 2.7.0 the canonical verdict is raise_cash — the base case reaches
+    # break-even (Month 8) and the binding constraint is capital > the $300k funds — so
+    # the break-even reason stays the plain positive statement and the verdict sub names
+    # the CAPITAL constraint; no field may contradict the Month-8 metric.
     from engine.tests.test_decision import assert_breakeven_text_consistent
     vm = _load("house_of_hope_canonical_60.json")
     assert vm["metrics"]["breakeven"]["raw"] is not None
-    assert vm["reco"]["tag"] == "do_not_proceed"
-    assert_breakeven_text_consistent(vm)
-    # Both the verdict sub and the metric reason must surface the downside driver.
-    for text in (vm["reco"]["sub"].lower(), vm["metrics"]["reasonBreakeven"].lower()):
-        assert "base case" in text and "downside" in text
+    assert vm["reco"]["tag"] == "raise_cash"
+    assert_breakeven_text_consistent(vm)  # break-even IS reached -> no "unreached" claim
+    # The verdict is capital-driven; the break-even reason never claims "not reached".
+    assert "capital" in vm["reco"]["sub"].lower()
+    assert "not reached" not in vm["metrics"]["reasonBreakeven"].lower()
 
 
 def test_design_parity_reproduces_headline(design_parity_result):
     vm = _load("house_of_hope_design_parity_40.json")
-    # The labor-driven prototype headline: break-even ~month 5 (operating).
-    assert vm["breakevenMonth"] == 5
-    # CASH basis (epic #321): the DISPLAYED Year-1 Net margin is dragged negative by the
-    # one-time startup hit (operating +$47,359 − $238,500 = −$191,141 over revenue), even
-    # though the OPERATING margin is the ~11% prototype headline. The displayed net + margin
-    # are congruent (both cash), and the payback now resolves to a real Month N (Month 30).
-    assert vm["rows"][-1]["y1"]["raw"] < 0                       # displayed (cash) margin
-    assert round(next(r for r in vm["rows"] if r["label"] == "Net income")["y1"]["raw"]) == -191141
-    assert vm["milestones"]["payback"]["raw"] == 30
+    # FUSION: DISPLAY layer is cash (2.7.0-A) — the Year-1 Net margin ROW is dragged negative
+    # by the one-time startup hit even though the OPERATING margin is positive. OPERATING layer
+    # is the branch's 6.2/990 distribution (2.7.0-B): break-even month 6 (was 5 pre-990), reco
+    # raise_cash (capital $302,238 > the $300k design-parity funds by $2,238 — an OWNER-VISIBLE
+    # flip from the prototype "proceed", flagged for the reviewer), operating margin ~9.0% (990
+    # constants lowered it from the pre-990 ~11% prototype headline). The DISPLAYED cash net and
+    # the Month-N payback are re-pinned to fused values in step 3.
+    assert vm["rows"][-1]["y1"]["raw"] < 0                       # displayed (cash) Net margin
+    # Fused cash Y1 net = operating +$38,504.84 − startup $238,500 = −$199,995.16 → −$199,995.
+    assert round(next(r for r in vm["rows"] if r["label"] == "Net income")["y1"]["raw"]) == -199995
+    assert vm["breakevenMonth"] == 6                            # OPERATING (6.2 Y1 distribution)
+    assert vm["reco"]["tag"] == "raise_cash"                    # OPERATING-driven (capital > funds)
+    # Month-N payback recomputes over the 60-month series on the 6.2 Y1 window → Month 32
+    # (their pre-fusion goldens read Month 30; the shift is expected — fusion spec §3).
+    assert vm["milestones"]["payback"]["raw"] == 32
     op_margin = float(design_parity_result.annual[1].margin)
-    assert 0.10 < op_margin < 0.12                              # the ~11% operating headline
+    assert 0.08 < op_margin < 0.10                              # ~9.0% operating (990 constants)
 
 
 def test_y1_revenue_identical_across_both_fixtures():
@@ -79,3 +88,78 @@ def test_y1_revenue_identical_across_both_fixtures():
     b = _load("house_of_hope_design_parity_40.json")
     # Revenue is labor-independent.
     assert a["kpis"][0]["value"]["raw"] == b["kpis"][0]["value"]["raw"]
+
+
+# --------------------------------------------------------------- Aggressive
+def test_aggressive_fixture_is_byte_stable(aggressive_result):
+    expected = _load("aggressive_flagged.json")
+    actual = json.loads(json.dumps(to_view_model(aggressive_result), sort_keys=True))
+    assert actual == expected
+
+
+def test_aggressive_triggers_the_two_named_guardrail_flags():
+    # AGENTS.md fixture 2: the aggressive shares MUST fire both §12.2 advisory
+    # guardrails, each demanding a justification note that travels into the packet.
+    vm = _load("aggressive_flagged.json")
+    flags = vm["flags"]
+    # FUSION: the §12.2 net-margin guardrail runs on the DISPLAYED (cash) margin (2.7.0-A).
+    # The Year-1 cash margin is dragged down to ~8.9% by the one-time startup, so the >30%
+    # flag no longer fires on Y1 — it fires on the steady-state LATE years (Y4/Y5, where
+    # cash == operating and the aggressive margin is ~37%). The guardrail still fires (spec
+    # §6); the share (>8%) guardrail fires on Y1 as before.
+    assert flags["net_margin_y4_out_of_band"]["requires_note"] is True
+    assert flags["net_margin_y5_out_of_band"]["requires_note"] is True
+    assert flags["share_y1_out_of_band"]["requires_note"] is True
+    # The late-year (steady-state) margin is above the ~30% band; verdict is "revise".
+    assert vm["rows"][-1]["y4"]["raw"] > 0.30
+    assert vm["reco"]["tag"] == "revise"
+    assert vm["model_version"] == "2.8.0"
+
+
+# ------------------------------------------------------------- Grace Mission
+def test_grace_fixture_is_byte_stable(grace_result):
+    expected = _load("grace_mission_loss.json")
+    actual = json.loads(json.dumps(to_view_model(grace_result), sort_keys=True))
+    assert actual == expected
+
+
+def test_grace_is_a_loss_case_with_payback_na_and_one_pinned_payroll():
+    # AGENTS.md fixture 3: negative Year-1 net rendered in parentheses, payback
+    # N/A-with-reason (never a 0), and exactly one overridden Payroll cell whose
+    # pinned value differs from the calculated value the Inspector shows.
+    vm = _load("grace_mission_loss.json")
+    net_row = next(r for r in vm["rows"] if r["label"] == "Net income")
+    assert net_row["y1"]["raw"] < 0
+    assert net_row["y1"]["display"].startswith("(")   # parentheses for negatives
+    assert vm["flags"]["payback"] == "N/A — no Year 1 profit"
+    assert vm["milestones"]["payback"]["raw"] is None  # explicit null, never a 0
+    assert vm["milestones"]["payback"]["display"] == "N/A"
+    assert len(vm["overrides"]) == 1
+    ov = vm["overrides"][0]
+    assert ov["node"] == "Payroll" and ov["year"] == 1
+    assert ov["value"]["raw"] == 110000.0
+    assert ov["calculated"]["raw"] != ov["value"]["raw"]  # calc-vs-override, no back-solve
+    assert vm["model_version"] == "2.8.0"
+
+
+# --------------------------------------------------------- NNN gross-check
+def test_nnn_gross_check_fixture_is_byte_stable(nnn_gross_check_result):
+    expected = _load("nnn_gross_check.json")
+    actual = json.loads(json.dumps(to_view_model(nnn_gross_check_result), sort_keys=True))
+    assert actual == expected
+
+
+def test_nnn_resolution_escalates_and_deposits_on_resolved_occupancy():
+    # Task 6.4 (DECISIONS.md): "code behavior governs" — the escalator and the lease
+    # deposit BOTH apply to the resolved occupancy INCLUDING the $30k NNN opex, never
+    # the base rent alone. Rent Y1 = $150,000 (120k + 30k), Y2 = $154,500 (×1.03), and
+    # the deposit is 3 months of the resolved occupancy = $37,500.
+    vm = _load("nnn_gross_check.json")
+    rent_row = next(r for r in vm["rows"] if r["label"] == "Rent")
+    assert rent_row["y1"]["raw"] == 150000.0
+    assert rent_row["y2"]["raw"] == 154500.0
+    deposit = next(c for c in vm["startupCosts"]
+                   if c["category"].startswith("Lease Deposit"))
+    assert deposit["amount"]["raw"] == 37500.0
+    assert deposit["amount"]["display"] == "$37,500"
+    assert vm["model_version"] == "2.8.0"

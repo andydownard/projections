@@ -26,6 +26,7 @@ const item: ProjectionListItem = {
   capital_required: { raw: 277990, display: "$277,990" },
   payback: { raw: 25, display: "Month 25" },
   breakeven: { raw: 5, display: "Month 5" },
+  reco_tag: "proceed",
   status: "active",
   version: 7,
   updated_at: "2026-06-24T17:03:21Z",
@@ -215,11 +216,41 @@ describe("ProjectionsList — L3: new column structure", () => {
     expect(within(row).getByText("N/A")).toBeInTheDocument();
   });
 
-  it("does not render a RecoChip (removed in v2)", () => {
+  // Audit P2 restore: the server never stopped emitting `reco_tag` on every list
+  // row, but the v2 redesign silently dropped the RecoChip from the UI — a real
+  // regression for a "decision-and-funding tool, not a calculator" (CLAUDE.md).
+  // This inverts the prior "does not render a RecoChip (removed in v2)" test.
+  it("renders a RecoChip naming the server's recommendation for the row", () => {
     render(<ProjectionsList projections={[item]} onCreate={() => {}} onRowClick={() => {}} />);
     const row = screen.getByTestId("projection-row-p_8x");
-    // RecoChip renders text like "Proceed" / "Revise" etc.
-    expect(within(row).queryByText(/^(proceed|revise|raise cash|find cheaper rent|delay|do not proceed)$/i)).toBeNull();
+    const chip = within(row).getByTestId("reco-chip");
+    expect(chip).toHaveAttribute("data-tag", "proceed");
+    expect(within(row).getByText(/^proceed$/i)).toBeInTheDocument();
+  });
+
+  it("renders a different RecoChip tag per row from the server's reco_tag", () => {
+    const doNotProceed: ProjectionListItem = {
+      ...item,
+      view_slug: "p_dnp",
+      reco_tag: "do_not_proceed",
+    };
+    render(
+      <ProjectionsList projections={[doNotProceed]} onCreate={() => {}} onRowClick={() => {}} />,
+    );
+    const row = screen.getByTestId("projection-row-p_dnp");
+    expect(within(row).getByTestId("reco-chip")).toHaveAttribute(
+      "data-tag",
+      "do_not_proceed",
+    );
+  });
+
+  it("right-aligns Payback and Breakeven with the shared .num tabular-nums class", () => {
+    render(<ProjectionsList projections={[item]} onCreate={() => {}} onRowClick={() => {}} />);
+    const row = screen.getByTestId("projection-row-p_8x");
+    const paybackCell = within(row).getByText("Month 25").closest("td");
+    const breakevenCell = within(row).getByText("Month 5").closest("td");
+    expect(paybackCell).toHaveClass("num");
+    expect(breakevenCell).toHaveClass("num");
   });
 
   it("does not render a mini-map (removed in v2)", () => {

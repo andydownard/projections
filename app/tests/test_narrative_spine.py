@@ -127,7 +127,7 @@ def test_put_narrative_fails_closed_on_ungrounded_figure(client):
     narrative untouched (fail-closed, SECURITY §6.3)."""
     created = _create(client)
     slug, edit = created["view_slug"], created["edit_token"]
-    # seed a valid prior narrative
+    # seed a valid prior narrative (a successful narrative write bumps the version 1->2)
     vm = client.get(f"/api/projections/{slug}").json()
     cap = vm["metrics"]["capital"]["display"]
     client.put(
@@ -135,11 +135,11 @@ def test_put_narrative_fails_closed_on_ungrounded_figure(client):
         json={"body_md": f"<p>original {cap}</p>"},
         headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
     )
-    # now PUT prose with a hallucinated figure
+    # now PUT prose with a hallucinated figure (at the current version 2)
     r = client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": "<p>The plan needs $9,999,999.</p>"},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
     )
     assert r.status_code == 409, r.text
     assert r.json()["detail"]["error"] == "grounding_failed"
@@ -232,16 +232,17 @@ def test_regenerate_over_edited_requires_confirm(client):
     slug, edit = created["view_slug"], created["edit_token"]
     vm = client.get(f"/api/projections/{slug}").json()
     cap = vm["metrics"]["capital"]["display"]
-    # user hand-edits the narrative
+    # user hand-edits the narrative (a successful narrative write bumps the version 1->2)
     client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": f"<p>hand written {cap}</p>"},
         headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
     )
-    # regenerate without confirm -> blocked, prose intact
+    # regenerate without confirm -> blocked, prose intact. The confirm-required 409 is
+    # rejected before the write, so the version stays 2 for the confirmed retry below.
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
     )
     assert r.status_code == 409, r.text
     assert r.json()["detail"]["error"] == "edited_confirm_required"
@@ -251,7 +252,7 @@ def test_regenerate_over_edited_requires_confirm(client):
     # regenerate WITH confirm -> proceeds and replaces, edited resets to false
     r2 = client.post(
         f"/api/projections/{slug}/narrative:regenerate?confirm=true",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
     )
     assert r2.status_code == 200, r2.text
     assert r2.json()["edited"] is False

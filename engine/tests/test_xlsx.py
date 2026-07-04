@@ -536,3 +536,43 @@ def test_expense_row_skipped_when_label_absent_from_annual(tmp_path):
     build_xlsx(full, str(full_path))
     full_ws = openpyxl.load_workbook(full_path)["Projection"]
     assert "Pest control" in _projection_label_map(full_ws)
+
+
+# ---------------------------------------- Task 1.4: newly-editable-setting inputs
+def _label_rows(ws, label):
+    """Every row whose column-A value equals ``label``. A fixed-annual line appears
+    twice — once as a KEY-INPUTS blue cell, once as a 5-YEAR-PROJECTION expense row —
+    so ``_projection_label_map`` (last-occurrence) can't distinguish the two."""
+    return [r for r in range(1, ws.max_row + 1)
+            if ws.cell(row=r, column=1).value == label]
+
+
+def test_fixed_annual_lines_are_blue_inputs_referenced_by_formula(tmp_path):
+    """Task 1.4 contract: each now-editable ``Assumptions.fixed_annual`` line (e.g.
+    'Pest control') is a BLUE input cell in KEY INPUTS, and its 5-YEAR-PROJECTION
+    expense row is a live formula referencing that input cell by coordinate (=$B$NN)
+    across all five years — never a re-inlined literal. So editing the blue cell
+    re-foots the expense row, Total Expenses (=SUM over it), Net income, and margin.
+
+    This locks the fixed_annual wiring (the one newly-editable setting that feeds a
+    sheet formula) against a future refactor silently collapsing it back to a literal.
+    Reserve buffer / capital and the sensitivity delta have NO cell in this workbook
+    (capital & sensitivity are engine-only decision metrics, absent from the sheet), so
+    per scope they get no input cell here — see task report.
+    """
+    res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    assert res.assumptions.fixed_annual, "there are fixed-annual lines to check"
+    for label in res.assumptions.fixed_annual:
+        rows = _label_rows(ws, label)
+        assert len(rows) == 2, f"{label}: expected a KEY-INPUTS row and an expense row"
+        input_row, expense_row = rows  # KEY INPUTS precedes the 5-YEAR PROJECTION
+        input_cell = ws.cell(row=input_row, column=2)
+        # blue input cell carrying the literal annual $ (a number, not a formula)
+        assert isinstance(input_cell.value, (int, float)), f"{label} input not numeric"
+        assert input_cell.font.color.rgb.endswith("0000FF"), f"{label} input not blue"
+        # each of Year 1..5 references the SINGLE input cell by ref — not a literal
+        for col in range(2, 7):
+            f = ws.cell(row=expense_row, column=col).value
+            assert f == f"=$B${input_row}", f"{label} Y{col - 1} not ref to input: {f!r}"

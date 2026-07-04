@@ -29,6 +29,11 @@ test.describe("override + 409 optimistic-concurrency", () => {
     // <NumberField unit="%"> entered in HUMAN units (so "50" = 50%, divided to the
     // engine raw at the PATCH boundary — no client math).
     await page.getByRole("tab", { name: /kpis/i }).click();
+    // The Labor % driver lives in the "Operating cost structure" group, which loads
+    // COLLAPSED (SettingsTab.tsx: every param group defaults closed, Task 3.1) --
+    // expand it before the field is fillable (same trap/fix as conflict-recovery
+    // .spec.ts's raceToConflict and ProjectionDetail.test.tsx:1360).
+    await page.getByTestId("settings-group-cost-structure").click();
     await page.getByLabel(/labor %/i).fill("50"); // change from the seed's 40%
     // The SERVER recompute (no client math) shows in the KPIs tab — the Labor-ratio
     // KPI reads 50%, never computed on the client.

@@ -218,7 +218,7 @@ def test_startup_costs_gracefully_absent_on_legacy_vm():
 
 # -------------------------------------------------- T4 disclaimer + terms + AI
 def test_disclaimer_terms_and_ai_disclosure_are_stamped():
-    body = "Capital is $321,940."   # grounded against VM5 (capital display)
+    body = "Capital is $347,854."   # grounded against VM5 (capital display)
     data = render_packet_docx(build_packet(
         _vm5(), role="board", narrative_md=body,
         terms_accepted_at="2026-06-27T12:00:00Z"))
@@ -231,11 +231,11 @@ def test_disclaimer_terms_and_ai_disclosure_are_stamped():
 
 # --------------------------------------------------- T5 strips narrative HTML
 def test_narrative_html_is_flattened_not_shown_literally():
-    body = "<p>The store needs <strong>$321,940</strong> in capital.</p>"
+    body = "<p>The store needs <strong>$347,854</strong> in capital.</p>"
     text = _all_text(render_packet_docx(build_packet(_vm5(), narrative_md=body)))
     assert "<p>" not in text and "</p>" not in text and "<strong>" not in text
     assert "The store needs" in text
-    assert "$321,940" in text
+    assert "$347,854" in text
 
 
 # ----------------------------------------------- T6 AI-off fallback renders full
@@ -262,7 +262,7 @@ def test_no_raw_float_ever_appears_in_the_document():
     leaks = [f for f in _raw_floats(vm) if f in text]
     assert not leaks, f"raw float(s) leaked into the .docx: {leaks}"
     # spot-check the headline raw values explicitly.
-    assert "321939.7347072" not in text     # capital raw
+    assert "347853.76208215486" not in text     # capital raw
     assert "426937.75488" not in text       # total revenue raw
     assert "238500.0" not in text           # startupTotal raw
 
@@ -287,7 +287,7 @@ def test_fallback_exec_summary_is_grounded_by_construction():
     # computed_json display strings, so validate_grounding must pass.
     vm = _vm5()
     text = _all_text(render_packet_docx(build_packet(vm, narrative_md=None)))
-    assert vm["metrics"]["capital"]["display"] in text     # "$321,940"
+    assert vm["metrics"]["capital"]["display"] in text     # "$347,854"
     validate_grounding(text, vm)
 
 
@@ -409,12 +409,12 @@ def test_kpi_disp_and_banner_fact_read_display_strings():
     pkt = build_packet(_vm5())
     assert _kpi_disp(pkt, "Total revenue") == "$426,938"
     assert _kpi_disp(pkt, "Missing KPI") == ""
-    assert _banner_fact(pkt, "Capital required") == "$321,940"
+    assert _banner_fact(pkt, "Capital required") == "$347,854"
     assert _banner_fact(pkt, "Missing fact") == ""
 
 
 def test_has_value_treats_na_and_empty_as_absent():
-    assert _has_value("$321,940") is True
+    assert _has_value("$347,854") is True
     assert _has_value("N/A") is False
     assert _has_value("—") is False
     assert _has_value("") is False
@@ -427,7 +427,7 @@ def test_exec_summary_fallback_is_grounded_and_floatless():
     for f in extract_figures(text):
         assert _norm(f) in grounded_figures(vm), f
     assert "House of Hope" in text
-    assert "321939.7347072" not in text          # never the raw float
+    assert "347853.76208215486" not in text          # never the raw float
 
 
 def test_exec_summary_fallback_omits_breakeven_when_na():
@@ -439,12 +439,13 @@ def test_exec_summary_fallback_omits_breakeven_when_na():
 
 
 def test_performance_sentence_grounded_year_one():
-    # CASH basis (epic #321): the grounded Year-1 net income includes the one-time
-    # startup hit (operating −$44,433 − $238,500 startup = −$282,933), sourced from the
-    # cash-based "Net income" surface — so the packet sentence reads the board's cash reality.
+    # CASH basis (epic #321) on the FUSION operating layer: the grounded Year-1 net income
+    # includes the one-time startup hit (operating −$53,714 with the 990 constants − $238,500
+    # startup = −$292,214), sourced from the cash-based "Net income" surface — so the packet
+    # sentence reads the board's cash reality.
     vm = _vm5()
     text = _performance_sentence(build_packet(vm))
-    assert "$426,938" in text and "($282,933)" in text
+    assert "$426,938" in text and "($292,214)" in text  # FUSION cash Y1 net
     for f in extract_figures(text):
         assert _norm(f) in grounded_figures(vm), f
 
@@ -453,8 +454,8 @@ def test_growth_sentence_uses_final_year_net_income():
     vm = _vm5()
     text = _growth_sentence(build_packet(vm))
     assert "Year 5" in text
-    assert "$46,173" in text          # the Year-5 net income (bottom-line last cell)
-    assert "18.9%" in text            # the Revenue CAGR
+    assert "$35,612" in text          # the Year-5 net income (bottom-line last cell)
+    assert "18.9%" in text            # the Revenue CAGR (revenue-only -> unchanged)
 
 
 def test_growth_sentence_qualitative_fallback_without_out_years():
@@ -469,7 +470,7 @@ def test_interpretation_para_payback_not_reached_branch():
     # VM5's payback is N/A (loss case) -> the "not reached" wording, capital only.
     vm = _vm5()
     text = _interpretation_para(build_packet(vm))
-    assert "$321,940" in text
+    assert "$347,854" in text
     assert "not reached" in text.lower()
     for f in extract_figures(text):
         assert _norm(f) in grounded_figures(vm), f
@@ -550,7 +551,7 @@ def test_ai_off_renders_the_fallback_not_a_stored_narrative():
 
 
 def test_ai_disclosure_strictly_tracks_narrative_presence():
-    on = _all_text(render_packet_docx(build_packet(_vm5(), narrative_md="Hi $321,940.")))
+    on = _all_text(render_packet_docx(build_packet(_vm5(), narrative_md="Hi $347,854.")))
     off = _all_text(render_packet_docx(build_packet(_vm5(), narrative_md=None)))
     assert AI_NARRATIVE_DISCLOSURE in on
     assert AI_NARRATIVE_DISCLOSURE not in off
@@ -584,6 +585,6 @@ def test_ai_on_path_is_fully_grounded_too():
     # When a grounded stored narrative is used, the WHOLE document (narrative +
     # deterministic sentences + tables) still validates against computed_json.
     vm = _vm5()
-    body = "House of Hope needs $321,940 in capital and earns $426,938 in revenue."
+    body = "House of Hope needs $347,854 in capital and earns $426,938 in revenue."
     text = _all_text(render_packet_docx(build_packet(vm, narrative_md=body)))
     validate_grounding(text, vm)

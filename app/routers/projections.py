@@ -22,11 +22,12 @@ import re
 import secrets
 import tempfile
 from datetime import datetime, timezone
-from typing import Any, Optional
+from decimal import Decimal, InvalidOperation
+from typing import Any, Optional, get_args, get_origin
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.background import BackgroundTask
 
 from app import config, narrative_provider, ratelimit
@@ -36,10 +37,9 @@ from app.deps import (
     hash_token,
     parse_if_match,
     resolve_bearer_identity,
-    token_matches,
 )
 from app.geo.client import GeoUpstreamError, static_map_bytes
-from app.jsonutil import loads_obj
+from app.jsonutil import dumps_finite, loads_obj
 from app.narrative import (
     GroundingError,
     canonical_grounded_figures,
@@ -50,6 +50,11 @@ from app.narrative import (
     validate_grounding,
 )
 from app.packet import build_packet, render_packet_docx, render_packet_md
+from app.routers.common import bearer as _bearer
+from app.routers.common import client_ip as _client_ip
+from app.routers.common import is_editor as _is_editor
+from app.routers.common import is_owner as _is_owner
+from app.routers.common import utcnow as _utcnow
 from app.store import Store, get_store
 from engine import dag
 from engine.compute import (
@@ -62,6 +67,7 @@ from engine.compute import (
 )
 from engine.model import (
     DEFAULT_OPENING_MONTH_NUMBER,
+    FIXED_ANNUAL,
     MODEL_VERSION,
     default_cost_schedule,
 )
@@ -109,8 +115,43 @@ _PATCH_WINDOW_SECONDS = 300
 _EXPORT_IP_LIMIT = 30  # xlsx + packet, per IP
 _EXPORT_TOKEN_LIMIT = 60  # xlsx + packet, per token when a bearer is presented
 _EXPORT_WINDOW_SECONDS = 3600
+# duplicate mirrors create's cost profile (mints tokens + runs the engine + a durable
+# write + one revision), so it reuses create's per-IP budget; it is authenticated
+# (owner-only), so a per-token cap is also meaningful (a compromised owner token
+# cannot fork-flood past 20/hr either).
+_DUPLICATE_IP_LIMIT = _CREATE_IP_LIMIT
+_DUPLICATE_TOKEN_LIMIT = _CREATE_IP_LIMIT
+_DUPLICATE_WINDOW_SECONDS = _CREATE_WINDOW_SECONDS
 _STATICMAP_IP_LIMIT = 120  # cached per (lat,lng,kind); per IP only (view-capability)
 _STATICMAP_WINDOW_SECONDS = 3600
+# Narrative writes (SECURITY.md §10.1). ``narrative:regenerate`` calls a PAID LLM, so
+# it carries the tightest cap on THREE axes: per IP + per token (hourly) AND a
+# per-projection DAILY ceiling, so a single compromised owner/edit token cannot burn a
+# day of provider spend re-drafting one board packet. PUT narrative is a local
+# sanitize + numeric-grounding write (no provider call), so a coarse per-token/hr cap
+# is enough. All are emitted BEFORE the provider/compute (the cheapest rejection).
+_REGEN_IP_LIMIT = 10
+_REGEN_TOKEN_LIMIT = 20
+_REGEN_WINDOW_SECONDS = 3600
+_REGEN_PROJECTION_DAILY_LIMIT = 50
+_REGEN_DAY_SECONDS = 86400
+_NARRATIVE_PUT_IP_LIMIT = 120
+_NARRATIVE_PUT_TOKEN_LIMIT = 120
+_NARRATIVE_PUT_WINDOW_SECONDS = 3600
+# Mutation-Safety-Quad leg (d): a COARSE per-IP+token abuse cap on every mutating
+# endpoint (SECURITY.md §10.1; CLAUDE.md "Mutation Safety Quad"). PATCH is the hot
+# autosave path — a 350 ms client debounce means worst-case ~170 legit saves/hr, so
+# 240/hr is generous headroom yet still bounds a runaway/compromised writer and the
+# revision-row growth each save appends. The owner-only lifecycle mutations (rotate /
+# revisions-restore / trash / restore / delete) are rare + heavier, so they carry a
+# tighter 60/hr. Compute itself stays cheap + AI-free; this is the abuse brake, not a
+# per-keystroke throttle. Emitted BEFORE the merge/recompute/write (cheapest rejection).
+_PATCH_IP_LIMIT = 240
+_PATCH_TOKEN_LIMIT = 240
+_PATCH_WINDOW_SECONDS = 3600
+_MUTATION_IP_LIMIT = 60
+_MUTATION_TOKEN_LIMIT = 60
+_MUTATION_WINDOW_SECONDS = 3600
 # Owner lifecycle ops (trash / restore / purge): owner-authenticated and infrequent,
 # but each is a destructive state change, so they carry the Mutation Safety Quad's
 # (d) per-IP + per-token cap (each route has its OWN bucket). SECURITY.md §10.
@@ -119,19 +160,6 @@ _LIFECYCLE_TOKEN_LIMIT = 120
 _LIFECYCLE_WINDOW_SECONDS = 3600
 
 router = APIRouter(prefix="/api/projections", tags=["projections"])
-
-
-def _client_ip(request: Request) -> str:
-    """Right-most untrusted hop from X-Forwarded-For, else the socket peer.
-
-    Railway terminates TLS at a single proxy that appends the real client IP as the
-    LAST X-Forwarded-For entry, so the right-most hop is the only one a client cannot
-    spoof (anything it sends arrives to the left of the proxy's append). SECURITY §10.
-    """
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _rate_limit_bypassed() -> bool:
@@ -174,31 +202,103 @@ def _rate_limited(
     )
 
 
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def _mutation_rate_limited(
+    endpoint: str, request: Request, authorization: Optional[str],
+) -> Optional[JSONResponse]:
+    """Quad leg (d) for the owner-only lifecycle mutations (rotate-tokens /
+    revisions-restore / trash / restore / delete): a coarse 60/hr per-IP + per-token
+    abuse cap, keyed on the hashed bearer. Called right after the ``_require_owner``
+    check (so a non-owner still gets 403, not a leaked 429) and before any state
+    read/write — the cheapest rejection. Each endpoint gets its own named bucket."""
+    token = _bearer(authorization)
+    return _rate_limited(
+        endpoint, request,
+        ip_limit=_MUTATION_IP_LIMIT,
+        token=hash_token(token) if token else None,
+        token_limit=_MUTATION_TOKEN_LIMIT,
+        window_seconds=_MUTATION_WINDOW_SECONDS,
+    )
+
+
+def _regen_daily_limited(projection_id: str) -> Optional[JSONResponse]:
+    """Per-projection DAILY ceiling on the PAID ``narrative:regenerate`` (SECURITY §10.1):
+    a single owner/edit token cannot burn a day of provider spend re-drafting ONE board
+    packet. Keyed on the projection id in a 24h window; the ip/token scopes are left off
+    (this cap is deliberately per-projection, orthogonal to the hourly caps). Returns a
+    429 JSONResponse over the cap, else None — emitted BEFORE the provider call."""
+    if _rate_limit_bypassed():
+        return None
+    allowed, retry_after = ratelimit.check(
+        "regenerate_narrative_daily",
+        ip_limit=0,  # ip is None -> the ip scope is skipped; only the projection window counts
+        extra_scopes=(("projection", projection_id, _REGEN_PROJECTION_DAILY_LIMIT),),
+        window_seconds=_REGEN_DAY_SECONDS,
+    )
+    if allowed:
+        return None
+    return JSONResponse(
+        status_code=429,
+        content={"error": "rate_limited", "retry_after_seconds": retry_after,
+                 "scope": "projection"},
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def _raise_version_conflict(store: Store, row: dict, if_match: int) -> None:
+    """The one shared optimistic-concurrency 409 (identical shape on PATCH, the token
+    rotation, and the narrative writes): the current server state + the client's stale
+    version + the recovery menu, so a concurrent editor can reload / overwrite /
+    save-as-copy. Always raises (never returns)."""
+    current = store.get_projection_by_slug(row["view_slug"])
+    cur_vm = loads_obj(current["computed_json"]) if current else {}
+    raise HTTPException(status_code=409, detail={
+        "error": "version_conflict",
+        "current_version": current["version"] if current else None,
+        "your_version": if_match,
+        "current_state": {**cur_vm, "view_slug": row["view_slug"],
+                          "version": current["version"] if current else None},
+        "recovery": "reload | overwrite | save_as_copy",
+    })
+
+
+def _narrative_version_bump(
+    store: Store, row: dict, token: str, if_match: int, change_summary: str,
+) -> int:
+    """Advance the projection version + snapshot a revision for a narrative write.
+
+    Closes the audit gap where narrative saves PARSED ``If-Match`` but ignored it: the
+    version-checked ``UPDATE … WHERE version=?`` + its revision commit land in ONE
+    transaction (mirrors the PATCH write path); 0 rows -> **409 version_conflict**, so a
+    concurrent editor that already advanced the version can NEVER silently clobber the
+    board-packet prose. Returns the new version. The caller upserts the narrative row
+    ONLY after this bump succeeds, so a stale writer is rejected before the upsert."""
+    new_version = if_match + 1
+    revision = {
+        "id": _new_id(),
+        "projection_id": row["id"],
+        "seq": new_version,
+        "inputs_json": row.get("inputs_json") or "{}",
+        "assumptions_json": row.get("assumptions_json") or "{}",
+        "overrides_json": row.get("overrides_json") or "{}",
+        "monthly_json": "{}",
+        "computed_json": row.get("computed_json") or "{}",
+        "model_version": row.get("model_version") or "",
+        "actor_token_hash": hash_token(token),
+        "change_summary": change_summary,
+        "created_at": _utcnow(),
+    }
+    # Empty patch: bump version + updated_at only (the prose lives in the narratives
+    # table, written by the caller); the revision is the audit/restore snapshot.
+    affected = store.update_with_version_check_and_revision(
+        row["id"], if_match, {}, revision)
+    if affected == 0:
+        _raise_version_conflict(store, row, if_match)
+    return new_version
 
 
 def _new_id() -> str:
     # App-generated, sortable-ish string PK (no DB autoincrement; Postgres-portable).
     return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + secrets.token_hex(8)
-
-
-def _bearer(authorization: Optional[str]) -> Optional[str]:
-    if authorization and authorization.startswith("Bearer "):
-        return authorization[7:].strip() or None
-    return None
-
-
-def _is_owner(token: Optional[str], row: dict) -> bool:
-    return token is not None and token_matches(token, row["owner_token_hash"])
-
-
-def _is_editor(token: Optional[str], row: dict) -> bool:
-    return (
-        token is not None
-        and bool(row.get("edit_token_hash"))
-        and token_matches(token, row["edit_token_hash"])
-    )
 
 
 def _clerk_owns(row: dict, ident: ClerkOwner) -> bool:
@@ -212,6 +312,35 @@ def _clerk_owns(row: dict, ident: ClerkOwner) -> bool:
     if oid and ident.org_id and oid == ident.org_id:
         return True
     return False
+
+
+def _resolve_owner_columns(
+    authorization: Optional[str],
+) -> tuple[str, Optional[str], dict[str, Any]]:
+    """Resolve (owner_token_hash, minted_owner_or_None, clerk_columns) for a NEW row.
+
+    Cookie-blind (Authorization header only). A verified Clerk owner stamps the
+    identity + mints a capability owner token (the schema requires owner_token_hash;
+    it is the recovery/claim seam); a capability bearer JOINS that token's workspace
+    (no new mint — the copy/second-create lands beside its siblings); anonymous mints
+    a fresh ~256-bit owner. Shared by create AND duplicate so the two mint paths can
+    never drift. ``minted_owner`` is the one-time plaintext to return (None when a
+    capability bearer joined an existing workspace)."""
+    identity = resolve_bearer_identity(authorization)
+    minted_owner = None
+    clerk_cols: dict[str, Any] = {}
+    if isinstance(identity, ClerkOwner):
+        presented_owner = secrets.token_urlsafe(32)
+        minted_owner = presented_owner
+        clerk_cols["owner_clerk_user_id"] = identity.clerk_user_id
+        if identity.org_id:
+            clerk_cols["owner_org_id"] = identity.org_id
+    elif isinstance(identity, CapabilityBearer):
+        presented_owner = identity.token  # join that token's workspace (unchanged)
+    else:  # Anonymous
+        presented_owner = secrets.token_urlsafe(32)  # ~256-bit
+        minted_owner = presented_owner
+    return hash_token(presented_owner), minted_owner, clerk_cols
 
 
 def _require_owner(store: Store, view_slug: str, authorization: Optional[str]) -> dict:
@@ -251,8 +380,61 @@ class CostScheduleItemIn(BaseModel):
     month: int = Field(ge=1)
     amount: float = Field(ge=0)
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
+
+
+# ---- numeric -> string coercion for the deployed wire contract (fix 1.3g) --------
+# The deployed SettingsTab (buildBody) and every deployed-era stored row send the
+# legacy decimal-string knobs (labor_pct, marketing/supplies/card/payroll_tax/salvage
+# pcts, the rent escalator, the donor shares, donation_value, basket) as JSON NUMBERS
+# (``humanValue / scale`` -> a float). Pydantic 2.13 does NOT coerce number ->
+# ``Optional[str]``, so the merge re-validation (``_revalidate_assumptions`` /
+# ``_revalidate_inputs``) 422'd every legacy autosave and made stored-float rows
+# permanently un-PATCHable (even a rename revalidates the stored dict). The two models
+# below carry a ``mode="before"`` validator that coerces int/float -> str for their
+# str-typed fields BEFORE field validation, so the bounds/allowlist checks still run on
+# the coerced value. It is scoped to str-typed fields ONLY: the genuinely-int knobs
+# (reserve_buffer, donations_per_hh) are left alone (an int stays an int; pydantic's own
+# lax str->int handles an int-like string). ``bool`` is EXCLUDED (it is an ``int``
+# subclass) so ``true`` never sneaks through as a number -> a bool still 422s.
+_STR_FIELD_CACHE: dict[type[BaseModel], frozenset[str]] = {}
+
+
+def _str_typed_fields(model_cls: type[BaseModel]) -> frozenset[str]:
+    """Field names on ``model_cls`` whose annotation admits ``str`` (``str`` or
+    ``Optional[str]``) — i.e. the decimal-string knobs a numeric wire value must
+    become. Genuinely-int / dict / list fields are excluded. Cached per class."""
+    cached = _STR_FIELD_CACHE.get(model_cls)
+    if cached is None:
+        names = set()
+        for fname, finfo in model_cls.model_fields.items():
+            ann = finfo.annotation
+            args = get_args(ann) if get_origin(ann) is not None else (ann,)
+            if str in args:
+                names.add(fname)
+        cached = frozenset(names)
+        _STR_FIELD_CACHE[model_cls] = cached
+    return cached
+
+
+def _coerce_numeric_str_fields(model_cls: type, data: Any) -> Any:
+    """Coerce ``int``/``float`` -> ``str`` for each str-typed field of ``model_cls``.
+
+    Runs as a ``mode="before"`` model validator so the coerced string flows through
+    field validation and the ``mode="after"`` bounds check. ``bool`` is excluded so it
+    still fails str validation (422). Returns ``data`` untouched when it is not a dict
+    or carries no numeric str-field values (never mutates the caller's dict)."""
+    if not isinstance(data, dict):
+        return data
+    coerced = None
+    for key in _str_typed_fields(model_cls):
+        if key in data:
+            value = data[key]
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if coerced is None:
+                    coerced = dict(data)
+                coerced[key] = str(value)
+    return coerced if coerced is not None else data
 
 
 class InputsIn(BaseModel):
@@ -282,6 +464,13 @@ class InputsIn(BaseModel):
     target_opening_date: Optional[str] = None
     opening_month_number: int = Field(default=DEFAULT_OPENING_MONTH_NUMBER, ge=1)
     cost_schedule: Optional[list[CostScheduleItemIn]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_numeric_strs(cls, data: Any) -> Any:
+        # Accept the deployed numeric wire shape (share_y*, donation_value, ...); see
+        # _coerce_numeric_str_fields (fix 1.3g).
+        return _coerce_numeric_str_fields(cls, data)
 
 
 # Inputs keys that are part of the saved projection but are NOT positional args of
@@ -315,13 +504,70 @@ class TradeAreaIn(BaseModel):
     households_source: Optional[str] = None  # "census_acs" | "user_edited" | "manual"
     moe: Optional[int] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 # Only these trade-area keys are engine inputs; provenance keys are filtered out
 # before constructing engine.compute.TradeArea (which accepts only these).
 _ENGINE_TRADE_KEYS = ("basis", "households", "acs_vintage")
+
+
+# Percent knobs (+ the rent escalator) are fractions validated to [0, 1]. labor_pct's
+# upper bound of 1 is intentional: the advisory band flag (engine build_flags) warns on
+# the high end; the hard cap only rejects a nonsensical > 100% share (task 1.1 review).
+_PCT_FIELDS = (
+    "labor_pct", "marketing_pct", "supplies_pct", "card_pct",
+    "payroll_tax_pct", "salvage_pct", "escalator",
+)
+
+
+def _require_fraction(name: str, raw: Optional[str], *, lo: str, hi: str) -> None:
+    """Validate an optional decimal-string knob is within [lo, hi] (inclusive).
+
+    None (the "use the engine default" sentinel) is always allowed. A non-numeric
+    string or an out-of-range value raises ValueError so Pydantic maps it to a 422
+    at the API boundary — the bad value never reaches the engine (never a 500).
+    """
+    if raw is None:
+        return
+    try:
+        val = Decimal(str(raw))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    # Decimal("nan") PARSES but every comparison below raises InvalidOperation (NaN is
+    # unordered) — reject it as a bad value (422) instead of letting it 500. ±Infinity
+    # parses AND compares cleanly, so a bare `is_nan()` guard lets it slip through here;
+    # `is_finite()` is False for qNaN/sNaN/±Infinity, closing the whole non-finite class
+    # in one predicate (review F1).
+    if not val.is_finite():
+        raise ValueError(f"{name} must be a number")
+    if val < Decimal(lo) or val > Decimal(hi):
+        raise ValueError(f"{name} must be between {lo} and {hi}")
+
+
+def _require_min(name: str, raw: Optional[str], *, lo: str) -> None:
+    """Validate an optional decimal-string knob is >= lo (no upper bound).
+
+    Same None-sentinel / 422-on-bad-value contract as ``_require_fraction``, for
+    knobs with a lower bound only (basket $, utilities $/sqft) rather than a [0,1]
+    fraction (review 1.3f, f3).
+    """
+    if raw is None:
+        return
+    try:
+        val = Decimal(str(raw))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    # NaN parses but comparisons raise InvalidOperation (see _require_fraction) — a
+    # NaN would also slip PAST a `< lo` lower-bound-only check, so reject it explicitly.
+    # ALSO reject ±Infinity: this helper has no upper bound, so `Decimal("inf") >= lo`
+    # is TRUE and sails straight through a `val < lo` check — the proven bricking bug
+    # (basket:"inf" -> 500 on this and every future read/restore, review F1).
+    # `is_finite()` covers qNaN/sNaN/±Infinity in one predicate.
+    if not val.is_finite():
+        raise ValueError(f"{name} must be a number")
+    if val < Decimal(lo):
+        raise ValueError(f"{name} must be >= {lo}")
 
 
 class AssumptionsIn(BaseModel):
@@ -342,7 +588,54 @@ class AssumptionsIn(BaseModel):
     # make the donation chain (retail = donations × value; customers = retail / basket)
     # fully editable. Optional + None-default so existing callers keep the model
     # default. Typed int so a PATCH value flows straight into the engine constant.
-    donations_per_hh: Optional[int] = None
+    # ge=0: a negative donations/household count is nonsensical (review 1.3f, f3).
+    donations_per_hh: Optional[int] = Field(default=None, ge=0)
+    # Cash reserve buffer (whole $, >= 0) added on top of the peak monthly shortfall
+    # to size startup capital (decision.py). Optional -> frozen-dataclass default $25k.
+    reserve_buffer: Optional[int] = Field(default=None, ge=0)
+    # ± stress fraction for the §12.2 sensitivity scenarios. Bounded to [0, 0.9]: a
+    # delta > 1 would make the downside donation multiplier (1 - delta) NEGATIVE
+    # (reviewer-mandated bound, task 1.1). Optional string -> engine default 0.25.
+    sensitivity_delta: Optional[str] = None
+    # Fixed annual operating $ lines (label -> $/yr). Keys are ALLOWLISTED to the
+    # engine's FIXED_ANNUAL labels (an unknown line is rejected, never silently added)
+    # and every value must be >= 0. A PARTIAL dict ACCUMULATES: incoming keys merge
+    # over the STORED fixed_annual map in ``_merge_patch``/``_merge_assumptions_patch``
+    # (so a line set by an EARLIER PATCH survives a LATER PATCH that only touches a
+    # different line), and the resolved map then merges over the engine's FIXED_ANNUAL
+    # defaults in ``_build_engine_args_from_dicts`` (so lines never touched at all
+    # keep their default). Optional -> the full engine default map.
+    fixed_annual: Optional[dict[str, float]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_numeric_strs(cls, data: Any) -> Any:
+        # Accept the deployed numeric wire shape (labor_pct, the cost %s, escalator,
+        # basket, ...) BEFORE the bounds check below runs; see
+        # _coerce_numeric_str_fields (fix 1.3g). reserve_buffer / donations_per_hh are
+        # int-typed and left untouched.
+        return _coerce_numeric_str_fields(cls, data)
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> AssumptionsIn:
+        for field_name in _PCT_FIELDS:
+            _require_fraction(field_name, getattr(self, field_name), lo="0", hi="1")
+        # sensitivity_delta in [0, 0.9] (a value > 1 -> negative donation multiplier).
+        _require_fraction("sensitivity_delta", self.sensitivity_delta, lo="0", hi="0.9")
+        # basket $ and utilities $/sqft have a lower bound only (review 1.3f, f3): a
+        # negative basket value or negative utilities rate is nonsensical but has no
+        # natural upper bound the way the [0,1] percent knobs do.
+        _require_min("basket", self.basket, lo="0")
+        _require_min("utilities_per_sqft", self.utilities_per_sqft, lo="0")
+        if self.fixed_annual is not None:
+            for label, value in self.fixed_annual.items():
+                if label not in FIXED_ANNUAL:
+                    raise ValueError(
+                        f"fixed_annual: unknown line {label!r} "
+                        f"(allowed: {sorted(FIXED_ANNUAL)})")
+                if value < 0:
+                    raise ValueError(f"fixed_annual[{label!r}] must be >= 0")
+        return self
 
 
 class LocationIn(BaseModel):
@@ -354,8 +647,7 @@ class LocationIn(BaseModel):
     lng: Optional[float] = None
     formatted_address: Optional[str] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class CreateProjectionIn(BaseModel):
@@ -451,7 +743,7 @@ def _schedule_columns(inputs_d: dict) -> dict:
         )
     opening = inputs_d.get("opening_month_number")
     return {
-        "cost_schedule_json": json.dumps(schedule),
+        "cost_schedule_json": dumps_finite(schedule),
         "target_opening_date": inputs_d.get("target_opening_date"),
         "opening_month_number": int(opening) if opening is not None
         else DEFAULT_OPENING_MONTH_NUMBER,
@@ -475,6 +767,12 @@ def _build_engine_args_from_dicts(
     engine_inputs_d.setdefault("share_y5", "0.12")
     inputs = Inputs(**engine_inputs_d)
     akw = {k: v for k, v in (assumptions_d or {}).items() if v is not None}
+    # A PARTIAL fixed_annual (e.g. {"Pest control": 600}) MERGES over the model
+    # defaults so the other fixed lines survive — the frozen Assumptions dataclass
+    # would otherwise REPLACE the whole map, silently dropping the untouched lines.
+    # AssumptionsIn allowlists the keys, so an off-list label can never reach here.
+    if "fixed_annual" in akw:
+        akw["fixed_annual"] = {**dict(FIXED_ANNUAL), **akw["fixed_annual"]}
     assumptions = Assumptions(**akw)
     demand = DemandDrivers(**(demand_d or {}))
     trade = TradeArea(**{
@@ -636,13 +934,78 @@ def _apply_override_ops(stored: dict, ops, calc):
     return result
 
 
+def _revalidate_assumptions(assumptions_d: dict) -> None:
+    """Re-validate the MERGED assumptions dict through AssumptionsIn (bounds/allowlist).
+
+    A raw-dict PATCH merges via ``dict.update``, which is blind to bounds — so a
+    ``PATCH {"assumptions": {"labor_pct": "5.0"}}`` would otherwise inject an
+    out-of-range knob straight into the engine. This runs the same model that guards
+    create, rejecting a bad value with 422 BEFORE the engine (never a 500).
+
+    Engine-only keys that are NOT AssumptionsIn fields (e.g. ``startup``, a valid
+    engine ``Assumptions`` dataclass field) are FILTERED out of the check — never
+    rejected — and still flow to the engine via ``_build_engine_args_from_dicts``.
+    """
+    try:
+        AssumptionsIn(**{k: v for k, v in assumptions_d.items()
+                         if k in AssumptionsIn.model_fields})
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_assumptions", "message": str(exc)}) from exc
+
+
+def _revalidate_inputs(inputs_d: dict) -> None:
+    """Re-validate the MERGED inputs dict through InputsIn (type + bounds).
+
+    ``cost_schedule`` is intentionally EXCLUDED: it is separately validated by
+    ``_validate_schedule_inputs`` (which TOLERATES the ``provenance`` metadata Penny
+    stamps on AI-created rows), whereas InputsIn's strict ``CostScheduleItemIn``
+    (``extra="forbid"``) would reject that provenance and 422 a legitimate save.
+    Non-InputsIn keys are filtered out (never rejected).
+    """
+    try:
+        InputsIn(**{k: v for k, v in inputs_d.items()
+                    if k in InputsIn.model_fields and k != "cost_schedule"})
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_inputs", "message": str(exc)}) from exc
+
+
+def _merge_assumptions_patch(assumptions_d: dict, patch: dict) -> None:
+    """Merge an assumptions PATCH partial onto the stored dict, IN PLACE.
+
+    Every key is a flat replace EXCEPT ``fixed_annual``, which ACCUMULATES: a
+    partial incoming map (e.g. ``{"Pest control": 600}``) is deep-merged with
+    incoming keys layered OVER the STORED map, not a flat ``dict.update`` that
+    replaces the whole stored map wholesale. Without this, PATCH#1 setting
+    ``{"Pest control": 600}`` followed by PATCH#2 setting
+    ``{"Insurance liability": 3000}`` silently reverted Pest control back to its
+    engine default -- PATCH#2's dict.update discarded PATCH#1's stored line
+    (review 1.3f, f2). ``_build_engine_args_from_dicts`` separately merges the
+    RESOLVED fixed_annual over the engine's FIXED_ANNUAL defaults for the lines
+    never edited at all; this merge is what makes edits ACROSS PATCHes survive.
+    """
+    if "fixed_annual" in patch and isinstance(patch["fixed_annual"], dict):
+        patch = dict(patch)
+        merged_fixed = dict(assumptions_d.get("fixed_annual") or {})
+        merged_fixed.update(patch["fixed_annual"])
+        patch["fixed_annual"] = merged_fixed
+    assumptions_d.update(patch)
+
+
 def _merge_patch(row: dict, body: PatchProjectionIn):
     """Merge an editable-surface partial onto the stored source-of-truth.
 
     Returns (inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name). This
     is the SHARED merge used by both PATCH (persisting) and /preview (read-only)
     so the two paths can never drift. Raises dag.PinRejected on a non-pinnable
-    node (the caller maps it to 422).
+    node (the caller maps it to 422); raises HTTPException(422) when the merged
+    assumptions/inputs surface fails AssumptionsIn/InputsIn re-validation.
+
+    NOTE: every top-level key here is a flat replace onto the stored dict EXCEPT
+    ``assumptions.fixed_annual``, which ACCUMULATES across PATCHes (see
+    ``_merge_assumptions_patch``) -- a partial map merges onto the stored map
+    rather than replacing it wholesale.
     """
     inputs_d = json.loads(row["inputs_json"] or "{}")
     assumptions_d = json.loads(row["assumptions_json"] or "{}")
@@ -652,7 +1015,7 @@ def _merge_patch(row: dict, body: PatchProjectionIn):
     if body.inputs:
         inputs_d.update(body.inputs)
     if body.assumptions:
-        assumptions_d.update(body.assumptions)
+        _merge_assumptions_patch(assumptions_d, body.assumptions)
     if body.demand:
         demand_d.update(body.demand)
     if body.trade_area:
@@ -660,6 +1023,10 @@ def _merge_patch(row: dict, body: PatchProjectionIn):
     if body.overrides is not None:
         calc = _calculated_unpinned(inputs_d, assumptions_d, demand_d, trade_d)
         overrides_d = _apply_override_ops(overrides_d, body.overrides, calc)
+    # Re-validate the merged editable surface with the same bounds that guard create,
+    # so a raw-dict PATCH can no longer inject an out-of-range value (422, not a crash).
+    _revalidate_assumptions(assumptions_d)
+    _revalidate_inputs(inputs_d)
     name = body.name if body.name is not None else row["name"]
     return inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name
 
@@ -726,24 +1093,9 @@ def create_projection(
 
     # Resolve the caller COOKIE-BLIND: a verified Clerk owner (when CLERK_ENABLED),
     # an opaque capability owner token, or anonymous. With Clerk off this is
-    # byte-for-byte today's behavior (every bearer is a capability token).
-    identity = resolve_bearer_identity(authorization)
-    minted_owner = None
-    clerk_cols: dict[str, Any] = {}
-    if isinstance(identity, ClerkOwner):
-        # Clerk-owned: stamp the verified identity and still mint a capability owner
-        # token (the schema requires owner_token_hash; it is the recovery/claim seam).
-        presented_owner = secrets.token_urlsafe(32)
-        minted_owner = presented_owner
-        clerk_cols["owner_clerk_user_id"] = identity.clerk_user_id
-        if identity.org_id:
-            clerk_cols["owner_org_id"] = identity.org_id
-    elif isinstance(identity, CapabilityBearer):
-        presented_owner = identity.token  # join that token's workspace (unchanged)
-    else:  # Anonymous
-        presented_owner = secrets.token_urlsafe(32)  # ~256-bit
-        minted_owner = presented_owner
-    owner_hash = hash_token(presented_owner)
+    # byte-for-byte today's behavior (every bearer is a capability token). Shared with
+    # duplicate so the two mint paths can never drift.
+    owner_hash, minted_owner, clerk_cols = _resolve_owner_columns(authorization)
 
     view_slug = secrets.token_urlsafe(16)  # ~128-bit
     edit_token = secrets.token_urlsafe(32)
@@ -760,13 +1112,13 @@ def create_projection(
         "name": name,
         "model_version": vm.get("model_version", ""),
         "compute_schema_version": vm.get("compute_schema_version", ""),
-        "location_json": json.dumps(body.location.model_dump(exclude_none=True)),
-        "trade_area_json": json.dumps(body.trade_area.model_dump()),
-        "inputs_json": json.dumps(inputs_dump),
-        "demand_drivers_json": json.dumps(body.demand or {}),
-        "assumptions_json": json.dumps(body.assumptions.model_dump() if body.assumptions else {}),
-        "overrides_json": json.dumps(body.overrides or {}),
-        "computed_json": json.dumps(vm),
+        "location_json": dumps_finite(body.location.model_dump(exclude_none=True)),
+        "trade_area_json": dumps_finite(body.trade_area.model_dump()),
+        "inputs_json": dumps_finite(inputs_dump),
+        "demand_drivers_json": dumps_finite(body.demand or {}),
+        "assumptions_json": dumps_finite(body.assumptions.model_dump() if body.assumptions else {}),
+        "overrides_json": dumps_finite(body.overrides or {}),
+        "computed_json": dumps_finite(vm),
         # Server-checked terms gate (PRD §21): stamp acceptance now when the operator
         # actively accepted; NULL otherwise so exports correctly 403 terms_required.
         "terms_accepted_at": now if body.terms_accepted else None,
@@ -789,12 +1141,157 @@ def create_projection(
     return out
 
 
+class DuplicateIn(BaseModel):
+    """Optional edit applied to the COPY before compute (API_SPEC §4.5).
+
+    ``patch`` is the SAME partial the autosave PATCH accepts. On a 409 the client's
+    "Save as copy" sends the conflicted edit here so it lands on the fork instead of
+    being dropped (the audited P0). Omitted / null -> a verbatim copy of the source's
+    editable surface. ``extra = "forbid"`` so a stray key is a 422, never silently
+    ignored."""
+    patch: Optional[PatchProjectionIn] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+@router.post("/{view_slug}/duplicate", status_code=201)
+def duplicate_projection(
+    view_slug: str,
+    request: Request,
+    body: Optional[DuplicateIn] = None,
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
+):
+    """Server-side copy into a FRESH row — the real "Save as copy" (API_SPEC §4.5).
+
+    Owner-only (``_require_owner``): edit/view/anonymous -> 403, exactly like
+    rotate/trash/delete (capability routes have no 401 path). The copy is a NEW
+    projection — new id / view_slug / edit token, FRESH revision — and NEVER reuses
+    the source's secrets (a shared slug/edit token would leak the source). The caller
+    is the owner, so the copy JOINS the owner's workspace (mirrors create's
+    identity-join: no new owner token when a capability owner presents one).
+
+    Duplicate creates a row and never version-mutates the source, so it carries no
+    If-Match (like create). The optional ``patch`` flows through the SAME
+    ``_merge_patch`` + ``_validate_schedule_inputs`` path as PATCH — override-DAG
+    validation, AssumptionsIn/InputsIn bounds, and fixed_annual ACCUMULATION are
+    therefore identical, so save-as-copy carries the conflicted edit faithfully.
+    """
+    # §10.1: mirror create's cost-DoS brake — cap per IP (and per owner token) BEFORE
+    # the auth read + compute + durable write.
+    _dup_token = _bearer(authorization)
+    limited = _rate_limited(
+        "duplicate_projection", request,
+        ip_limit=_DUPLICATE_IP_LIMIT,
+        token=hash_token(_dup_token) if _dup_token else None,
+        token_limit=_DUPLICATE_TOKEN_LIMIT, window_seconds=_DUPLICATE_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
+    row = _require_owner(store, view_slug, authorization)
+
+    # Resolve the copy's editable surface. With a patch, run the EXACT PATCH merge/
+    # validation path against the SOURCE row (fixed_annual accumulates over the
+    # source's stored map, override ops validate through the DAG); without one, copy
+    # the stored surface verbatim.
+    patch = body.patch if body is not None else None
+    if patch is not None:
+        try:
+            inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name = (
+                _merge_patch(row, patch))
+        except dag.PinRejected as exc:
+            node = exc.node if hasattr(exc, "node") else None
+            raise HTTPException(status_code=422, detail={
+                "error": "node_not_pinnable", "node": node,
+                "message": str(exc)}) from exc
+        _validate_schedule_inputs(inputs_d)
+    else:
+        inputs_d = json.loads(row["inputs_json"] or "{}")
+        assumptions_d = json.loads(row["assumptions_json"] or "{}")
+        demand_d = json.loads(row["demand_drivers_json"] or "{}")
+        trade_d = json.loads(row["trade_area_json"] or "{}")
+        overrides_d = json.loads(row["overrides_json"] or "{}")
+        name = row["name"]
+
+    try:
+        vm = _compute_view_model_from_dicts(
+            inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
+        raise HTTPException(
+            status_code=422, detail={"error": "invalid_inputs", "message": str(exc)}
+        ) from exc
+    location_d = loads_obj(row.get("location_json"))
+    _enrich_view_model(vm, location_d, trade_d)
+
+    owner_hash, minted_owner, clerk_cols = _resolve_owner_columns(authorization)
+    view_slug_new = secrets.token_urlsafe(16)  # ~128-bit — FRESH, never the source's
+    edit_token = secrets.token_urlsafe(32)      # FRESH edit capability
+    pid = _new_id()
+    now = _utcnow()
+    copy_name = f"{name} (copy)"
+
+    copy_row = {
+        "id": pid,
+        "view_slug": view_slug_new,
+        "owner_token_hash": owner_hash,
+        "edit_token_hash": hash_token(edit_token),
+        "name": copy_name,
+        "model_version": vm.get("model_version", ""),
+        "compute_schema_version": vm.get("compute_schema_version", ""),
+        # Copy the source's resolved location verbatim (byte-faithful column copy).
+        "location_json": row.get("location_json") or dumps_finite({}),
+        "trade_area_json": dumps_finite(trade_d),
+        "inputs_json": dumps_finite(inputs_d),
+        "demand_drivers_json": dumps_finite(demand_d),
+        "assumptions_json": dumps_finite(assumptions_d),
+        "overrides_json": dumps_finite(overrides_d),
+        "computed_json": dumps_finite(vm),
+        # The owner already accepted the planning-estimates caveat for this data; the
+        # copy inherits it so exports are reachable without a surprising re-accept.
+        "terms_accepted_at": row.get("terms_accepted_at"),
+        "created_at": now,
+        "updated_at": now,
+        **clerk_cols,
+        **_schedule_columns(inputs_d),
+    }
+    store.create_projection(copy_row)
+
+    # One fresh revision snapshot for the copy (seq 1) so its history starts at the
+    # duplicate, not an empty log (parity with every other mutation's audit trail).
+    store.insert_revision({
+        "id": _new_id(),
+        "projection_id": pid,
+        "seq": 1,
+        "inputs_json": copy_row["inputs_json"],
+        "assumptions_json": copy_row["assumptions_json"],
+        "overrides_json": copy_row["overrides_json"],
+        "monthly_json": "{}",
+        "computed_json": copy_row["computed_json"],
+        "model_version": copy_row["model_version"],
+        "actor_token_hash": hash_token(_dup_token) if _dup_token else None,
+        "actor": "user",
+        "change_summary": "duplicated",
+        "created_at": now,
+    })
+
+    out = {
+        **vm,
+        "view_slug": view_slug_new,
+        "version": 1,
+        "name": copy_name,
+        "edit_token": edit_token,  # one-time
+    }
+    if minted_owner is not None:
+        out["owner_token"] = minted_owner  # one-time (Clerk/anon owner only)
+    return out
+
+
 class ClaimIn(BaseModel):
     """The capability owner token to link onto the signed-in Clerk identity."""
     owner_token: str = Field(min_length=1)
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 @router.post("/claim")
@@ -1240,6 +1737,8 @@ class NarrativeIn(BaseModel):
 def put_narrative(
     view_slug: str,
     body: NarrativeIn,
+    request: Request,
+    response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
@@ -1247,7 +1746,11 @@ def put_narrative(
     """Save user-edited prose. body_md is allowlist-sanitized BEFORE storage.
 
     Sanitization is the stored-XSS -> localStorage-token-theft defense
-    (SECURITY.md §5). Owner/edit only; view-only is 403.
+    (SECURITY.md §5). Owner/edit only; view-only is 403. Optimistic concurrency:
+    ``If-Match`` is compared to the live version and a stale value is a 409
+    (shape identical to PATCH's); a successful save BUMPS the version and snapshots
+    a revision, so a second editor conflicts instead of silently clobbering the
+    board-packet prose. Coarse per-token/hr rate-limited (a local write, no provider).
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
@@ -1255,6 +1758,22 @@ def put_narrative(
     token = _bearer(authorization)
     if not (_is_owner(token, row) or _is_editor(token, row)):
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
+    assert token is not None  # the 403 guard rejects a None token (never owner/editor)
+
+    # §10.1: coarse per-token/hr cap (the hashed token is the bucket key, never plaintext).
+    limited = _rate_limited(
+        "put_narrative", request,
+        ip_limit=_NARRATIVE_PUT_IP_LIMIT,
+        token=hash_token(token), token_limit=_NARRATIVE_PUT_TOKEN_LIMIT,
+        window_seconds=_NARRATIVE_PUT_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
+    # Optimistic concurrency: a stale If-Match is rejected up front (before sanitize/
+    # grounding) so a second editor never clobbers the first's prose (audit P0).
+    if if_match != row["version"]:
+        _raise_version_conflict(store, row, if_match)
 
     clean = sanitize_body_md(body.body_md)
     live_vm = loads_obj(row.get("computed_json"))
@@ -1268,22 +1787,30 @@ def put_narrative(
             "error": "grounding_failed",
             "ungrounded_figures": exc.ungrounded,
         }) from exc
+    # Version-checked bump + revision (0 rows -> 409); the bump gates the write, so a
+    # racing editor at the same version is rejected here even if it slipped the check
+    # above. Persist the prose ONLY after the bump succeeds.
+    new_version = _narrative_version_bump(
+        store, row, token, if_match, "narrative_edit")
     store.upsert_narrative(row["id"], {
         "body_md": clean,
         "edited": 1,
         "edit_origin": "human",
         "computed_hash": compute_hash(live_vm),
-        "snapshot_json": json.dumps(live_vm),
+        "snapshot_json": dumps_finite(live_vm),
         "provider": None,
         "model_version": live_vm.get("model_version"),
     })
+    response.headers["ETag"] = str(new_version)
     return {"body_md": clean, "edited": True, "edit_origin": "human",
-            "computed_hash": compute_hash(live_vm)}
+            "computed_hash": compute_hash(live_vm), "version": new_version}
 
 
 @router.post("/{view_slug}/narrative:regenerate")
 def regenerate_narrative(
     view_slug: str,
+    request: Request,
+    response: Response,
     confirm: bool = False,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
@@ -1299,6 +1826,11 @@ def regenerate_narrative(
     narrative is NOT overwritten. A user-edited narrative is NEVER silently
     discarded: regenerating over ``edit_origin == 'human'`` without ``?confirm=true``
     -> 409 edited_confirm_required (confirm-before-discard gate).
+
+    Cost containment (audit P0): this is a PAID-LLM surface, so it is capped per IP +
+    per token (hourly) AND per projection (daily), and a stale ``If-Match`` is a 409,
+    ALL of them BEFORE the provider call — a rejected request never spends LLM budget.
+    A successful regenerate BUMPS the version and snapshots a revision.
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
@@ -1306,8 +1838,31 @@ def regenerate_narrative(
     token = _bearer(authorization)
     if not (_is_owner(token, row) or _is_editor(token, row)):
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
+    assert token is not None  # the 403 guard rejects a None token (never owner/editor)
+
+    # §10.1 cost containment: cap the PAID regenerate BEFORE the provider call — per IP +
+    # per token (hourly) AND a per-projection DAILY ceiling. A rejected request never
+    # spends a token of LLM budget.
+    limited = _rate_limited(
+        "regenerate_narrative", request,
+        ip_limit=_REGEN_IP_LIMIT,
+        token=hash_token(token), token_limit=_REGEN_TOKEN_LIMIT,
+        window_seconds=_REGEN_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+    limited = _regen_daily_limited(row["id"])
+    if limited is not None:
+        return limited
+
     if _ai_disabled(row):
         raise HTTPException(status_code=409, detail={"error": "ai_disabled"})
+
+    # Optimistic concurrency BEFORE the provider (audit P0): a stale If-Match is a 409
+    # with NO LLM call, so a concurrent editor's prose is never clobbered and a stale
+    # request never spends provider budget.
+    if if_match != row["version"]:
+        _raise_version_conflict(store, row, if_match)
 
     live_vm = loads_obj(row.get("computed_json"))
 
@@ -1337,17 +1892,23 @@ def regenerate_narrative(
             "error": "edited_confirm_required"})
 
     clean = sanitize_body_md(draft)
+    # Version-checked bump + revision (0 rows -> 409) BEFORE persisting the new prose,
+    # so a regenerate that raced a concurrent edit is rejected, not silently applied.
+    new_version = _narrative_version_bump(
+        store, row, token, if_match, "narrative_regenerate")
     store.upsert_narrative(row["id"], {
         "body_md": clean,
         "edited": 0,
         "edit_origin": "ai",
         "computed_hash": compute_hash(live_vm),
-        "snapshot_json": json.dumps(live_vm),
+        "snapshot_json": dumps_finite(live_vm),
         "provider": provider,
         "model_version": live_vm.get("model_version"),
     })
+    response.headers["ETag"] = str(new_version)
     return {"body_md": clean, "edited": False, "edit_origin": "ai",
-            "computed_hash": compute_hash(live_vm), "provider": provider}
+            "computed_hash": compute_hash(live_vm), "provider": provider,
+            "version": new_version}
 
 
 @router.get("/{view_slug}/packet")
@@ -1498,12 +2059,12 @@ def apply_projection_patch(
 
     patch = {
         "name": name,
-        "inputs_json": json.dumps(inputs_d),
-        "assumptions_json": json.dumps(assumptions_d),
-        "demand_drivers_json": json.dumps(demand_d),
-        "trade_area_json": json.dumps(trade_d),
-        "overrides_json": json.dumps(overrides_d),
-        "computed_json": json.dumps(vm),
+        "inputs_json": dumps_finite(inputs_d),
+        "assumptions_json": dumps_finite(assumptions_d),
+        "demand_drivers_json": dumps_finite(demand_d),
+        "trade_area_json": dumps_finite(trade_d),
+        "overrides_json": dumps_finite(overrides_d),
+        "computed_json": dumps_finite(vm),
         "model_version": vm.get("model_version", ""),
         **_schedule_columns(inputs_d),
     }
@@ -1529,16 +2090,7 @@ def apply_projection_patch(
     affected = store.update_with_version_check_and_revision(
         row["id"], if_match, patch, revision)
     if affected == 0:
-        current = store.get_projection_by_slug(row["view_slug"])
-        cur_vm = loads_obj(current["computed_json"]) if current else {}
-        raise HTTPException(status_code=409, detail={
-            "error": "version_conflict",
-            "current_version": current["version"] if current else None,
-            "your_version": if_match,
-            "current_state": {**cur_vm, "view_slug": row["view_slug"],
-                              "version": current["version"] if current else None},
-            "recovery": "reload | overwrite | save_as_copy",
-        })
+        _raise_version_conflict(store, row, if_match)
     return vm, new_version, name
 
 
@@ -1558,10 +2110,10 @@ def patch_projection(
     ``CLERK_ENABLED`` — a verified Clerk owner/grantee of the row, #323) and
     If-Match: <version>. Optimistic concurrency: a stale version writes 0 rows and
     returns HTTP 409 with the current server state. One revision snapshot per settle.
-    A per-IP + per-token cap (Mutation Safety Quad (d)) brakes the abuse path before
-    the recompute + write. The merge/recompute/persist/audit body lives in
+    A per-IP + per-token cap (Mutation Safety Quad (d), 240/hr) brakes the abuse path
+    before the recompute + write. The merge/recompute/persist/audit body lives in
     :func:`apply_projection_patch` so the Penny tool loop converges on the exact same
-    write path (actor:penny).
+    write path (actor:penny); the auth (403) + If-Match (409) legs live there.
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
@@ -1659,6 +2211,7 @@ def preview_projection(
 @router.post("/{view_slug}/rotate-tokens")
 def rotate_tokens(
     view_slug: str,
+    request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
@@ -1669,9 +2222,13 @@ def rotate_tokens(
     Owner-only. Immediately invalidates every previously-shared link (compromise
     response, SECURITY.md §3): the old owner/edit tokens and the old view_slug all
     die at once. Writes a rotation event to the audit/revision log. The new secrets
-    are returned exactly once (never re-derivable from the server).
+    are returned exactly once (never re-derivable from the server). Quad leg (d): a
+    coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1).
     """
     row = _require_owner(store, view_slug, authorization)
+    limited = _mutation_rate_limited("rotate_tokens", request, authorization)
+    if limited is not None:
+        return limited
 
     new_owner = secrets.token_urlsafe(32)   # ~256-bit
     new_edit = secrets.token_urlsafe(32)
@@ -1690,6 +2247,10 @@ def rotate_tokens(
         "owner_token_hash": hash_token(new_owner),
         "edit_token_hash": hash_token(new_edit),
         "view_slug": new_slug,
+        # Plain dumps (not dumps_finite) is intentional here, not an oversight
+        # (batch3-review finding A / Minor 4): new_role_map is built entirely from
+        # secrets.token_urlsafe() slugs -> role-name strings, no numerics, so there
+        # is no float for allow_nan=False to guard against.
         "role_tokens_json": json.dumps(new_role_map),
     }
     # The capability re-hash (same version-checked UPDATE as rotate_tokens) and its
@@ -1764,6 +2325,7 @@ def list_revisions(
 def restore_revision(
     view_slug: str,
     revision_id: str,
+    request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
@@ -1773,8 +2335,12 @@ def restore_revision(
 
     Owner-only. Appends rather than rewinds history: the snapshot's
     inputs/assumptions/overrides are recomputed and persisted at the next version.
+    Quad leg (d): a coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1).
     """
     row = _require_owner(store, view_slug, authorization)
+    limited = _mutation_rate_limited("restore_revision", request, authorization)
+    if limited is not None:
+        return limited
     rev = store.get_revision(revision_id)
     if rev is None or rev["projection_id"] != row["id"]:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -1793,10 +2359,10 @@ def restore_revision(
             "error": "invalid_inputs", "message": str(exc)}) from exc
 
     patch = {
-        "inputs_json": json.dumps(inputs_d),
-        "assumptions_json": json.dumps(assumptions_d),
-        "overrides_json": json.dumps(overrides_d),
-        "computed_json": json.dumps(vm),
+        "inputs_json": dumps_finite(inputs_d),
+        "assumptions_json": dumps_finite(assumptions_d),
+        "overrides_json": dumps_finite(overrides_d),
+        "computed_json": dumps_finite(vm),
         "model_version": vm.get("model_version", ""),
         # keep the denormalized schedule/anchor columns consistent with the
         # restored inputs_json (the canonical copy).
@@ -1879,7 +2445,8 @@ def trash_projection(
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
-    """Soft delete (API_SPEC §4.8): status -> trashed. Owner-only, If-Match required."""
+    """Soft delete (API_SPEC §4.8): status -> trashed. Owner-only, If-Match required.
+    Quad leg (d): a coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1)."""
     row = _require_owner(store, view_slug, authorization)
     limited = _lifecycle_rate_limit("trash", request, authorization)
     if limited is not None:
@@ -1896,7 +2463,8 @@ def restore_projection(
     authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
-    """Restore from trash (API_SPEC §4.8): status -> active. Owner-only."""
+    """Restore from trash (API_SPEC §4.8): status -> active. Owner-only. Quad leg (d):
+    a coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1)."""
     row = _require_owner(store, view_slug, authorization)
     limited = _lifecycle_rate_limit("restore", request, authorization)
     if limited is not None:
@@ -1917,7 +2485,7 @@ def delete_projection(
     the projection AND cascades to every child it owns (revisions, narratives,
     evidence, penny_transcripts, actuals, role links) so the confidential financials
     and Penny conversation are actually ERASED, not merely hidden (#202, DATA_MODEL
-    §5.4)."""
+    §5.4). Quad leg (d): a coarse 60/hr abuse cap after the owner check (SECURITY §10.1)."""
     row = _require_owner(store, view_slug, authorization)
     limited = _lifecycle_rate_limit("purge", request, authorization)
     if limited is not None:

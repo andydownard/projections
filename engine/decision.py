@@ -35,6 +35,36 @@ class Decision:
     payback_month: int | None = None
 
 
+def _stress_overrides(overrides, rent_mult, donation_mult):
+    """A scenario-local copy of ``overrides`` with the stress applied to the pins.
+
+    A pin asserts a *level*, not immunity to the ± sensitivity stress. Inside a
+    scenario re-run a pinned ``share#y`` value is scaled by ``donation_mult`` and a
+    pinned ``Rent#y`` value by ``rent_mult`` — exactly the same multipliers the run
+    applies to the un-pinned share inputs and the resolved occupancy — so the pinned
+    cell moves WITH the stress instead of freezing it. Every other pin passes through
+    unchanged. Pre-fix the un-scaled pin defeated the stress: e.g. a ``share#1`` pin
+    held the donation shock at its base level, so the downside net came out
+    -$74,433 instead of -$100,850 and the downside was artificially rosy.
+
+    Keys are ``"{node}#{year}"``; ``rpartition('#')`` isolates the node (expense
+    labels never contain '#'). The pin dict is shallow-copied with only ``value``
+    replaced, preserving its note/timestamp metadata.
+    """
+    if not overrides:
+        return overrides
+    stressed = {}
+    for key, pin in overrides.items():
+        node = key.rpartition("#")[0]
+        if node == "share":
+            stressed[key] = {**pin, "value": str(D(pin["value"]) * D(str(donation_mult)))}
+        elif node == "Rent":
+            stressed[key] = {**pin, "value": str(D(pin["value"]) * D(str(rent_mult)))}
+        else:
+            stressed[key] = pin
+    return stressed
+
+
 def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, donation_mult):
     """Full re-run of the core with perturbed rent & donations -> (net, breakeven, capital).
 
@@ -46,6 +76,10 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
     projection silently skipped the +25% rent shock — making the downside artificially
     rosier and flipping the go/no-go verdict on identical economics. Resolving to one
     quantity here makes the stress encoding-independent by construction (§6.2).
+
+    Pinned ``share#y`` / ``Rent#y`` cells are stressed too (``_stress_overrides``): a
+    pin sets a level, not immunity to the scenario — otherwise a pin silently defeats
+    the downside/upside on the very cell it fixes.
     """
     from engine.compute import (
         Inputs,
@@ -72,8 +106,9 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
            "lease_type": "gross",
            "nnn_opex_annual": "0"}
     )
+    stressed_overrides = _stress_overrides(overrides, rent_mult, donation_mult)
     years, startup, startup_total, occupancy = compute_annual(
-        new_inputs, assumptions, demand, trade, overrides)
+        new_inputs, assumptions, demand, trade, stressed_overrides)
     startup_by_month = startup_outflows_by_month(new_inputs, assumptions, occupancy[1])
     rows, be = build_monthly(years, assumptions, new_inputs.opening_month_number,
                              startup_by_month)
@@ -171,7 +206,15 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
                 + D(assumptions.labor_pct) * (Decimal("1") + D(assumptions.payroll_tax_pct))
                 + D(assumptions.supplies_pct))
     fixed = D(str(y1.total_exp)) - (D(str(y1.total_rev)) * var_rate)
-    break_even_revenue = (fixed / (Decimal("1") - var_rate)) if var_rate != 1 else None
+    # var_rate >= 1 (not just == 1): at or above 100% of revenue no revenue level
+    # ever recovers fixed costs, so `fixed / (1 - var_rate)` is either a division
+    # by zero or a nonsense negative "break-even" from a negative denominator —
+    # guard the whole unrecoverable range, not just the exact division-by-zero edge.
+    if var_rate >= 1:
+        break_even_revenue = None
+        flags["break_even_revenue"] = "N/A — variable-cost rate ≥ 100% of revenue"
+    else:
+        break_even_revenue = fixed / (Decimal("1") - var_rate)
 
     # simple payback (years) — N/A when Y1 net <= 0.
     if D(str(y1.net)) > 0:
@@ -190,13 +233,19 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
         cagr = None
         flags["cagr"] = "N/A"
 
-    # sensitivity: base / downside / upside, full re-runs (§6.2).
+    # sensitivity: base / downside / upside, full re-runs (§6.2). The ± stress reads
+    # assumptions.sensitivity_delta (model.SENSITIVITY_DELTA is its default and single
+    # source) — downside stresses rent ×(1+delta) / donations ×(1-delta), upside the
+    # reverse. Default delta 0.25 reproduces the prior 1.25/0.75 literals byte-for-byte.
+    delta = D(assumptions.sensitivity_delta)
+    up_mult = str(Decimal("1") + delta)      # 1.25 at the 0.25 default
+    down_mult = str(Decimal("1") - delta)    # 0.75 at the 0.25 default
     base_net, base_be, base_cap = _scenario_net(
         inputs, assumptions, demand, trade, overrides, "1.0", "1.0")
     down_net, down_be, down_cap = _scenario_net(
-        inputs, assumptions, demand, trade, overrides, "1.25", "0.75")
+        inputs, assumptions, demand, trade, overrides, up_mult, down_mult)
     up_net, up_be, up_cap = _scenario_net(
-        inputs, assumptions, demand, trade, overrides, "0.75", "1.25")
+        inputs, assumptions, demand, trade, overrides, down_mult, up_mult)
     sensitivity = {
         "base": {"net": base_net, "breakeven": base_be, "capital": base_cap},
         "downside": {"net": down_net, "breakeven": down_be, "capital": down_cap},
@@ -310,5 +359,32 @@ def build_flags(result, assumptions, demand):
     # revenue == 0 -> margin/per-unit KPIs null
     if y1.total_rev == 0:
         flags["margin"] = "N/A — no revenue"
+
+    # occupancy / labor / sales-per-sqft advisory bands (§12.2, Task 6.3). All
+    # three read the SAME resolved Year-1 values the KPI strip shows (viewmodel's
+    # occ_ratio/labor_ratio/sales_per_sqft) — override-aware (a pinned Payroll or
+    # Rent cell moves the ratio the flag checks, never the un-resolved input) and
+    # N/A-guarded on zero revenue / zero salesfloor so a degenerate case never
+    # divides by zero or fires spuriously.
+    rev1 = D(str(y1.total_rev))
+    if rev1 != 0:
+        occ_ratio = D(str(y1.expenses.get("Rent", 0))) / rev1
+        if occ_ratio > D(model.OCCUPANCY_RATIO_BAND_MAX):
+            flags["occupancy_ratio_out_of_band"] = {
+                "value": float(occ_ratio), "band": "≤ ~20%", "requires_note": True}
+
+        labor_ratio = D(str(y1.expenses.get("Payroll", 0))) / rev1
+        if (labor_ratio < D(model.LABOR_RATIO_BAND_MIN)
+                or labor_ratio > D(model.LABOR_RATIO_BAND_MAX)):
+            flags["labor_ratio_out_of_band"] = {
+                "value": float(labor_ratio), "band": "25%–60%", "requires_note": True}
+
+        salesfloor_sqft = D(result.inputs.building_sqft) * D(result.inputs.salesfloor_pct)
+        if salesfloor_sqft != 0:
+            sales_per_sqft = rev1 / salesfloor_sqft
+            if (sales_per_sqft < D(str(model.SALES_PER_SQFT_MIN))
+                    or sales_per_sqft > D(str(model.SALES_PER_SQFT_MAX))):
+                flags["sales_per_sqft_out_of_band"] = {
+                    "value": float(sales_per_sqft), "band": "$50–$300", "requires_note": True}
 
     return flags

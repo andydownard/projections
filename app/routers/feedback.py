@@ -25,13 +25,12 @@ import logging
 import os
 import secrets
 from collections.abc import Callable
-from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app import config, ratelimit
 from app.deps import resolve_clerk_identity
@@ -43,6 +42,8 @@ from app.feedback.redact import (
     normalize_type,
     redact_text,
 )
+from app.routers.common import client_ip as _client_ip
+from app.routers.common import utcnow as _utcnow
 from app.store import Store, get_store
 from engine.model import MODEL_VERSION
 
@@ -71,26 +72,14 @@ def _support_id() -> str:
     return "SUP-" + "".join(secrets.choice(_SUP_ALPHABET) for _ in range(6))
 
 
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _client_ip(request: Request) -> str:
-    """Right-most untrusted hop from X-Forwarded-For, else the socket peer."""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
-
-
 class FeedbackContext(BaseModel):
     # NO client `model_version`: it is stamped SERVER-side from the engine
     # (#201). A client-sent model_version is silently dropped (extra="ignore"),
     # so it can never bypass the redactor into a sink.
     view_slug: str = ""  # server-only; NEVER reaches GitHub (IDEA_FAB §3.5).
 
-    class Config:
-        extra = "ignore"  # any other context key is dropped silently.
+    # any other context key is dropped silently.
+    model_config = ConfigDict(extra="ignore")
 
 
 class FeedbackIn(BaseModel):

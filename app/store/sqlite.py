@@ -922,6 +922,10 @@ class SqliteStore:
                 (projection_id,),
             ).fetchone()
             if row is None:
+                # Plain json.dumps (not jsonutil.dumps_finite) is deliberate here:
+                # penny turns are chat text/roles/timestamps, never financial numerics,
+                # so non-finite floats cannot occur; the finite guard lives at the
+                # financial persist sites in app/routers/projections.py.
                 turns = apply_retention([turn])
                 tid = _new_transcript_id()
                 created_at = now

@@ -131,6 +131,30 @@ def test_other_owner_cannot_rotate_tokens(client, store):
     assert store.get_projection_by_slug(slug)["owner_token_hash"] == before
 
 
+def test_other_owner_cannot_delete(client, store):
+    # Quad leg (b) on the irreversible purge: a different (valid) owner is 403 forbidden
+    # BEFORE the trashed-precondition (409) or any purge — auth precedes state, and the
+    # victim's confidential row is never erased by a cross-owner DELETE.
+    victim = _create_fresh_workspace(client)
+    attacker = _create_fresh_workspace(client)
+    slug = victim["view_slug"]
+    r = client.delete(
+        f"/api/projections/{slug}",
+        headers={
+            "Authorization": f"Bearer {attacker['owner_token']}",
+            "If-Match": "1",
+        },
+    )
+    assert r.status_code == 403, r.text
+    assert r.json().get("detail", r.json())["error"] == "forbidden"
+    # the 403 must not leak the not_trashed/version state either
+    body = r.json().get("detail", r.json())
+    assert "current_version" not in body
+    # the victim row is untouched (still present + readable)
+    assert store.get_projection_by_slug(slug) is not None
+    assert client.get(f"/api/projections/{slug}").status_code == 200
+
+
 def test_other_owner_not_in_attacker_listing(client):
     victim = _create_fresh_workspace(client)
     attacker = _create_fresh_workspace(client)

@@ -39,10 +39,16 @@ export interface PatchResult {
 /** Thrown on a 409 stale mutation; carries the server's current state for recovery. */
 export class PatchConflictError extends Error {
   conflict: ConflictBody;
-  constructor(conflict: ConflictBody) {
+  /** The EXACT partial the stale write carried. Overwrite replays it with the
+   *  server's fresh If-Match and Save-as-copy carries it onto …/duplicate — so the
+   *  conflicting edit is preserved, not dropped (the old {name}-only replay lost it).
+   *  Defaults to `{}` so existing single-arg constructions stay valid. */
+  failedBody: PatchBody;
+  constructor(conflict: ConflictBody, failedBody: PatchBody = {}) {
     super(conflict.message ?? "version_conflict");
     this.name = "PatchConflictError";
     this.conflict = conflict;
+    this.failedBody = failedBody;
   }
 }
 
@@ -80,9 +86,10 @@ export async function patchProjection({
     // recovery fields (`current_version`, `current_state`) survive the parse. The
     // flat read left them `undefined`, so Overwrite re-sent the STALE If-Match and
     // the owner could never force-save (#188).
-    const body = (await resp.json()) as { detail?: ConflictBody } & Partial<ConflictBody>;
-    const conflict = (body.detail ?? (body as ConflictBody)) as ConflictBody;
-    throw new PatchConflictError(conflict);
+    const errBody = (await resp.json()) as { detail?: ConflictBody } & Partial<ConflictBody>;
+    const conflict = (errBody.detail ?? (errBody as ConflictBody)) as ConflictBody;
+    // Carry the exact body that just 409'd so the recovery flow can replay it.
+    throw new PatchConflictError(conflict, body);
   }
   if (!resp.ok) {
     throw new Error(`PATCH ${viewSlug} failed: ${resp.status}`);

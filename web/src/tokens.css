@@ -13,8 +13,28 @@
   /* --- semantic layer --- */
   --success: #257648;
   --warning: #b45309;
-  --error: #dc2626;
+  /* Darkened from #dc2626 (design audit P1): the old red measured 3.56-4.49:1 as
+   * TEXT on the cell-state band backgrounds + surface-alt — all FAIL the 4.5:1
+   * WCAG-AA floor for normal text. #b91c1c clears every declared pair (>=4.77:1);
+   * see tokens.contrast.test.ts for the full declared-pair gate. */
+  --error: #b91c1c;
   --override: #cbb7a9;
+  /* Text-role alias for --warning (design audit: OverrideAudit.tsx referenced an
+   * undefined var(--warn-text, #8a5a00) fallback — this makes it a real token
+   * instead of a silent fallback literal). Reuses --warning rather than minting a
+   * new hex; --warning already clears AA as text on white/surface-alt. */
+  --warn-text: var(--warning);
+
+  /* Cell-state band backgrounds (3-year table cells + legend swatches). Tokenized
+   * so the state machine's most meaning-bearing colors live in ONE place and can
+   * be contrast-checked/fixed together (design audit: "hard-coded state-band
+   * hexes outside the token layer"). --band-overridden absorbs two prior literal
+   * hexes (#efe7df "legacy" + #e7dccb "D6, stronger tint") into one canonical
+   * value — the more-specific D6 rule always won in the cascade, so this is a
+   * no-visual-change dedupe, not a redesign. */
+  --band-input: #eef6f0;
+  --band-overridden: #e7dccb;
+  --band-estimated: #fdf6e7;
 
   /* --- surfaces / text / lines --- */
   --surface: #ffffff;
@@ -47,9 +67,12 @@
   --w-semibold: 600;
   --w-bold: 700;
 
-  /* Placeholder text: muted AND lighter than --text-muted so an empty input
-   * reads as a hint, not as filled content (#21). Subtler than body muted. */
-  --placeholder: #9aa39d;
+  /* Placeholder text: muted AND lighter (lower-contrast) than --text-muted so an
+   * empty input reads as a hint, not as filled content (#21). Subtler than body
+   * muted, but never below the 4.5:1 AA floor — darkened from #9aa39d (2.59:1,
+   * FAIL) to #6c766f (4.71:1) per the design audit; still visibly softer than
+   * --text-muted's 6.05:1. */
+  --placeholder: #6c766f;
 
   /* Shared content frame: the topbar inner row and the main column align to it. */
   --frame: 72rem;
@@ -1105,6 +1128,77 @@ body {
   color: var(--text-muted);
 }
 
+/* Source of funds (Wave 2 Task 2.4): ALWAYS-visible fieldset on startup-costs —
+ * modeled on .space-assumptions above (bordered group), but with NO computed
+ * total (NO-CLIENT-MATH, PRD §13 — the server sums after Generate). */
+.source-of-funds {
+  margin: 1rem 0 0;
+  padding: 0.75rem 1rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.source-of-funds > legend {
+  padding: 0 0.4rem;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text);
+}
+.source-of-funds__note {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+/* --- AdvancedOptions: shared controlled disclosure (Wave 2 Task 2.1) ---------
+ * Modeled on .assumption__sources above: a muted, compact <details> summary
+ * row. Shared by every wizard step's advanced group AND the Settings tab. */
+.advanced-options {
+  border-top: 1px solid var(--line);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+.advanced-options__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  list-style: none;
+}
+.advanced-options__summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-options__badge {
+  font-size: var(--text-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  border-radius: var(--radius);
+  padding: 0 var(--space-2);
+}
+
+.advanced-options__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+/* Honest mobile (≤560px): one column so dense controls don't crowd. */
+@media (max-width: 560px) {
+  .advanced-options__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* --- Settings & assumptions tab (SLICE 4) --- */
 /* Review-first on mobile-375: status banner above the slider controls. */
 .settings-tab {
@@ -1368,7 +1462,7 @@ body {
   flex: none;
 }
 .swatch--input {
-  background: #eef6f0;
+  background: var(--band-input);
   border-color: var(--success);
 }
 .swatch--computed {
@@ -1376,7 +1470,7 @@ body {
   border-color: var(--text-muted);
 }
 .swatch--overridden {
-  background: #efe7df;
+  background: var(--band-overridden);
   border-color: var(--override);
 }
 /* Estimated reads as a filled triangle (icon, not color-only). */
@@ -1492,19 +1586,19 @@ body {
   color: var(--text);
 }
 .cell--input {
-  background: #eef6f0;
+  background: var(--band-input);
 }
 .cell-wrap .cell--input {
-  background: #eef6f0;
+  background: var(--band-input);
 }
 .cell--computed {
   color: var(--text);
 }
 .cell--overridden {
-  background: #efe7df;
+  background: var(--band-overridden);
 }
 .cell--estimated {
-  background: #fdf6e7;
+  background: var(--band-estimated);
 }
 .cell[aria-disabled="true"] {
   color: var(--text-muted);
@@ -1516,8 +1610,10 @@ body {
    (presentation, not client math). Placed AFTER the cell-state + aria-disabled
    rules so a negative computed/overridden cell reads as a loss, not muted/neutral.
    Covers the 3-year table cells, the KPI strip, the decision tiles, and the
-   owner-list money columns. NOTE: verify AA contrast of --error on the band
-   backgrounds (#eef6f0/#efe7df/#fdf6e7) at 1440/375 in a browser. */
+   owner-list money columns. AA contrast of --error on every band background
+   (--band-input/--band-overridden/--band-estimated) plus --surface-alt is
+   asserted by tokens.contrast.test.ts (design audit P1 — resolved; was FAIL at
+   3.56-4.49:1 with the old #dc2626, now >=4.5:1 everywhere with #b91c1c). */
 .cell[data-negative],
 .kpi__value[data-negative],
 .decision-tile__value[data-negative],
@@ -2589,6 +2685,50 @@ body {
   }
 }
 
+/* A failed Generate (audit P0, Task 2.5): draft-preserving alert + Retry — never a
+   silent failure and never a navigate to /p/undefined/edit. */
+.wizard__generate-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.wizard__generate-error p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--error);
+}
+
+/* Resume-an-in-progress-draft banner (Task 2.6): shown when a non-default draft was
+   restored from localStorage on mount. Subtle highlight panel — Resume adopts the
+   saved inputs, Start fresh discards them. */
+.wizard__resume {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+  margin-bottom: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--brand-primary);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  font-size: var(--text-base);
+  color: var(--text);
+}
+.wizard__resume p {
+  margin: 0;
+}
+.wizard__resume-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 /* Make the current breadcrumb step prominent — the page's de-facto heading (#17). */
 .wizard-steps__item--current .wizard-steps__label,
 .wizard-steps__item--current .wizard-steps__btn {
@@ -3027,6 +3167,19 @@ body {
   color: var(--text-muted);
 }
 
+/* A failed submit (Task 2.5): the draft (title/description) stays intact, so this
+   alert plus the still-enabled Send button is the retry affordance. */
+.feedback-modal__error {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border-left: 3px solid var(--error);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-alt);
+  font-size: var(--text-base);
+  line-height: 1.45;
+  color: var(--error);
+}
+
 .feedback-modal__success p {
   margin: 0;
   font-size: var(--text-base);
@@ -3157,74 +3310,6 @@ body {
 }
 
 /* ─── v2 UI primitives ───────────────────────────────────────────────────── */
-
-/* NumberField — controlled numeric input (v2 redesign, Owner Decision 10/17).
- * type=text + inputMode so the native spinner never appears. The .num class
- * (tabular-nums + text-align:right) is applied by default on the input to keep
- * alignment consistent with every other numeric column in the app. */
-
-.number-field {
-  display: inline-flex;
-  align-items: center;
-}
-
-.number-field--with-unit {
-  /* The unit glues tightly to the input — no gap between them. */
-  gap: 0;
-}
-
-.number-field__input {
-  height: 40px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0 0.625rem;
-  background: var(--surface);
-  font-size: var(--text-base);
-  color: var(--text);
-  min-width: 5rem;
-}
-.number-field__input:focus {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-.number-field__input::placeholder {
-  color: var(--placeholder);
-}
-/* When a unit prefix is present, square the left radius to visually join with
-   the unit badge. When suffix, square the right radius. */
-.number-field--with-unit .number-field__input:not(:first-child) {
-  border-radius: 0 8px 8px 0;
-}
-.number-field--with-unit .number-field__input:not(:last-child) {
-  border-radius: 8px 0 0 8px;
-}
-.number-field__input--left {
-  text-align: left;
-  font-variant-numeric: normal;
-}
-
-.number-field__unit {
-  display: inline-flex;
-  align-items: center;
-  height: 40px;
-  padding: 0 0.5rem;
-  border: 1px solid var(--line);
-  background: var(--surface-alt);
-  color: var(--text-muted);
-  font-size: var(--text-base);
-  white-space: nowrap;
-  user-select: none;
-}
-/* Prefix unit: rounds left corners, merges right border with the input */
-.number-field--with-unit .number-field__unit:first-child {
-  border-radius: 8px 0 0 8px;
-  border-right: none;
-}
-/* Suffix unit: rounds right corners, merges left border with the input */
-.number-field--with-unit .number-field__unit:last-child {
-  border-radius: 0 8px 8px 0;
-  border-left: none;
-}
 
 /* Sparkline — tiny hand-rolled SVG annual-net-income chart (v2 redesign).
  * Receives server-computed points; renders only geometry. No financial math.
@@ -3499,7 +3584,12 @@ body {
    shrink (min-width:0) so the four tiles never wrap to a second row on desktop. */
 .metric-bar {
   display: flex;
-  flex-wrap: nowrap;
+  /* wrap (not nowrap): the 4 metric cells (flex: 1 1 0) still share ONE row on desktop
+     since they fit, but the full-width `.metric-bar__footnote` (flex-basis: 100%, our
+     sensitivity/confidence line — spec §12) needs to wrap onto its OWN row below them.
+     A `nowrap` bar keeps the 100%-basis footnote inline and crushes the cells to ~0 width
+     (the fusion #320-nowrap × footnote collision). Mobile ≤480px wraps the cells too. */
+  flex-wrap: wrap;
   gap: 1.25rem;
   align-items: flex-start;
   padding: 0.75rem 0 0;
@@ -3554,6 +3644,16 @@ body {
 .metric-bar__cell--income .sparkline {
   margin-top: 0.1rem;
 }
+/* wave-3 w5: the downside-sensitivity line + low-ramp confidence chip sit on their
+   OWN full-width row below the metric cells (the bar is flex-wrap), stacked like the
+   DecisionBanner verdict column. Reuses .decision-banner__sensitivity/__confidence. */
+.metric-bar__footnote {
+  flex-basis: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
 
 /* --- D11 merged "Key metrics & drivers" grid ------------------------------- */
 .kpis-grid {
@@ -3599,6 +3699,54 @@ body {
   color: var(--brand-primary);
 }
 
+/* --- Task 3.1: wizard-mirrored collapsible groups in the KPIs/settings grid ---
+ * Each paramGroups.ts group renders as a controlled <details> whose <summary>
+ * carries the "{step} — {group}" heading + a count badge. Collapsed by default;
+ * the control grid mounts only when open (children unmount when closed). */
+.kpis-grid__group {
+  border-top: 1px solid var(--line);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+.kpis-grid__group-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: none;
+}
+.kpis-grid__group-summary::-webkit-details-marker {
+  display: none;
+}
+.kpis-grid__group-heading {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+.kpis-grid__group-badge {
+  font-size: var(--text-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  border-radius: var(--radius);
+  padding: 0 var(--space-2);
+}
+/* A display-only chip cell (e.g. lease type — editable in the wizard, not here). */
+.kpis-grid__cell--chip {
+  background: var(--surface);
+}
+.kpis-grid__chip {
+  align-self: flex-start;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.1rem 0.4rem;
+}
+
 /* --- D6 cell legend + cursor (more specific, additive) --------------------- */
 /* The hand cursor appears ONLY on a truly-editable cell; a derived cell or a
    read-only editable-typed cell reads as non-actionable (no dead hand). */
@@ -3613,9 +3761,13 @@ body {
 .three-year-table .cell--input {
   border-left: 2px solid var(--success);
 }
-/* Overridden = stronger amber tint + a dotted underline (non-color cue). */
+/* Overridden = a dotted underline (non-color cue). The tint itself now comes
+   from the base `.cell--overridden { background: var(--band-overridden) }`
+   rule above — this used to re-assert a DIFFERENT literal hex here (#e7dccb vs
+   the base rule's #efe7df) purely because this compound selector is more
+   specific and always won; now both point at one token, so there is nothing
+   left to override here (design audit: dedupe the two "overridden" hexes). */
 .three-year-table .cell--overridden {
-  background: #e7dccb;
   text-decoration: underline dotted;
   text-underline-offset: 2px;
 }
@@ -3743,6 +3895,150 @@ td.cell-wrap {
   gap: var(--label-gap);
 }
 
+/* ============================================================================
+ * Task 3.4 — OverrideAudit / FieldChange / RoleView: inline styles -> tokens.
+ * Design audit: these two components were "100% inline-styled", bypassing both
+ * the token layer and the tokens.coverage.test.ts gate, and hard-coding
+ * --brand-primary/--brand-deep as raw hex constants instead of vars.
+ * ========================================================================== */
+
+/* --- OverrideAudit.tsx (Penny drawer body + KPIs-tab audit list) ----------- */
+.override-audit__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.override-audit__heading {
+  margin: 0;
+  /* #22 three-size budget: this dense drawer used three off-scale sizes
+     (13/12/11px) purely cosmetically — weight/color already carry the
+     hierarchy (700 here vs the plain --text-sm below), so consolidating onto
+     --text-sm is a correctness fix, not a compromise. */
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text);
+}
+.override-audit__muted {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+/* The pinned-count badge beside the section heading. */
+.override-audit__count {
+  font-weight: 600;
+  margin-left: 0.4rem;
+}
+/* Stale-upstream / needs-justification flags: warning-toned TEXT (icon/wording
+   carries the meaning; color is never the only cue). */
+.override-audit__muted--warn {
+  color: var(--warn-text);
+}
+.override-audit__label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+/* The focused comment-form label reads brand-toned, not muted-gray. */
+.override-audit__label--brand {
+  color: var(--brand-deep);
+}
+.override-audit__pill {
+  font-size: var(--text-sm);
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--brand-deep);
+  cursor: pointer;
+}
+/* Primary pill (comment-form Save): filled brand, disabled while the draft is
+   empty — the native `disabled` attribute drives this, no inline style needed. */
+.override-audit__pill--primary {
+  border: none;
+  background: var(--brand-primary);
+  color: #ffffff;
+}
+.override-audit__pill--primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* --- FieldChange.tsx (per-field "changed by Penny" + undo affordance) ------ */
+.field-change {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+  /* #22 three-size budget: consolidated off-scale 13/11/12px sizes onto
+     --text-sm (weight/color already carry the hierarchy here). */
+  font-size: var(--text-sm);
+  line-height: 1.3;
+}
+.field-change__current {
+  font-weight: 700;
+}
+.field-change__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--brand-primary);
+  background: color-mix(in srgb, var(--brand-primary) 8%, transparent);
+  color: var(--brand-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.field-change__was {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-style: italic;
+}
+/* Undo / dismiss icon buttons. Width/height are set inline per-instance
+   (24px desktop / 44px touch — driven by a matchMedia probe, not a static
+   design token, so that stays a runtime style rather than a CSS rule). */
+.field-change__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--brand-primary);
+  cursor: pointer;
+  line-height: 1;
+}
+.field-change__icon-btn--muted {
+  color: var(--text-muted);
+}
+.field-change__icon-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* --- RoleView.tsx (read-only board/funder share heading) ------------------- */
+.role-view__heading {
+  margin: 0 0 1rem;
+  font-size: var(--text-lg);
+  line-height: 1.25;
+}
+
+/* 3.3 sensitivity banner */
+.decision-banner__sensitivity {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.decision-banner__confidence {
+  margin-top: var(--space-1);
+  display: inline-flex;
+  width: fit-content;
+}
 /* ───────────────────────────────────────────────────────────────────────────
  * Soft-delete / Trash (feat/v2-soft-delete)
  * Per-row "⋯" actions menu, confirm dialogs, the Trash view, danger buttons.

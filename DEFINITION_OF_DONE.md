@@ -20,10 +20,10 @@ A change is not "done" until these commands are run and their literal output is 
 |---|---|---|
 | Backend tests green | `pytest -q` | `0 failed`, exit 0 |
 | Frontend tests green | `npm test -- --run` | `0 failed`, exit 0 |
-| Engine golden + 3-way reconcile | `pytest -q engine/tests/golden/` | all golden fixtures pass; deltas `< $0.50` / `< 0.1pp` |
-| Excel formula-error gate | `python recalc.py "<exported>.xlsx"` | `{"status":"success","total_errors":0}` (parse JSON; `status=="success"` AND `total_errors==0`, fail closed on `{"error":...}`) |
+| Engine golden + 3-way reconcile | `pytest -q engine/tests/test_golden_gate.py` | all golden fixtures pass; deltas `< $0.50` / `< 0.1pp` |
+| Excel formula-error gate | `python reference/thrift-store-projections-skill/scripts/recalc.py "<exported>.xlsx"` | `{"status":"success","total_errors":0}` (parse JSON; `status=="success"` AND `total_errors==0`, fail closed on `{"error":...}`) |
 | Test:code ratio (HARD) | `python scripts/ratio.py` | `> 1.3` on PR diff **and** repo-wide |
-| Lint / types | `ruff check . && mypy app engine` · `npm run lint && npm run typecheck` | clean |
+| Lint / types | `ruff check . && mypy app engine` · `npm run typecheck` (web eslint not configured — #374) | clean |
 | Boot-refuse config | `python -c "import app.config as c; c.validate_required()"` (prod env) | refuses with the missing-secret name, or passes |
 | Deploy health (post-promote) | `curl -s $URL/api/health` | JSON shows the **new build SHA**, `db: ok`, `litestream: replicating` |
 
@@ -43,7 +43,7 @@ Golden reconciliation compares three artifacts that must agree (PRD §13/§18): 
 
 ## Tier 2 — QUALITY (every PR merge)
 
-- [ ] **HARD GATE — test:code ratio > 1.3 (measured, CI-blocking).** `scripts/ratio.py` reports test-LOC / code-LOC `> 1.3` on **both** the PR diff (added lines via `git diff` numstat, bucketed by the path map) **and** repo-wide (code = `engine/**` + `app/**` minus tests; test = `engine/tests/**`, `app/tests/**`, `frontend/**/*.{test,spec}.*`, `e2e/**`; excluded = migrations, generated fixtures, golden `.xlsx`, vendored, `__init__`). Paired with **`engine/**` branch coverage ≥ 90%** so the ratio can't be gamed by trivial assertions. *(This is the project's measured floor for the global `TDD` ≥1.3× rule — see [DECISIONS.md](./DECISIONS.md).)*
+- [ ] **HARD GATE — test:code ratio > 1.3 (measured, CI-blocking).** `scripts/ratio.py` reports test-LOC / code-LOC `> 1.3` on **both** the PR diff (added lines via `git diff` numstat, bucketed by the path map) **and** repo-wide (code = `engine/**` + `app/**` minus tests; test = `engine/tests/**`, `app/tests/**`, `frontend/**/*.{test,spec}.*`, `e2e/**`; excluded = migrations, generated fixtures, golden `.xlsx`, vendored, `__init__`). Paired with **`engine/**` + `app/**` branch coverage ≥ 90%** (Task 4.5 joined `app/**` to the coverage gate; measured 92.33% app-only / 93.44% combined at the time it was added) so the ratio can't be gamed by trivial assertions. *(This is the project's measured floor for the global `TDD` ≥1.3× rule — see [DECISIONS.md](./DECISIONS.md).)*
 - [ ] **End-to-end browser tests pass (extensive, not a single happy path).** Playwright E2E in `e2e/` covers at minimum: create→compute→decision-banner→autosave→reopen-by-owner-token→`.xlsx` export; edit/override→recompute→409-conflict; a read-only `view_slug` cannot edit; feedback files a redacted issue; the AI-disabled path. Headless in CI at **1440 / 768 / 375** against the Appendix-D stress dataset, screenshots archived.
 - [ ] **Error handling:** every external/IO call retries-with-backoff, degrades gracefully, or re-raises with context. **Zero silent failures.** Each new failure mode gets a [Failure Mode Registry](#failure-mode-registry) row.
 - [ ] **Threat model for new endpoints** recorded in the PR (who calls it, what they receive, what they can change, rate-limit cost) — `STANDARD`/`SESSION`.

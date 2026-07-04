@@ -155,17 +155,34 @@ def test_file_reads_use_a_connection_distinct_from_the_writer(file_store):
 
 
 def test_each_thread_gets_its_own_reader_connection(file_store):
-    ids: dict[int, int] = {}
+    # Regression (batch3 tracked flake): the ORIGINAL version of this test computed
+    # `id(file_store._read_conn())` INSIDE each worker and stashed only the int,
+    # never the connection object itself. `_read_conn()` caches the connection on
+    # `threading.local()` (per-thread), but that cache entry is the ONLY strong
+    # reference to it -- once a worker thread exits, CPython tears down its
+    # thread-local storage, dropping that reference, and the connection object can
+    # be garbage-collected immediately. With 5 short-lived threads racing, thread A's
+    # connection can be freed and thread B's NEW connection allocated at the exact
+    # same (now-recycled) memory address before every thread has joined -- so two
+    # DIFFERENT, already-dead connections report the SAME `id()`, undercounting the
+    # five distinct connections (proven flake: `assert 4 == 5`).
+    #
+    # Fix: hold a STRONG reference to every connection in `conns` for the whole test
+    # (not just its id()), so all 5 stay alive SIMULTANEOUSLY when we finally compare
+    # identities below -- `id()` is only guaranteed unique among objects that are
+    # alive at the same time, which this now actually guarantees.
+    conns: dict[int, sqlite3.Connection] = {}
 
     def worker(k: int) -> None:
-        ids[k] = id(file_store._read_conn())
+        conns[k] = file_store._read_conn()
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    assert len(set(ids.values())) == 5  # five distinct reader connections
+    assert len(conns) == 5
+    assert len({id(c) for c in conns.values()}) == 5  # five distinct reader connections
 
 
 def test_ping_probe_does_not_use_the_writer_connection(file_store):

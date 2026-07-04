@@ -15,7 +15,7 @@ This document is the contract for the FastAPI HTTP surface. It is authoritative 
 - **Money / percent in the API:** the engine is the **single math authority** (PRD §13). The compute response carries each figure as a **dual value** `{ "raw": <number>, "display": "<string>" }` so the client never re-derives rounding (whole dollars / 0.1 pp per §12.4). `raw` for money is **whole dollars** (the engine computes in cents/Decimal internally and rounds once at the API boundary). The frontend MUST render `display` and MUST NOT recompute. **No client-side math (PRD §13/Appendix C #22).**
 - **IDs:** application-generated ULID/UUID strings (no SQLite `rowid` leakage; Postgres-portable per [DATA_MODEL.md](./DATA_MODEL.md)). Projections are addressed in the URL by **`view_slug`** (the read lookup key), never by internal `id`.
 - **`null` vs absent:** an N/A metric is an explicit `null` plus an entry in the `flags` map (§12.4). It is never `0`, `NaN`, `#DIV/0!`, or an omitted key.
-- **Determinism:** a `GET` of a projection never recomputes on a newer engine. It returns the stored `computed_json` verbatim with an `upgrade_available` flag (§13). Recompute happens only on a mutation (`PATCH`) or an explicit `POST …/upgrade-model`.
+- **Determinism:** a `GET` of a projection never recomputes on a newer engine. It returns the stored `computed_json` verbatim with an `upgrade_available` flag (§13). Recompute happens only on a mutation (`PATCH`); the explicit `POST …/upgrade-model` action is **forward spec — not yet implemented** (§4.6).
 
 ---
 
@@ -42,11 +42,13 @@ A token is always scoped to **one** projection except the owner token, which add
 
 | Condition | Status | Body `error` |
 |---|---|---|
-| Mutation route with no `Authorization` header | `401` | `auth_required` |
-| `Authorization` present but token matches neither owner nor edit hash for this projection | `403` | `forbidden` |
+| Capability mutation with no `Authorization` header (or a bearer matching no token for this projection) | `403` | `forbidden` |
 | Read-only (`view`) capability attempts a mutation | `403` | `read_only` |
-| Edit token attempts an owner-only route (list, rotate, delete, trash, revisions list/restore) | `403` | `owner_required` |
+| Edit token attempts an owner-only route (list, rotate, delete, trash, duplicate, revisions list/restore) | `403` | `owner_required` |
+| Verified-Clerk-identity route (`POST …/claim`, §4.9) with no Clerk JWT | `401` | `clerk_identity_required` |
 | Secret detected in URL path or query string | `400` | `secret_in_url` (defense-in-depth; secrets only via header/fragment) |
+
+**Convention (as-built):** the capability-token routes return **`403`** on every missing/mismatched bearer — `forbidden`, or `owner_required` when an edit token hits an owner-only route, or `read_only` for a view token. There is **no `401` path for a capability token**; the sole `401` is the Clerk-identity route `POST …/claim` (`clerk_identity_required`), where possession of a capability token does not authorize binding a workspace to an arbitrary Clerk identity.
 
 Bodies: `{ "error": "<code>", "message": "<human readable>", "support_hint": "<optional>" }`. Never echo the token. Never log `Authorization` headers or URL fragments (§20).
 
@@ -83,7 +85,7 @@ On any stale mutation the server returns **HTTP 409** with the **current server 
 - `current_version` is the authoritative server version; `your_version` echoes the rejected `If-Match`.
 - `current_state` is the **complete view-model** (identical shape to the §3 `200` body) so the UI can render the latest without a follow-up `GET`.
 - **Overwrite** path: the client re-issues the same `PATCH` with `If-Match: <current_version>` (it has it from this body). The server does **not** auto-merge.
-- **Save-as-copy** path: the client calls `POST …/duplicate` (§4.4), which mints a fresh owner token and forks the projection at its own version 1.
+- **Save-as-copy** path: the client (holding the **owner** token — the route is owner-only) calls `POST …/duplicate` (§4.5), forking the projection into a fresh `view_slug` at its own `version 1` and carrying the conflicted edit as the optional `{ "patch": … }`. The fork **joins the owner's workspace** — no fresh owner token is minted for a capability owner (§4.5).
 
 ---
 
@@ -114,7 +116,8 @@ Limits apply **per IP and per token** (PRD §20/§27), 429 on breach with `Retry
 | Endpoint | Limit (per IP) | Limit (per token) | Rationale |
 |---|---|---|---|
 | `POST /api/research` | 10 / hour | 20 / hour | LLM + Places + Census cost; cached by location+size key (§16.6). |
-| `POST …/narrative:regenerate` | 10 / hour | 6 / hour / projection | Regeneration cap (§27 cost control). |
+| `POST …/narrative:regenerate` | 10 / hour | 20 / hour + hard cap **50 / day / projection** | Paid-LLM regeneration cap (§27 cost control, SECURITY §10.1). All three caps are enforced **before** the provider call — a rejected request spends no LLM budget. |
+| `PUT …/narrative` | 120 / hour | 120 / hour | Coarse cap on the (local, no-provider) prose save. |
 | `POST /api/feedback` | 5 / hour | — | GitHub-issue spam. |
 | `POST /api/intent` | 5 / hour | — | CRM spam. |
 | `POST /api/projections` (create) | 20 / hour | — | Projection-creation flood. |
@@ -201,7 +204,11 @@ Every read or mutation of a projection returns the **same** view-model — the e
     "payrollTaxPct":0.075, "salvagePct":0.008, "escalator":0.03, "basket":17.08,
     "donationsPerHh":3, "donationValue":74.0, "donationsPerHouseholdPerYear":3,
     "shareY1":0.06, "shareY2":0.08, "shareY3":0.10, "shareY4":0.11, "shareY5":0.12,
-    "occupancyAnnual":90000, "leaseType":"nnn", "salesfloorSqft":7000, "reserveBuffer":25000
+    "leaseType":"nnn", "salesfloorSqft":7000, "reserveBuffer":25000,
+    "sensitivityDelta":0.25,
+    "fixedAnnual":{"Insurance liability":2000,"Internet, Phones":3000,"Pest control":300,
+                   "Repairs/maintenance":1600,"Security system":900},
+    "nnnOpexAnnual":0.0, "buildingSqft":10000.0, "salesfloorPct":0.70
   },
 
   "flags": { "payback": "na_no_year1_profit" },
@@ -217,8 +224,11 @@ Notes:
 - **`reco.tag`** is a **semantic enum**, not a hex color: `proceed | revise | find_cheaper_rent | raise_cash | delay | do_not_proceed` (§12.3). The client maps enum → design token (brand vs semantic separation). The API never emits hex.
 - **`row.class`** ∈ `input | computed | overridden | estimated`; `row.node` is the DAG node key used by overrides. Derived rows and KPIs have `editable:false` and are **non-pinnable** (server rejects pin attempts — §6.1). A **pinnable component row stays `editable:true` even when pinned** (#322): the cell is the override entry point, so the owner can re-edit the pin in place; the `overridden` class drives the orange highlight independently of editability (this is a `editable` *value* change, the field shape is unchanged).
 - **Override keys** are `"{node}#{year}"` in storage (`overrides_json`, [DATA_MODEL.md](./DATA_MODEL.md)); the `overrides[]` array splits them into `node`+`year` for the inspector.
-- **`model_version`** + **`compute_schema_version`** are tracked separately: the former changes when the math changes; the latter when the view-model shape changes. `upgrade_available` is true when the stored `model_version` is older than the deployed engine — but the body is still the **stored snapshot** (no silent recompute, §13).
+- **`model_version`** + **`compute_schema_version`** are tracked separately: the former changes when the math changes; the latter when the view-model shape changes. The **deployed engine is `model_version 2.8.0` / `compute_schema_version 1.7.0`** (the fusion of the cash-display `2.7.0-A` and the params/gaps `2.7.0-B` engines; see [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) / [DECISIONS.md](./DECISIONS.md)). The `≥ 1.x.0` field-introduction markers below still hold — 1.7.0 is a superset. `upgrade_available` is true when the stored `model_version` is older than the deployed engine — but the body is still the **stored snapshot** (no silent recompute, §13).
 - For a **read-only** request `role` reflects the share-link role (`board`/`funder`/`advisor`); `settings` editability and CTAs are tailored, and write-only fields may be elided.
+- **`donationsPerHh`** is a legacy alias for `donationsPerHouseholdPerYear`; both are emitted for compatibility, and their values are identical.
+- **`settings.sensitivityDelta` / `fixedAnnual` / `nnnOpexAnnual` / `buildingSqft` / `salesfloorPct`** (`compute_schema_version ≥ 1.6.0`) round out the editable knob set the view-model previously dropped (audit P0): `sensitivityDelta` is the §12.2 ± stress fraction (single source for the `sensitivity` block below); `fixedAnnual` is the label→annual-$ map (`Insurance liability`, `Internet, Phones`, `Pest control`, `Repairs/maintenance`, `Security system`); `nnnOpexAnnual`/`buildingSqft`/`salesfloorPct` are the NNN opex add-on and the building/salesfloor geometry the sq-ft-scaled lines derive from. All additive — a pre-1.6.0 snapshot simply lacks these keys.
+- **`sensitivity`** (`compute_schema_version ≥ 1.6.0`) is the §12.2 ± stress scenarios: `{base, downside, upside}`, each `{net{raw,display}, breakeven, capital{raw,display}}`, plus a sibling `delta` (the ± fraction, mirrors `settings.sensitivityDelta`). **`confidence.ramp`** (`"low"` | `"high"`) flags whether the ramp-dependent metrics (break-even, cash gap) rest on the low-confidence default S-curve. Full shape in [DATA_MODEL.md](./DATA_MODEL.md) §4.8.
 
 ---
 
@@ -320,9 +330,11 @@ The core editing endpoint. Drives autosave (debounced) and every Settings/driver
   - Pinnable nodes are **inputs and expense component lines only**. A pin on a derived/total/margin/KPI node → **422** `{ "error":"node_not_pinnable", "node":"Net income" }`.
   - Recompute is a **topological DAG evaluation**: `resolve(node) = pin.value if pinned else f(resolve(parents))`. **No back-solve** — pinning a downstream node never mutates upstream inputs; upstream rows that no longer drive any pinned downstream node get a **stale flag** surfaced in `flags`/`overrides[].affected`.
   - Setting an override whose value equals the calculated value within tolerance ($0.50) **deletes** the pin (auto-clear-on-equal, matching the design's commit semantics).
+- **Assumption bounds (server re-validates the MERGED `assumptions` dict on every PATCH — `AssumptionsIn`, `compute_schema_version` ≥ 1.6.0):** the labor/marketing/supplies/card/payroll-tax/salvage/escalator percent knobs stay bounded to `[0, 1]`; `sensitivity_delta` (the §12.2 ± stress fraction) is bounded to `[0, 0.9]` — a value > 1 would flip the downside donation multiplier negative; `reserve_buffer`, `donations_per_hh`, `basket`, and `utilities_per_sqft` are bounded to `>= 0` (no upper bound); `fixed_annual` keys are allowlisted to the engine's `FIXED_ANNUAL` labels (an off-list label is rejected, never silently added) and every value must be `>= 0`. Any violation → **422** `{ "error":"invalid_assumptions", "message":"..." }` — rejected before the merged surface ever reaches the engine. Because re-validation runs over the **merged** dict, not just the PATCHed keys, a stored row carrying a legacy out-of-range value (saved before a bound existed) will **422 on the very next PATCH** — even one touching an unrelated field — until that value is re-sent in-range (fail-closed hardening, not a regression).
+  - **`fixed_annual` PATCH semantics ACCUMULATE, never replace:** a partial map (e.g. `{"Pest control": 600}`) deep-merges the incoming keys **over the STORED map** — a line set by an earlier PATCH survives a later PATCH that only touches a different line — and the resolved map then merges over the engine's `FIXED_ANNUAL` defaults for any line never touched at all. (A flat `dict.update` would silently revert every previously-edited line not present in the latest PATCH — fixed as part of the 1.3 review.)
 - **Behavior:** recompute server-side (<50 ms p95 target, §27), persist new `computed_json/monthly_json/overrides_json/flags`, increment `version`, write one revision snapshot (`actor_token_hash`, `change_summary`).
 - **Response `200`:** the recomputed view-model (§3). `ETag: "<new version>"`. `saveLabel:"All changes saved"`.
-- **Errors:** `428` missing `If-Match`; `409` stale (§1.4 shape); `422` invalid override / out-of-domain input; `403` read-only; `400` malformed.
+- **Errors:** `428` missing `If-Match`; `409` stale (§1.4 shape); `422` invalid override / out-of-domain input (`invalid_inputs` / `invalid_assumptions` / `node_not_pinnable`); `403` read-only; `400` malformed.
 
 ### 4.4a `POST /api/projections/{view_slug}/preview` — dry-run (read-only)
 
@@ -349,13 +361,15 @@ A **read-only what-if**: merge the same editable-surface partial as `PATCH` (§4
 
 ### 4.5 `POST /api/projections/{view_slug}/duplicate`
 
-- **Auth:** owner or edit (Bearer) on the source. **Capability:** owner/edit. **No `If-Match`** (creates a new resource).
-- **Behavior:** deep-copies inputs/assumptions/overrides/trade_area into a **new** projection, recomputes at the current engine, mints **fresh** owner/edit/view tokens and a recovery code, sets the copy's `version=1`. Powers "Save as copy" from the 409 flow (§1.4) and the list "Duplicate" action.
-- **Request body (optional):** `{ "name": "House of Hope (copy)" }`.
-- **Response `201`:** the new projection's view-model + `tokens` block (same shape as §4.2).
-- **Errors:** `403`; `429` create limit.
+- **Auth:** **owner only** — the owner token Bearer, or a verified Clerk owner of the source. **Capability:** owner. An **edit** token → `403 owner_required`; a view/anonymous/wrong-owner bearer → `403 forbidden` (like rotate/trash/delete; this router has no `401` path for a capability bearer). **No `If-Match`** — it creates a new row and never version-mutates the source, exactly like create.
+- **Behavior:** deep-copies inputs/assumptions/overrides/trade_area into a **new** projection and recomputes at the current engine. Mints a **fresh** `view_slug` and **fresh** edit token (never the source's — a shared slug/edit token would leak the source), sets the copy's `version=1`, and appends **one** revision (`change_summary="duplicated"`). The caller is the owner, so the copy **joins the caller's workspace** — it is owner-scoped to the same owner (`owner_token_hash` copied) and appears in the owner's list. **No fresh owner token is minted** for a capability owner (identity-join, mirroring create §4.2); a Clerk/anonymous owner receives a one-time `owner_token` exactly as create does. There is **no recovery code**. The copy inherits the source's `terms_accepted_at` (exports stay reachable without re-accepting). Powers **"Save as copy" from the 409 conflict flow** (§1.4, `SaveConflictModal` / `SettingsTab`). *(There is no list-page "Duplicate" button today — the endpoint's only client is the 409 recovery path.)*
+- **Request body (optional):** `{ "patch": <PatchProjectionIn> }` — the same editable-surface partial `PATCH` accepts (§4.4). On a 409 the client's "Save as copy" sends the conflicted edit here so it lands on the fork instead of being dropped; the patch flows through the **same** `_merge_patch` + validation path as `PATCH` (override-DAG rejection of derived/total nodes, `AssumptionsIn`/`InputsIn` bounds, `fixed_annual` accumulation over the source's map). Omitted / `{}` / `null` → a **verbatim** copy of the source's editable surface. A stray key → `422` (the body is `extra="forbid"`).
+- **Response `201`:** the copy's compute view-model (§3) plus `view_slug`, `version: 1`, `name: "<source name> (copy)"`, a one-time `edit_token`, and — for a Clerk/anonymous owner **only** — a one-time `owner_token`. (Same shape as the §4.2 create response.)
+- **Errors:** `403` (`owner_required` for an edit token; `forbidden` otherwise); `404` unknown slug; `422` `invalid_inputs` / `node_not_pinnable` / out-of-bounds patch (same validation as `PATCH`); `429` create limit.
 
-### 4.6 `POST /api/projections/{view_slug}/upgrade-model`
+### 4.6 `POST /api/projections/{view_slug}/upgrade-model` — **⚠ FORWARD SPEC — NOT IMPLEMENTED**
+
+> **This endpoint does not exist in the router yet** (no route decorator in `app/routers/projections.py`; the POST surface today is create, `/duplicate`, `/claim`, `/narrative:regenerate`, `/preview`, `/rotate-tokens`, `/revisions/{id}/restore`, `/trash`, `/restore`, and `DELETE`). Staleness is surfaced today via the read-time `upgrade_available` flag (§4.3), and a recompute is written by any `PATCH` (which stamps the current `model_version` on the new revision). The explicit, non-mutating "apply the new model, keep the old bytes" upgrade action below is the **intended** design and is retained here as the forward spec; wire it before relying on it.
 
 - **Auth:** owner or edit (Bearer). **Capability:** owner/edit. **Requires `If-Match: <version>`.**
 - **Behavior:** recompute the projection under the **current** engine `model_version`, writing a **new revision** (the prior `computed_json`+`model_version` are preserved in `revisions`, never destroyed — §13). Only call when `upgrade_available` is true; calling when already current is a no-op `200` with unchanged version.
@@ -483,10 +497,12 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 ```
 `stale` is true when the stored `computed_hash` ≠ the current `computed_json` hash; the client shows "Out of date" + Regenerate and **never auto-overwrites** user-edited prose (§17). `edit_origin` ∈ `ai | human | null` records how the stored prose was last produced. **`grounded_figures`** is the **server-built** canonical figure list with display variants ($277,990 / $278k / ($41,200)) derived from `computed_json` — the client never re-derives figures with a regex; the grounding validator checks against the same variant set (epic-N N3).
 
-- **`PUT` request:** `{ "body_md":"…markdown…" }`. The server **sanitizes** `body_md` with an allowlist (`p`/headings/`ul`-`ol`-`li`/`strong`/`em`/`blockquote`/`code`/`a[http|https|mailto]`) before storage — no raw HTML, no inline event handlers (stored-XSS → token-theft defense, [SECURITY.md](./SECURITY.md)) — and applies **numeric grounding fail-closed**: an ungrounded figure in a hand-edit is **rejected** (`409 grounding_failed`) and the prior narrative is left untouched (epic-N N4). Sets `edit_origin:"human"`. Response `200`: `{ "body_md":"…sanitized…", "edited":true, "edit_origin":"human", "computed_hash":"…" }`.
+- **Optimistic concurrency (both `PUT` and `:regenerate`):** `If-Match: <version>` is **required** (`428` if absent) and compared to the projection's live `version`. A stale value → **`409 version_conflict`** (same shape as the autosave PATCH: `{ error, current_version, your_version, current_state, recovery }`) so a second editor never silently clobbers the first's board-packet prose. A successful write **bumps the projection `version`** (standard `… SET version = version + 1 WHERE version = ?`, 0 rows → `409`), returns the new value in the `ETag` header and a `"version"` body field, and snapshots one revision (`change_summary` = `narrative_edit` / `narrative_regenerate`).
+
+- **`PUT` request:** `{ "body_md":"…markdown…" }`. The server **sanitizes** `body_md` with an allowlist (`p`/headings/`ul`-`ol`-`li`/`strong`/`em`/`blockquote`/`code`/`a[http|https|mailto]`) before storage — no raw HTML, no inline event handlers (stored-XSS → token-theft defense, [SECURITY.md](./SECURITY.md)) — and applies **numeric grounding fail-closed**: an ungrounded figure in a hand-edit is **rejected** (`409 grounding_failed`) and the prior narrative is left untouched (epic-N N4). Sets `edit_origin:"human"`. Response `200`: `{ "body_md":"…sanitized…", "edited":true, "edit_origin":"human", "computed_hash":"…", "version":<int> }`.
 
 - **`:regenerate` behavior:** low-temperature generation, **Anthropic primary → OpenAI fallback**; the result passes the numeric-grounding validator before it is stored. The `provider` field reflects the **actual** provider used. The prose states rent as an **estimate/range**, never a fact. Query `?confirm=true` is required to regenerate over a hand-edited narrative (confirm-before-discard, N6).
-  - Response `200`: `{ "body_md":"…", "edited":false, "edit_origin":"ai", "computed_hash":"…", "provider":"anthropic" }`.
+  - Response `200`: `{ "body_md":"…", "edited":false, "edit_origin":"ai", "computed_hash":"…", "provider":"anthropic", "version":<int> }`.
   - **`409 grounding_failed`** (validator rejection): `{ "error":"grounding_failed", "ungrounded_figures":["$310,000"] }` — the prior narrative is **not** overwritten.
   - **`409 edited_confirm_required`** when regenerating over `edit_origin:"human"` without `?confirm=true` — user prose is never silently discarded.
   - **`503 ai_unavailable`** when both providers fail (compute and `.xlsx` still work — §21). Body `{ "error":"ai_unavailable" }`.
@@ -513,7 +529,7 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 
 - **Auth:** owner/edit/view. **Capability:** owner/edit/view (role flag tailors emphasis/CTAs — board/funder/advisor, §6.2/§17). **Terms acceptance required** (`403 terms_required` otherwise).
 - **Query:** `?format=pdf|docx` (default `pdf`); `?role=board|funder|advisor` (defaults to the share-link role, else `board`).
-- **Behavior:** the packet **leads with evidence** (§15), then decision recommendation, assumptions (verified vs estimated), citations w/ dates+confidence, sensitivity table, risks, cash need + break-even, monthly cash-flow summary, 5-year P&L, KPIs. Prose is the grounded narrative (§6.1); if AI is disabled, the packet omits generated prose but still includes the structured/evidence sections.
+- **Behavior:** the packet **leads with evidence** (§15), then decision recommendation, assumptions (verified vs estimated), citations w/ dates+confidence, sensitivity table, **§12.2 guardrails** (any out-of-band driver + the justification note it requires — sourced from the engine `flags` that carry `requires_note: true`; empty/silent when every driver is in band), risks, cash need + break-even, monthly cash-flow summary, 5-year P&L, KPIs. Prose is the grounded narrative (§6.1); if AI is disabled, the packet omits generated prose but still includes the structured/evidence sections (guardrails included — they are flag-derived, never AI-derived).
 - **Response `200`:** `application/pdf` or the `.docx` content type; `Content-Disposition: attachment`.
 - **Errors:** `403 terms_required`; `404`; `429`.
 
@@ -611,7 +627,7 @@ Decision #15: keep the **summing and formatting authority server-side** for the 
   ],
   "grandTotal": { "raw": 95000.0, "display": "$95,000" },
   "modelVersion": "2.6.0",
-  "computeSchemaVersion": "1.5.0"
+  "computeSchemaVersion": "1.6.0"
 }
 ```
 - **Errors:** `429 rate_limited` (`{ "error":"rate_limited", "retry_after_seconds": N, "scope":"ip" }` + `Retry-After`); `422` validation (a malformed row).
@@ -755,6 +771,7 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `409` | `grounding_failed` / `ai_disabled` / `not_trashed` | Narrative figure ungrounded; AI opt-out; hard-delete on an active projection. |
 | `413` / `415` | `file_too_large` / `unsupported_media_type` | Evidence upload limits. |
 | `422` | `node_not_pinnable` / `unsupported_basis` / `input_out_of_domain` | Pin on a derived node; radius/ZCTA basis; e.g. 0 sq ft. |
+| `422` | `invalid_inputs` / `invalid_assumptions` | The merged `inputs`/`assumptions` surface fails `InputsIn`/`AssumptionsIn` re-validation (e.g. a percent knob outside `[0,1]`, `sensitivity_delta` outside `[0,0.9]`, a negative `reserve_buffer`/`donations_per_hh`/`basket`/`utilities_per_sqft`, an off-allowlist or negative `fixed_annual` line, an oversized `cost_schedule`). Applies on **every** `PATCH`, including one that merely re-validates a legacy stored value from before a bound existed. |
 | `428` | `if_match_required` | Mutation missing `If-Match`. |
 | `429` | `rate_limited` | Per-IP or per-token limit (carries `retry_after_seconds`). |
 | `502` | `places_unavailable` / `census_unavailable` / `research_unavailable` | Upstream data provider down — client falls back to manual entry. |
@@ -771,8 +788,8 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 | `GET …/{slug}` | owner/edit/view | — | no | read |
 | `PATCH …/{slug}` | owner/edit | **yes** | yes | autosave |
 | `POST …/{slug}/preview` | owner/edit | no | **no (read-only)** | read |
-| `POST …/{slug}/duplicate` | owner/edit | no | create | create |
-| `POST …/{slug}/upgrade-model` | owner/edit | **yes** | yes | read |
+| `POST …/{slug}/duplicate` | owner | no | create | create |
+| `POST …/{slug}/upgrade-model` *(forward spec — not implemented, §4.6)* | owner/edit | **yes** | yes | read |
 | `POST …/{slug}/rotate-tokens` | owner | **yes** | yes | read |
 | `POST …/{slug}/trash` · `…/restore` | owner | **yes** | yes | read |
 | `DELETE …/{slug}` | owner | **yes** | yes (purge) | read |

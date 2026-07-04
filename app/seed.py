@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.deps import hash_token
+from engine import model
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.viewmodel import to_view_model
 
@@ -27,8 +28,11 @@ EXAMPLE_OWNER_TOKEN = "owner-secret"
 ROLE_SLUG = "board-slug"
 ROLE_NAME = "board"
 
-# Design-parity (40% labor) House of Hope — the Appendix-D headline the prototype
-# screenshots use (reco=proceed, capital ~ $278k, break-even ~month 5).
+# Design-parity (40% labor) House of Hope. Under engine 2.7.0 (990 constants +
+# monthly split) this seed computes reco=raise_cash — capital ~$302k crosses its
+# $300k funds by ~$2.2k (Y1 net still positive; the capital>funds gate, not store
+# health). The prototype-era "proceed / ~$278k / BE ~month 5" headline no longer
+# holds; see DECISIONS.md (2.7.0) and owner decision #345.
 _INPUTS: dict[str, Any] = dict(
     org_name="House of Hope",
     city="Longview, Texas",
@@ -38,7 +42,7 @@ _INPUTS: dict[str, Any] = dict(
     share_y3="0.10",
     share_y4="0.11",
     share_y5="0.12",
-    donation_value="74",
+    donation_value=model.DEFAULT_DONATION_VALUE,  # 990-grounded $74 (single source)
     building_sqft="10000",
     salesfloor_pct="0.70",
     occupancy_annual="120000",
@@ -87,6 +91,12 @@ def seed_example(store) -> None:
         return
     vm = example_view_model()
     now = _utcnow()
+    # Plain json.dumps (not dumps_finite) throughout this row is intentional, not an
+    # oversight (batch3-review finding A / Minor 1): every value here is either a
+    # static seed constant (_LOCATION/_TRADE/_INPUTS/_ASSUMPTIONS, hand-authored, no
+    # floats that could be non-finite) or `vm`, the engine's own view-model, which
+    # always emits explicit `null` — never NaN/Infinity (PRD §12.4) — and this whole
+    # path only runs under the non-prod E2E_SEED gate, never a real user PATCH.
     row = {
         "id": "seed-example-" + secrets.token_hex(4),
         "view_slug": EXAMPLE_SLUG,
@@ -128,6 +138,8 @@ def reset_example(store) -> bool:
         seed_example(store)
         return False
     vm = example_view_model()
+    # Plain json.dumps exemption: same reasoning as seed_example() above (static seed
+    # constants + the engine's own null-not-NaN vm, non-prod E2E gate only).
     patch = {
         "name": "House of Hope",
         "inputs_json": json.dumps(_INPUTS),

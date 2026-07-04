@@ -1,6 +1,6 @@
 # BUILD_PLAN.md — Thrift Store Projection Web App
 
-**Repo:** `rallytasks/projections` · **Status:** Ready to build (not yet built) · **Source of truth:** [PRD.md](./reference/PRD.md) (v3.1) · **Tracks PRD §24 milestones M-1–M7**
+**Repo:** `rallytasks/projections` · **Status:** built & deployed (engine 2.6.0, 5-year horizon, redesign v2) · **Source of truth:** [PRD.md](./reference/PRD.md) (v3.1) · **Tracks PRD §24 milestones M-1–M7**
 
 > This is the execution plan an agent team builds from. It expands the PRD milestones into sequenced, agent-sized tasks with per-task acceptance criteria, dependencies, and the review gates that apply. It is deliberately self-consistent with its sibling docs — cross-link by filename: [ARCHITECTURE.md](./ARCHITECTURE.md), [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md), [DATA_MODEL.md](./DATA_MODEL.md), [API_SPEC.md](./API_SPEC.md), [SECURITY.md](./SECURITY.md), [OPS_RUNBOOK.md](./OPS_RUNBOOK.md), [CLAUDE.md](./CLAUDE.md), [AGENTS.md](./AGENTS.md), [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md), [CONTRIBUTING.md](./CONTRIBUTING.md), [IDEA_FAB.md](./IDEA_FAB.md).
 

@@ -10,6 +10,7 @@ import pytest
 from engine import model
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.money import D
+from engine.tests.conftest import build_canonical_inputs
 
 
 def test_first_year_cash_gap_is_most_negative_cumulative(canonical_result):
@@ -33,12 +34,18 @@ def test_capital_required_is_peak_shortfall_plus_reserve(canonical_result):
 
 def test_design_parity_capital_matches_appendix_d_headline(design_parity_result):
     # Contract anchor (ENGINE_CONTRACT §6.1 / DESIGN_PROMPT): the 40% design-parity
-    # case is the prototype headline — reco "proceed" and capital ≈ $278k (the board
-    # screenshots show ~$277,990; the monthly model lands a touch higher). A range,
-    # not a to-the-dollar match, since the prototype used a different calc.
+    # case is the prototype headline. Capital trajectory across waves: prototype
+    # screenshots ~$277,990 -> ~$299,168 (6.2 monthly split) -> $302,238.41 (6.4
+    # 990-grounded payroll tax 8% + Insurance $10k). *** OWNER-VISIBLE FLIP (6.4): ***
+    # capital ($302,238) now crosses the design-parity/seed source_of_funds ($300,000)
+    # by $2,238, so the rules-as-written reco flips proceed -> raise_cash (Year-1 net
+    # is still +$38,505 and margins stay in band — it is the capital>funds gate, not a
+    # health problem). The prototype's "Proceed" headline assumed the pre-990 cost
+    # basis; restoring it would require funding the demo above its now-higher capital
+    # need. Flagged for the whole-branch reviewer / owner.
     cap = D(str(design_parity_result.decision.startup_capital_required))
-    assert Decimal("275000") <= cap <= Decimal("282000")
-    assert design_parity_result.decision.reco_tag == "proceed"
+    assert Decimal("300000") < cap <= Decimal("305000")
+    assert design_parity_result.decision.reco_tag == "raise_cash"
 
 
 def test_payback_null_when_y1_net_not_positive(canonical_result):
@@ -143,6 +150,93 @@ def test_sensitivity_capital_has_no_startup_double_count(canonical_result):
     assert base_cap < doubled
 
 
+def test_sensitivity_delta_assumption_drives_stress():
+    # The ± sensitivity stress reads Assumptions.sensitivity_delta (default 0.25); it
+    # is NO LONGER a hard-coded 1.25/0.75 literal. With delta=0.10 the downside must
+    # stress rent ×(1+0.10)=1.10 and donations ×(1-0.10)=0.90 — proven by equality
+    # with a hand-built _scenario_net at exactly those multipliers, and by differing
+    # from the default 0.25 run.
+    from engine.decision import _scenario_net
+
+    inputs, _default_a, demand, trade = build_canonical_inputs()
+    a10 = Assumptions(labor_pct="0.60", sensitivity_delta="0.10")
+    down10 = compute(inputs, a10, demand, trade, overrides={}).decision.sensitivity[
+        "downside"]
+
+    hand_net, hand_be, hand_cap = _scenario_net(
+        inputs, a10, demand, trade, {}, "1.10", "0.90")
+    assert D(str(down10["net"])) == D(str(hand_net))
+    assert down10["breakeven"] == hand_be
+    assert D(str(down10["capital"])) == D(str(hand_cap))
+
+    # The knob actually moves the stress: a 0.10 delta differs from the default 0.25.
+    a25 = Assumptions(labor_pct="0.60")  # sensitivity_delta defaults to 0.25
+    down25 = compute(inputs, a25, demand, trade, overrides={}).decision.sensitivity[
+        "downside"]
+    assert D(str(down10["net"])) != D(str(down25["net"]))
+
+
+def test_sensitivity_default_unchanged():
+    # Anchor invariant: the default Assumptions (sensitivity_delta=0.25) must
+    # reproduce the prior hard-coded ±25% stress EXACTLY (rent 1.25/donations 0.75 on
+    # the downside, 0.75/1.25 on the upside) — this is what keeps the frozen goldens
+    # byte-identical after wiring SENSITIVITY_DELTA.
+    from engine.decision import _scenario_net
+
+    inputs, a, demand, trade = build_canonical_inputs()  # default delta 0.25
+    sens = compute(inputs, a, demand, trade, overrides={}).decision.sensitivity
+
+    hand = {
+        "base": _scenario_net(inputs, a, demand, trade, {}, "1.0", "1.0"),
+        "downside": _scenario_net(inputs, a, demand, trade, {}, "1.25", "0.75"),
+        "upside": _scenario_net(inputs, a, demand, trade, {}, "0.75", "1.25"),
+    }
+    for scen, (net, be, cap) in hand.items():
+        assert D(str(sens[scen]["net"])) == D(str(net)), scen
+        assert sens[scen]["breakeven"] == be, scen
+        assert D(str(sens[scen]["capital"])) == D(str(cap)), scen
+
+
+# --------------------------- pins must NOT defeat the sensitivity stress (panel P0)
+def test_pinned_share_at_base_does_not_defeat_the_sensitivity_stress(canonical_inputs):
+    # A pin asserts a LEVEL, not immunity to the ± stress: pinning share#1 to its own
+    # computed base value (0.06) must leave the whole sensitivity dict byte-identical
+    # to the unpinned run. Pre-fix the pin froze the donation stress inside the
+    # scenario re-runs — the downside net came out -$74,433 instead of the correct
+    # -$100,850, making the downside artificially rosy (and able to flip the verdict).
+    inputs, a, demand, trade = canonical_inputs
+    unpinned = compute(inputs, a, demand, trade, overrides={}).decision.sensitivity
+    pin = {"share#1": {"value": "0.06", "note": "pinned to base",
+                       "ts": "2026-07-04T00:00:00Z"}}
+    pinned = compute(inputs, a, demand, trade, overrides=pin).decision.sensitivity
+    for scen in ("base", "downside", "upside"):
+        assert D(str(pinned[scen]["net"])) == D(str(unpinned[scen]["net"])), scen
+        assert pinned[scen]["breakeven"] == unpinned[scen]["breakeven"], scen
+        assert D(str(pinned[scen]["capital"])) == D(str(unpinned[scen]["capital"])), scen
+    # ...and the donation stress genuinely bites THROUGH the pin (not a vacuous pass):
+    # the downside donation shock still drives net below the base case.
+    assert D(str(pinned["downside"]["net"])) < D(str(pinned["base"]["net"]))
+
+
+def test_pinned_rent_at_base_still_takes_the_downside_rent_shock(canonical_inputs):
+    # Pinning Rent#1 to its base level ($120,000) must NOT shield the downside from the
+    # +25% rent shock: the pinned run's whole sensitivity dict must equal the unpinned
+    # run's (which stresses rent to $150,000). Pre-fix the rent pin froze the shock, so
+    # the downside capital came out $342,215 instead of the correct $371,850.
+    inputs, a, demand, trade = canonical_inputs
+    unpinned = compute(inputs, a, demand, trade, overrides={}).decision.sensitivity
+    pin = {"Rent#1": {"value": "120000", "note": "pinned to base",
+                      "ts": "2026-07-04T00:00:00Z"}}
+    pinned = compute(inputs, a, demand, trade, overrides=pin).decision.sensitivity
+    for scen in ("base", "downside", "upside"):
+        assert D(str(pinned[scen]["net"])) == D(str(unpinned[scen]["net"])), scen
+        assert pinned[scen]["breakeven"] == unpinned[scen]["breakeven"], scen
+        assert D(str(pinned[scen]["capital"])) == D(str(unpinned[scen]["capital"])), scen
+    # The +25% rent shock genuinely deepens the downside capital vs base (bites through
+    # the pin).
+    assert D(str(pinned["downside"]["capital"])) > D(str(pinned["base"]["capital"]))
+
+
 def test_reco_tag_is_semantic_enum(canonical_result):
     valid = {"proceed", "revise", "find_cheaper_rent", "raise_cash", "delay", "do_not_proceed"}
     assert canonical_result.decision.reco_tag in valid
@@ -183,6 +277,24 @@ def test_efficiency_kpis_are_na_when_revenue_is_zero():
 def test_canonical_60_labor_is_not_proceed(canonical_result):
     # A loss case must not say "proceed".
     assert canonical_result.decision.reco_tag != "proceed"
+
+
+def test_canonical_reco_is_raise_cash_after_monthly_split(canonical_result):
+    # Pins the canonical verdict under the 6.2 monthly distribution change (fixed
+    # costs charged flat, payroll taxes on the payroll ramp): the downside scenario
+    # reaches break-even within the horizon, so the do_not_proceed rule no longer
+    # fires, and the binding constraint is capital > source of funds ($300,000) ->
+    # raise_cash. Re-pinned at the 2.7.0 regen (Task 6.4): the 990-grounded constants
+    # deepen the trough (capital $342,403 -> $347,853.76) and push the downside
+    # break-even from month 11 to month 12 (still inside the horizon). The verdict is
+    # UNCHANGED (raise_cash) — the owner-visible 6.2 flip (owner decision #345) holds.
+    # Any future regression that flips this verdict must trip THIS assertion loudly.
+    dec = canonical_result.decision
+    assert dec.reco_tag == "raise_cash"
+    assert "capital" in dec.reco_reasons
+    # The two facts the verdict is built from:
+    assert dec.sensitivity["downside"]["breakeven"] == 12   # downside DOES break even
+    assert D(str(dec.startup_capital_required)) > D(canonical_result.inputs.source_of_funds)
 
 
 def test_aggressive_fixture_triggers_margin_guardrail():
@@ -382,6 +494,170 @@ def test_aggressive_share_guardrail_fires_at_canonical_labor():
     assert res.decision.reco_tag == "revise"
 
 
+# --------------------------------------- occupancy / labor / sales-per-sqft (Task 6.3)
+def test_occupancy_ratio_out_of_band_flag_fires_on_canonical(canonical_result):
+    # Canonical Y1 occupancy ratio ($120,000 Rent / ~$426,938 revenue) is ~28.1%,
+    # above the 20% advisory band -- the flag must fire with requires_note, even
+    # though _recommend's own inline occ_ratio check never reaches find_cheaper_rent
+    # here (raise_cash wins on precedence -- test_canonical_reco_is_raise_cash...).
+    y1 = canonical_result.annual[1]
+    occ_ratio = D(str(y1.expenses["Rent"])) / D(str(y1.total_rev))
+    assert Decimal("0.28") < occ_ratio < Decimal("0.29")
+    flag = canonical_result.flags.get("occupancy_ratio_out_of_band")
+    assert flag is not None
+    assert flag["requires_note"] is True
+
+
+def test_occupancy_ratio_flag_absent_when_in_band():
+    # Same canonical shape but a smaller resolved rent keeps the ratio under 20%.
+    inputs = Inputs(
+        org_name="House of Hope", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="50000", lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    assert "occupancy_ratio_out_of_band" not in res.flags
+
+
+def test_labor_ratio_out_of_band_flag_and_break_even_revenue_guard():
+    # labor 0.90 pushes the %-of-revenue cost stack (card 2% + marketing 3.75% +
+    # payroll 90%*1.075 + supplies 5%) to var_rate == 1.075 >= 1: break-even revenue
+    # is mathematically undefined (no revenue level ever recovers fixed costs) and
+    # MUST guard to None with a flags reason, alongside the labor-ratio advisory
+    # flag firing (90% is above the 60% band ceiling).
+    inputs, _, demand, trade = build_canonical_inputs()
+    res = compute(inputs, Assumptions(labor_pct="0.90"), demand, trade, overrides={})
+    flag = res.flags.get("labor_ratio_out_of_band")
+    assert flag is not None
+    assert flag["requires_note"] is True
+    assert res.decision.break_even_revenue_annual is None
+    assert res.flags["break_even_revenue"] == (
+        "N/A — variable-cost rate ≥ 100% of revenue")
+
+
+def test_labor_ratio_flag_absent_when_in_band(canonical_result):
+    # Canonical labor is exactly 60% -- the band's upper edge, not outside it.
+    assert "labor_ratio_out_of_band" not in canonical_result.flags
+
+
+def test_advisory_flags_are_override_aware(canonical_inputs):
+    # The 6.3 advisory bands read the RESOLVED Year-1 values (decision.py:341-346),
+    # so a pinned component cell must move the ratio the flag checks -- not the
+    # un-resolved input. Two directions, one invariant:
+    #   * Canonical fires occupancy_ratio_out_of_band ($120k rent / ~$427k rev ~28%).
+    #     Pinning a smaller Rent#1 must CLEAR it ($50k / ~$427k ~11.7% < 20%).
+    #   * Canonical labor is exactly 60% (in band). Pinning a large Payroll#1 must
+    #     FIRE labor_ratio_out_of_band ($400k / ~$427k ~93.7% > 60%).
+    # Without override-awareness (flags reading raw inputs) both assertions fail.
+    inputs, a, demand, trade = canonical_inputs
+
+    rent_pinned = compute(inputs, a, demand, trade,
+                          overrides={"Rent#1": {"value": "50000", "note": "x", "ts": "t"}})
+    assert "occupancy_ratio_out_of_band" not in rent_pinned.flags
+
+    payroll_pinned = compute(inputs, a, demand, trade,
+                             overrides={"Payroll#1": {"value": "400000", "note": "x", "ts": "t"}})
+    flag = payroll_pinned.flags.get("labor_ratio_out_of_band")
+    assert flag is not None
+    assert flag["requires_note"] is True
+    assert Decimal("0.93") < D(str(flag["value"])) < Decimal("0.94")
+
+
+def test_sales_per_sqft_flag_absent_when_in_band(canonical_result):
+    # Canonical Y1 sales/sqft (~$426,938 / 7,000 sqft ~= $61) sits inside $50-$300.
+    assert "sales_per_sqft_out_of_band" not in canonical_result.flags
+
+
+def test_sales_per_sqft_out_of_band_flag_fires_below_band():
+    # A tiny donor share on a big salesfloor drives Y1 sales/sqft under $50.
+    inputs = Inputs(
+        org_name="Low Sales", city="x", opening_status="pre_launch",
+        share_y1="0.01", share_y2="0.01", share_y3="0.01", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="50000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    flag = res.flags.get("sales_per_sqft_out_of_band")
+    assert flag is not None
+    assert flag["requires_note"] is True
+
+
+def test_sales_per_sqft_out_of_band_flag_fires_above_band():
+    # A big donor share on a small salesfloor drives Y1 sales/sqft over $300.
+    inputs = Inputs(
+        org_name="High Sales", city="x", opening_status="pre_launch",
+        share_y1="0.20", share_y2="0.20", share_y3="0.20", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="2000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="900000",
+    )
+    res = compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    flag = res.flags.get("sales_per_sqft_out_of_band")
+    assert flag is not None
+    assert flag["requires_note"] is True
+
+
+# --------------------------------------- cross-module classification tripwire (Wave-6A
+# fable review, Important #1 — same defect class as the batch-2 I2 packet fix): the
+# %-of-revenue expense LINE SET must stay in sync across all three homes that classify
+# it, or a future line silently mis-files in two places at once.
+def test_pct_of_revenue_classification_is_consistent_across_the_three_homes(
+        canonical_result):
+    """Three homes classify "which expense lines are %-of-revenue":
+
+      1. engine.compute.PCT_OF_REVENUE_LINES — the canonical driver-chain list (each
+         entry has its own ``*_pct`` assumption field: card/marketing/labor/supplies).
+      2. engine.monthly._PCT_OF_REVENUE_LABELS — which lines ride the monthly revenue
+         S-curve (vs. a flat lease-style spread). Payroll is the ONE deliberate,
+         documented exception here: it rides its own hire-ramp instead (monthly.py's
+         own module comment explains why), so home 2's set is home 1's MINUS Payroll.
+      3. engine.decision.py's break-even-revenue ``var_rate`` (§12.4) — introspected
+         here from decision.py's own OUTPUTS (break_even_revenue_annual + Year-1
+         total_exp/total_rev), never a hand-copied re-implementation of its formula:
+         solving ``break_even_revenue = (total_exp - total_rev*var_rate) / (1 - var_rate)``
+         for var_rate gives
+         ``var_rate = (break_even_revenue - total_exp) / (break_even_revenue - total_rev)``.
+
+    A future %-of-revenue line added to compute.py's list but forgotten in the other
+    two would otherwise silently flat-spread in the monthly model (mis-classified as
+    a fixed lease obligation instead of riding the revenue ramp) AND drop out of the
+    break-even-revenue math, with no test failing — this is that test.
+    """
+    import engine.compute as compute_mod
+    import engine.monthly as monthly_mod
+
+    canonical_lines = set(compute_mod.PCT_OF_REVENUE_LINES)
+
+    # Home 2: monthly.py's revenue-ramp set == the canonical set minus the one
+    # documented exception (Payroll rides its own ramp, tracked separately).
+    assert set(monthly_mod._PCT_OF_REVENUE_LABELS) == canonical_lines - {"Payroll"}
+
+    # Home 3: introspect the REAL var_rate decision.py's break-even-revenue guard
+    # actually used, purely from its own outputs (no re-implemented formula).
+    y1 = canonical_result.annual[1]
+    dec = canonical_result.decision
+    rev1 = D(str(y1.total_rev))
+    exp1 = D(str(y1.total_exp))
+    ber = dec.break_even_revenue_annual
+    assert ber is not None  # canonical's var_rate < 1 -- a real break-even revenue exists
+    implied_var_rate = (ber - exp1) / (ber - rev1)
+
+    # The dollar total of every canonical %-of-revenue line, PLUS its one DERIVED
+    # %-of-Payroll line ("Payroll taxes" is not itself in PCT_OF_REVENUE_LINES —
+    # it is derived from Payroll, exactly like Rent is derived from occupancy —
+    # but decision.py's var_rate folds it into the Payroll term via
+    # ``labor_pct * (1 + payroll_tax_pct)``), must equal var_rate's entire dollar
+    # coverage. A future line added to home 1 without a matching var_rate term
+    # would push this dollar total above implied_var_rate * rev1 and fail loudly.
+    pct_dollar_total = sum(
+        (D(str(y1.expenses[label])) for label in canonical_lines), Decimal("0")
+    ) + D(str(y1.expenses["Payroll taxes"]))
+    assert abs(pct_dollar_total - implied_var_rate * rev1) < Decimal("0.01")
+
+
 # --------------------------------------- decision text <-> metric consistency (#142/#145)
 def _claims_breakeven_unreached(text: str) -> bool:
     """True when a string flatly asserts break-even was never reached."""
@@ -420,28 +696,30 @@ def assert_breakeven_text_consistent(vm) -> None:
                 f"{be['display']!r} (reached in the base case): {text!r}")
 
 
-def test_reco_text_and_breakeven_metric_cannot_disagree_canonical(canonical_result):
-    # #142 RED: the canonical default reaches operating break-even at month 9 in the
-    # BASE case (metrics.breakeven = Month 9), yet is do_not_proceed because the
-    # DOWNSIDE never breaks even. The reco text must say *that*, not flatly claim
-    # "break-even is not reached" — which contradicts the Month-9 metric on screen.
+def test_reco_text_and_breakeven_metric_cannot_disagree_grace(grace_result):
+    # #142: Grace Mission reaches operating break-even at month 8 in the BASE case
+    # (metrics.breakeven = Month 8), yet is do_not_proceed because the DOWNSIDE never
+    # breaks even. The reco text must say *that*, not flatly claim "break-even is
+    # not reached" — which contradicts the Month-8 metric on screen.
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
-    vm = to_view_model(canonical_result)
+    vm = to_view_model(grace_result)
     assert vm["reco"]["tag"] == "do_not_proceed"
-    assert vm["metrics"]["breakeven"]["raw"] == 9
+    assert vm["metrics"]["breakeven"]["raw"] == 8
     assert_breakeven_text_consistent(vm)
 
 
-def test_reco_text_names_base_and_downside_when_base_breaks_even(canonical_result):
-    # #142/#145 RED: the honest, consistent message surfaces WHY the verdict is
-    # do_not_proceed — the base case reaches break-even (Month 9) but the downside
+def test_reco_text_names_base_and_downside_when_base_breaks_even(grace_result):
+    # #142/#145: the honest, consistent message surfaces WHY the verdict is
+    # do_not_proceed — the base case reaches break-even (Month 8) but the downside
     # scenario (rent +25% / donations -25%) does not, so the plan is not robust.
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
-    vm = to_view_model(canonical_result)
+    vm = to_view_model(grace_result)
     for text in (vm["reco"]["sub"].lower(), vm["metrics"]["reasonBreakeven"].lower()):
         assert "base case" in text, text
         assert "downside" in text, text
-        assert "month 9" in text, text
+        assert "month 8" in text, text
 
 
 def test_reco_text_consistent_for_deep_loss_base_unreached():
@@ -456,11 +734,12 @@ def test_reco_text_consistent_for_deep_loss_base_unreached():
     assert_breakeven_text_consistent(vm)  # must not raise
 
 
-def test_decision_reason_names_base_breakeven_month(canonical_result):
+def test_decision_reason_names_base_breakeven_month(grace_result):
     # At the engine layer (before the view-model), the do_not_proceed break-even
     # reason already carries the base-case month and the downside scenario — the
     # view-model formatting layer adds nothing the engine didn't assert.
-    dec = canonical_result.decision
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
+    dec = grace_result.decision
     assert dec.reco_tag == "do_not_proceed"
     reason = dec.reco_reasons["breakeven"]
     assert f"Month {dec.break_even_month}" in reason
@@ -489,7 +768,10 @@ def test_base_unreached_reason_is_honest_not_viable():
 def test_do_not_proceed_message_differs_between_base_fail_and_downside_fail():
     # The two do_not_proceed stories must read differently: a base that reaches
     # break-even (downside-driven verdict) vs a base that never does (non-viable).
-    downside_driven = _opening_at(1, labor="0.60").decision.reco_reasons["breakeven"]
+    # (downside-driven arm re-homed from canonical to Grace after the 6.2 monthly
+    # split — see task-6.1-6.2-report; canonical is now raise_cash)
+    from engine.tests.conftest import build_grace_result
+    downside_driven = build_grace_result().decision.reco_reasons["breakeven"]
     base_failed = _opening_at(
         1, labor="0.60", share_y1="0.005", share_y2="0.005",
         share_y3="0.005", share_y4="0.11", share_y5="0.12").decision.reco_reasons["breakeven"]
@@ -570,15 +852,47 @@ def test_downside_actually_stresses_rent_for_every_encoding():
             f"{name}: rent +25% did not lower net (rent stress was skipped)"
 
 
+def _grace_econ_84k_encodings():
+    """Grace Mission's economics (occupancy_y1 == $84,000) encoded four ways.
+
+    (re-homed from the canonical $120k economics after the 6.2 monthly split — see
+    task-6.1-6.2-report: canonical's downside now reaches break-even, so Grace is
+    the fixture whose downside legitimately never breaks even.)
+    """
+    common = dict(
+        org_name="Grace Mission", city="Tyler, Texas", opening_status="pre_launch",
+        share_y1="0.04", share_y2="0.05", share_y3="0.06",
+        share_y4="0.07", share_y5="0.08", donation_value="74",
+        building_sqft="6000", salesfloor_pct="0.70",
+        source_of_funds="250000",
+    )
+    return {
+        "occupancy_annual_gross": Inputs(
+            occupancy_annual="84000", lease_type="gross", **common),
+        "rent_per_sqft_gross": Inputs(
+            rent_per_sqft="14", lease_type="gross", **common),  # 6000 * 14 = 84000
+        "occupancy_annual_nnn": Inputs(
+            occupancy_annual="54000", nnn_opex_annual="30000", lease_type="nnn",
+            **common),  # 54000 + 30000 = 84000
+        "rent_per_sqft_nnn": Inputs(
+            rent_per_sqft="9.0", nnn_opex_annual="30000", lease_type="nnn",
+            **common),  # 9*6000 + 30000 = 84000
+    }
+
+
 def test_downside_verdict_is_do_not_proceed_for_all_encodings():
-    # #181: the canonical 60%-labor economics legitimately fail the downside (rent
-    # +25%/donations -25% never breaks even) -> do_not_proceed. That correct verdict
-    # must hold for every encoding, never silently flip to proceed/raise_cash.
-    a = Assumptions(labor_pct="0.60")
+    # #181: Grace's economics legitimately fail the downside (rent +25%/donations
+    # -25% never breaks even) -> do_not_proceed. That correct verdict must hold for
+    # every encoding, never silently flip to proceed/raise_cash. The Payroll#1 pin
+    # is part of Grace's identity and rides along (orthogonal to the rent encoding).
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
+    from engine.tests.conftest import GRACE_PAYROLL_OVERRIDE
+    a = Assumptions()  # 60% labor default
     demand = DemandDrivers()
-    trade = TradeArea(basis="city", households="31798")
-    for name, inp in _econ_120k_encodings().items():
-        dec = compute(inp, a, demand, trade, overrides={}).decision
+    trade = TradeArea(basis="city", households="25000")
+    for name, inp in _grace_econ_84k_encodings().items():
+        dec = compute(inp, a, demand, trade,
+                      overrides=dict(GRACE_PAYROLL_OVERRIDE)).decision
         assert dec.sensitivity["downside"]["breakeven"] is None, name
         assert dec.reco_tag == "do_not_proceed", name
 
@@ -593,8 +907,14 @@ def test_breakeven_consistency_invariant_holds_across_a_scenario_sweep():
     seen_downside_driven = False
     seen_base_unreached = False
     seen_reached_and_proceed = False
+    # The 0.04-share row keeps the downside-driven branch exercised: after the 6.2
+    # monthly split the canonical 0.06/0.08/0.10 shares no longer produce a base-
+    # reaches/downside-fails case (its downside now breaks even), but 0.04 shares at
+    # 0.50/0.60 labor still do — so the sweep cannot go vacuous on that branch.
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     for labor in ("0.40", "0.50", "0.60"):
         for shares in (("0.005", "0.005", "0.005"),
+                       ("0.04", "0.04", "0.04"),
                        ("0.06", "0.08", "0.10"),
                        ("0.15", "0.20", "0.25")):
             for g in (1, 4):

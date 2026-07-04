@@ -29,12 +29,15 @@ import {
   docxHref,
 } from "../api/viewModel";
 import {
+  duplicateProjection,
   getEditToken,
   getOwnerToken,
+  setEditToken,
+  setOwnerToken,
   trashProjection,
   LifecycleConflictError,
 } from "../api/projections";
-import { patchProjection, PatchConflictError } from "../api/patch";
+import { patchProjection, PatchConflictError, type PatchBody } from "../api/patch";
 import { clerkActive, getClerkToken } from "../auth/clerkToken";
 import { ShareModal } from "../components/ShareModal";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -56,6 +59,11 @@ import type {
 import type { SaveState } from "../components/TopBar";
 import type { ConflictBody } from "../state/autosaveReducer";
 import { clearDetailHeader, setDetailHeader } from "../state/detailHeader";
+import {
+  formatListDate,
+  sensitivityBreakevenLabel,
+  sensitivityDeltaLabel,
+} from "../components/displayLabels";
 import type { ServerValue } from "../api/client";
 import type { PatchHandlerArgs } from "../components/SettingsTab";
 import { readFragmentSecret } from "../router/route";
@@ -274,11 +282,24 @@ function auditItems(vm: ViewModel): OverrideAuditItem[] {
 }
 
 /** Build the SettingsTab view-model from the server settings map. The 2.6.0 / E2
- *  drivers (shareY4/Y5, donationValue, basket, donationsPerHouseholdPerYear) are
- *  included ONLY when the snapshot carries them, so a legacy 3-year snapshot renders
- *  just the drivers it actually has (the merged grid filters on presence). */
+ *  drivers (shareY4/Y5, donationValue, basket, donationsPerHouseholdPerYear) AND the
+ *  1.6.0 params (reserveBuffer, sensitivityDelta, nnnOpexAnnual, buildingSqft,
+ *  salesfloorPct, rentPerSqft, utilitiesPerSqft, fixedAnnual, leaseType) are included
+ *  ONLY when the snapshot carries them, so a legacy snapshot renders just the drivers
+ *  it actually has (the merged grid filters on presence and drops empty groups). */
 function settingsVm(s: ViewModel["settings"]) {
   const has = (k: string) => s[k] !== undefined && s[k] !== null;
+  // A numeric setting that may arrive as a number OR a string (old Penny-edited rows
+  // stored e.g. reserve_buffer as a string): coerce via Number() before wrapping so
+  // the field seeds from the value, not 0. Display coercion only — no client math.
+  const numSv = (v: ServerValue | number | string | undefined): ServerValue => {
+    if (v && typeof v === "object" && "raw" in v) return v;
+    const n = Number(v);
+    return { raw: Number.isFinite(n) ? n : 0, display: String(v ?? "") };
+  };
+  // fixedAnnual is a nested {label: $/yr} dict; the settings map's value type does not
+  // model objects, so read it through an explicit cast.
+  const fixedAnnual = s.fixedAnnual as unknown as Record<string, number> | undefined;
   return {
     laborPct: sv(s.laborPct),
     marketingPct: sv(s.marketingPct),
@@ -297,21 +318,30 @@ function settingsVm(s: ViewModel["settings"]) {
     ...(has("donationsPerHouseholdPerYear")
       ? { donationsPerHouseholdPerYear: sv(s.donationsPerHouseholdPerYear) }
       : {}),
+    // 1.6.0 params — presence-filtered for legacy snapshots.
+    ...(has("reserveBuffer") ? { reserveBuffer: numSv(s.reserveBuffer) } : {}),
+    ...(has("sensitivityDelta") ? { sensitivityDelta: numSv(s.sensitivityDelta) } : {}),
+    ...(has("nnnOpexAnnual") ? { nnnOpexAnnual: numSv(s.nnnOpexAnnual) } : {}),
+    ...(has("buildingSqft") ? { buildingSqft: numSv(s.buildingSqft) } : {}),
+    ...(has("salesfloorPct") ? { salesfloorPct: numSv(s.salesfloorPct) } : {}),
+    ...(has("rentPerSqft") ? { rentPerSqft: numSv(s.rentPerSqft) } : {}),
+    ...(has("utilitiesPerSqft") ? { utilitiesPerSqft: numSv(s.utilitiesPerSqft) } : {}),
+    ...(fixedAnnual && typeof fixedAnnual === "object" ? { fixedAnnual } : {}),
+    ...(has("leaseType") ? { leaseType: String(s.leaseType) } : {}),
   };
 }
 
 /** Format an ISO timestamp as a short "Updated MMM D, YYYY" string for the header.
  *  Display only; rendered ONLY when the server provides `updated_at` (never a
- *  fabricated date). Returns null for a missing/unparseable value. */
+ *  fabricated date). Returns null for a missing/unparseable value. Reuses the SAME
+ *  `formatListDate` helper the list page renders (audit P2: this used to call its
+ *  own `toLocaleDateString(undefined, …)` — locale-dependent and liable to render a
+ *  different calendar day than the list for the exact same `updated_at` timestamp). */
 function updatedLabel(iso?: string): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return `Updated ${d.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  })}`;
+  return `Updated ${formatListDate(iso)}`;
 }
 
 /** The 4-cell header metric bar (D1): Income sparkline · Capital required (RED) ·
@@ -319,10 +349,11 @@ function updatedLabel(iso?: string): string | null {
  *  testids the rest of the app reads. Every figure is the server's display string
  *  (no client math); the sparkline geometry comes from the server's incomeSeries. */
 function MetricBar({ vm }: { vm: ViewModel }) {
-  const { metrics, milestones, incomeSeries, year5Income } = vm;
+  const { metrics, milestones, incomeSeries, year5Income, sensitivity, confidence } = vm;
   const breakeven = milestones?.breakEven ?? metrics.breakeven;
   const payback = milestones?.payback;
   const points = (incomeSeries ?? []).map((s) => s.raw);
+  const lowRamp = confidence?.ramp === "low";
   return (
     <section
       className="metric-bar decision-banner"
@@ -372,6 +403,27 @@ function MetricBar({ vm }: { vm: ViewModel }) {
           {breakeven.display}
         </span>
       </div>
+      {/* wave-3 w5: the §12.2 downside-stress line + low-ramp confidence chip the
+          RoleView DecisionBanner surfaces (task 3.3). Rendered from the SERVER fields
+          with the EXACT DecisionBanner classes/format (no client math); absent on a
+          legacy snapshot (schema < 1.6.0) → the footnote row is not rendered at all. */}
+      {(sensitivity || lowRamp) && (
+        <div className="metric-bar__footnote">
+          {sensitivity && (
+            <p className="decision-banner__sensitivity" data-testid="sensitivity-downside">
+              {`Downside (${sensitivityDeltaLabel(sensitivity.delta)}): `}
+              {sensitivity.downside.net.display} net · break-even{" "}
+              {sensitivityBreakevenLabel(sensitivity.downside.breakeven)} · capital{" "}
+              {sensitivity.downside.capital.display}
+            </p>
+          )}
+          {lowRamp && (
+            <span className="chip decision-banner__confidence" data-testid="confidence-chip">
+              Confidence: ramp estimate — low
+            </span>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -382,6 +434,16 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const [name, setName] = useState("");
   const [saveLabel, setSaveLabel] = useState<SaveLabel>("");
   const [conflict, setConflict] = useState<ConflictBody | null>(null);
+  // The exact PATCH body the stale save carried (audited P0). Overwrite replays it
+  // with the server's fresh If-Match; Save-as-copy carries it onto …/duplicate — so a
+  // conflicting settings/override edit is preserved, never dropped.
+  const [failedBody, setFailedBody] = useState<PatchBody | null>(null);
+  // wave-3 w1: a chosen 409 resolution (reload/overwrite/save-as-copy) is in flight.
+  // `resolvingRef` blocks a synchronous double-click BEFORE React can re-render
+  // (two clicks in one tick both used to fire, minting TWO copies / two force-saves);
+  // `resolving` disables the modal's buttons for the visual (and subsequent renders).
+  const resolvingRef = useRef(false);
+  const [resolving, setResolving] = useState(false);
   // D1 / Decision 13: the always-on "Store name" input is replaced by an inline
   // pencil-to-rename. `renaming` reveals the inline input; committing returns to the
   // heading. The input keeps aria-label "Store name" so it stays addressable.
@@ -539,6 +601,19 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   // owner can still add a justification manually from the override audit when the
   // override UI is enabled (VITE_OVERRIDES_UI).
 
+  // One place to fan a save failure into the recovery UI: a 409 opens the conflict
+  // modal AND stashes the exact body that failed, so Overwrite can replay it (not
+  // just {name}) and Save-as-copy can carry it onto the fork. Anything else is a
+  // retryable error.
+  function onSaveError(err: unknown) {
+    if (err instanceof PatchConflictError) {
+      setConflict(err.conflict);
+      setFailedBody(err.failedBody);
+    } else {
+      setSaveLabel("Save failed — retry");
+    }
+  }
+
   // PE7: per-field inline undo — a FORWARD PATCH restoring the share input to its
   // prior value (carries Bearer + If-Match), producing a NEW revision. Never erases
   // the revision that introduced the change; re-undoable (the revert is itself a
@@ -550,10 +625,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     setSaveLabel("Saving…");
     doPatch({ inputs: { [revert.patchKey]: revert.raw } }, version)
       .then(() => setSaveLabel("All changes saved"))
-      .catch((err) => {
-        if (err instanceof PatchConflictError) setConflict(err.conflict);
-        else setSaveLabel("Save failed — retry");
-      });
+      .catch(onSaveError);
   }
 
   // Epic G2 (#42) / P1 regression (#284): commit an inline edit from a 3-year-table
@@ -578,10 +650,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     setSaveLabel("Saving…");
     doPatch(body, version)
       .then(() => setSaveLabel("All changes saved"))
-      .catch((err) => {
-        if (err instanceof PatchConflictError) setConflict(err.conflict);
-        else setSaveLabel("Save failed — retry");
-      });
+      .catch(onSaveError);
   }
 
   // Epic G2 (#42): reset a pin — a host-owned FORWARD edit clearing the override
@@ -596,10 +665,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     }
     doPatch({ overrides: { clear: [{ node, year }] } }, version)
       .then(() => setSaveLabel("All changes saved"))
-      .catch((err) => {
-        if (err instanceof PatchConflictError) setConflict(err.conflict);
-        else setSaveLabel("Save failed — retry");
-      });
+      .catch(onSaveError);
   }
 
   // Slide Penny OUT with the focused "why did you override {node} {year}?" prompt for
@@ -626,10 +692,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       version,
     )
       .then(() => setSaveLabel("All changes saved"))
-      .catch((err) => {
-        if (err instanceof PatchConflictError) setConflict(err.conflict);
-        else setSaveLabel("Save failed — retry");
-      });
+      .catch(onSaveError);
   }
 
   // Resolve the PATCH bearer: the per-device capability token (edit/owner) is
@@ -683,13 +746,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     nameTimer.current = setTimeout(() => {
       doPatch({ name: value }, version)
         .then(() => setSaveLabel("All changes saved"))
-        .catch((err) => {
-          if (err instanceof PatchConflictError) {
-            setConflict(err.conflict);
-          } else {
-            setSaveLabel("Save failed — retry");
-          }
-        });
+        .catch(onSaveError);
     }, 150);
   }
 
@@ -702,38 +759,115 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       setSaveLabel("All changes saved");
       return { version: v, viewModel: vm };
     } catch (err) {
-      if (err instanceof PatchConflictError) {
-        setConflict(err.conflict);
-      } else {
-        setSaveLabel("Save failed — retry");
-      }
+      // The SettingsTab body is a full PatchBody, so err.failedBody carries the exact
+      // driver edit (both the page modal's and the tab banner's Save-as-copy use it).
+      onSaveError(err);
       throw err;
     }
   }
 
   function resolveReload() {
+    if (resolvingRef.current) return;
+    resolvingRef.current = true;
+    setResolving(true);
     const v = conflict?.current_version ?? version;
     setConflict(null);
-    void fetchProjection(slug).then((data) => {
-      setVm(data);
-      setVersion(data.version);
-      setName(data.name);
-    });
+    // w3: also drop the stashed failed body — Reload DISCARDS the local edit, so the
+    // pending patch must not linger to be replayed by a later Overwrite.
+    setFailedBody(null);
+    void fetchProjection(slug)
+      .then((data) => {
+        setVm(data);
+        setVersion(data.version);
+        setName(data.name);
+        // m50: only claim success once the re-fetch actually lands — the modal is
+        // already dismissed, so this is the only remaining signal the reload worked.
+        setSaveLabel("All changes saved");
+      })
+      .catch(() => {
+        // m50: a transient read failure (network/5xx) after the modal is dismissed
+        // must surface as retryable, never a false "All changes saved" — the prior
+        // snapshot is kept on screen.
+        setSaveLabel("Save failed — retry");
+      })
+      .finally(() => {
+        resolvingRef.current = false;
+        setResolving(false);
+      });
     setVersion(v);
-    setSaveLabel("All changes saved");
   }
 
   function resolveOverwrite() {
+    // Replay the EXACT body that lost the race, with the SERVER's current version as
+    // the fresh If-Match — force-saving the conflicting edit (not just the name). The
+    // {name} fallback only covers a conflict raised before any body was captured.
+    // C2 (3.2f): keep `conflict` + `failedBody` until the force-save SUCCEEDS. Clearing
+    // them up-front destroyed the pending edit AND dismissed the modal the moment the
+    // overwrite failed (403/429/500/network) — the exact P0 recurring on the failure
+    // path. On success we clear in .then(); on failure onSaveError re-stashes a fresh
+    // 409 or (for any other error) leaves the modal up so the owner can retry.
+    if (resolvingRef.current) return;
+    resolvingRef.current = true;
+    setResolving(true);
     const v = conflict?.current_version ?? version;
-    setConflict(null);
-    doPatch({ name }, v)
-      .then(() => setSaveLabel("All changes saved"))
-      .catch(() => setSaveLabel("Save failed — retry"));
+    const body: PatchBody = failedBody ?? { name };
+    setSaveLabel("Saving…");
+    doPatch(body as Record<string, unknown>, v)
+      .then(() => {
+        setConflict(null);
+        setFailedBody(null);
+        setSaveLabel("All changes saved");
+      })
+      .catch(onSaveError)
+      .finally(() => {
+        // Reset AFTER onSaveError re-stashes a fresh 409 (or leaves the modal up for a
+        // non-409 retry), so the re-armed modal's buttons are clickable again (w1/w4).
+        resolvingRef.current = false;
+        setResolving(false);
+      });
   }
 
   function resolveSaveAsCopy() {
-    setConflict(null);
-    setSaveLabel("All changes saved");
+    // The real fork: POST …/duplicate carrying the conflicted edit as {patch}, so the
+    // copy is born WITH the user's unsaved change (server-side compute), then land on
+    // it. The copy's fresh edit token is retained on this device so its Share panel can
+    // rebuild the editable link.
+    // C1 (3.2f): /duplicate is OWNER-ONLY. `token.current` resolves to the per-slug
+    // EDIT token (which the owner device stores at create), so sending it 403'd
+    // owner_required on the real owner device. Send the OWNER token; fall back to
+    // token.current only for the (rare) case a device has an owner-capable bearer that
+    // is not in the owner-token slot. The button is disabled when no owner token exists.
+    // C2 (3.2f): keep `conflict` + `failedBody` until the fork SUCCEEDS — a failed
+    // duplicate (403/429/network) must NOT dismiss the modal or drop the pending edit.
+    // w1: a synchronous double-click on Save-as-copy used to mint TWO copies; block the
+    // second invocation before the first fork returns (the ref beats React's re-render).
+    if (resolvingRef.current) return;
+    resolvingRef.current = true;
+    setResolving(true);
+    const pending = failedBody ?? undefined;
+    const dupToken = getOwnerToken() ?? token.current ?? "";
+    setSaveLabel("Saving…");
+    duplicateProjection(slug, dupToken, pending)
+      .then((res) => {
+        if (res.edit_token) setEditToken(res.view_slug, res.edit_token);
+        // A capability owner joins their workspace (no owner_token). Only store a
+        // minted one (Clerk/anon) when this device holds none — never clobber the
+        // existing owner token that anchors the owner's other projections.
+        if (res.owner_token && !getOwnerToken()) setOwnerToken(res.owner_token);
+        setConflict(null);
+        setFailedBody(null);
+        setSaveLabel("All changes saved");
+        window.history.pushState(null, "", `/p/${res.view_slug}/edit`);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      })
+      // The fork failed: leave the modal up + the edit stashed so the owner can retry
+      // or choose Overwrite/Reload instead. (The button is owner-only-gated, so this is
+      // a transient 429/network/5xx, not the edit-token 403 the gate already prevents.)
+      .catch(() => setSaveLabel("Save failed — retry"))
+      .finally(() => {
+        resolvingRef.current = false;
+        setResolving(false);
+      });
   }
 
   if (loadError) {
@@ -751,6 +885,12 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   if (!vm) {
     return <div className="detail detail--loading">Loading…</div>;
   }
+
+  // POST …/duplicate is OWNER-ONLY (an edit token 403s owner_required). Save-as-copy is
+  // therefore only offered when this device holds the owner token; an editor-link holder
+  // sees it disabled with an owner-account tooltip (C1, 3.2f). Read fresh each render so
+  // a just-minted owner token (Clerk/anon fork) flips it on.
+  const canSaveAsCopy = getOwnerToken() != null;
 
   return (
     <div className="detail">
@@ -969,6 +1109,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
                   version={version}
                   onPatch={onSettingsPatch}
                   onSaveAsCopy={resolveSaveAsCopy}
+                  canSaveAsCopy={canSaveAsCopy}
                 />
               </div>
             </div>
@@ -1002,7 +1143,9 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           onReload={resolveReload}
           onOverwrite={resolveOverwrite}
           onSaveAsCopy={resolveSaveAsCopy}
+          canSaveAsCopy={canSaveAsCopy}
           message={conflict.message}
+          busy={resolving}
         />
       )}
 

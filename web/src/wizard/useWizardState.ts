@@ -9,7 +9,7 @@
 // Address → Square footage → Households → Donor market share → Startup costs.
 // There is NO Review step; terms acceptance is IMPLICIT on Generate (owner
 // Decision 5 — the disclaimer still shows + still stamps artifacts server-side).
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 
 import type { ResolveErrorKind, TradeAreaResolved } from "../api/places";
 import {
@@ -42,6 +42,15 @@ export { STEPS, STEP_LABELS, type StepKey } from "./steps";
 import { STEPS } from "./steps";
 import type { StepKey } from "./steps";
 
+// The composite key for the per-(step, group) advancedOpen map (Task 2.2+): a
+// step can own more than one advanced group (paramGroups.ts groupsForStep), so
+// the map can't be keyed by step alone. Exported so every Step*.tsx reads/writes
+// the SAME key shape the hook uses — no ad-hoc string concatenation drifting
+// from this one definition.
+export function advancedKey(step: StepKey, groupId: string): string {
+  return `${step}:${groupId}`;
+}
+
 // Wizard-side defaults (owner Decision 9): the building defaults to 12,500 sq ft /
 // 80% sales floor (the engine golden anchor EXAMPLE_BUILDING_SQFT stays 10,000 — this
 // is wizard-side only, no golden regen). The sq-ft-scaled cost rows + occupancy are
@@ -64,6 +73,7 @@ export const DEFAULT_DRAFT: WizardDraft = {
   donationValue: 50,
   basket: 17.08,
   donationsPerHh: 3,
+  salvagePct: 0.8,
   shareY1: 6,
   shareY2: 8,
   shareY3: 10,
@@ -76,9 +86,28 @@ export const DEFAULT_DRAFT: WizardDraft = {
   utilitiesPerSqft: UTILITIES_PER_SQFT,
   fixturesPerSqft: FIXTURES_PER_SQFT,
   buildoutPerSqft: BUILDOUT_PER_SQFT,
+  nnnOpexAnnual: 0,
   cash: 300000,
   grant: 0,
   loan: 0,
+  // Rent/cost/funding advanced drivers (Wave 2 Task 2.4) — the owner-decided v1
+  // resolved defaults (CLAUDE.md "Resolved defaults" table / ENGINE_CONTRACT.md §1),
+  // reproducing today's engine defaults byte-for-byte (anchor invariant).
+  escalatorPct: 3,
+  laborPct: 60,
+  marketingPct: 3.75,
+  suppliesPct: 5,
+  cardPct: 2,
+  payrollTaxPct: 8, // 990-grounded (2.7.0); tracks engine PAYROLL_TAX_PCT_OF_PAYROLL
+  reserveBuffer: 25000,
+  sensitivityDeltaPct: 25,
+  fixedAnnual: {
+    "Insurance liability": 10000, // 990-grounded (2.7.0); tracks engine FIXED_ANNUAL
+    "Internet, Phones": 3000,
+    "Pest control": 300,
+    "Repairs/maintenance": 1600,
+    "Security system": 900,
+  },
   // Terms acceptance is IMPLICIT on Generate now (owner Decision 5): the box is gone,
   // the disclaimer still shows, and create defaults termsAccepted=true so the .xlsx /
   // packet exports stay reachable (EXPORT_DISCLAIMER still stamps artifacts server-side).
@@ -93,6 +122,28 @@ export const DEFAULT_DRAFT: WizardDraft = {
     BUILDOUT_PER_SQFT,
   ),
 };
+
+// --- localStorage draft persistence (Wave 2 Task 2.6) ------------------------
+// The wizard draft is saved locally (debounced) so a reload/return offers to resume
+// where the operator left off, and cleared once a successful Generate turns the draft
+// into a real projection. This is a convenience cache of INPUTS on the operator's own
+// device — no projection math, no secret (there is no token/slug in a draft), so it is
+// plain localStorage (mirrors the owner-token slot's device-local posture).
+export const WIZARD_DRAFT_STORAGE_KEY = "wizard-draft-v1";
+const DRAFT_WRITE_DEBOUNCE_MS = 500;
+
+/** Read the persisted draft, tolerating an absent/corrupt/unavailable store (never
+ *  throws — a bad cache must degrade to "no resume", never break the wizard). */
+function readStoredWizardDraft(): WizardDraft | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(WIZARD_DRAFT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as WizardDraft) : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface WizardState {
   draft: WizardDraft;
@@ -133,12 +184,37 @@ export interface WizardState {
   setRentPerSqft: (n: number) => void;
   setUtilitiesPerSqft: (n: number) => void;
   setFixturesPerSqft: (n: number) => void;
+  setBuildoutPerSqft: (n: number) => void;
 
   // cost schedule (basic; the editor ticket enriches the step UI)
   costSchedule: CostScheduleRow[];
   addCostRow: () => void;
   updateCostRow: (i: number, patch: Partial<CostScheduleRow>) => void;
   removeCostRow: (i: number) => void;
+
+  // --- Advanced Options disclosure (Wave 2 Task 2.1, per-GROUP as of 2.2) ----
+  // Per-(step, group) open/closed state for the AdvancedOptions component. Lives
+  // HERE (not step-local state) because steps unmount on Next/Back — a step-local
+  // useState would forget whether the operator had it open. All groups default
+  // closed (compact load). A step can own MORE THAN ONE advanced group (e.g.
+  // startup-costs owns "rent-lease" / "cost-structure" / "funding", Task 2.4) so
+  // the map is keyed by the composite `advancedKey(step, groupId)` string, not
+  // just the step — otherwise opening one group would open them all.
+  advancedOpen: Partial<Record<string, boolean>>;
+  toggleAdvanced: (step: StepKey, groupId: string, open: boolean) => void;
+
+  // --- localStorage draft persistence + resume (Task 2.6) --------------------
+  // True when a NON-default draft was found in localStorage on mount and the operator
+  // has not yet chosen — drives the resume banner (Resume / Start fresh).
+  resumeAvailable: boolean;
+  /** Adopt the stored draft into the working draft; hide the banner. */
+  resumeDraft: () => void;
+  /** Start fresh: discard the stored draft (clear the key), hide the banner, keep the
+   *  fresh default draft. */
+  dismissResume: () => void;
+  /** Clear the persisted draft — called on a successful Generate (the draft became a
+   *  real projection, so there is nothing left to resume). */
+  clearDraft: () => void;
 
   canGenerate: boolean;
 }
@@ -156,6 +232,74 @@ export function useWizardState(
   initialStep = 0,
 ): WizardState {
   const [draft, setDraft] = useState<WizardDraft>({ ...DEFAULT_DRAFT, ...initial });
+
+  // --- localStorage draft persistence + resume (Task 2.6) --------------------
+  // Captured ONCE at mount: the pristine baseline this session started from, and any
+  // draft already persisted from a prior visit. A stored draft identical to the fresh
+  // baseline is "nothing to resume" (offering it would be noise), so the resume banner
+  // only shows when the stored draft actually diverges.
+  const baselineDraftJsonRef = useRef<string>(JSON.stringify({ ...DEFAULT_DRAFT, ...initial }));
+  const storedDraftRef = useRef<WizardDraft | null>(readStoredWizardDraft());
+  const [resumeAvailable, setResumeAvailable] = useState<boolean>(() => {
+    const s = storedDraftRef.current;
+    return s != null && JSON.stringify(s) !== baselineDraftJsonRef.current;
+  });
+  const draftWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Never write until the draft OBJECT has actually changed from the initial state.
+  // Identity (not a consumed boolean ref) is the guard because React StrictMode runs
+  // the effect setup->cleanup->setup on the SAME instance with persistent refs — a
+  // skip-first boolean is spent by the first setup, letting the second schedule a
+  // debounced write of the pristine default over a stored draft the operator hasn't
+  // chosen to resume yet (2.6 review, Important #1). The initial state object's
+  // identity survives StrictMode re-runs; only a real setDraft produces a new object.
+  const initialDraftObjRef = useRef<WizardDraft | null>(null);
+  if (initialDraftObjRef.current === null) initialDraftObjRef.current = draft;
+
+  useEffect(() => {
+    if (draft === initialDraftObjRef.current) return;
+    if (draftWriteTimerRef.current) clearTimeout(draftWriteTimerRef.current);
+    draftWriteTimerRef.current = setTimeout(() => {
+      try {
+        globalThis.localStorage?.setItem(WIZARD_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+      } catch {
+        // Storage full / unavailable — persistence is best-effort; never block the wizard.
+      }
+    }, DRAFT_WRITE_DEBOUNCE_MS);
+    return () => {
+      if (draftWriteTimerRef.current) clearTimeout(draftWriteTimerRef.current);
+    };
+  }, [draft]);
+
+  const clearStoredDraft = useCallback(() => {
+    if (draftWriteTimerRef.current) clearTimeout(draftWriteTimerRef.current);
+    try {
+      globalThis.localStorage?.removeItem(WIZARD_DRAFT_STORAGE_KEY);
+    } catch {
+      // ignore — a failed clear is harmless (the key is overwritten on the next write).
+    }
+  }, []);
+
+  const resumeDraft = useCallback(() => {
+    const s = storedDraftRef.current;
+    // Merge over DEFAULT_DRAFT: a draft persisted before a deploy that added new
+    // draft fields must resume with those fields at their defaults, never undefined
+    // (String(undefined) === "undefined" would 422 at Generate) — 2.6 review #2.
+    if (s) setDraft({ ...DEFAULT_DRAFT, ...s });
+    setResumeAvailable(false);
+  }, []);
+
+  const dismissResume = useCallback(() => {
+    clearStoredDraft();
+    storedDraftRef.current = null;
+    setResumeAvailable(false);
+  }, [clearStoredDraft]);
+
+  const clearDraft = useCallback(() => {
+    clearStoredDraft();
+    storedDraftRef.current = null;
+    setResumeAvailable(false);
+  }, [clearStoredDraft]);
+
   const [step, setStep] = useState(() =>
     Math.min(Math.max(0, Math.trunc(initialStep)), STEPS.length - 1),
   );
@@ -173,6 +317,14 @@ export function useWizardState(
   const [rentSource, setRentSource] = useState<AssumptionSource>("default");
   const [utilitiesSource, setUtilitiesSource] = useState<AssumptionSource>("default");
   const [fixturesSource, setFixturesSource] = useState<AssumptionSource>("default");
+
+  // Advanced Options disclosure state (Wave 2 Task 2.1, per-GROUP as of 2.2) —
+  // every (step, group) starts collapsed (empty map reads as falsy per key);
+  // lives in the hook so it survives a step's unmount/remount on Next/Back.
+  const [advancedOpen, setAdvancedOpen] = useState<Partial<Record<string, boolean>>>({});
+  const toggleAdvanced = useCallback((step: StepKey, groupId: string, open: boolean) => {
+    setAdvancedOpen((prev) => ({ ...prev, [advancedKey(step, groupId)]: open }));
+  }, []);
 
   const set = useCallback(<K extends keyof WizardDraft>(key: K, value: WizardDraft[K]) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -272,6 +424,20 @@ export function useWizardState(
       fixturesPerSqft: n,
       costSchedule: reseedScaledCostRows(
         prev.costSchedule ?? [], prev.buildingSqft, n, prev.buildoutPerSqft,
+      ),
+    }));
+  }, []);
+
+  // Mirrors setFixturesPerSqft (Task 2.2): a build-out $/sq ft edit re-seeds the
+  // same two sq-ft-scaled cost rows (Equipment & Fixtures, Build-out) since
+  // reseedScaledCostRows takes both rates together. No separate provenance
+  // tracking — only utilities/fixtures state a provenance badge (brief 2.2).
+  const setBuildoutPerSqft = useCallback((n: number) => {
+    setDraft((prev) => ({
+      ...prev,
+      buildoutPerSqft: n,
+      costSchedule: reseedScaledCostRows(
+        prev.costSchedule ?? [], prev.buildingSqft, prev.fixturesPerSqft, n,
       ),
     }));
   }, []);
@@ -385,10 +551,17 @@ export function useWizardState(
     setRentPerSqft,
     setUtilitiesPerSqft,
     setFixturesPerSqft,
+    setBuildoutPerSqft,
     costSchedule: draft.costSchedule ?? [],
     addCostRow,
     updateCostRow,
     removeCostRow,
+    advancedOpen,
+    toggleAdvanced,
+    resumeAvailable,
+    resumeDraft,
+    dismissResume,
+    clearDraft,
     canGenerate,
   };
 }

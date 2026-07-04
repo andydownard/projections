@@ -30,7 +30,6 @@ import copy
 import json
 import os
 import secrets
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
@@ -38,7 +37,7 @@ from pydantic import BaseModel, Field
 
 from app import ratelimit
 from app.aisafety import is_computed_figure_token
-from app.deps import hash_token, token_matches
+from app.deps import hash_token
 from app.penny import proposal as proposal_intake
 from app.penny.loop import AIDisabledError as LoopAIDisabledError
 from app.penny.loop import (
@@ -51,27 +50,13 @@ from app.penny.loop import (
 )
 from app.penny.providers import AIUnavailableError, ProviderChain, build_provider_chain
 from app.penny.tools import build_registry
+from app.routers.common import bearer as _bearer
+from app.routers.common import is_editor as _is_editor
+from app.routers.common import is_owner as _is_owner
+from app.routers.common import utcnow as _utcnow
 from app.store import Store, get_store
 
 router = APIRouter(tags=["penny"])
-
-
-def _bearer(authorization: Optional[str]) -> Optional[str]:
-    if authorization and authorization.startswith("Bearer "):
-        return authorization[7:].strip() or None
-    return None
-
-
-def _is_owner(token: Optional[str], row: dict) -> bool:
-    return token is not None and token_matches(token, row["owner_token_hash"])
-
-
-def _is_editor(token: Optional[str], row: dict) -> bool:
-    return (
-        token is not None
-        and bool(row.get("edit_token_hash"))
-        and token_matches(token, row["edit_token_hash"])
-    )
 
 
 @router.get("/api/projections/{view_slug}/penny/transcript")
@@ -149,7 +134,13 @@ def _client_ip(request: Optional[Request]) -> Optional[str]:
     LAST X-Forwarded-For entry, so the right-most hop is the only one a client cannot
     spoof. Using the raw socket peer (``request.client.host``) would collapse every
     external caller onto the proxy's shared internal IP — a single global bucket
-    (issue #189). Mirrors ``app/routers/projections._client_ip``.
+    (issue #189).
+
+    NOT unified into ``app.routers.common.client_ip``: this variant is Optional-typed
+    (accepts ``Optional[Request]``, returns ``Optional[str]`` and coerces an empty
+    right-most hop to ``None``) to feed Penny's Optional rate-limit key, whereas the
+    shared ``client_ip`` returns a ``str`` with a ``"unknown"`` sentinel. Kept local so
+    the extraction stays byte-for-byte behavior-preserving.
     """
     if request is None:
         return None
@@ -159,10 +150,6 @@ def _client_ip(request: Optional[Request]) -> Optional[str]:
     if request.client is None:
         return None
     return request.client.host
-
-
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _new_turn_id() -> str:
@@ -502,6 +489,10 @@ _DRAFT_INPUT_FIELDS = {"city", "org_name", "target_opening_date", "opening_month
 _DRAFT_ASSUMPTION_KEYS = {
     "labor_pct", "marketing_pct", "supplies_pct", "card_pct", "payroll_tax_pct",
     "salvage_pct", "escalator", "basket", "donations_per_hh",
+    # Scalar capital/stress knobs (task 1.3). fixed_annual is deliberately absent: it
+    # is dict-valued and Penny only routes a single scalar value, so she stays
+    # fail-closed on the per-line fixed-annual map by design.
+    "reserve_buffer", "sensitivity_delta",
     "share_y1", "share_y2", "share_y3", "share_y4", "share_y5",
     "rent_per_sqft", "occupancy_annual", "donation_value",
 }

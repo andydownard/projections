@@ -204,6 +204,47 @@ describe("CostScheduleEditor — server totals rendered verbatim (#15, no client
     expect(screen.getByTestId("cost-grand-total")).toHaveTextContent("$145,000");
   });
 
+  // Same class of bug, and the one that ACTUALLY reproduced live: under a parallel
+  // test run, CreateProjectionPage.test.tsx's catch-all fetch mock answered
+  // POST /api/cost-schedule/preview with an unrelated view-model body (no
+  // `grandTotal` key at all) — `totals?.grandTotal.display` threw because the
+  // optional chain only covered `totals`, not `totals.grandTotal`.
+  it("does not throw when totals arrives without a grandTotal (a wrong-shaped/partial response)", () => {
+    const noGrandTotal = {
+      rowTotals: [
+        { category: "Consultant", total: { raw: 100000, display: "$100,000" } },
+        { category: "Equipment", total: { raw: 45000, display: "$45,000" } },
+      ],
+      columnTotals: [{ month: 1, total: { raw: 145000, display: "$145,000" } }],
+      modelVersion: "2.5.0",
+      computeSchemaVersion: "1.3.0",
+    } as unknown as CostSchedulePreview;
+    expect(() => setup({ totals: noGrandTotal })).not.toThrow();
+    expect(screen.getByTestId("cost-grand-total")).toHaveTextContent("—");
+    // The row totals WERE present, so they still render verbatim.
+    expect(screen.getByTestId("row-total-0")).toHaveTextContent("$100,000");
+  });
+
+  // Root-caused flake (intermittent uncaught TypeError in parallel test runs, and a
+  // potential prod crash): `totals?.rowTotals.map(...)` only guards `totals` itself
+  // — if the PREVIEW RESPONSE ARRIVES PARTIAL (a truthy totals object missing the
+  // rowTotals/columnTotals arrays), `undefined.map` throws synchronously during
+  // render. The grid must degrade to the placeholder, never throw.
+  it("does not throw when totals arrives without rowTotals or columnTotals (a partial server response)", () => {
+    const partial = {
+      grandTotal: { raw: 145000, display: "$145,000" },
+      modelVersion: "2.5.0",
+      computeSchemaVersion: "1.3.0",
+    } as unknown as CostSchedulePreview;
+    expect(() => setup({ totals: partial })).not.toThrow();
+    // The row-total cells fall back to the neutral placeholder — no totals row data
+    // renders from the missing rowTotals array.
+    expect(screen.getByTestId("row-total-0")).toHaveTextContent("—");
+    expect(screen.getByTestId("row-total-1")).toHaveTextContent("—");
+    // grandTotal WAS present on this partial response, so it still renders verbatim.
+    expect(screen.getByTestId("cost-grand-total")).toHaveTextContent("$145,000");
+  });
+
   it("shows a neutral placeholder for totals before the server responds", () => {
     setup({ totals: null });
     expect(screen.getByTestId("cost-grand-total")).toHaveTextContent("—");

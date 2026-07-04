@@ -2,6 +2,48 @@
 
 > Final calls from the convening (product lead deciding, informed by the product team + 6 unicorn founders). Supersedes the open blockers in the Engineering Handoff §2.
 
+## ⚑ 2.8.0 fusion: cash-display engine × params/gaps engine (`model_version` 2.7.0-A + 2.7.0-B → 2.8.0 / `compute_schema_version` 1.7.0)
+
+**Call:** Two engines were independently stamped `2.7.0`. **2.7.0-A** (deployed to prod, epic #321) made the projection cash-based; **2.7.0-B** (this branch, never deployed — Wave-6 params/gaps close-out) added the 990 constants + monthly split + sensitivity/confidence surfacing. Rather than pick one, **fuse both** (owner-approved 2026-07-04, "fuse both, then deploy") into `model_version 2.8.0` / `compute_schema_version 1.7.0`.
+
+**Composition rules (the semantics of the fused engine):**
+- **Display layer = 2.7.0-A (cash-based).** Displayed Net income AND Net margin subtract the one-time Year-1 startup and are congruent (`cash_net[1] = operating_net[1] − startup_total`, `cash_net[y≥2] = operating_net[y]`, `net_margin[y] = cash_net[y] / total_rev[y]`); `monthly[]` spans the full 60-month horizon; payback = the first project-month cumulative cash ≥ 0 after going negative ("Month N"); the §12.2 net-margin guardrail runs on the DISPLAYED (cash) margin; the `.xlsx` Year-1 Net-income cell subtracts Total Startup Costs and payback rides the MILESTONES Month-N row.
+- **Operating layer = 2.7.0-B (params/gaps).** The internal operating net (unchanged) still drives the verdict (`_recommend` gates), `simple_payback`, sensitivity re-runs, and the monthly roll-up. The **Year-1 monthly window uses the 6.2 three-stream split** (fixed flat 1/12, payroll+taxes on the payroll ramp, %-of-revenue on the revenue S-curve); Years 2–5 uniform 1/12; every year rolls up to the penny. **Capital / break-even / first-year cash gap are Year-1-anchored on the 6.2 distribution.** The 990-grounded constants, the 6.3 advisory flags, `money_view` single-rounding-authority, exact lease-deposit arithmetic, and the conservative NNN resolved-occupancy reading all carry over.
+- **Consequences (re-derived expectations):** canonical capital **$347,853.76** / break-even **month 8** / **raise_cash** / cash Y1 net **($292,214)** / payback N/A; design-parity capital **$302,238.41** / break-even **month 6** / **raise_cash** / cash Y1 net **($199,995)** / payback **Month 32**; aggressive reco **revise** with the **>30% net-margin guardrail firing on Y4/Y5** (cash margin, since the Year-1 cash margin is dragged to ~8.9% by the startup) + the share (>8%) guardrail on Y1/Y4/Y5. Neither canonical nor design-parity reco changed from `raise_cash` (both operating-driven — no owner-visible verdict flip beyond the pre-fusion 2.7.0-B state).
+- **Versions:** `MODEL_VERSION = "2.8.0"`, `COMPUTE_SCHEMA_VERSION = "1.7.0"` (the union of A's cash surfaces + 60-row monthly + Month-N milestone × B's `sensitivity{base,downside,upside}` + `confidence{ramp}` + editable settings knobs). Stored 2.7.0 snapshots read verbatim with `upgrade_available`; recompute writes a NEW 2.8.0 revision.
+
+**Rationale:** Both engines' changes are real improvements that don't conflict at the layer boundary — cash accounting is a *display* concern, the 990 constants + monthly split are an *operating* concern. The one interaction (the §12.2 guardrail now reads the cash margin) shifts the aggressive fixture's flag-years but preserves its purpose (the flag still fires). All five goldens regenerated in one pass; the three-way LibreOffice recalc gate passes with and without overrides.
+
+---
+
+## ⚑ 990-grounded constants: payroll tax 7.5% → 8.0%, Insurance liability $2,000 → $10,000/yr (`model_version` 2.7.0, Task 6.4)
+
+**Call:** Re-default two cost constants from real filings.
+
+**Rationale:** Validated against **six Goodwill 990s** (all filed 2024–25, FY2023–24; see `docs/2026-07-03-owner-deliverables.md` §2): Wayne & Holmes OH (**EIN 34-1272032**), NE Pennsylvania (**24-0800938**), Sandusky OH (**34-1113714**), Central East Texas / Lufkin (**75-2204594**), SW Oklahoma & N Texas (**73-0675119**), Lubbock TX (**75-1245440**).
+- **Payroll tax %:** our 7.5% was **contradicted** — all six orgs' employer payroll-tax load fell in **7.85–9.34%**. Raised to **8.0%** (`PAYROLL_TAX_PCT_OF_PAYROLL`). Workers-comp / SUTA-FUTA burden (true ~10–12%) is still **excluded** and tracked separately (#346).
+- **Insurance liability:** $2,000/yr was **5–10× low** for a staffed ~10,000-sqft public-retail store (BOP + GL + nonprofit D&O). Raised to a **$10,000 placeholder** (`FIXED_ANNUAL["Insurance liability"]`); the owner confirms a real market quote (P1). The constant is **per-projection editable**, so this only moves new projections' starting point.
+- Both changes move engine outputs, so they land as a **`MODEL_VERSION` 2.6.0 → 2.7.0 bump with the single golden regen in the same commit** (Task 6.4), never a silent flip.
+- Also in 2.7.0: **`DEFAULT_DONATION_VALUE = "$74"`** is named as the single methodology-seed default the seed + engine-parity FE draft reference. Evidence caveat: unlike the two constants above, the demand chain is **not observable** in the six-EIN 990 sample, and the $74 is a **2013-dollar literature value** (CPI vintage-stamping = enhancement-backlog item 4 in the owner deliverables doc) — do not cite it as 990-grounded. The wizard's user-facing default stays a deliberately-conservative **$50** per Owner Decision 4 / W15 — a distinct, intentional value.
+
+---
+
+## ⚑ NNN resolution: the escalator AND the lease deposit both apply to the RESOLVED occupancy, INCLUDING NNN opex (Task 6.4)
+
+**Call:** Resolve the long-standing NNN ambiguity in favor of the code's behavior (the conservative, higher-cost reading).
+
+**Rationale:** ENGINE_CONTRACT contained a genuine contradiction — §1 said the escalator and the lease-deposit startup line use `rent_y1` only (NNN opex excluded), while §3 said "add NNN opex to occupancy … the escalator [applies]." The **code has always** resolved `occupancy_y1 = base_rent + nnn_opex_annual` (`_occupancy_y1`), escalated that resolved figure (`occ1 × (1+e)^(y−1)`), and computed the deposit as 3 months of the resolved occupancy. **Code behavior governs**: this is the conservative (higher startup-capital) reading for a first-time operator, which is the safer default for a decision-and-funding tool. ENGINE_CONTRACT §1/§7 are rewritten to match §3/code; a frozen `nnn_gross_check` golden pins it (canonical + `lease_type="nnn"` + `nnn_opex_annual="$30,000"` ⇒ resolved occupancy $150,000, Y2 = $154,500, deposit = $37,500). Any future change to how NNN flows through occupancy/escalator/deposit trips that golden.
+
+---
+
+## ⚑ Monthly cash-flow split: fixed operating costs charged flat, payroll taxes on the payroll ramp (`model_version` 2.7.0, Task 6.2 — regen deferred to 6.4)
+
+**Call:** The Year-1 monthly distribution charges fixed operating costs flat across the 12 operating months and rides payroll taxes on the payroll ramp (not a flat 1/12 of everything).
+
+**Rationale:** Front-loaded fixed costs against a back-loaded revenue S-curve deepen the early cash trough — a truer month-by-month picture for capital sizing. The annual P&L is unchanged (Year-1 annual is still the roll-up of the 12 months); only the *distribution* moved, which reshapes the trough and therefore capital / break-even month. This flipped the **canonical 60%** verdict `do_not_proceed → raise_cash` (the downside now breaks even within the horizon, so the binding constraint became capital > the $300k funds) — an **owner-visible** output change feeding **owner decision #345** (gate-rebalance question). At the 6.4 regen the 990-grounded constants deepened it further (capital ≈ $347,854, downside break-even month 12) but the canonical verdict **held at `raise_cash`**. Separately flagged for the whole-branch reviewer: the **40% design-parity** twin also crossed its $300k funds at 6.4 (capital ≈ $302,238), flipping `proceed → raise_cash` — the prototype "Proceed" headline was calibrated to the pre-990 cost basis.
+
+---
+
 ## ⚑ Sq-ft-scaled utilities + fixtures, location-researched rent (feature #245, `model_version` 2.5.0)
 
 Owner request: ask for sq ft, research representative rent by location, and scale utilities + fixtures with sq ft from the example basis. Calls made for the build:
@@ -36,7 +78,7 @@ The convening recommended **40%**. The owner (Andy) elected to **keep 60%** — 
 
 **Call:** Labor default %
 
-**Rationale:** Unanimous across all 10 voices and a correctness/testability decision, not a taste one: 40% is the ONLY value that reconciles the Appendix-D headline golden (Y1 rev ~$426,911, ~11% margin, capital ~$277,990, break-even ~month 5, reco=Proceed). 60% silently flips the headline recommendation, breaks design parity with every screenshot, and forces QA to chase a phantom mismatch between two 'correct' answers. Rationale documented in ENGINE_CONTRACT §1/§2. CLOSED before M1.
+**Rationale:** **SUPERSEDED by the owner 60% override (engine/model.py LABOR_PCT_OF_REVENUE)** — Unanimous across all 10 voices and a correctness/testability decision, not a taste one: 40% is the ONLY value that reconciles the Appendix-D headline golden (Y1 rev ~$426,911, ~11% margin, capital ~$277,990, break-even ~month 5, reco=Proceed). 60% silently flips the headline recommendation, breaks design parity with every screenshot, and forces QA to chase a phantom mismatch between two 'correct' answers. Rationale documented in ENGINE_CONTRACT §1/§2. CLOSED before M1.
 
 ---
 

@@ -58,6 +58,7 @@ from app.feedback.redact import (
     normalize_type,
     redact_text,
 )
+from app.packet import _YEAR_KEYS
 from app.routers.projections import (
     MAX_COST_SCHEDULE_ROWS,
     PatchProjectionIn,
@@ -89,6 +90,10 @@ _ASSUMPTION_BUCKET = {
     "escalator": "assumptions", "basket": "assumptions",
     # donations per household / year is an engine assumption (E2 editable driver).
     "donations_per_hh": "assumptions",
+    # Scalar capital/stress knobs (task 1.3). fixed_annual is NOT listed: it is
+    # dict-valued, and Penny's set_assumption routes a single scalar `str(value)` — a
+    # per-line map has no scalar form here, so Penny stays fail-closed on it by design.
+    "reserve_buffer": "assumptions", "sensitivity_delta": "assumptions",
     "share_y1": "inputs", "share_y2": "inputs", "share_y3": "inputs",
     # 5-year horizon: the late-year donor shares route to inputs like share_y1..3.
     "share_y4": "inputs", "share_y5": "inputs",
@@ -168,7 +173,11 @@ def _diff_view_models(before: dict, after: dict) -> list[dict]:
         b = brows.get((r.get("label"), r.get("group")))
         if b is None:
             continue
-        for yr in ("y1", "y2", "y3"):
+        # Same year-key range the packet's income statement covers (app.packet
+        # ._YEAR_KEYS, y1..y5) -- was y1-y3 only, so a PATCH that exclusively moves
+        # a Year 4/5 row (e.g. share_y5) produced a diff that never mentioned
+        # Year 5 at all, and Penny would narrate "nothing changed" for a real edit.
+        for yr in _YEAR_KEYS:
             bd = (b.get(yr) or {}).get("display")
             ad = (r.get(yr) or {}).get("display")
             if bd != ad:
@@ -412,6 +421,16 @@ def _set_input(store: Store):
     return handler
 
 
+# set_assumption stringifies every value by default (the engine's %/decimal knobs
+# — including sensitivity_delta — want a decimal STRING, matching the manual-PATCH
+# shape). reserve_buffer and donations_per_hh are the INT-valued assumptions
+# (AssumptionsIn / engine.compute.Assumptions type them int): str(value) would store
+# the STRING "40000"/"4" while the manual UI PATCH sends the JSON int, so the
+# computed_json.settings echo type-flips depending on which path edited it
+# (review 1.3f, f1 + follow-up). Normalize both so all paths store/echo identically.
+_INT_ASSUMPTION_FIELDS = {"reserve_buffer", "donations_per_hh"}
+
+
 def _set_assumption(store: Store):
     def handler(args: dict, ctx: ToolContext) -> dict:
         if not ctx.can_mutate:
@@ -426,7 +445,14 @@ def _set_assumption(store: Store):
         bucket = _ASSUMPTION_BUCKET.get(str(name))
         if bucket is None:
             return {"error": "unknown_field", "status": 422, "field": name}
-        patch = {str(name): str(value)}
+        if str(name) in _INT_ASSUMPTION_FIELDS:
+            coerced = _as_int(value)
+            if coerced is None:
+                return {"error": "invalid_inputs", "status": 422,
+                        "message": f"{name} must be a whole number"}
+            patch: dict[str, object] = {str(name): coerced}
+        else:
+            patch = {str(name): str(value)}
         if bucket == "assumptions":
             body = PatchProjectionIn(assumptions=patch)
         else:

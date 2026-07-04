@@ -192,6 +192,56 @@ def test_set_assumption_share_routes_to_inputs(store, projection):
     assert json.loads(row["inputs_json"])["share_y1"] == "0.08"
 
 
+# `_diff_view_models` walked only y1-y3, so a PATCH that only moves a Year 4/5
+# row (e.g. share_y5) produced a diff that never mentions Year 5 at all -- Penny
+# would narrate "nothing changed" for a real 5-year edit. The engine emits y1..y5
+# on every row (engine >= 2.6.0), so the diff must cover the same year-key range
+# the packet does (app.packet._YEAR_KEYS), not a stale 3-year subset.
+def test_set_assumption_share_y5_diff_mentions_year_5(store, projection):
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "set_assumption", {"name": "share_y5", "value": "0.20"})
+    assert res["applied"] is True
+    row = store.get_projection_by_slug(projection["view_slug"])
+    assert json.loads(row["inputs_json"])["share_y5"] == "0.20"
+    assert res["changed"], "a share_y5 edit must produce a non-empty narrated diff"
+    assert any("Y5" in c["label"] for c in res["changed"]), (
+        "share_y5 moved a Year 5 row but the diff never mentions Year 5 "
+        f"(changed={res['changed']!r})"
+    )
+
+
+# review 1.3f (f1): Penny's set_assumption routes every value through str(value), so
+# a Penny reserve_buffer edit stored the STRING "40000" while the manual UI PATCH
+# stores the JSON int 40000 -- a type-flip in computed_json.settings.reserveBuffer
+# depending on WHICH path made the edit. reserve_buffer must be int-normalized in
+# Penny's routing; sensitivity_delta must stay a string (the engine wants a decimal
+# string, matched by the manual-PATCH shape too).
+def test_set_assumption_reserve_buffer_is_int_normalized_not_string(store, projection):
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "set_assumption", {"name": "reserve_buffer", "value": "40000"})
+    assert res["applied"] is True
+    row = store.get_projection_by_slug(projection["view_slug"])
+    stored = json.loads(row["assumptions_json"])["reserve_buffer"]
+    assert stored == 40000
+    assert isinstance(stored, int), f"reserve_buffer stored as {type(stored)!r}, not int"
+    vm = json.loads(row["computed_json"])
+    assert vm["settings"]["reserveBuffer"] == 40000
+    assert isinstance(vm["settings"]["reserveBuffer"], int), (
+        "settings.reserveBuffer echoed as a string after a Penny edit "
+        f"({vm['settings']['reserveBuffer']!r}) -- type-flips vs the UI PATCH path")
+
+
+def test_set_assumption_sensitivity_delta_stays_a_string(store, projection):
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "set_assumption",
+               {"name": "sensitivity_delta", "value": "0.10"})
+    assert res["applied"] is True
+    row = store.get_projection_by_slug(projection["view_slug"])
+    stored = json.loads(row["assumptions_json"])["sensitivity_delta"]
+    assert stored == "0.10"
+    assert isinstance(stored, str)
+
+
 # ----------------------------------------------------- set/clear override + DAG
 def test_set_override_pins_component_and_clears_it(store, projection):
     ctx = _ctx(projection)
@@ -615,3 +665,23 @@ def test_tool_runs_through_the_pe3_loop_and_mutates(store, projection):
     row = store.get_projection_by_slug(projection["view_slug"])
     assert row["version"] == 2
     assert store.list_revisions(row["id"])[0]["actor"] == "penny"
+
+
+# review 1.3f follow-up: donations_per_hh is the OTHER int-typed assumption
+# (AssumptionsIn.donations_per_hh: Optional[int]) and had the identical Penny
+# str(value) type-flip -- settings.donationsPerHh echoed the JSON string "4"
+# after a Penny edit vs int 4 from a UI PATCH.
+def test_set_assumption_donations_per_hh_is_int_normalized_not_string(store, projection):
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "set_assumption", {"name": "donations_per_hh", "value": "4"})
+    assert res["applied"] is True
+    row = store.get_projection_by_slug(projection["view_slug"])
+    stored = json.loads(row["assumptions_json"])["donations_per_hh"]
+    assert stored == 4
+    assert isinstance(stored, int), f"donations_per_hh stored as {type(stored)!r}, not int"
+    vm = json.loads(row["computed_json"])
+    for key in ("donationsPerHh", "donationsPerHouseholdPerYear"):
+        assert vm["settings"][key] == 4
+        assert isinstance(vm["settings"][key], int), (
+            f"settings.{key} echoed as a string after a Penny edit "
+            f"({vm['settings'][key]!r}) -- type-flips vs the UI PATCH path")

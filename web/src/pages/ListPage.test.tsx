@@ -28,6 +28,7 @@ const populated: ProjectionListResponse = {
       capital_required: { raw: 277990, display: "$277,990" },
       payback: { raw: 25, display: "Month 25" },
       breakeven: { raw: 5, display: "Month 5" },
+      reco_tag: "proceed",
       status: "active",
       version: 7,
       updated_at: "2026-06-24T17:03:21Z",

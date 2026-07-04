@@ -15,11 +15,12 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app import ratelimit
 from app.geo import client
 from app.geo.derive import CensusUnavailable, LocationNotFound, derive_trade_area
+from app.routers.common import client_ip as _client_ip
 
 router = APIRouter(prefix="/api/places", tags=["places"])
 
@@ -29,13 +30,6 @@ _AUTOCOMPLETE_IP_LIMIT = 150
 _RESOLVE_IP_LIMIT = 60
 _WINDOW_SECONDS = 3600
 _MIN_QUERY_LEN = 3
-
-
-def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _rate_limited(endpoint: str, request: Request, limit: int):
@@ -56,8 +50,7 @@ class AutocompleteIn(BaseModel):
     query: str
     session_token: Optional[str] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class ResolveIn(BaseModel):
@@ -65,8 +58,7 @@ class ResolveIn(BaseModel):
     basis: str = "city"
     session_token: Optional[str] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 @router.post("/autocomplete")

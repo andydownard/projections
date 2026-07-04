@@ -1,9 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { StepConfigureDonations } from "./StepConfigureDonations";
+import { advancedKey } from "./useWizardState";
 import type { WizardState } from "./useWizardState";
+import type { WizardDraft } from "./shareHelper";
 import type { TradeAreaResolved } from "../api/places";
 
 const RESOLVED = {
@@ -16,13 +18,23 @@ const RESOLVED = {
   evidence: {} as TradeAreaResolved["evidence"],
 } as unknown as TradeAreaResolved;
 
-function mockState(over: Partial<WizardState> = {}): WizardState {
+const BASE_DRAFT: Partial<WizardDraft> = {
+  shareY1: 6, shareY2: 8, shareY3: 10,
+  shareY4: 11, shareY5: 12,
+  donationValue: 50,
+  basket: 17.08,
+  donationsPerHh: 3,
+  salvagePct: 0.8,
+};
+
+interface MockOverrides extends Partial<Omit<WizardState, "draft">> {
+  draft?: Partial<WizardDraft>;
+}
+
+function mockState(over: MockOverrides = {}): WizardState {
+  const { draft: draftOverride, ...rest } = over;
   return {
-    draft: {
-      shareY1: 6, shareY2: 8, shareY3: 10,
-      shareY4: 11, shareY5: 12,
-      donationValue: 50,
-    },
+    draft: { ...BASE_DRAFT, ...draftOverride },
     set: vi.fn(),
     resolved: RESOLVED,
     basis: "city",
@@ -31,7 +43,9 @@ function mockState(over: Partial<WizardState> = {}): WizardState {
     householdsSource: "census_acs",
     applyBasis: vi.fn(),
     setHouseholds: vi.fn(),
-    ...over,
+    advancedOpen: {},
+    toggleAdvanced: vi.fn(),
+    ...rest,
   } as unknown as WizardState;
 }
 
@@ -85,5 +99,48 @@ describe("StepConfigureDonations — W15", () => {
   it("never says 'trade area' in the UI", () => {
     const { container } = render(<StepConfigureDonations state={mockState()} />);
     expect(container.textContent?.toLowerCase()).not.toContain("trade area");
+  });
+});
+
+describe("StepConfigureDonations — Advanced options (Task 2.3)", () => {
+  it("renders the 'Donation economics' advanced group closed by default", () => {
+    render(<StepConfigureDonations state={mockState()} />);
+    expect(screen.getByText("Donation economics")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/average basket/i)).toBeNull();
+    expect(screen.queryByLabelText(/donations per household/i)).toBeNull();
+    expect(screen.queryByLabelText(/salvage/i)).toBeNull();
+  });
+
+  it("open shows basket ($17.08), donations/yr (3), and salvage % (0.80) with units", () => {
+    const state = mockState({
+      advancedOpen: { [advancedKey("configure-donations", "donation-econ")]: true },
+    });
+    render(<StepConfigureDonations state={state} />);
+    const basket = screen.getByLabelText(/average basket/i) as HTMLInputElement;
+    const donationsPerHh = screen.getByLabelText(/donations per household/i) as HTMLInputElement;
+    const salvage = screen.getByLabelText(/salvage/i) as HTMLInputElement;
+    expect(basket.value).toBe("17.08");
+    expect(donationsPerHh.value).toBe("3");
+    expect(salvage.value).toBe("0.80");
+  });
+
+  it("editing basket/donationsPerHh/salvagePct writes the matching draft key", () => {
+    const set = vi.fn();
+    const state = mockState({
+      set,
+      advancedOpen: { [advancedKey("configure-donations", "donation-econ")]: true },
+    });
+    render(<StepConfigureDonations state={state} />);
+
+    fireEvent.change(screen.getByLabelText(/average basket/i), { target: { value: "20.50" } });
+    expect(set).toHaveBeenLastCalledWith("basket", 20.5);
+
+    fireEvent.change(screen.getByLabelText(/donations per household/i), {
+      target: { value: "4" },
+    });
+    expect(set).toHaveBeenLastCalledWith("donationsPerHh", 4);
+
+    fireEvent.change(screen.getByLabelText(/salvage/i), { target: { value: "1.25" } });
+    expect(set).toHaveBeenLastCalledWith("salvagePct", 1.25);
   });
 });

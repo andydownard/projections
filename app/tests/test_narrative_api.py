@@ -139,7 +139,7 @@ def test_regenerate_produces_grounded_prose(client):
 def test_regenerate_rejects_hallucinated_figure_without_clobbering(client, monkeypatch):
     created = _create(client)
     slug, edit = created["view_slug"], created["edit_token"]
-    # seed a saved narrative first
+    # seed a saved narrative first (a successful narrative write bumps the version 1->2)
     client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": "<p>original prose</p>"},
@@ -152,7 +152,7 @@ def test_regenerate_rejects_hallucinated_figure_without_clobbering(client, monke
         lambda vm, role=None: "The store needs $9,999,999 in capital.")
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
     )
     assert r.status_code == 409, r.text
     assert r.json()["detail"]["error"] == "grounding_failed"
@@ -179,10 +179,11 @@ def test_stale_detection_without_clobbering_edits(client):
     assert g["stale"] is False
 
     # mutate the projection so the headline figures (capital/gap/break-even) move
+    # (the narrative save above bumped the version 1->2, so the PATCH uses If-Match 2)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"share_y1": "0.12"}},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
     )
     assert r.status_code == 200, r.text
 

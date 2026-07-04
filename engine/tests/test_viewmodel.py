@@ -11,8 +11,8 @@ from engine.viewmodel import to_view_model
 def test_top_level_fields_present(canonical_result):
     vm = to_view_model(canonical_result)
     for key in ("reco", "metrics", "kpis", "monthly", "rows", "overrides",
-                "settings", "flags", "version", "model_version",
-                "compute_schema_version", "breakevenMonth"):
+                "settings", "sensitivity", "confidence", "flags", "version",
+                "model_version", "compute_schema_version", "breakevenMonth"):
         assert key in vm, key
 
 
@@ -115,9 +115,53 @@ def test_settings_block(canonical_result):
               "payrollTaxPct", "salvagePct", "escalator", "basket",
               "donationsPerHh", "shareY1", "shareY2", "shareY3",
               "shareY4", "shareY5", "donationValue",
-              "donationsPerHouseholdPerYear", "reserveBuffer"):
+              "donationsPerHouseholdPerYear", "reserveBuffer",
+              # 1.6.0: the full editable knob set (audit P0)
+              "sensitivityDelta", "fixedAnnual", "nnnOpexAnnual",
+              "buildingSqft", "salesfloorPct"):
         assert k in s
     assert abs(s["laborPct"] - 0.60) < 1e-9
+    assert abs(s["sensitivityDelta"] - 0.25) < 1e-9
+    assert abs(s["buildingSqft"] - 10000.0) < 1e-9
+    assert abs(s["salesfloorPct"] - 0.70) < 1e-9
+    assert abs(s["nnnOpexAnnual"] - 0.0) < 1e-9
+    # fixedAnnual is the label -> annual-$ operating map (990-grounded Insurance
+    # liability = $10,000 at 2.7.0; was $2,000).
+    assert s["fixedAnnual"]["Insurance liability"] == 10000.0
+
+
+def test_sensitivity_block_serialized(canonical_result):
+    # schema 1.6.0: the §12.2 ±stress scenarios (already computed in decision.py) are
+    # serialized so the client renders the tornado/robustness view without recomputing.
+    vm = to_view_model(canonical_result)
+    sens = vm["sensitivity"]
+    assert set(sens) == {"base", "downside", "upside", "delta"}
+    # delta is the ± stress fraction (0.25 default), the single source read by the engine.
+    assert abs(sens["delta"] - 0.25) < 1e-9
+    for scenario in ("base", "downside", "upside"):
+        block = sens[scenario]
+        assert set(block) == {"net", "breakeven", "capital"}
+        # net + capital are dual-value {raw, display} money views (single format authority).
+        for money_key in ("net", "capital"):
+            assert set(block[money_key]) >= {"raw", "display"}
+            assert isinstance(block[money_key]["raw"], float)
+            assert isinstance(block[money_key]["display"], str)
+        # break-even is a plain project-month int, or None when never reached.
+        assert block["breakeven"] is None or isinstance(block["breakeven"], int)
+    # The serialized values are the engine's decision.sensitivity verbatim (no re-math).
+    dec_sens = canonical_result.decision.sensitivity
+    assert sens["downside"]["net"]["raw"] == float(dec_sens["downside"]["net"])
+    assert sens["downside"]["capital"]["raw"] == float(dec_sens["downside"]["capital"])
+    assert sens["downside"]["breakeven"] == dec_sens["downside"]["breakeven"]
+    assert sens["base"]["net"]["raw"] == float(dec_sens["base"]["net"])
+
+
+def test_confidence_block_from_ramp_flag(canonical_result):
+    # schema 1.6.0: the ramp low-confidence flag (build_flags) is surfaced as a
+    # confidence label the client can render (audit P0 — it was previously dropped).
+    vm = to_view_model(canonical_result)
+    assert canonical_result.flags["ramp_low_confidence"] is True
+    assert vm["confidence"] == {"ramp": "low"}
 
 
 def test_view_model_is_json_serializable(canonical_result):
@@ -127,9 +171,10 @@ def test_view_model_is_json_serializable(canonical_result):
 
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
-    assert vm["model_version"] == "2.7.0"     # cash-based net/margin + Month-N payback
-    # 1.6.0: cash-based income/margin display surfaces + monthly[] 12->60. Same shapes.
-    assert vm["compute_schema_version"] == "1.6.0"
+    assert vm["model_version"] == "2.8.0"     # FUSION: cash display (A) × params/gaps operating (B)
+    # 1.7.0: cash income/margin surfaces + monthly[] 60 rows + Month-N payback (A) UNION
+    # +sensitivity+delta +confidence{ramp} + editable settings knobs (B).
+    assert vm["compute_schema_version"] == "1.7.0"
     assert "utilitiesPerSqft" in vm["settings"]
     assert "rentPerSqft" in vm["settings"]
 
@@ -195,7 +240,7 @@ def test_milestones_block_has_three_dual_value_milestones(canonical_result):
     assert set(ms) == {"grandOpening", "breakEven", "payback"}
     # grand opening = the input G (month 1 default); always reached, dual-value.
     assert ms["grandOpening"] == {"raw": 1, "display": "Month 1"}
-    # break-even is a real project month for the canonical fixture (month 9).
+    # break-even is a real project month for the canonical fixture (month 8).
     assert ms["breakEven"]["raw"] == canonical_result.decision.break_even_month
     assert ms["breakEven"]["display"] == f"Month {canonical_result.decision.break_even_month}"
 
@@ -289,46 +334,56 @@ def test_compute_populates_view_model_natively(canonical_result):
 # --------------------------------- decision-text <-> break-even consistency (#142/#145)
 def _do_not_proceed_base_reaches_downside_fails(opening_month_number=1):
     """A do_not_proceed result whose BASE case reaches break-even but whose DOWNSIDE
-    does not — the canonical 60%-labor economics, parameterizable on opening month so
-    the consistency holds when the timeline is shifted, not just at month 1."""
+    does not — the Grace Mission economics, parameterizable on opening month so
+    the consistency holds when the timeline is shifted, not just at month 1.
+
+    (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report:
+    canonical's downside now reaches break-even, so canonical is raise_cash and
+    Grace is the fixture whose downside legitimately never breaks even.)"""
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    from engine.tests.conftest import GRACE_PAYROLL_OVERRIDE
     inputs = Inputs(
-        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
-        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
-        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+        org_name="Grace Mission", city="Tyler, Texas", opening_status="pre_launch",
+        share_y1="0.04", share_y2="0.05", share_y3="0.06", share_y4="0.07", share_y5="0.08",
+        donation_value="74", building_sqft="6000", salesfloor_pct="0.70",
+        rent_per_sqft="14", lease_type="gross", source_of_funds="250000",
         opening_month_number=opening_month_number,
     )
-    return compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
-                   TradeArea(basis="city", households="31798"))
+    return compute(inputs, Assumptions(), DemandDrivers(),
+                   TradeArea(basis="city", households="25000"),
+                   overrides=dict(GRACE_PAYROLL_OVERRIDE))
 
 
-def test_do_not_proceed_sub_is_engine_reason_not_static_fallback(canonical_result):
+def test_do_not_proceed_sub_is_engine_reason_not_static_fallback(grace_result):
     # The verdict sub for do_not_proceed must be the engine's precise break-even
     # reason (single source of truth) — NOT the static _RECO_HEADLINES fallback —
     # so reco.sub can never drift from the metric's reason text (#142).
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import _RECO_HEADLINES, to_view_model
-    vm = to_view_model(canonical_result)
+    vm = to_view_model(grace_result)
     assert vm["reco"]["tag"] == "do_not_proceed"
     static_sub = _RECO_HEADLINES["do_not_proceed"][1]
     assert vm["reco"]["sub"] != static_sub
-    assert vm["reco"]["sub"] == canonical_result.decision.reco_reasons["breakeven"]
+    assert vm["reco"]["sub"] == grace_result.decision.reco_reasons["breakeven"]
 
 
-def test_do_not_proceed_sub_equals_reason_breakeven(canonical_result):
+def test_do_not_proceed_sub_equals_reason_breakeven(grace_result):
     # The banner sub and the break-even tile's reason are the SAME server string,
     # so the two surfaces can never tell a board member different stories (#145).
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
-    vm = to_view_model(canonical_result)
+    vm = to_view_model(grace_result)
+    assert vm["reco"]["tag"] == "do_not_proceed"
     assert vm["reco"]["sub"] == vm["metrics"]["reasonBreakeven"]
 
 
-def test_do_not_proceed_reason_month_matches_breakeven_metric(canonical_result):
+def test_do_not_proceed_reason_month_matches_breakeven_metric(grace_result):
     # The Month-N named in the reason text is exactly the base-case break-even month
     # rendered in metrics.breakeven — they are derived from the same value, so the
     # words and the number can never disagree.
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
-    vm = to_view_model(canonical_result)
+    vm = to_view_model(grace_result)
     be = vm["metrics"]["breakeven"]
     assert be["raw"] is not None
     assert f"Month {be['raw']}" in vm["reco"]["sub"]
@@ -351,14 +406,26 @@ def test_breakeven_consistency_holds_when_timeline_shifts():
         assert "downside" in vm["reco"]["sub"].lower()
 
 
-def test_proceed_case_keeps_default_breakeven_reason_and_is_consistent(design_parity_result):
-    # A non-do_not_proceed verdict (the design-parity 40% proceed case) is untouched:
-    # reasonBreakeven falls back to the plain definition, reco.sub is the proceed
-    # sub, and the consistency invariant still holds (break-even reached, no "not
-    # reached" claim anywhere).
+def test_proceed_case_keeps_default_breakeven_reason_and_is_consistent():
+    # A genuine proceed verdict: reasonBreakeven falls back to the plain definition,
+    # reco.sub is the proceed sub, and the consistency invariant holds (break-even
+    # reached, no "not reached" claim anywhere). Built inline as the 40%-labor
+    # design-parity SHAPE with adequate funding (source_of_funds > its $302,238 capital
+    # need) — at the 2.7.0 990-grounded basis the design-parity fixture's own $300k
+    # funds now yields raise_cash (capital crosses funds by $2,238), so a dedicated
+    # proceed case is constructed here to keep this branch covered.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     from engine.tests.test_decision import assert_breakeven_text_consistent
     from engine.viewmodel import to_view_model
-    vm = to_view_model(design_parity_result)
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="400000",
+    )
+    result = compute(inputs, Assumptions(labor_pct="0.40"), DemandDrivers(),
+                     TradeArea(basis="city", households="31798"), overrides={})
+    vm = to_view_model(result)
     assert vm["reco"]["tag"] == "proceed"
     assert vm["metrics"]["reasonBreakeven"] == (
         "First month operating net turns and stays non-negative.")

@@ -132,3 +132,25 @@ def test_rotate_requires_if_match(client):
         headers={"Authorization": f"Bearer {owner}"},
     )
     assert r.status_code == 428, r.text
+
+
+def test_rotate_stale_if_match_409_and_does_not_rotate(client):
+    # Quad leg (c): a stale If-Match writes 0 rows -> 409 version_conflict, and NOTHING
+    # rotates — the original owner token + slug still work (a stale rotate can never
+    # half-invalidate the live capabilities).
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    r = client.post(
+        f"/api/projections/{slug}/rotate-tokens",
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "99"},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json().get("detail", r.json())["error"] == "version_conflict"
+    # nothing rotated: the ORIGINAL slug still reads and the owner can still mutate.
+    assert client.get(f"/api/projections/{slug}").status_code == 200
+    ok = client.patch(
+        f"/api/projections/{slug}",
+        json={"name": "still-mine"},
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+    )
+    assert ok.status_code == 200, ok.text
