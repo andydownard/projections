@@ -180,3 +180,29 @@ def test_delete_over_cap_returns_429(client, monkeypatch):
     for _ in range(3):
         assert _delete().status_code != 429
     _assert_429(_delete())
+
+
+# ------------------------------------------------------- IMP-3(7): token-cap leg
+def test_trash_over_token_cap_returns_429_across_distinct_ips(client, monkeypatch):
+    # `_mutation_rate_limited` derives + passes the token bucket internally for ALL
+    # FIVE lifecycle mutations (rotate-tokens / restore_revision / trash / restore /
+    # delete) via the exact same call shape — only PATCH's analogous helper had a
+    # same-token-across-IPs test (above). Lock the shared helper via trash; the
+    # other four are wired identically.
+    slug, owner, _v, _b = create_projection(client)
+    monkeypatch.setattr(P, "_MUTATION_TOKEN_LIMIT", 3, raising=False)
+
+    # Stale If-Match ⇒ 409 (no state mutation), same trick as the IP-cap test above.
+    def _trash(ip):
+        return client.post(
+            f"/api/projections/{slug}/trash",
+            headers={
+                "Authorization": f"Bearer {owner}",
+                "If-Match": "99",
+                "X-Forwarded-For": ip,
+            },
+        )
+
+    for i in range(3):
+        assert _trash(f"10.0.3.{i}").status_code != 429
+    _assert_429(_trash("10.0.3.99"))

@@ -213,3 +213,70 @@ def test_put_over_token_cap_returns_429(client, monkeypatch):
     assert r.status_code == 429, r.text
     assert r.json()["error"] == "rate_limited"
     assert int(r.headers["Retry-After"]) >= 1
+
+
+# ===================================================== IMP-3 quad secondary legs
+# Whole-branch review: the enforcement below is already shared-code-path-verified
+# (PUT and regenerate share the literal `_is_owner(token, row) or _is_editor(token,
+# row)` gate; regenerate shares `_mutation`-style per-IP+per-token dual caps with
+# PUT). These tests were the missing pins, transcribed from the xown/rlm patterns
+# used elsewhere in the suite.
+
+def test_regenerate_requires_owner_or_editor_403(client):
+    # IMP-3(1): PUT's view-only->403 gate (narrApi:91) had no regenerate twin, even
+    # though the two share the identical auth check verbatim.
+    slug, _owner, _version, _ = create_projection(client)
+    no_auth = client.post(_regen_url(slug), headers={"If-Match": "1"})
+    assert no_auth.status_code == 403, no_auth.text
+    assert no_auth.json().get("detail", no_auth.json())["error"] == "forbidden"
+
+    wrong = client.post(
+        _regen_url(slug),
+        headers={"Authorization": "Bearer not-the-token", "If-Match": "1"},
+    )
+    assert wrong.status_code == 403, wrong.text
+
+
+def test_put_and_regenerate_other_owner_forbidden_and_untouched(client_store):
+    # IMP-3(2): a valid but DIFFERENT owner's token must not read/write another
+    # workspace's narrative surface (TENANT, PRD §20). PUT and regenerate share the
+    # SAME owner/editor gate, so one test pins both legs.
+    client, store = client_store
+    slug, _victim_owner, _v, _b = create_projection(client, name="Victim")
+    _a_slug, attacker_owner, _v2, _b2 = create_projection(client, name="Attacker")
+
+    r = client.put(_put_url(slug), json={"body_md": "<p>pwned</p>"},
+                   headers=_auth(attacker_owner, 1))
+    assert r.status_code == 403, r.text
+    assert r.json().get("detail", r.json())["error"] == "forbidden"
+
+    r2 = client.post(_regen_url(slug), headers=_auth(attacker_owner, 1))
+    assert r2.status_code == 403, r2.text
+    assert r2.json().get("detail", r2.json())["error"] == "forbidden"
+
+    # the victim's narrative surface is completely untouched.
+    after = store.get_projection_by_slug(slug)
+    assert after["version"] == 1
+    g = client.get(_put_url(slug)).json()
+    assert g["body_md"] == ""
+
+
+def test_put_over_ip_cap_returns_429(client, monkeypatch):
+    # IMP-3(3): only the TOKEN leg (test_put_over_token_cap_returns_429 above) was
+    # pinned; the independently-checked IP leg (wired identically to regenerate's)
+    # had no coverage of its own.
+    monkeypatch.setattr(P, "_NARRATIVE_PUT_IP_LIMIT", 2, raising=False)
+    slug, owner, _version, _ = create_projection(client)
+
+    version = 1
+    for _ in range(2):
+        r = client.put(_put_url(slug), json={"body_md": "<p>note</p>"},
+                       headers=_auth(owner, version))
+        assert r.status_code == 200, r.text
+        version = r.json()["version"]
+
+    r = client.put(_put_url(slug), json={"body_md": "<p>note</p>"},
+                   headers=_auth(owner, version))
+    assert r.status_code == 429, r.text
+    assert r.json()["error"] == "rate_limited"
+    assert int(r.headers["Retry-After"]) >= 1

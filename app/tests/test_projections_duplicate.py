@@ -94,6 +94,23 @@ def test_duplicate_rate_limited_429(client, monkeypatch):
     assert int(r.headers["Retry-After"]) >= 1
 
 
+def test_duplicate_over_token_cap_returns_429_across_distinct_ips(client, monkeypatch):
+    # IMP-3(7): only the IP leg above was pinned. Drive the SAME owner token from
+    # THREE DISTINCT IPs (XFF-spoof, matching test_rate_limits_mutations.py's
+    # convention) so the per-IP bucket never fills — only the per-token bucket can
+    # produce the 429.
+    slug, owner, _v, _body = create_projection(client)
+    monkeypatch.setattr(P, "_DUPLICATE_TOKEN_LIMIT", 3, raising=False)
+
+    for i in range(3):
+        r = _dup(client, slug, owner, headers={"X-Forwarded-For": f"10.0.1.{i}"})
+        assert r.status_code == 201, r.text
+    r = _dup(client, slug, owner, headers={"X-Forwarded-For": "10.0.1.99"})
+    assert r.status_code == 429, r.text
+    assert r.json()["error"] == "rate_limited"
+    assert int(r.headers["Retry-After"]) >= 1
+
+
 # ------------------------------------------------------- quad (d) copy fidelity
 def test_duplicate_copies_fields_mints_fresh_secrets_and_appends_revision(client_store):
     client, store = client_store

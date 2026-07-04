@@ -154,3 +154,74 @@ def test_trash_is_owner_only(client):
                     headers={"Authorization": f"Bearer {edit}", "If-Match": "1"})
     assert r.status_code == 403, r.text
     assert r.json().get("detail", r.json())["error"] == "owner_required"
+
+
+# =============================================================== IMP-3 quad legs
+# Whole-branch review: trash/restore share `_require_owner` with the already-
+# cross-owner-tested rotate/patch/delete routes, so the enforcement below is
+# shared-code-path-verified — these were the missing pins.
+
+def test_trash_cross_owner_forbidden_and_untouched(client, store):
+    # IMP-3(5a): a valid but DIFFERENT owner cannot trash this projection (TENANT,
+    # PRD §20); no auth/owner-scope test existed for trash beyond the edit-token leg
+    # above.
+    created = _create(client)
+    slug = created["view_slug"]
+    attacker = _create(client)
+    r = client.post(
+        f"/api/projections/{slug}/trash",
+        headers={"Authorization": f"Bearer {attacker['owner_token']}", "If-Match": "1"},
+    )
+    assert r.status_code == 403, r.text
+    assert r.json().get("detail", r.json())["error"] == "forbidden"
+    after = store.get_projection_by_slug(slug)
+    assert after["status"] == "active"
+    assert after["version"] == 1
+
+
+def test_restore_requires_owner_and_rejects_other_owner(client, store):
+    # IMP-3(4): POST /restore shares `_require_owner` with trash/rotate/delete but
+    # had NO auth or owner-scope test of its own (a full hole in the quad matrix).
+    created = _create(client)
+    slug, owner, edit = (
+        created["view_slug"], created["owner_token"], created["edit_token"])
+    client.post(f"/api/projections/{slug}/trash",
+                headers={"Authorization": f"Bearer {owner}", "If-Match": "1"})
+
+    # edit token -> 403 owner_required (identical gate to trash/rotate/delete).
+    r = client.post(f"/api/projections/{slug}/restore",
+                    headers={"Authorization": f"Bearer {edit}", "If-Match": "2"})
+    assert r.status_code == 403, r.text
+    assert r.json().get("detail", r.json())["error"] == "owner_required"
+
+    # a different, valid owner -> 403 forbidden; the trashed row is untouched.
+    attacker = _create(client)
+    r2 = client.post(
+        f"/api/projections/{slug}/restore",
+        headers={"Authorization": f"Bearer {attacker['owner_token']}", "If-Match": "2"},
+    )
+    assert r2.status_code == 403, r2.text
+    assert r2.json().get("detail", r2.json())["error"] == "forbidden"
+    assert store.get_projection_by_slug(slug)["status"] == "trashed"
+
+
+def test_delete_stale_if_match_after_trash_returns_409_and_keeps_row(client, store):
+    # IMP-3(6): the version-checked purge is proven at the STORE level
+    # (test_purge_cascade.py::test_purge_version_mismatch_returns_zero_and_keeps_data)
+    # but the API-level 409 — through the real DELETE route's _require_owner +
+    # not_trashed gate + purge_projection call — had no test of its own.
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    client.post(f"/api/projections/{slug}/trash",
+                headers={"Authorization": f"Bearer {owner}", "If-Match": "1"})
+
+    r = client.delete(f"/api/projections/{slug}",
+                      headers={"Authorization": f"Bearer {owner}", "If-Match": "99"})
+    assert r.status_code == 409, r.text
+    detail = r.json().get("detail", r.json())
+    assert detail["error"] == "version_conflict"
+    assert "recovery" in detail
+    # nothing purged: the row (and its trashed status) survives.
+    after = store.get_projection_by_slug(slug)
+    assert after is not None
+    assert after["status"] == "trashed"

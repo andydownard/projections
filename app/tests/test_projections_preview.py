@@ -185,3 +185,28 @@ def test_preview_rate_limited_on_read_bucket(client, monkeypatch):
             assert "retry_after_seconds" in r.json()
             break
     assert seen_429, "preview never hit the read-bucket rate limit"
+
+
+def test_preview_over_token_cap_returns_429_across_distinct_ips(client, monkeypatch):
+    # IMP-3(7): only the IP leg above was pinned, even though `preview_projection`
+    # passes BOTH ip_limit and token_limit to `_rate_limited` (an independently
+    # enforced token bucket). Drive the SAME owner token from THREE DISTINCT IPs
+    # (XFF-spoof, matching test_rate_limits_mutations.py's convention) so the
+    # per-IP bucket never fills — only the per-token bucket can produce the 429.
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    import app.routers.projections as P
+    monkeypatch.setattr(P, "_PREVIEW_TOKEN_LIMIT", 3, raising=False)
+    body = {"assumptions": {"labor_pct": "0.45"}}
+
+    def _preview(ip):
+        return client.post(
+            f"/api/projections/{slug}/preview", json=body,
+            headers={"Authorization": f"Bearer {owner}", "X-Forwarded-For": ip},
+        )
+
+    for i in range(3):
+        assert _preview(f"10.0.2.{i}").status_code == 200
+    r = _preview("10.0.2.99")
+    assert r.status_code == 429, r.text
+    assert r.json()["error"] == "rate_limited"

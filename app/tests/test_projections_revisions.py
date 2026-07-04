@@ -140,6 +140,28 @@ def test_restore_revision_edit_token_is_owner_required_403(client):
     assert r.json().get("detail", r.json())["error"] == "owner_required"
 
 
+def test_restore_revision_cross_owner_forbidden_and_untouched(client, store):
+    # IMP-3(5b): a valid but DIFFERENT owner cannot restore a revision on this
+    # projection (TENANT, PRD §20) — only the edit-token leg above had coverage.
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    client.patch(f"/api/projections/{slug}", json={"assumptions": {"labor_pct": "0.45"}},
+                 headers={"Authorization": f"Bearer {owner}", "If-Match": "1"})
+    revs = client.get(f"/api/projections/{slug}/revisions",
+                      headers={"Authorization": f"Bearer {owner}"}).json()["revisions"]
+    target = revs[0]["id"]
+
+    attacker = _create(client)
+    r = client.post(
+        f"/api/projections/{slug}/revisions/{target}/restore",
+        headers={"Authorization": f"Bearer {attacker['owner_token']}", "If-Match": "2"},
+    )
+    assert r.status_code == 403, r.text
+    assert r.json().get("detail", r.json())["error"] == "forbidden"
+    # the victim's version is unaffected by the attacker's attempt.
+    assert store.get_projection_by_slug(slug)["version"] == 2
+
+
 def test_restore_revision_stale_if_match_409(client):
     # Quad leg (c): a stale If-Match on restore writes 0 rows -> 409 version_conflict
     # (the same optimistic-concurrency wall as PATCH), so a concurrent edit is never
