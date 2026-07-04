@@ -186,7 +186,7 @@ def test_legacy_three_year_snapshot_reads_verbatim_then_auto_extends_on_recomput
         legacy_inputs, {"labor_pct": "0.60"}, {},
         {"basis": "city", "households": "31798"}, {})
     assert vm["model_version"] == MODEL_VERSION and MODEL_VERSION == "2.6.0"
-    assert vm["compute_schema_version"] == "1.5.0"
+    assert vm["compute_schema_version"] == "1.6.0"
     # plateau defaults filled the gap left by the pre-5-year save.
     assert abs(vm["settings"]["shareY4"] - 0.11) < 1e-9
     assert abs(vm["settings"]["shareY5"] - 0.12) < 1e-9

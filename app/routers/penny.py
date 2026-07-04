@@ -489,6 +489,10 @@ _DRAFT_INPUT_FIELDS = {"city", "org_name", "target_opening_date", "opening_month
 _DRAFT_ASSUMPTION_KEYS = {
     "labor_pct", "marketing_pct", "supplies_pct", "card_pct", "payroll_tax_pct",
     "salvage_pct", "escalator", "basket", "donations_per_hh",
+    # Scalar capital/stress knobs (task 1.3). fixed_annual is deliberately absent: it
+    # is dict-valued and Penny only routes a single scalar value, so she stays
+    # fail-closed on the per-line fixed-annual map by design.
+    "reserve_buffer", "sensitivity_delta",
     "share_y1", "share_y2", "share_y3", "share_y4", "share_y5",
     "rent_per_sqft", "occupancy_annual", "donation_value",
 }

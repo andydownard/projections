@@ -22,11 +22,12 @@ import re
 import secrets
 import tempfile
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from starlette.background import BackgroundTask
 
 from app import config, narrative_provider, ratelimit
@@ -66,6 +67,7 @@ from engine.compute import (
 )
 from engine.model import (
     DEFAULT_OPENING_MONTH_NUMBER,
+    FIXED_ANNUAL,
     MODEL_VERSION,
     default_cost_schedule,
 )
@@ -275,6 +277,32 @@ class TradeAreaIn(BaseModel):
 _ENGINE_TRADE_KEYS = ("basis", "households", "acs_vintage")
 
 
+# Percent knobs (+ the rent escalator) are fractions validated to [0, 1]. labor_pct's
+# upper bound of 1 is intentional: the advisory band flag (engine build_flags) warns on
+# the high end; the hard cap only rejects a nonsensical > 100% share (task 1.1 review).
+_PCT_FIELDS = (
+    "labor_pct", "marketing_pct", "supplies_pct", "card_pct",
+    "payroll_tax_pct", "salvage_pct", "escalator",
+)
+
+
+def _require_fraction(name: str, raw: Optional[str], *, lo: str, hi: str) -> None:
+    """Validate an optional decimal-string knob is within [lo, hi] (inclusive).
+
+    None (the "use the engine default" sentinel) is always allowed. A non-numeric
+    string or an out-of-range value raises ValueError so Pydantic maps it to a 422
+    at the API boundary — the bad value never reaches the engine (never a 500).
+    """
+    if raw is None:
+        return
+    try:
+        val = Decimal(str(raw))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if val < Decimal(lo) or val > Decimal(hi):
+        raise ValueError(f"{name} must be between {lo} and {hi}")
+
+
 class AssumptionsIn(BaseModel):
     labor_pct: Optional[str] = None
     marketing_pct: Optional[str] = None
@@ -294,6 +322,35 @@ class AssumptionsIn(BaseModel):
     # fully editable. Optional + None-default so existing callers keep the model
     # default. Typed int so a PATCH value flows straight into the engine constant.
     donations_per_hh: Optional[int] = None
+    # Cash reserve buffer (whole $, >= 0) added on top of the peak monthly shortfall
+    # to size startup capital (decision.py). Optional -> frozen-dataclass default $25k.
+    reserve_buffer: Optional[int] = Field(default=None, ge=0)
+    # ± stress fraction for the §12.2 sensitivity scenarios. Bounded to [0, 0.9]: a
+    # delta > 1 would make the downside donation multiplier (1 - delta) NEGATIVE
+    # (reviewer-mandated bound, task 1.1). Optional string -> engine default 0.25.
+    sensitivity_delta: Optional[str] = None
+    # Fixed annual operating $ lines (label -> $/yr). Keys are ALLOWLISTED to the
+    # engine's FIXED_ANNUAL labels (an unknown line is rejected, never silently added)
+    # and every value must be >= 0. A PARTIAL dict is MERGED over the defaults in
+    # _build_engine_args_from_dicts (the other fixed lines survive). Optional -> the
+    # full engine default map.
+    fixed_annual: Optional[dict[str, float]] = None
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> AssumptionsIn:
+        for field_name in _PCT_FIELDS:
+            _require_fraction(field_name, getattr(self, field_name), lo="0", hi="1")
+        # sensitivity_delta in [0, 0.9] (a value > 1 -> negative donation multiplier).
+        _require_fraction("sensitivity_delta", self.sensitivity_delta, lo="0", hi="0.9")
+        if self.fixed_annual is not None:
+            for label, value in self.fixed_annual.items():
+                if label not in FIXED_ANNUAL:
+                    raise ValueError(
+                        f"fixed_annual: unknown line {label!r} "
+                        f"(allowed: {sorted(FIXED_ANNUAL)})")
+                if value < 0:
+                    raise ValueError(f"fixed_annual[{label!r}] must be >= 0")
+        return self
 
 
 class LocationIn(BaseModel):
@@ -426,6 +483,12 @@ def _build_engine_args_from_dicts(
     engine_inputs_d.setdefault("share_y5", "0.12")
     inputs = Inputs(**engine_inputs_d)
     akw = {k: v for k, v in (assumptions_d or {}).items() if v is not None}
+    # A PARTIAL fixed_annual (e.g. {"Pest control": 600}) MERGES over the model
+    # defaults so the other fixed lines survive — the frozen Assumptions dataclass
+    # would otherwise REPLACE the whole map, silently dropping the untouched lines.
+    # AssumptionsIn allowlists the keys, so an off-list label can never reach here.
+    if "fixed_annual" in akw:
+        akw["fixed_annual"] = {**dict(FIXED_ANNUAL), **akw["fixed_annual"]}
     assumptions = Assumptions(**akw)
     demand = DemandDrivers(**(demand_d or {}))
     trade = TradeArea(**{
@@ -587,13 +650,51 @@ def _apply_override_ops(stored: dict, ops, calc):
     return result
 
 
+def _revalidate_assumptions(assumptions_d: dict) -> None:
+    """Re-validate the MERGED assumptions dict through AssumptionsIn (bounds/allowlist).
+
+    A raw-dict PATCH merges via ``dict.update``, which is blind to bounds — so a
+    ``PATCH {"assumptions": {"labor_pct": "5.0"}}`` would otherwise inject an
+    out-of-range knob straight into the engine. This runs the same model that guards
+    create, rejecting a bad value with 422 BEFORE the engine (never a 500).
+
+    Engine-only keys that are NOT AssumptionsIn fields (e.g. ``startup``, a valid
+    engine ``Assumptions`` dataclass field) are FILTERED out of the check — never
+    rejected — and still flow to the engine via ``_build_engine_args_from_dicts``.
+    """
+    try:
+        AssumptionsIn(**{k: v for k, v in assumptions_d.items()
+                         if k in AssumptionsIn.model_fields})
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_assumptions", "message": str(exc)}) from exc
+
+
+def _revalidate_inputs(inputs_d: dict) -> None:
+    """Re-validate the MERGED inputs dict through InputsIn (type + bounds).
+
+    ``cost_schedule`` is intentionally EXCLUDED: it is separately validated by
+    ``_validate_schedule_inputs`` (which TOLERATES the ``provenance`` metadata Penny
+    stamps on AI-created rows), whereas InputsIn's strict ``CostScheduleItemIn``
+    (``extra="forbid"``) would reject that provenance and 422 a legitimate save.
+    Non-InputsIn keys are filtered out (never rejected).
+    """
+    try:
+        InputsIn(**{k: v for k, v in inputs_d.items()
+                    if k in InputsIn.model_fields and k != "cost_schedule"})
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_inputs", "message": str(exc)}) from exc
+
+
 def _merge_patch(row: dict, body: PatchProjectionIn):
     """Merge an editable-surface partial onto the stored source-of-truth.
 
     Returns (inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name). This
     is the SHARED merge used by both PATCH (persisting) and /preview (read-only)
     so the two paths can never drift. Raises dag.PinRejected on a non-pinnable
-    node (the caller maps it to 422).
+    node (the caller maps it to 422); raises HTTPException(422) when the merged
+    assumptions/inputs surface fails AssumptionsIn/InputsIn re-validation.
     """
     inputs_d = json.loads(row["inputs_json"] or "{}")
     assumptions_d = json.loads(row["assumptions_json"] or "{}")
@@ -611,6 +712,10 @@ def _merge_patch(row: dict, body: PatchProjectionIn):
     if body.overrides is not None:
         calc = _calculated_unpinned(inputs_d, assumptions_d, demand_d, trade_d)
         overrides_d = _apply_override_ops(overrides_d, body.overrides, calc)
+    # Re-validate the merged editable surface with the same bounds that guard create,
+    # so a raw-dict PATCH can no longer inject an out-of-range value (422, not a crash).
+    _revalidate_assumptions(assumptions_d)
+    _revalidate_inputs(inputs_d)
     name = body.name if body.name is not None else row["name"]
     return inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name
 

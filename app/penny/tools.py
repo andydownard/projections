@@ -89,6 +89,10 @@ _ASSUMPTION_BUCKET = {
     "escalator": "assumptions", "basket": "assumptions",
     # donations per household / year is an engine assumption (E2 editable driver).
     "donations_per_hh": "assumptions",
+    # Scalar capital/stress knobs (task 1.3). fixed_annual is NOT listed: it is
+    # dict-valued, and Penny's set_assumption routes a single scalar `str(value)` — a
+    # per-line map has no scalar form here, so Penny stays fail-closed on it by design.
+    "reserve_buffer": "assumptions", "sensitivity_delta": "assumptions",
     "share_y1": "inputs", "share_y2": "inputs", "share_y3": "inputs",
     # 5-year horizon: the late-year donor shares route to inputs like share_y1..3.
     "share_y4": "inputs", "share_y5": "inputs",
