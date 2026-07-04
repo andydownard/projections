@@ -382,13 +382,47 @@ export interface AdvancedOptionsProps {
 
 ---
 
-## Wave 6 — McKinsey engine fixes + final gate
+## Wave 6 — McKinsey engine fixes (adjudicated 2026-07-03; MODEL_VERSION 2.6.0 → 2.7.0, ONE bump covering 6.1–6.4, goldens regenerated once at 6.4)
 
-### Task 6.1: Adjudicated McKinsey P0/P1 math fixes
+### Task 6.1: Sensitivity stress must not be defeated by pins (panel P0; verified worked probe)
 
-Appended by the orchestrator after the partner synthesis lands and each finding is verified against the engine source by Fable. Only findings graded "math is wrong" (not "assumption needs data") enter this branch; assumption-default changes go to tickets (they change goldens and need owner sign-off).
+**Files:** Modify: `engine/decision.py` (`_scenario_net`), `engine/tests/test_decision.py`
+**Interfaces:** Inside scenario re-runs only, a pinned `share#y` value is scaled by the same donation multiplier and a pinned `Rent#y` by the rent multiplier (a pin asserts a level, not immunity to the stress). Implementation: `_scenario_net` builds a scenario-local `overrides` copy where `share#*` pin values are multiplied by `donation_mult` and `Rent#*` pin values by `rent_mult`; all other pins pass through unchanged.
+**Model: opus.**
 
-### Task 6.2: Final verification + PR
+- [ ] RED: canonical inputs + `share#1` pinned to its own computed base value (0.06) → sensitivity dict equals the unpinned run (today it differs: downside net −$74,433 vs −$100,850 — Analyst A probe). Second test: `Rent#1` pinned → downside capital still reflects the +25% rent shock.
+- [ ] Implement; `pytest engine/tests/test_decision.py -q` → PASS. Commit: `fix(engine): scenario stress applies to pinned share/Rent values (pin no longer defeats downside)`
+
+### Task 6.2: Monthly model — split fixed / variable / payroll expense streams (panel P0)
+
+**Files:** Modify: `engine/monthly.py`, `engine/tests/test_monthly.py`, `ENGINE_CONTRACT.md` §5.2, `AGENTS.md` (fixture-expectation lines)
+**Interfaces:** `build_monthly` gains a third distribution stream: **fixed** annual lines (Rent, Utilities/trash service, and the FIXED_ANNUAL labels — every `annual_y1.expenses` key that is not a %-of-revenue line and not Payroll/Payroll taxes) are spread flat 1/12 per operating month (last month absorbs the Decimal residual, preserving the penny-exact roll-up); **Payroll AND Payroll taxes** follow `_PAYROLL_WEIGHTS`; the remaining %-of-revenue lines (card fees, marketing, supplies) follow `_REVENUE_WEIGHTS`. Classify by label against a module-level `_PCT_OF_REVENUE_LABELS` frozenset; `build_monthly` already receives `annual_y1` (expenses dict available). Expected canonical shifts (Analyst A hand-verified): trough ≈ −$317,403 at M7, capital ≈ $342,403, break-even month 8 (was 9).
+**Model: opus.**
+
+- [ ] RED: `test_monthly.py` — each operating month's fixed-line total == annual_fixed/12 (last month absorbs residual); payroll-tax stream follows payroll weights not revenue weights; annual==sum(monthly) still penny-exact; canonical trough/capital/break-even match the hand-computed expectations above.
+- [ ] Implement; update ENGINE_CONTRACT §5.2 (also fixing its payroll-tax-scales-with-revenue inconsistency) + AGENTS.md fixture-headline notes (canonical capital/break-even shift; design-parity twin numbers re-pinned at 6.4 regen).
+- [ ] `pytest engine/tests -q -k "not frozen and not golden_gate"` → PASS (frozen goldens regen at 6.4 in the same PR). Commit: `fix(engine): monthly cash-flow charges fixed costs flat, payroll taxes on payroll ramp`
+
+### Task 6.3: Implement the three missing advisory guardrail flags + guard break-even revenue (panel P1)
+
+**Files:** Modify: `engine/decision.py` (`build_flags`, `build_decision`), `engine/model.py` (new named constants `LABOR_RATIO_BAND_MIN = "0.25"`, `LABOR_RATIO_BAND_MAX = "0.60"`, `SALES_PER_SQFT_MIN = 50`, `SALES_PER_SQFT_MAX = 300`), `engine/tests/test_decision.py`
+**Interfaces:** New flags (same dict shape as existing band flags, `requires_note: True`): `occupancy_ratio_out_of_band` (Y1 Rent/revenue > OCCUPANCY_RATIO_BAND_MAX), `labor_ratio_out_of_band` (labor_pct outside 0.25–0.60), `sales_per_sqft_out_of_band` (Y1 revenue / salesfloor sqft outside $50–$300). Guard: `break_even_revenue_annual = None` when `var_rate >= 1` (today only `== 1`) plus `flags["break_even_revenue"] = "N/A — variable-cost rate ≥ 100% of revenue"`.
+**Model: sonnet.**
+
+- [ ] RED: canonical fixture (occupancy ratio 28.1%) → occupancy flag present with requires_note; labor_pct "0.90" → labor flag AND break_even_revenue None with the flags reason (0.90×1.075+0.1075 ≥ 1); an in-band sales/sqft fixture → no sales flag.
+- [ ] Implement; `pytest engine/tests -q -k "not frozen and not golden_gate"` → PASS. Commit: `feat(engine): occupancy/labor/sales-per-sqft advisory flags; break-even revenue N/A guard`
+
+### Task 6.4: 990-grounded constants + NNN contract resolution + MODEL_VERSION 2.7.0 + single regen
+
+**Files:** Modify: `engine/model.py` (PAYROLL_TAX_PCT_OF_PAYROLL "0.075"→"0.08"; FIXED_ANNUAL "Insurance liability" 2000→10000; new `DEFAULT_DONATION_VALUE = "74"`; MODEL_VERSION → "2.7.0" with a rationale block naming 6.1/6.2/6.3/6.4), `ENGINE_CONTRACT.md` (§1 NNN/escalator text + defaults table + §5.2/§6 metric expectations), `DECISIONS.md` (three new entries: payroll-tax/insurance evidence w/ EIN citations, NNN resolution, monthly-split), `app/seed.py` + `web/src/wizard/useWizardState.ts` if either carries a literal donation value, `engine/tests/conftest.py` (+ NNN fixture builder), `engine/tests/test_golden_gate.py` (+ NNN entry), ALL goldens via `python scripts/regen_goldens.py`
+**Interfaces:** NNN resolution: **code behavior governs** — escalator applies to the resolved occupancy including NNN opex, and the lease deposit is 3 months of resolved occupancy; this is the conservative (higher-cost) reading. Rewrite ENGINE_CONTRACT §1 to match §3/code; record in DECISIONS.md. New golden `nnn_gross_check`: canonical + `lease_type="nnn"` + `nnn_opex_annual="30000"` asserting Y2 occupancy $154,500 and the deposit line = 3 months of (rent+NNN)/12.
+**Model: opus.**
+
+- [ ] RED: test_model.py version literal "2.7.0"; constant-value tests; NNN fixture assertions.
+- [ ] Implement; regen ALL goldens; `pytest engine/tests -q && pytest engine/tests/test_golden_gate.py -q` → PASS; commit body carries the golden-diff summary (numbers change HERE by design: payroll tax, insurance, monthly split, plus the new flags/sensitivity keys).
+- [ ] Commit: `feat(engine)!: 2.7.0 — 990-grounded payroll tax 8% + insurance $10k; NNN rule resolved; monthly split + pin-stress + advisory flags land in goldens`
+
+### Task 6.5: Final verification + PR
 
 - [ ] Full proof set (see top) — paste outputs; `python scripts/regen_goldens.py --check` clean; `git rebase` onto latest integrate/redesign-v2 if it moved.
 - [ ] PR to `integrate/redesign-v2` with: wave summary, golden-diff note (keys added, zero numbers changed), quad matrix, screenshots of wizard advanced sections + grouped detail page at 1440/768/375.
@@ -397,4 +431,6 @@ Appended by the orchestrator after the partner synthesis lands and each finding 
 
 ## Explicitly OUT of this branch (ticketed instead)
 
-Role-view layouts (§6.2), stale-cell popover/override UX, mobile stacked editor, evidence attachments + upload hardening, upgrade-model endpoint, expert-review CTA + funnel instrumentation, NarrativeCanvas wire-or-remove (+ DOMPurify if kept), share presets/live revenue helper, S-curve ramp presets + calibration, seasonality/opening_status/demand-confidence wire-or-remove, PDF packet, list duplicate/trash actions + start-from-example, migrating 49 test files to shared fixtures, grounding-stack consolidation (narrative.py vs aisafety.py), e2e keyboard-editing + per-worker DB + degraded-state specs, loading skeletons, cost-schedule editing on the detail page (Timing group shows opening month read-only this branch), McKinsey assumption-default changes.
+Role-view layouts (§6.2), stale-cell popover/override UX, mobile stacked editor, evidence attachments + upload hardening, upgrade-model endpoint, expert-review CTA + funnel instrumentation, NarrativeCanvas wire-or-remove (+ DOMPurify if kept), share presets/live revenue helper, S-curve ramp presets + calibration, seasonality/opening_status/demand-confidence wire-or-remove, PDF packet, list duplicate/trash actions + start-from-example, migrating 49 test files to shared fixtures, grounding-stack consolidation (narrative.py vs aisafety.py), e2e keyboard-editing + per-worker DB + degraded-state specs, loading skeletons, cost-schedule editing on the detail page (Timing group shows opening month read-only this branch).
+
+McKinsey items ticketed (not this branch): pre-opening occupancy/payroll charging (lease-start/hire-date inputs), payback extension beyond M12 (extrapolated labeling), recommendation-gate rebalance (joint-downside veto → owner decision) + one-way stresses, S-curve plateau + M12→Y2 continuity, override-system batch (stale-hint scoping, inspector calculated basis, affected map), capital-definition contract alignment (whole-plan vs first-year), N/A display batch (customers sentinel, cash-gap clamp), xlsx completeness guard for extra expense labels, marketing taper decision, labor staffing mini-model / volunteer offset UX, salvage upside note, 990-comparability evidence copy, M-1 operator calibration (manual).
