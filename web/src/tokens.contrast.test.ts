@@ -99,6 +99,11 @@ const PAIRS: Pair[] = [
   // needs-justification flags, both on white and on a surface-alt container.
   { fg: "warn-text", bg: "surface", where: "OverrideAudit stale-upstream / needs-justification text, white bg" },
   { fg: "warn-text", bg: "surface-alt", where: "OverrideAudit inside a surface-alt container (Settings/KPIs grid)" },
+  // Cash-flow module redesign (2026-07-04): muted ink carries the axis titles,
+  // axis tick labels, year labels and the group "Ending cash" summary — on white
+  // and on the surface-alt group-header / row-highlight band. Locked to AA.
+  { fg: "text-muted", bg: "surface", where: "cash-flow axis titles / tick labels, white bg" },
+  { fg: "text-muted", bg: "surface-alt", where: "cash-flow group 'Ending cash' summary + active-row highlight band" },
 ];
 
 describe("tokens.css: cell-state + placeholder + warn-text colors clear WCAG-AA 4.5:1", () => {

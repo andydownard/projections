@@ -376,8 +376,8 @@ describe("ProjectionDetail — heading hierarchy (a11y #203)", () => {
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     render(<ProjectionDetail slug="p_8x" edit={false} />);
     await screen.findByRole("heading", { level: 1 });
-    // The Projection panel section headings ("3-year projection", "First-year cash
-    // flow") are h2 (Epic G removed the standalone "Decision & 3-year projection").
+    // The Projection panel section headings ("3-year projection", "Cash flow") are
+    // h2 (Epic G removed the standalone "Decision & 3-year projection").
     expect(screen.getAllByRole("heading", { level: 2 }).length).toBeGreaterThan(0);
     expect(
       screen.queryByRole("heading", { name: /decision & 3-year projection/i }),
