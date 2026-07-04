@@ -479,6 +479,14 @@ export function StepStartupCosts({
         onChangeRows={(next: CostScheduleRow[]) => state.set("costSchedule", next)}
         onChangeOpeningMonth={(v) => state.set("openingMonthNumber", v)}
       />
+
+      {/* Task 2.5 (audit P1): the planning-estimates notice, above the Generate
+          button that CreateProjectionPage renders right after this step (terms
+          acceptance stays IMPLICIT — owner Decision 5 — this is a content notice,
+          not the W8 terms checkbox). */}
+      <p className="wizard__disclaimer">
+        These figures are planning estimates, not financial advice.
+      </p>
     </section>
   );
 }

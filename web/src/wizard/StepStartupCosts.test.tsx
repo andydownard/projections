@@ -290,3 +290,22 @@ describe("StepStartupCosts — Rent & lease / Operating cost structure / Funding
     expect(screen.getByText("Timing")).toBeInTheDocument();
   });
 });
+
+// Task 2.5 (audit P1): the planning-estimates disclaimer, rendered by this (the
+// last) step so it sits directly above the Generate button that CreateProjectionPage
+// renders immediately after it.
+describe("StepStartupCosts — planning-estimates disclaimer (audit P1, Task 2.5)", () => {
+  it("renders the disclaimer text", () => {
+    render(<StepStartupCosts state={makeState()} />);
+    expect(
+      screen.getByText("These figures are planning estimates, not financial advice."),
+    ).toBeInTheDocument();
+  });
+
+  it("uses the styled .wizard__disclaimer class", () => {
+    render(<StepStartupCosts state={makeState()} />);
+    expect(
+      screen.getByText("These figures are planning estimates, not financial advice."),
+    ).toHaveClass("wizard__disclaimer");
+  });
+});

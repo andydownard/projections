@@ -290,6 +290,120 @@ describe("CreateProjectionPage — Generate lands on the editable detail (owner 
   });
 });
 
+// Wave 2 Task 2.5 (audit P0): a failed Generate must never navigate to
+// /p/undefined/edit or silently do nothing — it must surface an alert with a
+// Retry that re-invokes Generate, leaving the URL and the in-progress draft intact.
+function wireFetchFailingCreate(mode: "500" | "reject") {
+  return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url.includes("/api/places/autocomplete"))
+      return jsonResponse({ predictions: [{ description: "Dallas, TX, USA", place_id: "PID_DAL" }] });
+    if (url.includes("/api/places/resolve")) return jsonResponse(RESOLVED);
+    if (url.includes("/api/research")) return jsonResponse(RESEARCH);
+    if (url.includes("/api/projections")) {
+      if (mode === "reject") return Promise.reject(new TypeError("Failed to fetch"));
+      return Promise.resolve(new Response(JSON.stringify({ error: "server_error" }), { status: 500 }));
+    }
+    return jsonResponse({});
+  });
+}
+
+async function stepToStartupCosts(user: ReturnType<typeof userEvent.setup>) {
+  await resolveAddress(user);
+  await user.click(screen.getByRole("button", { name: /^next$/i })); // -> square footage
+  await user.click(screen.getByRole("button", { name: /^next$/i })); // -> configure-donations
+  await user.click(screen.getByRole("button", { name: /^next$/i })); // -> startup costs
+}
+
+describe("CreateProjectionPage — Generate failure surfaces an alert w/ retry (audit P0, Task 2.5)", () => {
+  it("a 500 response renders an alert + Retry, never navigates, keeps the draft", async () => {
+    window.history.pushState(null, "", "/wizard");
+    wireFetchFailingCreate("500");
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToStartupCosts(user);
+    await waitFor(() =>
+      expect((screen.getByLabelText(/rent per square foot/i) as HTMLInputElement).value).toBe(
+        "18.00",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate projections/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/couldn.t generate/i);
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    // Never navigated — no /p/undefined/edit, no navigation at all.
+    expect(window.location.pathname).toBe("/wizard/startup-costs");
+    // The draft is intact — the pre-filled rent value survives the failure.
+    expect((screen.getByLabelText(/rent per square foot/i) as HTMLInputElement).value).toBe(
+      "18.00",
+    );
+  });
+
+  it("a network rejection renders the same alert + Retry, never navigates", async () => {
+    window.history.pushState(null, "", "/wizard");
+    wireFetchFailingCreate("reject");
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToStartupCosts(user);
+
+    await user.click(screen.getByRole("button", { name: /generate projections/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/couldn.t generate/i);
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/wizard/startup-costs");
+  });
+
+  it("Retry re-invokes Generate and lands on /p/<slug>/edit once the server recovers", async () => {
+    window.history.pushState(null, "", "/wizard");
+    let creates = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes("/api/places/autocomplete"))
+        return jsonResponse({ predictions: [{ description: "Dallas, TX, USA", place_id: "PID_DAL" }] });
+      if (url.includes("/api/places/resolve")) return jsonResponse(RESOLVED);
+      if (url.includes("/api/research")) return jsonResponse(RESEARCH);
+      if (url.includes("/api/projections")) {
+        creates += 1;
+        if (creates === 1) return Promise.resolve(new Response("{}", { status: 500 }));
+        return jsonResponse({ ...VM, owner_token: "tok", edit_token: "edit_new" });
+      }
+      return jsonResponse({});
+    });
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToStartupCosts(user);
+    await user.click(screen.getByRole("button", { name: /generate projections/i }));
+    await screen.findByRole("alert");
+
+    await user.click(screen.getByRole("button", { name: /retry/i }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/p/p_new/edit"));
+    expect(creates).toBe(2);
+  });
+});
+
+describe("CreateProjectionPage — planning-estimates disclaimer (audit P1, Task 2.5)", () => {
+  it("renders the disclaimer paragraph on the last step, above Generate", async () => {
+    wireFetch({});
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToStartupCosts(user);
+    expect(
+      screen.getByText(/these figures are planning estimates, not financial advice/i),
+    ).toBeInTheDocument();
+  });
+
+  it("is absent on an earlier step (address)", () => {
+    render(<CreateProjectionPage />);
+    expect(
+      screen.queryByText(/these figures are planning estimates, not financial advice/i),
+    ).toBeNull();
+  });
+});
+
 describe("CreateProjectionPage — sequential creates never orphan the prior projection (B3)", () => {
   // The data-loss regression (Mutation-Safety-Quad): the create POST must carry the
   // owner identity. Anonymous create #1 mints + persists a token; create #2 then

@@ -227,6 +227,10 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
   const [busy, setBusy] = useState(false);
+  // Task 2.5 (audit P0): a failed Generate (network reject, non-2xx response, or a
+  // malformed body missing view_slug) must never navigate — it surfaces this alert
+  // with a Retry that re-invokes Generate against the still-intact draft.
+  const [generateError, setGenerateError] = useState<string | null>(null);
   // #32 — the contextual proposal upload on the startup-costs step.
   const [proposalBusy, setProposalBusy] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
@@ -393,8 +397,12 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
 
   // Generate: POST the create body and land DIRECTLY on the editable detail page
   // (owner Decision 12 — no in-page result view, no "projection ready" interstitial).
+  // Task 2.5 (audit P0): a network reject, a non-2xx response, or a malformed body
+  // missing view_slug must NEVER navigate (the /p/undefined/edit bug) and must never
+  // fail silently — the draft stays intact and generateError drives the alert+Retry.
   async function onGenerate(d: WizardDraft) {
     setBusy(true);
+    setGenerateError(null);
     try {
       const body = toServerCreateBody(buildCreatePayload(d));
       // Attach the Places->Census provenance so the server persists + emits it
@@ -432,10 +440,24 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
         headers: { "Content-Type": "application/json", ...owner },
         body: JSON.stringify(body),
       });
+      if (!resp.ok) {
+        setGenerateError(
+          "Couldn't generate your projection — please try again.",
+        );
+        return;
+      }
       const created = (await resp.json()) as ViewModel & {
         owner_token?: string;
         edit_token?: string;
       };
+      // A 2xx with no view_slug is still a failure to navigate on (the
+      // /p/undefined/edit bug) — treat it the same as a non-ok response.
+      if (!created.view_slug) {
+        setGenerateError(
+          "Couldn't generate your projection — please try again.",
+        );
+        return;
+      }
       // Persist a minted owner token ONLY when the request went out anonymous (no
       // pre-existing owner). Never overwrite an existing owner token — that single
       // localStorage slot is the only handle on the prior projection, and clobbering
@@ -455,6 +477,12 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
       // Land directly on the editable projection (owner Decision 12).
       window.history.pushState(null, "", `/p/${created.view_slug}/edit`);
       window.dispatchEvent(new PopStateEvent("popstate"));
+    } catch {
+      // A network reject (offline, DNS, CORS, aborted) or a JSON parse failure —
+      // the draft is untouched (we never cleared it), so Retry just re-POSTs it.
+      setGenerateError(
+        "Couldn't generate your projection — check your connection and try again.",
+      );
     } finally {
       setBusy(false);
     }
@@ -592,6 +620,23 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
               </button>
             )}
           </div>
+
+          {/* Task 2.5 (audit P0): a failed Generate must never navigate to
+              /p/undefined/edit or fail silently. The draft above is untouched, so
+              Retry simply re-POSTs it. */}
+          {generateError && (
+            <div className="wizard__generate-error" role="alert" data-testid="generate-error">
+              <p>{generateError}</p>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => void onGenerate(wiz.draft)}
+              >
+                Retry
+              </button>
+            </div>
+          )}
         </form>
 
         {/* A between-steps spinner for the one blocking transition (#15): Generate.

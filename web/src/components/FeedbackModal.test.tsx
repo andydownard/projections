@@ -47,6 +47,32 @@ describe("FeedbackModal", () => {
     });
   });
 
+  // Task 2.5 (audit P0, same catch treatment as CreateProjectionPage's Generate):
+  // a failed submit must never throw an unhandled rejection or silently do
+  // nothing — it surfaces an alert and leaves the draft (title/description) intact
+  // so the user can just click Send again.
+  it("a rejected onSubmit surfaces an alert and keeps the draft intact (no crash)", async () => {
+    const onSubmit = vi.fn(async (): Promise<string> => {
+      throw new Error("network down");
+    });
+    render(<FeedbackModal onSubmit={onSubmit} onClose={() => {}} />);
+    await userEvent.type(screen.getByLabelText(/title/i), "Break-even off by one");
+    await userEvent.type(screen.getByLabelText(/description/i), "Banner vs chart.");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/couldn.t send/i);
+    expect(screen.queryByTestId("feedback-success")).toBeNull();
+    // Draft intact — nothing was cleared on failure.
+    expect(screen.getByLabelText(/title/i)).toHaveValue("Break-even off by one");
+    expect(screen.getByLabelText(/description/i)).toHaveValue("Banner vs chart.");
+
+    // Retrying (clicking Send again) re-invokes onSubmit against the same draft.
+    onSubmit.mockResolvedValueOnce("SUP-RETRY1");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    expect(await screen.findByTestId("feedback-success")).toHaveTextContent("SUP-RETRY1");
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+  });
+
   it("disables Send until a title is entered", () => {
     render(<FeedbackModal onSubmit={async () => "SUP-X"} onClose={() => {}} />);
     expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();

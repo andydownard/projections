@@ -2604,6 +2604,25 @@ body {
   }
 }
 
+/* A failed Generate (audit P0, Task 2.5): draft-preserving alert + Retry — never a
+   silent failure and never a navigate to /p/undefined/edit. */
+.wizard__generate-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.wizard__generate-error p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--error);
+}
+
 /* Make the current breadcrumb step prominent — the page's de-facto heading (#17). */
 .wizard-steps__item--current .wizard-steps__label,
 .wizard-steps__item--current .wizard-steps__btn {
@@ -3040,6 +3059,19 @@ body {
   font-size: var(--text-base);
   line-height: 1.45;
   color: var(--text-muted);
+}
+
+/* A failed submit (Task 2.5): the draft (title/description) stays intact, so this
+   alert plus the still-enabled Send button is the retry affordance. */
+.feedback-modal__error {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border-left: 3px solid var(--error);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-alt);
+  font-size: var(--text-base);
+  line-height: 1.45;
+  color: var(--error);
 }
 
 .feedback-modal__success p {

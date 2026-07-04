@@ -47,6 +47,10 @@ export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModal
   const [description, setDescription] = useState("");
   const [supportId, setSupportId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Task 2.5 (audit P0, same catch treatment as CreateProjectionPage's Generate): a
+  // failed submit must never throw an unhandled rejection or silently do nothing —
+  // the title/description draft stays intact so Send can simply be clicked again.
+  const [sendError, setSendError] = useState<string | null>(null);
   const { showToast } = useToast();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
 
@@ -55,6 +59,7 @@ export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModal
 
   async function send() {
     setSubmitting(true);
+    setSendError(null);
     try {
       const id = await onSubmit(
         isIdea
@@ -68,6 +73,8 @@ export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModal
       } else {
         setSupportId(id);
       }
+    } catch {
+      setSendError("Couldn't send feedback — please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -159,6 +166,11 @@ export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModal
               </label>
             )}
             {/* AS2: email input removed from idea path — server derives from Clerk JWT */}
+            {sendError && (
+              <p className="feedback-modal__error" role="alert" data-testid="feedback-error">
+                {sendError}
+              </p>
+            )}
             <div className="feedback-modal__actions">
               <button type="button" className="btn" onClick={onClose}>
                 Cancel
