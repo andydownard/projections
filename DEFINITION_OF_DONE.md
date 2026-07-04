@@ -20,8 +20,8 @@ A change is not "done" until these commands are run and their literal output is 
 |---|---|---|
 | Backend tests green | `pytest -q` | `0 failed`, exit 0 |
 | Frontend tests green | `npm test -- --run` | `0 failed`, exit 0 |
-| Engine golden + 3-way reconcile | `pytest -q engine/tests/golden/` | all golden fixtures pass; deltas `< $0.50` / `< 0.1pp` |
-| Excel formula-error gate | `python recalc.py "<exported>.xlsx"` | `{"status":"success","total_errors":0}` (parse JSON; `status=="success"` AND `total_errors==0`, fail closed on `{"error":...}`) |
+| Engine golden + 3-way reconcile | `pytest -q engine/tests/test_golden_gate.py` | all golden fixtures pass; deltas `< $0.50` / `< 0.1pp` |
+| Excel formula-error gate | `python reference/thrift-store-projections-skill/scripts/recalc.py "<exported>.xlsx"` | `{"status":"success","total_errors":0}` (parse JSON; `status=="success"` AND `total_errors==0`, fail closed on `{"error":...}`) |
 | Test:code ratio (HARD) | `python scripts/ratio.py` | `> 1.3` on PR diff **and** repo-wide |
 | Lint / types | `ruff check . && mypy app engine` · `npm run lint && npm run typecheck` | clean |
 | Boot-refuse config | `python -c "import app.config as c; c.validate_required()"` (prod env) | refuses with the missing-secret name, or passes |
