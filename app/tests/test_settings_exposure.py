@@ -64,6 +64,40 @@ def test_patch_fixed_annual_merges_and_shifts_expenses(client):
     assert _row_y1_raw(vm, "Total Expenses") == pytest.approx(before_exp + 300)
 
 
+# ---- review 1.3f (f2): SEQUENTIAL single-line PATCHes must ACCUMULATE, not replace.
+# _merge_patch's dict.update REPLACED the whole stored fixed_annual map on every
+# PATCH, so PATCH#2's single line silently reverted PATCH#1's line back to its
+# engine default. The fix deep-merges fixed_annual: incoming keys layer over the
+# STORED map (which itself may already carry prior accumulated edits).
+def test_patch_fixed_annual_accumulates_across_sequential_patches(client):
+    slug, owner, version, body = create_projection(client)
+    before_exp = _row_y1_raw(body, "Total Expenses")
+
+    r1 = client.patch(
+        f"/api/projections/{slug}",
+        json={"assumptions": {"fixed_annual": {"Pest control": 600}}},
+        headers=_hdr(owner, version),
+    )
+    assert r1.status_code == 200, r1.text
+    vm1 = r1.json()
+    assert vm1["settings"]["fixedAnnual"]["Pest control"] == 600
+
+    r2 = client.patch(
+        f"/api/projections/{slug}",
+        json={"assumptions": {"fixed_annual": {"Insurance liability": 3000}}},
+        headers=_hdr(owner, vm1["version"]),
+    )
+    assert r2.status_code == 200, r2.text
+    vm2 = r2.json()
+    fa = vm2["settings"]["fixedAnnual"]
+    # PATCH#1's line must SURVIVE PATCH#2 (accumulate), not silently revert to 300.
+    assert fa["Pest control"] == 600
+    assert fa["Insurance liability"] == 3000
+    # Pest control 300->600 (+300) and Insurance liability 2000->3000 (+1000) both
+    # land in Total Expenses -- +1300 total vs the pre-patch baseline.
+    assert _row_y1_raw(vm2, "Total Expenses") == pytest.approx(before_exp + 300 + 1000)
+
+
 # ---- (c) an off-allowlist fixed_annual key is rejected (422, not an engine crash)
 def test_patch_fixed_annual_unknown_key_422(client):
     slug, owner, version, _ = create_projection(client)
@@ -80,6 +114,37 @@ def test_patch_fixed_annual_negative_value_422(client):
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"fixed_annual": {"Pest control": -5}}},
+        headers=_hdr(owner, version),
+    )
+    assert r.status_code == 422, r.text
+
+
+# ---- review 1.3f (f3): ge=0 bounds on donations_per_hh / basket / utilities_per_sqft
+def test_patch_donations_per_hh_negative_422(client):
+    slug, owner, version, _ = create_projection(client)
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"assumptions": {"donations_per_hh": -1}},
+        headers=_hdr(owner, version),
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_patch_basket_negative_422(client):
+    slug, owner, version, _ = create_projection(client)
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"assumptions": {"basket": "-5"}},
+        headers=_hdr(owner, version),
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_patch_utilities_per_sqft_negative_422(client):
+    slug, owner, version, _ = create_projection(client)
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"assumptions": {"utilities_per_sqft": "-1"}},
         headers=_hdr(owner, version),
     )
     assert r.status_code == 422, r.text

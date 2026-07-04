@@ -416,6 +416,16 @@ def _set_input(store: Store):
     return handler
 
 
+# set_assumption stringifies every value by default (the engine's %/decimal knobs
+# — including sensitivity_delta — want a decimal STRING, matching the manual-PATCH
+# shape). reserve_buffer is the one INT-valued assumption (AssumptionsIn.reserve_buffer
+# / engine.compute.Assumptions.reserve_buffer): str(value) would store the STRING
+# "40000" while the manual UI PATCH sends the JSON int 40000, so
+# computed_json.settings.reserveBuffer type-flips depending on which path edited it
+# (review 1.3f, f1). Normalize it to an int here so both paths store/echo identically.
+_INT_ASSUMPTION_FIELDS = {"reserve_buffer"}
+
+
 def _set_assumption(store: Store):
     def handler(args: dict, ctx: ToolContext) -> dict:
         if not ctx.can_mutate:
@@ -430,7 +440,14 @@ def _set_assumption(store: Store):
         bucket = _ASSUMPTION_BUCKET.get(str(name))
         if bucket is None:
             return {"error": "unknown_field", "status": 422, "field": name}
-        patch = {str(name): str(value)}
+        if str(name) in _INT_ASSUMPTION_FIELDS:
+            coerced = _as_int(value)
+            if coerced is None:
+                return {"error": "invalid_inputs", "status": 422,
+                        "message": f"{name} must be a whole number"}
+            patch = {str(name): coerced}
+        else:
+            patch = {str(name): str(value)}
         if bucket == "assumptions":
             body = PatchProjectionIn(assumptions=patch)
         else:

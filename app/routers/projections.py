@@ -303,6 +303,23 @@ def _require_fraction(name: str, raw: Optional[str], *, lo: str, hi: str) -> Non
         raise ValueError(f"{name} must be between {lo} and {hi}")
 
 
+def _require_min(name: str, raw: Optional[str], *, lo: str) -> None:
+    """Validate an optional decimal-string knob is >= lo (no upper bound).
+
+    Same None-sentinel / 422-on-bad-value contract as ``_require_fraction``, for
+    knobs with a lower bound only (basket $, utilities $/sqft) rather than a [0,1]
+    fraction (review 1.3f, f3).
+    """
+    if raw is None:
+        return
+    try:
+        val = Decimal(str(raw))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if val < Decimal(lo):
+        raise ValueError(f"{name} must be >= {lo}")
+
+
 class AssumptionsIn(BaseModel):
     labor_pct: Optional[str] = None
     marketing_pct: Optional[str] = None
@@ -321,7 +338,8 @@ class AssumptionsIn(BaseModel):
     # make the donation chain (retail = donations × value; customers = retail / basket)
     # fully editable. Optional + None-default so existing callers keep the model
     # default. Typed int so a PATCH value flows straight into the engine constant.
-    donations_per_hh: Optional[int] = None
+    # ge=0: a negative donations/household count is nonsensical (review 1.3f, f3).
+    donations_per_hh: Optional[int] = Field(default=None, ge=0)
     # Cash reserve buffer (whole $, >= 0) added on top of the peak monthly shortfall
     # to size startup capital (decision.py). Optional -> frozen-dataclass default $25k.
     reserve_buffer: Optional[int] = Field(default=None, ge=0)
@@ -331,9 +349,12 @@ class AssumptionsIn(BaseModel):
     sensitivity_delta: Optional[str] = None
     # Fixed annual operating $ lines (label -> $/yr). Keys are ALLOWLISTED to the
     # engine's FIXED_ANNUAL labels (an unknown line is rejected, never silently added)
-    # and every value must be >= 0. A PARTIAL dict is MERGED over the defaults in
-    # _build_engine_args_from_dicts (the other fixed lines survive). Optional -> the
-    # full engine default map.
+    # and every value must be >= 0. A PARTIAL dict ACCUMULATES: incoming keys merge
+    # over the STORED fixed_annual map in ``_merge_patch``/``_merge_assumptions_patch``
+    # (so a line set by an EARLIER PATCH survives a LATER PATCH that only touches a
+    # different line), and the resolved map then merges over the engine's FIXED_ANNUAL
+    # defaults in ``_build_engine_args_from_dicts`` (so lines never touched at all
+    # keep their default). Optional -> the full engine default map.
     fixed_annual: Optional[dict[str, float]] = None
 
     @model_validator(mode="after")
@@ -342,6 +363,11 @@ class AssumptionsIn(BaseModel):
             _require_fraction(field_name, getattr(self, field_name), lo="0", hi="1")
         # sensitivity_delta in [0, 0.9] (a value > 1 -> negative donation multiplier).
         _require_fraction("sensitivity_delta", self.sensitivity_delta, lo="0", hi="0.9")
+        # basket $ and utilities $/sqft have a lower bound only (review 1.3f, f3): a
+        # negative basket value or negative utilities rate is nonsensical but has no
+        # natural upper bound the way the [0,1] percent knobs do.
+        _require_min("basket", self.basket, lo="0")
+        _require_min("utilities_per_sqft", self.utilities_per_sqft, lo="0")
         if self.fixed_annual is not None:
             for label, value in self.fixed_annual.items():
                 if label not in FIXED_ANNUAL:
@@ -687,6 +713,28 @@ def _revalidate_inputs(inputs_d: dict) -> None:
             "error": "invalid_inputs", "message": str(exc)}) from exc
 
 
+def _merge_assumptions_patch(assumptions_d: dict, patch: dict) -> None:
+    """Merge an assumptions PATCH partial onto the stored dict, IN PLACE.
+
+    Every key is a flat replace EXCEPT ``fixed_annual``, which ACCUMULATES: a
+    partial incoming map (e.g. ``{"Pest control": 600}``) is deep-merged with
+    incoming keys layered OVER the STORED map, not a flat ``dict.update`` that
+    replaces the whole stored map wholesale. Without this, PATCH#1 setting
+    ``{"Pest control": 600}`` followed by PATCH#2 setting
+    ``{"Insurance liability": 3000}`` silently reverted Pest control back to its
+    engine default -- PATCH#2's dict.update discarded PATCH#1's stored line
+    (review 1.3f, f2). ``_build_engine_args_from_dicts`` separately merges the
+    RESOLVED fixed_annual over the engine's FIXED_ANNUAL defaults for the lines
+    never edited at all; this merge is what makes edits ACROSS PATCHes survive.
+    """
+    if "fixed_annual" in patch and isinstance(patch["fixed_annual"], dict):
+        patch = dict(patch)
+        merged_fixed = dict(assumptions_d.get("fixed_annual") or {})
+        merged_fixed.update(patch["fixed_annual"])
+        patch["fixed_annual"] = merged_fixed
+    assumptions_d.update(patch)
+
+
 def _merge_patch(row: dict, body: PatchProjectionIn):
     """Merge an editable-surface partial onto the stored source-of-truth.
 
@@ -695,6 +743,11 @@ def _merge_patch(row: dict, body: PatchProjectionIn):
     so the two paths can never drift. Raises dag.PinRejected on a non-pinnable
     node (the caller maps it to 422); raises HTTPException(422) when the merged
     assumptions/inputs surface fails AssumptionsIn/InputsIn re-validation.
+
+    NOTE: every top-level key here is a flat replace onto the stored dict EXCEPT
+    ``assumptions.fixed_annual``, which ACCUMULATES across PATCHes (see
+    ``_merge_assumptions_patch``) -- a partial map merges onto the stored map
+    rather than replacing it wholesale.
     """
     inputs_d = json.loads(row["inputs_json"] or "{}")
     assumptions_d = json.loads(row["assumptions_json"] or "{}")
@@ -704,7 +757,7 @@ def _merge_patch(row: dict, body: PatchProjectionIn):
     if body.inputs:
         inputs_d.update(body.inputs)
     if body.assumptions:
-        assumptions_d.update(body.assumptions)
+        _merge_assumptions_patch(assumptions_d, body.assumptions)
     if body.demand:
         demand_d.update(body.demand)
     if body.trade_area:

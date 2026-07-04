@@ -192,6 +192,38 @@ def test_set_assumption_share_routes_to_inputs(store, projection):
     assert json.loads(row["inputs_json"])["share_y1"] == "0.08"
 
 
+# review 1.3f (f1): Penny's set_assumption routes every value through str(value), so
+# a Penny reserve_buffer edit stored the STRING "40000" while the manual UI PATCH
+# stores the JSON int 40000 -- a type-flip in computed_json.settings.reserveBuffer
+# depending on WHICH path made the edit. reserve_buffer must be int-normalized in
+# Penny's routing; sensitivity_delta must stay a string (the engine wants a decimal
+# string, matched by the manual-PATCH shape too).
+def test_set_assumption_reserve_buffer_is_int_normalized_not_string(store, projection):
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "set_assumption", {"name": "reserve_buffer", "value": "40000"})
+    assert res["applied"] is True
+    row = store.get_projection_by_slug(projection["view_slug"])
+    stored = json.loads(row["assumptions_json"])["reserve_buffer"]
+    assert stored == 40000
+    assert isinstance(stored, int), f"reserve_buffer stored as {type(stored)!r}, not int"
+    vm = json.loads(row["computed_json"])
+    assert vm["settings"]["reserveBuffer"] == 40000
+    assert isinstance(vm["settings"]["reserveBuffer"], int), (
+        "settings.reserveBuffer echoed as a string after a Penny edit "
+        f"({vm['settings']['reserveBuffer']!r}) -- type-flips vs the UI PATCH path")
+
+
+def test_set_assumption_sensitivity_delta_stays_a_string(store, projection):
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "set_assumption",
+               {"name": "sensitivity_delta", "value": "0.10"})
+    assert res["applied"] is True
+    row = store.get_projection_by_slug(projection["view_slug"])
+    stored = json.loads(row["assumptions_json"])["sensitivity_delta"]
+    assert stored == "0.10"
+    assert isinstance(stored, str)
+
+
 # ----------------------------------------------------- set/clear override + DAG
 def test_set_override_pins_component_and_clears_it(store, projection):
     ctx = _ctx(projection)
