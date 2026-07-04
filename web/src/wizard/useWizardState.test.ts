@@ -304,3 +304,48 @@ describe("useWizardState — W1 furthestReached + W15 new steps", () => {
     expect(result.current.draft.shareY5).toBe(12);
   });
 });
+
+// Wave 2 Task 2.1: the Advanced Options disclosure on every step is closed
+// (compact) by default and its open/closed state lives HERE, in the hook — not
+// component-local state on the step — because steps unmount on Next/Back
+// (CreateProjectionPage renders one Step*.tsx at a time). A step-local useState
+// would silently forget whether the operator had it open every time they
+// navigated away and back.
+describe("useWizardState — advancedOpen (Advanced Options disclosure state)", () => {
+  it("starts with every step's advanced group collapsed (empty map)", () => {
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.advancedOpen).toEqual({});
+    expect(result.current.advancedOpen["square-footage"]).toBeFalsy();
+    expect(result.current.advancedOpen["startup-costs"]).toBeFalsy();
+  });
+
+  it("toggleAdvanced opens a single step's group without affecting others", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.toggleAdvanced("square-footage", true));
+    expect(result.current.advancedOpen["square-footage"]).toBe(true);
+    expect(result.current.advancedOpen["startup-costs"]).toBeFalsy();
+  });
+
+  it("toggleAdvanced can close a step's group again", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.toggleAdvanced("startup-costs", true));
+    expect(result.current.advancedOpen["startup-costs"]).toBe(true);
+    act(() => result.current.toggleAdvanced("startup-costs", false));
+    expect(result.current.advancedOpen["startup-costs"]).toBe(false);
+  });
+
+  it("survives goNext()/goBack() — state lives in the hook, not the unmounted step", () => {
+    const { result } = renderHook(() => useWizardState());
+    act(() => result.current.onResolved(RESOLVED));
+    act(() => result.current.goNext()); // → square-footage
+    expect(result.current.stepKey).toBe("square-footage");
+    act(() => result.current.toggleAdvanced("square-footage", true));
+    expect(result.current.advancedOpen["square-footage"]).toBe(true);
+
+    act(() => result.current.goNext()); // → configure-donations (defaults valid)
+    expect(result.current.stepKey).toBe("configure-donations");
+    act(() => result.current.goBack()); // → square-footage
+    expect(result.current.stepKey).toBe("square-footage");
+    expect(result.current.advancedOpen["square-footage"]).toBe(true); // persisted
+  });
+});

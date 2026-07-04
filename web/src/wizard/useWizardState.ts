@@ -154,6 +154,15 @@ export interface WizardState {
   updateCostRow: (i: number, patch: Partial<CostScheduleRow>) => void;
   removeCostRow: (i: number) => void;
 
+  // --- Advanced Options disclosure (Wave 2 Task 2.1) -------------------------
+  // Per-step open/closed state for the AdvancedOptions component. Lives HERE
+  // (not step-local state) because steps unmount on Next/Back — a step-local
+  // useState would forget whether the operator had it open. All steps default
+  // closed (compact load), keyed by StepKey; toggleAdvanced sets one step's
+  // entry without touching the others.
+  advancedOpen: Partial<Record<StepKey, boolean>>;
+  toggleAdvanced: (step: StepKey, open: boolean) => void;
+
   canGenerate: boolean;
 }
 
@@ -190,6 +199,14 @@ export function useWizardState(
   const [rentResearch, setRentResearch] = useState<RentResearch | null>(null);
   const [rentResearchLoading, setRentResearchLoading] = useState(false);
   const [rentResearchError, setRentResearchError] = useState(false);
+
+  // Advanced Options disclosure state (Wave 2 Task 2.1) — every step starts
+  // collapsed (empty map reads as falsy per key); lives in the hook so it
+  // survives a step's unmount/remount on Next/Back.
+  const [advancedOpen, setAdvancedOpen] = useState<Partial<Record<StepKey, boolean>>>({});
+  const toggleAdvanced = useCallback((step: StepKey, open: boolean) => {
+    setAdvancedOpen((prev) => ({ ...prev, [step]: open }));
+  }, []);
 
   const set = useCallback(<K extends keyof WizardDraft>(key: K, value: WizardDraft[K]) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -444,6 +461,8 @@ export function useWizardState(
     addCostRow,
     updateCostRow,
     removeCostRow,
+    advancedOpen,
+    toggleAdvanced,
     canGenerate,
   };
 }

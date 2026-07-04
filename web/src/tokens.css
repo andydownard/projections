@@ -1090,6 +1090,51 @@ body {
   color: var(--text-muted);
 }
 
+/* --- AdvancedOptions: shared controlled disclosure (Wave 2 Task 2.1) ---------
+ * Modeled on .assumption__sources above: a muted, compact <details> summary
+ * row. Shared by every wizard step's advanced group AND the Settings tab. */
+.advanced-options {
+  border-top: 1px solid var(--line);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+.advanced-options__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  list-style: none;
+}
+.advanced-options__summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-options__badge {
+  font-size: var(--text-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  border-radius: var(--radius);
+  padding: 0 var(--space-2);
+}
+
+.advanced-options__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+/* Honest mobile (≤560px): one column so dense controls don't crowd. */
+@media (max-width: 560px) {
+  .advanced-options__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* --- Settings & assumptions tab (SLICE 4) --- */
 /* Review-first on mobile-375: status banner above the slider controls. */
 .settings-tab {
