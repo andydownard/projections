@@ -1,45 +1,49 @@
 # Massive Refactor — Session Handoff (2026-07-04)
 
-**Branch:** `refactor/params-gaps-simplify-2026-07` (backend worktree `.claude/worktrees/massive-refactor`, base `55e0997`, 40 commits)
-**Stacked FE branch:** `refactor/params-fe` (worktree `.claude/worktrees/massive-refactor-fe`) — already merged into the main branch twice; keep for any remaining FE slices, then delete.
-**Authoritative recovery map:** `.superpowers/sdd/progress.md` (the SDD ledger — trust it + `git log` over memory after any compaction). Task briefs live in the scratchpad at `.../scratchpad/briefs/task-*.md`; the plan is `docs/plans/2026-07-03-massive-refactor.md`.
+> **FINAL STATE: SHIPPED — PR #379 open → `integrate/redesign-v2`** (2026-07-04 afternoon). Whole-branch fable review verdict SHIP; fix-now list landed (8dab589/38b1e99/3b12dcf/b891a41); proof set orchestrator-verified at b891a41 (pytest 1877 · gate 12/12 · --check 0 · ratio 3.200 · web 787 + typecheck). Tickets #371–#378 filed. **Stopped at PR-open — merge/deploy is the owner's call.** Owner must read the PR's "Owner-visible changes" section (BOTH reco flips + 2.7.0 constants). Everything below is the historical resume record.
 
-## How to resume
-Read `.superpowers/sdd/progress.md` top-to-bottom, then continue the **REVISED REMAINING QUEUE** near its end. One implementer per task/batch (own git commits), a review after each, a final whole-branch review before PR. **Model policy (owner, escalating through the session): everything now runs on Opus — implementers AND reviews AND the final whole-branch review** (Fable + Sonnet limits were hit). Every dispatch MUST carry the workspace guard (pwd + branch check) — an early implementer committed to the wrong checkout once; recovered via cherry-pick.
+**Branch:** `refactor/params-gaps-simplify-2026-07` (backend worktree `.claude/worktrees/massive-refactor`, base `55e0997`).
+**Stacked FE branch:** `refactor/params-fe` — fully merged; no FE slices remain (Wave-6 FE work lands on the main refactor branch directly). Delete the `massive-refactor-fe` worktree at ship.
+**Authoritative recovery map:** `.superpowers/sdd/progress.md` (current through Wave 6B close + 6C dispatch). Task briefs + ALL implementer/review reports: `/private/tmp/claude-501/-Users-andydownard-projects-projections/cc5a008c-e385-4859-b8c3-35c3e0ca3bae/scratchpad/briefs/`. Plan: `docs/plans/2026-07-03-massive-refactor.md`.
+
+## Model policy (owner, 2026-07-04 midday — supersedes the earlier "everything opus")
+Reviews (per-batch AND whole-branch) on **Fable**; implementers right-sized (**opus** = engine math, **sonnet** = infra/mechanical); **≤2 agents in flight** (rate-limit throttle); implementers serialized in the shared worktree, reviewers overlapped from their own PINNED worktrees (`git worktree add <scratch> <sha>`, remove after). Every dispatch carries the workspace guard (pwd + branch check).
+
+## State at wrap-up (12:05 MT)
+
+**DONE + fable-REVIEWED (all findings resolved or routed):**
+- **Batch 1** (`e53ac03`/`1b482cf`/`d3fcd1a`) — conflict-recovery hardening, NaN-422, Task 4.2 rate-limit quad. Review: Approved-with-followups; F1 Infinity-brick fixed in Batch 3; adjudications: OVERWRITE-test change upheld; cap placement kept (SECURITY.md sentence fixed).
+- **Batch 2** (`a972377`/`c4d45a3`) — aggressive+grace goldens frozen (3-way w/ + w/o overrides, §12.2 note travels via new packet guardrails section); 6 hypothesis properties. 40%-labor deviation RATIFIED (60% caps margin at 24.75%). Property tests found the lease-deposit {raw,display} bug → fixed in 6C commit 1.
+- **Batch 3** (`1dd7624`/`42bb4e8`/`bd01cc4`) — F1 Infinity fix + `dumps_finite` class-kill; coverage gate binding in CI (93.44% vs fail_under=90); 12 ConfigDict migrations; conflict-recovery e2e (9/9); both flakes killed (id()-reuse root-caused = GC address recycling).
+- **Wave 6A** (`a4a83b9`/`4f8edd8`) — 6.1 pin-defeats-stress; 6.2 monthly fixed/variable/payroll split. Canonical: trough −$317,403 @M7, capital $342,403, break-even 8 (reviewer re-derived to the cent). **OWNER-VISIBLE: canonical reco FLIPPED do_not_proceed → raise_cash** (downside now breaks even @M11; rules-as-written, no threshold touched; do_not_proceed coverage re-homed onto grace; independently adjudicated + UPHELD by fable review; feeds owner decision #345). See `briefs/task-6.1-6.2-report.md` "OWNER-VISIBLE" section + `briefs/wave6a-review.md`.
+- **Wave 6B** (`54d929c`/`d14dbdf`/`711044d`/`8b4c181`) — 6.3 advisory flags (occupancy/labor/sales-per-sqft, override-aware) + break-even-revenue ≥1 guard (was emitting nonsense negatives); I2 packet fix (guardrails iterate vm.flags — unmapped requires_note can't silently drop); classification-sync tripwire (proven non-vacuous by mutation); override-conflict e2e repaired (3 masked tests unmasked). Review: Approved; its 1 Important (pinned-override flag test) + §6.2 doc line were routed into 6C by addendum.
+
+**Wave 6C — COMPLETE (12:5x MT), tree FULLY GREEN, fable review still pending (first action at resume):** `bae77c4` (money_view single-sourced — raw+display from one Decimal, ZERO golden drift; lease deposit exact; property-4 xfails now permanent guards; 6.3 override-awareness pinned) + `5ce411f` (MODEL_VERSION **2.7.0**: payroll tax 8%, Insurance $10k, DEFAULT_DONATION_VALUE 74, NNN resolved conservative, new `nnn_gross_check` golden, single regen of all 5 goldens, landmines L1/L2/L3 all re-pinned; **canonical reco HELD raise_cash** — L3 not triggered) + `5861a6c` (FE defaults track engine — payrollTaxPct 8, Insurance $10k; wizard $50 donation default deliberately kept per Owner Decision 4 vs engine 74 — reviewer should confirm that divergence is documented intent; full docs pass incl. I-3/I1, API_SPEC /duplicate, AGENTS.md re-pin). Verify: **1867 passed / 0 failed / 0 xfailed · gate 12/12 (incl. nnn w/+w/o overrides) · --check 0 · ratio 3.174 · web 785 + typecheck clean.** Report: `briefs/task-6.4-report.md` (pre-6.2→post-6.2→post-6.4 headline table).
+**⚠ SECOND OWNER-VISIBLE FLIP (from 6C):** the 40% design-parity twin (and E2E seed) flipped **proceed→raise_cash** — 990-grounded capital $302,238 crosses its $300k funds by $2,238 (Y1 net still +$38,505; it's the capital>funds gate, not store health). Re-pinned to truth, not massaged. Owner lever: raise the demo's `source_of_funds` above ~$303k if the demo should read "proceed". Must appear in the PR's owner-visible list next to the canonical flip.
+
+## How to resume (1:40pm MT)
+1. `git -C .claude/worktrees/massive-refactor log --oneline -12` + check `briefs/task-6.4-report.md`.
+   - **6C finished** (3 commits + report): proceed to step 2.
+   - **6C incomplete/dead** (>30 min no new commit AND no report): inspect working tree; complete the remainder yourself or re-dispatch ONE opus agent with the 6C dispatch scope minus whatever landed (the dispatch text is reconstructable from this doc's IN-FLIGHT paragraph; do NOT re-do commit 1).
+2. **Fable review of 6C** (pinned worktree at its head; base `8b4c181`). Special attention: regen diff sanity (numbers changed ONLY for the documented reasons), L1/L2 re-pins not loosened, L3 (did the canonical reco survive as raise_cash? if it moved again, that's owner-visible), FE anchor byte-pins really match engine defaults, NNN golden asserts the brief's exact numbers, ENGINE_CONTRACT §1-vs-§10 no longer self-contradicts.
+3. **Ship phase** (task #5): fable WHOLE-BRANCH review (base `55e0997`, ~60 commits) + triage the minor ledger (m1–m66 in progress.md; most are wontfix/ticket) → fix slice if needed → full proof set (pytest, golden gate w/ soffice, --check, ratio, web test+typecheck; **NO `npm run lint`** — eslint was never installed/configured, known drift m55, note it in the PR) → file 3 Wave-5 deferral tickets (projections.py split / ProjectionDetail hooks / PennyDrawer split) + a 4th: eslint add-or-remove (m55) → PR to `integrate/redesign-v2` with wave summary, golden-diff note, quad matrix, the OWNER-VISIBLE reco-flip section, owner-decision list (#345 linkage prominent), screenshots wizard+detail at 1440/768/375. **Stop at PR-open — merge/deploy is the owner's call.**
 
 ## Verify commands (proof set)
 ```
-# backend worktree:
-/Users/andydownard/projects/projections/.venv/bin/python -m pytest -q            # (worktree has no venv; use the main checkout's)
-/Users/andydownard/projects/projections/.venv/bin/python scripts/regen_goldens.py --check   # goldens byte-stable
-python -m pytest engine/tests/test_golden_gate.py -q                             # soffice at /opt/homebrew/bin/soffice
-python scripts/ratio.py                                                          # test:code > 1.3
-cd web && npm test -- --run --no-file-parallelism && npm run typecheck           # eslint binary MISSING in both worktrees — install before lint gate
+/Users/andydownard/projects/projections/.venv/bin/python -m pytest -q                    # from worktree root; expect 0 failed 0 xfailed after 6C
+/Users/andydownard/projects/projections/.venv/bin/python -m pytest engine/tests/test_golden_gate.py -q   # soffice at /opt/homebrew/bin/soffice
+/Users/andydownard/projects/projections/.venv/bin/python scripts/regen_goldens.py --check
+/Users/andydownard/projects/projections/.venv/bin/python scripts/ratio.py
+cd web && npm test -- --run && npm run typecheck                                          # lint DOES NOT EXIST (m55)
 ```
-Last green on merged tree (HEAD 4df2b2c): pytest exit 0 · 777 web tests · typecheck clean · ratio 3.06.
 
-## DONE & reviewed (all approved, findings fixed)
-- **Wave 0** — docs-drift fix, dead-code deletion, `scripts/regen_goldens.py` (byte-identity net, drift-proven), shared `app/tests/conftest.py`, `app/routers/common.py` helper extraction (penny client_ip kept local deliberately).
-- **Wave 1** — `SENSITIVITY_DELTA` wired + exposed; view-model gains `sensitivity{base,downside,upside,delta}` + `confidence{ramp}` + 5 settings keys (**COMPUTE_SCHEMA_VERSION 1.5.0→1.6.0, MODEL_VERSION stays 2.6.0**); `reserve_buffer`/`sensitivity_delta`/`fixed_annual` API-exposed with bounds; PATCH re-validation; xlsx fixed-annual lock; ENGINE_CONTRACT/API_SPEC/DATA_MODEL updated; **1.3g** = numeric→str coercion so the deployed numeric PATCH contract + stored-float rows keep working (a Critical the 3.1 review caught by execution).
-- **Wave 2 (wizard)** — `AdvancedOptions` disclosure + `paramGroups.ts` taxonomy; advanced sections on all steps (space/donation/rent/cost/funding groups); visible Source-of-funds; Generate error state + disclaimer; payload mappers send every advanced assumption; localStorage draft persistence + resume (StrictMode-safe, merge-over-defaults). Integration-proven: default wizard body → 201, settings echo engine-equal.
-- **Wave 3** — grouped SettingsTab mirroring the wizard (every 1.6.0 param editable); **duplicate endpoint + real 409 recovery** (Overwrite replays the failed body, Save-as-copy forks with the pending edit — both Criticals from review fixed in 3.2f); sensitivity on the RoleView banner + packet; penny Y4/Y5 diff fix; WCAG-AA contrast (9 pairs ≥4.5 + CI gate); clipboard honesty; unified dates; list RecoChip; **CostScheduleEditor null-safety (root-caused the parallel-test flake)**.
+## Owner-visible items for the PR (do not bury)
+1. **Canonical reco flip** do_not_proceed → raise_cash (6.2 monthly split; upheld by independent fable adjudication; #345 gate-rebalance linkage). Post-6.4 headline numbers: take from `briefs/task-6.4-report.md` table.
+2. **2.7.0 constants**: payroll tax 8%, insurance $10k placeholder (owner quote still pending — #341-ish, see owner-decisions list), donation value $74, NNN conservative reading.
+3. Aggressive fixture runs labor 40% (only way the §12.2 guardrail can fire; ratified).
+4. `npm run lint` never worked (no eslint dep/config ever; CI never ran it) — ticket filed at ship.
+5. RecoChip list restore reversed an explicit v2 removal (pre-existing note, still wants owner eyes).
+6. Owner decisions still pending (block M-1, not this PR): insurance quote; #345; #355 labor UX; #220 M-1 calibration; #346; #358 terms wording; #347 marketing taper; #359 pricing.
 
-## Batch 1 — LANDED (needs review before PR)
-Commits `e53ac03` (conflict-recovery hardening: busy-guard vs double-copy, SettingsTab banner overwrite clear-on-success, reload hygiene, second-409 restash, MetricBar sensitivity line on owner detail page), `1b482cf` (NaN-500 fix in `_require_fraction`/`_require_min`), `d3fcd1a` (**Task 4.2** rate-limit quad complete). Full suites green: pytest 1817, web 785, typecheck clean, goldens --check exit 0. **Review pending (opus).** Two things for the reviewer: (1) autosaveReducer OVERWRITE test was changed to the new retain-on-overwrite/clear-on-success contract — confirm intent preserved; (2) owner-only mutation caps sit AFTER `_require_owner` (non-owner gets 403, never a leaked 429) and PATCH cap BEFORE compute — a deliberate call; decide if the per-IP cap should also brake unauthenticated floods on owner-only routes (would need to move ahead of the owner check).
-
-## REMAINING QUEUE (all opus)
-0. **Review Batch 1** (opus) — see the Batch 1 section above; then continue.
-1. **Batch 2** — Task 4.3 freeze `aggressive_flagged.json` + `grace_mission_loss.json` goldens (3-way, with/without overrides; packet §12.2 note travels) + Task 4.4 hypothesis property tests (annual==Σmonthly, capital no-double-count, escalator, {raw,display}, breakeven≥G).
-2. **Batch 3** — Task 4.5 app/ coverage gate + pydantic ConfigDict migration + conflict-recovery e2e; investigate the two tracked flakes (web parallel cross-file pollution — mostly fixed by CostScheduleEditor null-safety; `test_store_robustness` id()-reuse race).
-3. **Wave 6 engine (2.7.0)** — **the McKinsey heart, needs owner-visible care:** 6.1 pin-defeats-stress fix; 6.2 monthly fixed/variable/payroll split (canonical capital ~$317k→$342k, break-even 9→8 — expected golden change); 6.3 occupancy/labor/sales-per-sqft advisory flags; 6.4 990-grounded constants (payroll tax 0.075→0.08, insurance $2k→$10k placeholder, DEFAULT_DONATION_VALUE="74", NNN contract resolution) + MODEL_VERSION 2.7.0 + single golden regen. **6.4 MUST ALSO update the FE wizard defaults** (`DEFAULT_DRAFT.payrollTaxPct 7.5→8`, `fixedAnnual Insurance 2000→10000`) **and** `shareHelper.test.ts` `ENGINE_DEFAULTS` + byte-pins — the FE anchor is hand-transcribed and CI-invisible to drift (grep `0.075|payrollTaxPct` web/src). See the 6.x task briefs.
-4. **Ship** — opus whole-branch review; full proof set; file 3 Wave-5 deferral tickets (projections.py split / ProjectionDetail hooks / PennyDrawer split); PR to `integrate/redesign-v2` with wave summary + golden-diff note + quad matrix + wizard/detail screenshots at 1440/768/375.
-
-## Deliverables already produced (this session)
-- **28 GitHub tickets #343–#370** on Projections Roadmap board #5 (priority field set); 7 duplicates commented on existing issues.
-- **`docs/2026-07-03-owner-deliverables.md`** — your 9-item manual TODO list, the six-990 constants-validation table, and the ranked $0–3/mo enhancement bundle (990 cohort priors, Census MRTS seasonality, BLS OES staffing model, CPI vintage-stamping, user-actuals calibration loop, triangulation ensemble). **Read this first when you return.**
-
-## Owner decisions still pending (block Wave 6 finalization / M-1)
-Insurance quote confirmation; recommendation-gate rebalance (#345 — default projection opens "Do not proceed" via the joint-downside veto); labor-input UX + default (#355); M-1 operator calibration (#220); cost-completeness explicit-lines-vs-contingency (#346); terms-acceptance legal wording (#358); marketing taper (#347); expert-review price/CTA (#359). The RecoChip restore on the list (#3.5-FE) reversed an explicit v2 removal — wants owner eyes.
-
-## Known minor-ledger (deferred, ~46 items in progress.md) — triage at whole-branch review
-Highlights: torn-write window on narrative bump-vs-upsert; `_raise_version_conflict` docstring overclaim; 8 more files with inline brand hex; several doc-example staleness (DATA_MODEL §4.5 `fixed` key, API_SPEC number-pct examples). None block; all recorded with file:line in the ledger.
+## Deliverables already produced (unchanged)
+28 GitHub tickets #343–#370 on board #5; `docs/2026-07-03-owner-deliverables.md` (owner TODO list, six-990 constants table, enhancement bundle).
