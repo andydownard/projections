@@ -192,6 +192,24 @@ def test_set_assumption_share_routes_to_inputs(store, projection):
     assert json.loads(row["inputs_json"])["share_y1"] == "0.08"
 
 
+# `_diff_view_models` walked only y1-y3, so a PATCH that only moves a Year 4/5
+# row (e.g. share_y5) produced a diff that never mentions Year 5 at all -- Penny
+# would narrate "nothing changed" for a real 5-year edit. The engine emits y1..y5
+# on every row (engine >= 2.6.0), so the diff must cover the same year-key range
+# the packet does (app.packet._YEAR_KEYS), not a stale 3-year subset.
+def test_set_assumption_share_y5_diff_mentions_year_5(store, projection):
+    ctx = _ctx(projection)
+    res = _run(store, ctx, "set_assumption", {"name": "share_y5", "value": "0.20"})
+    assert res["applied"] is True
+    row = store.get_projection_by_slug(projection["view_slug"])
+    assert json.loads(row["inputs_json"])["share_y5"] == "0.20"
+    assert res["changed"], "a share_y5 edit must produce a non-empty narrated diff"
+    assert any("Y5" in c["label"] for c in res["changed"]), (
+        "share_y5 moved a Year 5 row but the diff never mentions Year 5 "
+        f"(changed={res['changed']!r})"
+    )
+
+
 # review 1.3f (f1): Penny's set_assumption routes every value through str(value), so
 # a Penny reserve_buffer edit stored the STRING "40000" while the manual UI PATCH
 # stores the JSON int 40000 -- a type-flip in computed_json.settings.reserveBuffer

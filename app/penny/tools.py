@@ -58,6 +58,7 @@ from app.feedback.redact import (
     normalize_type,
     redact_text,
 )
+from app.packet import _YEAR_KEYS
 from app.routers.projections import (
     MAX_COST_SCHEDULE_ROWS,
     PatchProjectionIn,
@@ -172,7 +173,11 @@ def _diff_view_models(before: dict, after: dict) -> list[dict]:
         b = brows.get((r.get("label"), r.get("group")))
         if b is None:
             continue
-        for yr in ("y1", "y2", "y3"):
+        # Same year-key range the packet's income statement covers (app.packet
+        # ._YEAR_KEYS, y1..y5) -- was y1-y3 only, so a PATCH that exclusively moves
+        # a Year 4/5 row (e.g. share_y5) produced a diff that never mentioned
+        # Year 5 at all, and Penny would narrate "nothing changed" for a real edit.
+        for yr in _YEAR_KEYS:
             bd = (b.get(yr) or {}).get("display")
             ad = (r.get(yr) or {}).get("display")
             if bd != ad:
