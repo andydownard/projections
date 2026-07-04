@@ -120,26 +120,66 @@ def _provenance(vm: dict[str, Any]) -> dict[str, Any]:
     return buckets
 
 
+def _month_disp(month: Any) -> str:
+    """Plain-language break-even label for a raw sensitivity-scenario project
+    month (schema >= 1.6.0 emits a bare int, never a {raw,display} pair) — never
+    a misleading 0/blank when the scenario doesn't reach break-even."""
+    return f"Month {month}" if isinstance(month, int) else "Not reached"
+
+
 def _sensitivity(vm: dict[str, Any]) -> dict[str, Any]:
     """A grounded sensitivity table.
 
-    The packet must not fabricate downside math (that is the engine's job), so the
-    table surfaces the engine's already-computed headline figures as the base
-    column and labels each as a sensitivity driver. Every display string here is
-    copied verbatim from ``computed_json`` (grounded by construction); no new
-    arithmetic is performed in the packet layer.
+    When the engine's §12.2 stress block is present (``vm["sensitivity"]``,
+    schema >= 1.6.0), render the FULL base/downside/upside comparison decision.py
+    already computes: three drivers (net income, break-even, capital required)
+    across the three re-run scenarios, plus a disclaimer row explaining the ±
+    stress (sourced from ``sensitivity.delta`` — never a hard-coded "25%"). Every
+    display string is copied verbatim from ``computed_json`` (grounded by
+    construction); no new arithmetic happens in the packet layer.
+
+    A legacy snapshot that predates schema 1.6.0 has no ``sensitivity`` block —
+    this degrades to the prior base-case-only Driver/Base case/Note table
+    (unchanged), never fabricating downside/upside figures that were never
+    computed for that stored snapshot.
     """
+    sens = vm.get("sensitivity")
+    if isinstance(sens, dict) and {"base", "downside", "upside"} <= sens.keys():
+        base, down, up = sens["base"], sens["downside"], sens["upside"]
+        delta_pct = round(float(sens.get("delta") or 0) * 100)
+        rows = [
+            {"driver": "Net income",
+             "cells": [_disp(base.get("net")), _disp(down.get("net")), _disp(up.get("net"))]},
+            {"driver": "Break-even",
+             "cells": [_month_disp(base.get("breakeven")), _month_disp(down.get("breakeven")),
+                       _month_disp(up.get("breakeven"))]},
+            {"driver": "Capital required",
+             "cells": [_disp(base.get("capital")), _disp(down.get("capital")),
+                       _disp(up.get("capital"))]},
+        ]
+        disclaimer = (
+            f"Downside stresses rent +{delta_pct}% and donations −{delta_pct}%; "
+            "Upside applies the reverse. Each scenario is a full engine re-run, "
+            "not a linear scale of the base case."
+        )
+        return {"columns": ["Driver", "Base case", "Downside", "Upside"],
+                "rows": rows, "disclaimer": disclaimer}
+
+    # Legacy fallback (pre-1.6.0 snapshot, no vm["sensitivity"]): the prior
+    # base-case-only headline table — unchanged.
     metrics = vm.get("metrics") or {}
     rows = [
-        {"driver": "Capital required", "base": _disp(metrics.get("capital")),
-         # Source the rationale from the view-model so packet and UI never drift.
-         "note": metrics.get("reasonCapital")
-                 or ("Worst-case cumulative cash trough (already includes "
-                     "one-time startup) plus reserve.")},
-        {"driver": "First-year cash gap", "base": _disp(metrics.get("cashGap")),
-         "note": "Most-negative cumulative cash across the first year."},
-        {"driver": "Break-even", "base": _disp(metrics.get("breakeven")),
-         "note": "First month operating net turns and stays non-negative."},
+        {"driver": "Capital required",
+         "cells": [_disp(metrics.get("capital")),
+                   metrics.get("reasonCapital")
+                   or ("Worst-case cumulative cash trough (already includes "
+                       "one-time startup) plus reserve.")]},
+        {"driver": "First-year cash gap",
+         "cells": [_disp(metrics.get("cashGap")),
+                   "Most-negative cumulative cash across the first year."]},
+        {"driver": "Break-even",
+         "cells": [_disp(metrics.get("breakeven")),
+                   "First month operating net turns and stays non-negative."]},
     ]
     return {"columns": ["Driver", "Base case", "Note"], "rows": rows}
 
@@ -319,8 +359,11 @@ def render_packet_md(pkt: dict[str, Any]) -> str:
     lines.append("| " + " | ".join(sens["columns"]) + " |")
     lines.append("|" + "|".join(["---"] * len(sens["columns"])) + "|")
     for r in sens["rows"]:
-        lines.append(f"| {_md_escape(r['driver'])} | {_md_escape(r['base'])} "
-                     f"| {_md_escape(r['note'])} |")
+        cells = " | ".join(_md_escape(c) for c in r["cells"])
+        lines.append(f"| {_md_escape(r['driver'])} | {cells} |")
+    if sens.get("disclaimer"):
+        lines.append("")
+        lines.append(f"_{_md_escape(sens['disclaimer'])}_")
     lines.append("")
 
     lines.append("## Key metrics")

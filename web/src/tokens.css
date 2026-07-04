@@ -3704,3 +3704,17 @@ td.cell-wrap {
 .kpi {
   gap: var(--label-gap);
 }
+
+/* 3.3 sensitivity banner */
+.decision-banner__sensitivity {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.decision-banner__confidence {
+  margin-top: var(--space-1);
+  display: inline-flex;
+  width: fit-content;
+}

@@ -8,8 +8,8 @@
 // (icon + text, not color alone), and an unreached milestone renders an explicit
 // N/A-with-reason — never a misleading 0 (issue #117).
 import { RecoChip } from "./RecoChip";
-import { cashGapLabel } from "./displayLabels";
-import type { Metrics, Milestone, Milestones, Reco } from "../api/viewModel";
+import { cashGapLabel, sensitivityBreakevenLabel, sensitivityDeltaLabel } from "./displayLabels";
+import type { Confidence, Metrics, Milestone, Milestones, Reco, Sensitivity } from "../api/viewModel";
 
 export interface DecisionBannerProps {
   reco: Reco;
@@ -18,6 +18,14 @@ export interface DecisionBannerProps {
    *  sourced from `breakEven` (carrying its N/A-with-reason flag) and a Payback
    *  metric is added. Optional so legacy snapshots still render. */
   milestones?: Milestones;
+  /** §12.2 base/downside/upside stress scenarios (schema ≥ 1.6.0, task 3.3 audit
+   *  P0: decision.py already computed this but the view-model previously dropped
+   *  it). Optional so a legacy stored snapshot renders cleanly with no downside
+   *  line at all. */
+  sensitivity?: Sensitivity;
+  /** The ramp low-confidence flag (schema ≥ 1.6.0). Optional; only a `"low"`
+   *  value renders a chip — `"high"`/absent is the silent default. */
+  confidence?: Confidence;
 }
 
 // The exact product definitions (issue #117 / spec §8) — surfaced verbatim.
@@ -58,7 +66,13 @@ interface MetricCell {
   help?: { id: string; term: string; definition: string };
 }
 
-export function DecisionBanner({ reco, metrics, milestones }: DecisionBannerProps) {
+export function DecisionBanner({
+  reco,
+  metrics,
+  milestones,
+  sensitivity,
+  confidence,
+}: DecisionBannerProps) {
   // Break-even prefers the milestone (carries its N/A reason) when available,
   // else the legacy metrics field. No client formatting — server display only.
   const breakeven: Milestone | { display: string } = milestones
@@ -108,6 +122,22 @@ export function DecisionBanner({ reco, metrics, milestones }: DecisionBannerProp
         <div>
           <p className="decision-banner__headline">{reco.headline}</p>
           <p className="decision-banner__sub">{reco.sub}</p>
+          {/* task 3.3 (audit P0): the §12.2 downside/upside stress the engine
+              already computes was dropped before it ever reached the view-model.
+              Absent on a legacy snapshot (schema < 1.6.0) -> render nothing. */}
+          {sensitivity && (
+            <p className="decision-banner__sensitivity" data-testid="sensitivity-downside">
+              {`Downside (${sensitivityDeltaLabel(sensitivity.delta)}): `}
+              {sensitivity.downside.net.display} net · break-even{" "}
+              {sensitivityBreakevenLabel(sensitivity.downside.breakeven)} · capital{" "}
+              {sensitivity.downside.capital.display}
+            </p>
+          )}
+          {confidence?.ramp === "low" && (
+            <span className="chip decision-banner__confidence" data-testid="confidence-chip">
+              Confidence: ramp estimate — low
+            </span>
+          )}
         </div>
       </div>
       <dl className="decision-banner__metrics">

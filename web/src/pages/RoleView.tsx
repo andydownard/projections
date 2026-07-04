@@ -73,7 +73,13 @@ export function RoleView({ slug }: RoleViewProps) {
       {/* Read-only notice (M7 I2): a shared link can read/download/export but not
           edit — announced politely (role="status"), meaning carried in text. */}
       <DegradedState kind="read-only" />
-      <DecisionBanner reco={vm.reco} metrics={vm.metrics} milestones={vm.milestones} />
+      <DecisionBanner
+        reco={vm.reco}
+        metrics={vm.metrics}
+        milestones={vm.milestones}
+        sensitivity={vm.sensitivity}
+        confidence={vm.confidence}
+      />
     </div>
   );
 }

@@ -6,6 +6,8 @@ import {
   formatListDate,
   householdsSourceLabel,
   isNegative,
+  sensitivityBreakevenLabel,
+  sensitivityDeltaLabel,
 } from "./displayLabels";
 
 // PRESENTATION-only helpers (#148 negative cue, #151 enum/date labels). They do
@@ -83,6 +85,27 @@ describe("householdsSourceLabel", () => {
     expect(householdsSourceLabel("")).toBe("");
     expect(householdsSourceLabel(null)).toBe("");
     expect(householdsSourceLabel(undefined)).toBe("");
+  });
+});
+
+describe("sensitivityDeltaLabel [task 3.3]", () => {
+  it("renders the ± stress framing FROM the server's delta fraction, never a hard-coded 25", () => {
+    expect(sensitivityDeltaLabel(0.25)).toBe("rent +25% / donations −25%");
+  });
+
+  it("scales with a different server delta (no hard-coded percentage)", () => {
+    expect(sensitivityDeltaLabel(0.1)).toBe("rent +10% / donations −10%");
+    expect(sensitivityDeltaLabel(0.5)).toBe("rent +50% / donations −50%");
+  });
+});
+
+describe("sensitivityBreakevenLabel [task 3.3]", () => {
+  it("renders 'Month N' for a reached scenario break-even", () => {
+    expect(sensitivityBreakevenLabel(5)).toBe("Month 5");
+  });
+
+  it("renders 'not reached' when the scenario never breaks even (null, never a misleading 0)", () => {
+    expect(sensitivityBreakevenLabel(null)).toBe("not reached");
   });
 });
 

@@ -44,6 +44,33 @@ export interface Milestones {
   payback: Milestone;
 }
 
+/** One §12.2 ± stress scenario (schema 1.6.0) — a FULL engine re-run, not a
+ *  linear scale of the base case. `breakeven` is the plain project-month int the
+ *  scenario reaches, or `null` when it never does (never a misleading 0). */
+export interface SensitivityScenario {
+  net: ServerValue;
+  breakeven: number | null;
+  capital: ServerValue;
+}
+
+/** The base/downside/upside §12.2 stress block (schema 1.6.0, audit P0: the
+ *  engine already computed this in decision.py but the view-model previously
+ *  dropped it). `delta` is the ± fraction (0.25 default) driving the "rent
+ *  +25% / donations −25%" framing — rendered from THIS field, never hard-coded. */
+export interface Sensitivity {
+  base: SensitivityScenario;
+  downside: SensitivityScenario;
+  upside: SensitivityScenario;
+  delta: number;
+}
+
+/** The ramp low-confidence flag (schema 1.6.0) surfaced next to the
+ *  ramp-dependent metrics (break-even, cash gap): the monthly S-curve has never
+ *  been calibrated against a real opening (ENGINE_CONTRACT §12). */
+export interface Confidence {
+  ramp: "low" | "high";
+}
+
 export interface Kpi {
   label: string;
   value: ServerValue;
@@ -161,6 +188,13 @@ export interface ViewModel {
   rows: Row[];
   /** The pinned overrides (Override audit + Penny justification capture). */
   overrides?: OverrideEntry[];
+  /** §12.2 base/downside/upside stress scenarios (schema ≥ 1.6.0). Optional so
+   *  legacy stored snapshots that predate it still render (banner degrades
+   *  cleanly — no downside line). */
+  sensitivity?: Sensitivity;
+  /** The ramp low-confidence flag (schema ≥ 1.6.0). Optional — same legacy-
+   *  snapshot reasoning as `sensitivity`. */
+  confidence?: Confidence;
   /** Node ids whose upstream inputs changed since the pin (stale-upstream flag). */
   staleNodes?: string[];
   settings: Record<string, ServerValue | number | string>;

@@ -43,6 +43,22 @@ VM = {
     ],
 }
 
+# schema >= 1.6.0 (task 3.3, audit P0): the §12.2 base/downside/upside stress
+# scenarios decision.py already computed but the view-model previously dropped.
+# A packet built from this VM must render all three columns, grounded verbatim.
+VM_SENSITIVITY = {
+    **VM,
+    "sensitivity": {
+        "base": {"net": {"raw": 46900.0, "display": "$46,900"}, "breakeven": 5,
+                  "capital": {"raw": 277990.0, "display": "$277,990"}},
+        "downside": {"net": {"raw": -12000.0, "display": "($12,000)"}, "breakeven": None,
+                     "capital": {"raw": 312000.0, "display": "$312,000"}},
+        "upside": {"net": {"raw": 98000.0, "display": "$98,000"}, "breakeven": 4,
+                   "capital": {"raw": 250000.0, "display": "$250,000"}},
+        "delta": 0.25,
+    },
+}
+
 
 # ---------------------------------------------------------------- structure
 def test_build_packet_has_required_sections():
@@ -90,6 +106,41 @@ def test_sensitivity_table_is_grounded():
     # base column references the real capital figure
     flat = str(sens)
     assert "$277,990" in flat
+
+
+def test_sensitivity_table_has_base_downside_upside_columns_when_block_present():
+    """task 3.3: schema >= 1.6.0 -- the packet must surface the FULL base/downside/
+    upside comparison the engine already computed, not a base-case-only table."""
+    pkt = build_packet(VM_SENSITIVITY, role="board")
+    sens = pkt["sections"]["sensitivity"]
+    assert sens["columns"] == ["Driver", "Base case", "Downside", "Upside"]
+    flat = str(sens)
+    assert "$46,900" in flat    # base net
+    assert "($12,000)" in flat  # downside net
+    assert "$98,000" in flat    # upside net
+    assert "$312,000" in flat   # downside capital
+    assert "$250,000" in flat   # upside capital
+    assert "Not reached" in flat  # downside breakeven is null -- never a misleading 0/blank
+
+
+def test_sensitivity_table_keeps_the_disclaimer_row():
+    """The ± stress disclaimer row must survive the redesign and travel into the
+    rendered markdown packet (a board reader must see what "downside" means)."""
+    pkt = build_packet(VM_SENSITIVITY, role="board")
+    sens = pkt["sections"]["sensitivity"]
+    assert sens.get("disclaimer")
+    assert "25%" in sens["disclaimer"]  # sourced from sensitivity.delta, not hard-coded prose
+    md = render_packet_md(pkt)
+    assert sens["disclaimer"] in md
+
+
+def test_sensitivity_table_legacy_snapshot_falls_back_cleanly():
+    """A pre-1.6.0 snapshot (no vm['sensitivity']) must still render the prior
+    base-case-only table -- never crash, never fabricate downside/upside figures."""
+    pkt = build_packet(VM, role="board")
+    sens = pkt["sections"]["sensitivity"]
+    assert sens["columns"] == ["Driver", "Base case", "Note"]
+    assert "disclaimer" not in sens
 
 
 # ------------------------------------------------------------ role variants

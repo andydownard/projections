@@ -31,6 +31,24 @@ export function cashGapLabel(v: ServerValue | null | undefined): string {
   return v && v.raw < 0 ? "First-year cash gap" : "Lowest first-year cash balance";
 }
 
+/** The §12.2 ± stress framing ("rent +25% / donations −25%") from the server's
+ *  `sensitivity.delta` fraction (task 3.3) — NEVER a hard-coded "25". `delta` is
+ *  the single source (mirrors `settings.sensitivityDelta`); this only turns the
+ *  fraction into the two signed percentages, a `×100` shaping the NO-CLIENT-MATH
+ *  rule already allows (no scenario math happens here). */
+export function sensitivityDeltaLabel(delta: number): string {
+  const pct = Math.round(delta * 100);
+  return `rent +${pct}% / donations −${pct}%`;
+}
+
+/** A sensitivity scenario's break-even as plain language: the server emits only
+ *  the raw project-month int (or `null` when never reached) for this block, so
+ *  this is bare `String()` shaping of an already-server-computed value — not a
+ *  new figure (NO-CLIENT-MATH allows String()/÷100 shaping in mappers). */
+export function sensitivityBreakevenLabel(breakeven: number | null): string {
+  return breakeven == null ? "not reached" : `Month ${breakeven}`;
+}
+
 // Known trade-area `basis` codes → human labels. The server emits no display
 // variant for `basis` yet (see PR note); until then this map keeps the raw enum
 // off the screen. Unknown codes fall through to a title-cased form so a future
