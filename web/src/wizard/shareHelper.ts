@@ -50,6 +50,9 @@ export interface WizardDraft {
   donationValue: number;
   basket: number;
   donationsPerHh: number;
+  // Salvage % of retail (Wave 2 Task 2.3) — HUMAN units (e.g. 0.8 for 0.8%), not
+  // yet sent to the server (task 2.6 wires the create-payload mapper).
+  salvagePct: number;
   shareY1: number;
   shareY2: number;
   shareY3: number;

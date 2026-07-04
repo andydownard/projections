@@ -20,6 +20,7 @@ const DRAFT: WizardDraft = {
   donationValue: 74,
   basket: 17.08,
   donationsPerHh: 3,
+  salvagePct: 0.8,
   shareY1: 6,
   shareY2: 8,
   shareY3: 10,
