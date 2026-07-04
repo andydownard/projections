@@ -36,7 +36,7 @@ The convening recommended **40%**. The owner (Andy) elected to **keep 60%** — 
 
 **Call:** Labor default %
 
-**Rationale:** Unanimous across all 10 voices and a correctness/testability decision, not a taste one: 40% is the ONLY value that reconciles the Appendix-D headline golden (Y1 rev ~$426,911, ~11% margin, capital ~$277,990, break-even ~month 5, reco=Proceed). 60% silently flips the headline recommendation, breaks design parity with every screenshot, and forces QA to chase a phantom mismatch between two 'correct' answers. Rationale documented in ENGINE_CONTRACT §1/§2. CLOSED before M1.
+**Rationale:** **SUPERSEDED by the owner 60% override (engine/model.py LABOR_PCT_OF_REVENUE)** — Unanimous across all 10 voices and a correctness/testability decision, not a taste one: 40% is the ONLY value that reconciles the Appendix-D headline golden (Y1 rev ~$426,911, ~11% margin, capital ~$277,990, break-even ~month 5, reco=Proceed). 60% silently flips the headline recommendation, breaks design parity with every screenshot, and forces QA to chase a phantom mismatch between two 'correct' answers. Rationale documented in ENGINE_CONTRACT §1/§2. CLOSED before M1.
 
 ---
 

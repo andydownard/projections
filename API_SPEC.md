@@ -200,7 +200,7 @@ Every read or mutation of a projection returns the **same** view-model — the e
     "payrollTaxPct":0.075, "salvagePct":0.008, "escalator":0.03, "basket":17.08,
     "donationsPerHh":3, "donationValue":74.0, "donationsPerHouseholdPerYear":3,
     "shareY1":0.06, "shareY2":0.08, "shareY3":0.10, "shareY4":0.11, "shareY5":0.12,
-    "occupancyAnnual":90000, "leaseType":"nnn", "salesfloorSqft":7000, "reserveBuffer":25000
+    "leaseType":"nnn", "salesfloorSqft":7000, "reserveBuffer":25000
   },
 
   "flags": { "payback": "na_no_year1_profit" },
@@ -218,6 +218,7 @@ Notes:
 - **Override keys** are `"{node}#{year}"` in storage (`overrides_json`, [DATA_MODEL.md](./DATA_MODEL.md)); the `overrides[]` array splits them into `node`+`year` for the inspector.
 - **`model_version`** + **`compute_schema_version`** are tracked separately: the former changes when the math changes; the latter when the view-model shape changes. `upgrade_available` is true when the stored `model_version` is older than the deployed engine — but the body is still the **stored snapshot** (no silent recompute, §13).
 - For a **read-only** request `role` reflects the share-link role (`board`/`funder`/`advisor`); `settings` editability and CTAs are tailored, and write-only fields may be elided.
+- **`donationsPerHh`** is a legacy alias for `donationsPerHouseholdPerYear`; both are emitted for compatibility, and their values are identical.
 
 ---
 

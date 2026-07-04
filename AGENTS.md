@@ -1,7 +1,7 @@
 <!-- AGENT INSTRUCTIONS — read and obey before writing any code. -->
 # projections — Thrift Store Projection web app (a decision-and-funding tool, not a calculator)
 
-A server-authoritative tool that helps a first-time nonprofit thrift-store operator decide **whether and how** to launch, and produces a board/funder-ready case for it. From a few inputs it researches the local trade area + market rent, builds a **monthly launch cash-flow** plus a **3-year projection** with KPIs and **decision outputs** (break-even month, startup capital required, first-year cash gap, rules-based go/no-go), and exports a cited **Board Packet** and a formula-driven `.xlsx`. Every number shows its evidence and confidence.
+A server-authoritative tool that helps a first-time nonprofit thrift-store operator decide **whether and how** to launch, and produces a board/funder-ready case for it. From a few inputs it researches the local trade area + market rent, builds a **monthly launch cash-flow** plus a **5-year projection** with KPIs and **decision outputs** (break-even month, startup capital required, first-year cash gap, rules-based go/no-go), and exports a cited **Board Packet** and a formula-driven `.xlsx`. Every number shows its evidence and confidence. Monthly cash-flow is anchored to Year 1; Year 2–5 are annual.
 
 > **Global engineering contract:** https://github.com/rallytasks/agents/blob/main/AGENTS.md
 > Every rule there applies to this repo. Cite rules by ID — `SECRETS`, `TENANT`, `DB`, `MUTATION`, `SERVER`, `OUTBOUND`, `MONEY`, `DESTRUCTIVE`, `INJECTION`, `PLAN`, `TDD`, `VERIFY`, `GIT`, `DOCS`, `HYGIENE`, `PATTERNS`, `REGRESSIONS`, `TRACKING`, `STYLE`, `STANDARD`, `API`, `SESSION`, `PII`, `AI`, `UI`, plus the portfolio conventions (Feedback FAB, Maximum parallelization). This file adds **only** project specifics and any `Override <ID>:` line. Shared rules live in the global file **once** — they are never copied here. A `grep "Override "` of this file lists exactly where projections diverges.
@@ -11,7 +11,7 @@ A server-authoritative tool that helps a first-time nonprofit thrift-store opera
 
 **Read first:** [reference/PRD.md](./reference/PRD.md) (authoritative requirements) → this file → [ARCHITECTURE.md](./ARCHITECTURE.md) → [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) → [BUILD_PLAN.md](./BUILD_PLAN.md) → [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) (the bar).
 
-**Status:** scaffolded, **not yet built**. The Python script in `reference/` is a *calibration seed*, not the v1 engine — see [The engine is a rewrite](#the-engine-is-a-rewrite-not-a-reuse-read-before-touching-m1).
+**Status:** built & deployed (engine 2.6.0, 5-year horizon, redesign v2). The Python script in `reference/` is a *calibration seed*, not the v1 engine — see [The engine is a rewrite](#the-engine-is-a-rewrite-not-a-reuse-read-before-touching-m1).
 
 ---
 
@@ -31,7 +31,7 @@ A server-authoritative tool that helps a first-time nonprofit thrift-store opera
 
 ## Commands
 
-test: `pytest -q` · golden: `pytest engine/tests/golden -q` (3-way reconcile) · recalc: `python recalc.py <xlsx>` (assert `status=="success"` **and** `total_errors==0`; fail closed on an `{"error":…}` dict) · ratio: `python scripts/ratio.py` · front: `npm test -- --run` / `npm run typecheck` / `npm run lint` · health: `GET /api/health` shows the **new build SHA**.
+test: `pytest -q` · golden: `pytest engine/tests/test_golden_gate.py -q` (3-way reconcile) · recalc: `python reference/thrift-store-projections-skill/scripts/recalc.py <xlsx>` (assert `status=="success"` **and** `total_errors==0`; fail closed on an `{"error":…}` dict) · ratio: `python scripts/ratio.py` · front: `npm test -- --run` / `npm run typecheck` / `npm run lint` · health: `GET /api/health` shows the **new build SHA**.
 This is the project's concrete `VERIFY` proof set; the full Verification Bar table is the single home in [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md).
 
 ## Beachhead ICP (judge everything against it)
