@@ -3583,6 +3583,54 @@ body {
   color: var(--brand-primary);
 }
 
+/* --- Task 3.1: wizard-mirrored collapsible groups in the KPIs/settings grid ---
+ * Each paramGroups.ts group renders as a controlled <details> whose <summary>
+ * carries the "{step} — {group}" heading + a count badge. Collapsed by default;
+ * the control grid mounts only when open (children unmount when closed). */
+.kpis-grid__group {
+  border-top: 1px solid var(--line);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+.kpis-grid__group-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: none;
+}
+.kpis-grid__group-summary::-webkit-details-marker {
+  display: none;
+}
+.kpis-grid__group-heading {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+.kpis-grid__group-badge {
+  font-size: var(--text-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  border-radius: var(--radius);
+  padding: 0 var(--space-2);
+}
+/* A display-only chip cell (e.g. lease type — editable in the wizard, not here). */
+.kpis-grid__cell--chip {
+  background: var(--surface);
+}
+.kpis-grid__chip {
+  align-self: flex-start;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.1rem 0.4rem;
+}
+
 /* --- D6 cell legend + cursor (more specific, additive) --------------------- */
 /* The hand cursor appears ONLY on a truly-editable cell; a derived cell or a
    read-only editable-typed cell reads as non-actionable (no dead hand). */
