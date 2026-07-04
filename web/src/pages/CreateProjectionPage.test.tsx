@@ -294,7 +294,7 @@ describe("CreateProjectionPage — Generate lands on the editable detail (owner 
 // Wave 2 Task 2.5 (audit P0): a failed Generate must never navigate to
 // /p/undefined/edit or silently do nothing — it must surface an alert with a
 // Retry that re-invokes Generate, leaving the URL and the in-progress draft intact.
-function wireFetchFailingCreate(mode: "500" | "reject") {
+function wireFetchFailingCreate(mode: "500" | "reject" | "empty" | "malformed") {
   return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
     const url = String(input);
     if (url.includes("/api/places/autocomplete"))
@@ -303,6 +303,18 @@ function wireFetchFailingCreate(mode: "500" | "reject") {
     if (url.includes("/api/research")) return jsonResponse(RESEARCH);
     if (url.includes("/api/projections")) {
       if (mode === "reject") return Promise.reject(new TypeError("Failed to fetch"));
+      // A 2xx with NO view_slug — the /p/undefined/edit regression. resp.ok is true,
+      // so only the explicit `!created.view_slug` guard prevents a bad navigation.
+      if (mode === "empty")
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      // A 2xx whose body is not valid JSON — resp.json() rejects; only the outer catch
+      // keeps this from navigating on an undefined view_slug.
+      if (mode === "malformed")
+        return Promise.resolve(
+          new Response("not json{", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
       return Promise.resolve(new Response(JSON.stringify({ error: "server_error" }), { status: 500 }));
     }
     return jsonResponse({});
@@ -345,6 +357,43 @@ describe("CreateProjectionPage — Generate failure surfaces an alert w/ retry (
   it("a network rejection renders the same alert + Retry, never navigates", async () => {
     window.history.pushState(null, "", "/wizard");
     wireFetchFailingCreate("reject");
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToStartupCosts(user);
+
+    await user.click(screen.getByRole("button", { name: /generate projections/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/couldn.t generate/i);
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/wizard/startup-costs");
+  });
+
+  // 2.5-review fast-follow: the named /p/undefined/edit regression. A 2xx response
+  // whose body has NO view_slug must be treated as a failure — the guard at
+  // onGenerate's `!created.view_slug` branch was previously untested.
+  it("a 2xx with a missing view_slug (body {}) shows the alert and NEVER navigates", async () => {
+    window.history.pushState(null, "", "/wizard");
+    wireFetchFailingCreate("empty");
+    const user = userEvent.setup();
+    render(<CreateProjectionPage />);
+    await stepToStartupCosts(user);
+
+    await user.click(screen.getByRole("button", { name: /generate projections/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/couldn.t generate/i);
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    // Crucially: no /p/undefined/edit — the URL stays on the wizard step.
+    expect(window.location.pathname).toBe("/wizard/startup-costs");
+    expect(window.location.pathname).not.toMatch(/undefined/);
+  });
+
+  // 2.5-review fast-follow: a 2xx whose body is not valid JSON makes resp.json() reject.
+  // The outer catch must surface the alert (not navigate on an undefined view_slug).
+  it("a 2xx with malformed JSON hits the catch path — alert, Retry, no navigation", async () => {
+    window.history.pushState(null, "", "/wizard");
+    wireFetchFailingCreate("malformed");
     const user = userEvent.setup();
     render(<CreateProjectionPage />);
     await stepToStartupCosts(user);

@@ -401,6 +401,10 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
   // missing view_slug must NEVER navigate (the /p/undefined/edit bug) and must never
   // fail silently — the draft stays intact and generateError drives the alert+Retry.
   async function onGenerate(d: WizardDraft) {
+    // 2.5-review fast-follow: belt-and-braces double-submit guard. The disabled Generate
+    // /Retry buttons are the primary defense; this stops a second in-flight POST if a
+    // click races the disable (e.g. Enter + click). Never a second create for one intent.
+    if (busy) return;
     setBusy(true);
     setGenerateError(null);
     try {
