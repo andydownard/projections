@@ -34,11 +34,13 @@ def test_capital_required_is_peak_shortfall_plus_reserve(canonical_result):
 
 def test_design_parity_capital_matches_appendix_d_headline(design_parity_result):
     # Contract anchor (ENGINE_CONTRACT §6.1 / DESIGN_PROMPT): the 40% design-parity
-    # case is the prototype headline — reco "proceed" and capital ≈ $278k (the board
-    # screenshots show ~$277,990; the monthly model lands a touch higher). A range,
+    # case is the prototype headline — reco "proceed". The prototype/board
+    # screenshots showed capital ~$277,990; the 6.2 monthly split (fixed costs flat,
+    # payroll taxes on the payroll ramp) deepens the early trough, landing capital
+    # ≈ $299,168 (hand-verified; final numbers re-pinned at the 6.4 regen). A range,
     # not a to-the-dollar match, since the prototype used a different calc.
     cap = D(str(design_parity_result.decision.startup_capital_required))
-    assert Decimal("275000") <= cap <= Decimal("282000")
+    assert Decimal("295000") <= cap <= Decimal("302000")
     assert design_parity_result.decision.reco_tag == "proceed"
 
 
@@ -273,6 +275,23 @@ def test_canonical_60_labor_is_not_proceed(canonical_result):
     assert canonical_result.decision.reco_tag != "proceed"
 
 
+def test_canonical_reco_is_raise_cash_after_monthly_split(canonical_result):
+    # Pins the canonical verdict under the 6.2 monthly distribution change (fixed
+    # costs charged flat, payroll taxes on the payroll ramp): the downside scenario
+    # now reaches break-even (month 11), so the do_not_proceed rule no longer fires,
+    # and the binding constraint is capital ($342,403) > source of funds ($300,000)
+    # -> raise_cash. The decision RULES are unchanged — only the hand-verified
+    # monthly distribution beneath them; this is rules-as-written output (owner
+    # decision #345 tracks the gate-rebalance question). Any future regression that
+    # flips this verdict must trip THIS assertion loudly, never drift silently.
+    dec = canonical_result.decision
+    assert dec.reco_tag == "raise_cash"
+    assert "capital" in dec.reco_reasons
+    # The two facts the verdict is built from:
+    assert dec.sensitivity["downside"]["breakeven"] == 11   # downside DOES break even
+    assert D(str(dec.startup_capital_required)) > D(canonical_result.inputs.source_of_funds)
+
+
 def test_aggressive_fixture_triggers_margin_guardrail():
     # shares 15/20/25 -> high margin. The >30% net-margin guardrail is a design
     # headline computed at the labor band's low end (40%, the prototype value);
@@ -500,28 +519,30 @@ def assert_breakeven_text_consistent(vm) -> None:
                 f"{be['display']!r} (reached in the base case): {text!r}")
 
 
-def test_reco_text_and_breakeven_metric_cannot_disagree_canonical(canonical_result):
-    # #142 RED: the canonical default reaches operating break-even at month 9 in the
-    # BASE case (metrics.breakeven = Month 9), yet is do_not_proceed because the
-    # DOWNSIDE never breaks even. The reco text must say *that*, not flatly claim
-    # "break-even is not reached" — which contradicts the Month-9 metric on screen.
+def test_reco_text_and_breakeven_metric_cannot_disagree_grace(grace_result):
+    # #142: Grace Mission reaches operating break-even at month 8 in the BASE case
+    # (metrics.breakeven = Month 8), yet is do_not_proceed because the DOWNSIDE never
+    # breaks even. The reco text must say *that*, not flatly claim "break-even is
+    # not reached" — which contradicts the Month-8 metric on screen.
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
-    vm = to_view_model(canonical_result)
+    vm = to_view_model(grace_result)
     assert vm["reco"]["tag"] == "do_not_proceed"
-    assert vm["metrics"]["breakeven"]["raw"] == 9
+    assert vm["metrics"]["breakeven"]["raw"] == 8
     assert_breakeven_text_consistent(vm)
 
 
-def test_reco_text_names_base_and_downside_when_base_breaks_even(canonical_result):
-    # #142/#145 RED: the honest, consistent message surfaces WHY the verdict is
-    # do_not_proceed — the base case reaches break-even (Month 9) but the downside
+def test_reco_text_names_base_and_downside_when_base_breaks_even(grace_result):
+    # #142/#145: the honest, consistent message surfaces WHY the verdict is
+    # do_not_proceed — the base case reaches break-even (Month 8) but the downside
     # scenario (rent +25% / donations -25%) does not, so the plan is not robust.
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
-    vm = to_view_model(canonical_result)
+    vm = to_view_model(grace_result)
     for text in (vm["reco"]["sub"].lower(), vm["metrics"]["reasonBreakeven"].lower()):
         assert "base case" in text, text
         assert "downside" in text, text
-        assert "month 9" in text, text
+        assert "month 8" in text, text
 
 
 def test_reco_text_consistent_for_deep_loss_base_unreached():
@@ -536,11 +557,12 @@ def test_reco_text_consistent_for_deep_loss_base_unreached():
     assert_breakeven_text_consistent(vm)  # must not raise
 
 
-def test_decision_reason_names_base_breakeven_month(canonical_result):
+def test_decision_reason_names_base_breakeven_month(grace_result):
     # At the engine layer (before the view-model), the do_not_proceed break-even
     # reason already carries the base-case month and the downside scenario — the
     # view-model formatting layer adds nothing the engine didn't assert.
-    dec = canonical_result.decision
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
+    dec = grace_result.decision
     assert dec.reco_tag == "do_not_proceed"
     reason = dec.reco_reasons["breakeven"]
     assert f"Month {dec.break_even_month}" in reason
@@ -569,7 +591,10 @@ def test_base_unreached_reason_is_honest_not_viable():
 def test_do_not_proceed_message_differs_between_base_fail_and_downside_fail():
     # The two do_not_proceed stories must read differently: a base that reaches
     # break-even (downside-driven verdict) vs a base that never does (non-viable).
-    downside_driven = _opening_at(1, labor="0.60").decision.reco_reasons["breakeven"]
+    # (downside-driven arm re-homed from canonical to Grace after the 6.2 monthly
+    # split — see task-6.1-6.2-report; canonical is now raise_cash)
+    from engine.tests.conftest import build_grace_result
+    downside_driven = build_grace_result().decision.reco_reasons["breakeven"]
     base_failed = _opening_at(
         1, labor="0.60", share_y1="0.005", share_y2="0.005",
         share_y3="0.005", share_y4="0.11", share_y5="0.12").decision.reco_reasons["breakeven"]
@@ -650,15 +675,47 @@ def test_downside_actually_stresses_rent_for_every_encoding():
             f"{name}: rent +25% did not lower net (rent stress was skipped)"
 
 
+def _grace_econ_84k_encodings():
+    """Grace Mission's economics (occupancy_y1 == $84,000) encoded four ways.
+
+    (re-homed from the canonical $120k economics after the 6.2 monthly split — see
+    task-6.1-6.2-report: canonical's downside now reaches break-even, so Grace is
+    the fixture whose downside legitimately never breaks even.)
+    """
+    common = dict(
+        org_name="Grace Mission", city="Tyler, Texas", opening_status="pre_launch",
+        share_y1="0.04", share_y2="0.05", share_y3="0.06",
+        share_y4="0.07", share_y5="0.08", donation_value="74",
+        building_sqft="6000", salesfloor_pct="0.70",
+        source_of_funds="250000",
+    )
+    return {
+        "occupancy_annual_gross": Inputs(
+            occupancy_annual="84000", lease_type="gross", **common),
+        "rent_per_sqft_gross": Inputs(
+            rent_per_sqft="14", lease_type="gross", **common),  # 6000 * 14 = 84000
+        "occupancy_annual_nnn": Inputs(
+            occupancy_annual="54000", nnn_opex_annual="30000", lease_type="nnn",
+            **common),  # 54000 + 30000 = 84000
+        "rent_per_sqft_nnn": Inputs(
+            rent_per_sqft="9.0", nnn_opex_annual="30000", lease_type="nnn",
+            **common),  # 9*6000 + 30000 = 84000
+    }
+
+
 def test_downside_verdict_is_do_not_proceed_for_all_encodings():
-    # #181: the canonical 60%-labor economics legitimately fail the downside (rent
-    # +25%/donations -25% never breaks even) -> do_not_proceed. That correct verdict
-    # must hold for every encoding, never silently flip to proceed/raise_cash.
-    a = Assumptions(labor_pct="0.60")
+    # #181: Grace's economics legitimately fail the downside (rent +25%/donations
+    # -25% never breaks even) -> do_not_proceed. That correct verdict must hold for
+    # every encoding, never silently flip to proceed/raise_cash. The Payroll#1 pin
+    # is part of Grace's identity and rides along (orthogonal to the rent encoding).
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
+    from engine.tests.conftest import GRACE_PAYROLL_OVERRIDE
+    a = Assumptions()  # 60% labor default
     demand = DemandDrivers()
-    trade = TradeArea(basis="city", households="31798")
-    for name, inp in _econ_120k_encodings().items():
-        dec = compute(inp, a, demand, trade, overrides={}).decision
+    trade = TradeArea(basis="city", households="25000")
+    for name, inp in _grace_econ_84k_encodings().items():
+        dec = compute(inp, a, demand, trade,
+                      overrides=dict(GRACE_PAYROLL_OVERRIDE)).decision
         assert dec.sensitivity["downside"]["breakeven"] is None, name
         assert dec.reco_tag == "do_not_proceed", name
 
@@ -673,8 +730,14 @@ def test_breakeven_consistency_invariant_holds_across_a_scenario_sweep():
     seen_downside_driven = False
     seen_base_unreached = False
     seen_reached_and_proceed = False
+    # The 0.04-share row keeps the downside-driven branch exercised: after the 6.2
+    # monthly split the canonical 0.06/0.08/0.10 shares no longer produce a base-
+    # reaches/downside-fails case (its downside now breaks even), but 0.04 shares at
+    # 0.50/0.60 labor still do — so the sweep cannot go vacuous on that branch.
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     for labor in ("0.40", "0.50", "0.60"):
         for shares in (("0.005", "0.005", "0.005"),
+                       ("0.04", "0.04", "0.04"),
                        ("0.06", "0.08", "0.10"),
                        ("0.15", "0.20", "0.25")):
             for g in (1, 4):

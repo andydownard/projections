@@ -173,11 +173,15 @@ def test_migration_default_backfill_reproduces_legacy_view_model_byte_for_byte()
 def test_legacy_default_key_numbers_are_pinned():
     # Literal regression anchor for the migration default (#120): the legacy lump
     # numbers are frozen so a future engine change cannot silently move them.
+    # Capital/break-even re-pinned for the 6.2 monthly split (fixed costs flat,
+    # payroll taxes on the payroll ramp): the trough deepens to -$317,403.21 at M7
+    # so capital = 342,403.21 (was 321,939.73) and break-even advances to month 8
+    # (was 9). The ANNUAL P&L (startup_total, Y1 net) is untouched by 6.2.
     res = _hoh()  # canonical 60% labor, no schedule (the seeded legacy default)
     assert D(str(res.startup_total)) == Decimal("238500")
     assert D(str(res.annual[1].net)) == Decimal("-44432.9056672000")
-    assert D(str(res.decision.startup_capital_required)) == Decimal("321939.7347072000000")
-    assert res.decision.break_even_month == 9
+    assert D(str(res.decision.startup_capital_required)) == Decimal("342403.2143641952000")
+    assert res.decision.break_even_month == 8
     assert res.decision.payback_month is None  # never recovered in the horizon
 
 

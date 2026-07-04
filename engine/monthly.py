@@ -24,9 +24,11 @@ so the trough reflects the real cash low point that sets the capital requirement
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from engine.money import D
+
+_CENT = Decimal("0.01")
 
 # S-curve revenue ramp weights (relative; normalized internally). Calibration
 # backlog (§12.5) — emitted with flags.ramp_low_confidence. Mirrors the prototype.
@@ -35,12 +37,21 @@ _REVENUE_WEIGHTS = [
     ("0.04", "0.05", "0.06", "0.065", "0.075", "0.085",
      "0.09", "0.095", "0.10", "0.105", "0.11", "0.125")
 ]
-# Payroll ramps in earlier (hires precede full revenue).
+# Payroll ramps in earlier (hires precede full revenue). Payroll taxes ride this
+# same ramp (they are a fixed % OF payroll, so they track payroll, not revenue).
 _PAYROLL_WEIGHTS = [
     Decimal(w) for w in
     ("0.097", "0.095", "0.09", "0.086", "0.084", "0.08",
      "0.08", "0.079", "0.077", "0.077", "0.078", "0.077")
 ]
+# The only expense lines that scale with revenue month-to-month (ENGINE_CONTRACT §5.2).
+# Payroll/Payroll taxes are deliberately EXCLUDED (payroll ramp); everything else is
+# fixed. Classifying by label keeps the streams honest as new lines are added.
+_PCT_OF_REVENUE_LABELS = frozenset({
+    "Credit card fees",
+    "Marketing & outreach",
+    "Supplies & processing",
+})
 
 
 @dataclass
@@ -64,6 +75,23 @@ def _distribute(total: Decimal, weights):
     """Split `total` across len(weights) buckets; last bucket absorbs residual."""
     norm = _normalized(weights)
     parts = [total * w for w in norm[:-1]]
+    parts.append(total - sum(parts, Decimal("0")))
+    return parts
+
+
+def _flat_monthly(total: Decimal, months: int = 12):
+    """Spread `total` FLAT across `months` operating months, to the cent, with the
+    last month absorbing the residual (penny-exact: the parts sum to exactly `total`).
+
+    Fixed annual lines (rent, utilities, insurance, …) are lease/contract obligations
+    paid in equal monthly installments — flat, NOT revenue-weighted. Quantizing each
+    equal installment to the cent (rather than the non-terminating full-precision
+    1/12) keeps every monthly value low-precision, so the combined monthly expense and
+    net still roll up to the annual totals EXACTLY at the 28-digit Decimal precision
+    (Regression #15) — a full-precision 1/12 stream overflows that precision when the
+    12 combined months are re-summed and drifts the roll-up by ~1e-22."""
+    each = (total / months).quantize(_CENT, rounding=ROUND_HALF_UP)
+    parts = [each] * (months - 1)
     parts.append(total - sum(parts, Decimal("0")))
     return parts
 
@@ -97,15 +125,31 @@ def build_monthly(annual_y1, assumptions, opening_month_number, startup_by_month
     total_rev = D(str(annual_y1.total_rev))
     total_exp = D(str(annual_y1.total_exp))
 
-    # Split revenue by the S-curve; payroll by its own weights; everything else
-    # (the remaining operating expense) tracks the revenue curve so variable-heavy
-    # costs concentrate with revenue. Both sums equal the annual totals exactly.
-    payroll_annual = D(str(annual_y1.expenses.get("Payroll", Decimal("0"))))
-    other_exp_annual = total_exp - payroll_annual
+    # Three expense streams (ENGINE_CONTRACT §5.2), each distributed by its own weights:
+    #  - %-of-revenue lines (card fees, marketing, supplies) ride the revenue S-curve;
+    #  - Payroll AND Payroll taxes ride the payroll hire-ramp (payroll taxes are a fixed
+    #    % OF payroll, so they track payroll month-to-month, never the revenue curve);
+    #  - every other (fixed annual) line — Rent, Utilities/trash, FIXED_ANNUAL — is a
+    #    lease/contract obligation that does not ramp, so it spreads FLAT.
+    # ``fixed`` is the residual (total_exp minus the two classified streams) so a newly
+    # added expense label is treated as fixed by default, never silently dropped.
+    exp_by_label = annual_y1.expenses
+    pct_annual = sum((D(str(v)) for k, v in exp_by_label.items()
+                      if k in _PCT_OF_REVENUE_LABELS), Decimal("0"))
+    payroll_annual = sum((D(str(exp_by_label.get(k, Decimal("0"))))
+                          for k in ("Payroll", "Payroll taxes")), Decimal("0"))
+    fixed_annual = total_exp - pct_annual - payroll_annual
 
     rev_parts = _distribute(total_rev, _REVENUE_WEIGHTS)
+    pct_parts = _distribute(pct_annual, _REVENUE_WEIGHTS)
     payroll_parts = _distribute(payroll_annual, _PAYROLL_WEIGHTS)
-    other_parts = _distribute(other_exp_annual, _REVENUE_WEIGHTS)
+    fixed_parts = _flat_monthly(fixed_annual)
+
+    # Combined operating expense per month. Every stream is penny-exact and low-
+    # precision, so the 12 combined months roll up to total_exp (and, with rev_parts,
+    # to net) EXACTLY at the 28-digit Decimal precision (Regression #15) — no residual
+    # correction needed.
+    exp_parts = [pct_parts[i] + payroll_parts[i] + fixed_parts[i] for i in range(12)]
 
     rows = []
     cumulative = Decimal("0")
@@ -123,7 +167,7 @@ def build_monthly(annual_y1, assumptions, opening_month_number, startup_by_month
         elif month <= g + 11:
             oi = month - g
             rev = rev_parts[oi]
-            exp = payroll_parts[oi] + other_parts[oi]
+            exp = exp_parts[oi]
             net = rev - exp
             op_nets.append(net)
             kind = "operating"

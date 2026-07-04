@@ -234,7 +234,7 @@ def test_milestones_block_has_three_dual_value_milestones(canonical_result):
     assert set(ms) == {"grandOpening", "breakEven", "payback"}
     # grand opening = the input G (month 1 default); always reached, dual-value.
     assert ms["grandOpening"] == {"raw": 1, "display": "Month 1"}
-    # break-even is a real project month for the canonical fixture (month 9).
+    # break-even is a real project month for the canonical fixture (month 8).
     assert ms["breakEven"]["raw"] == canonical_result.decision.break_even_month
     assert ms["breakEven"]["display"] == f"Month {canonical_result.decision.break_even_month}"
 
@@ -328,46 +328,56 @@ def test_compute_populates_view_model_natively(canonical_result):
 # --------------------------------- decision-text <-> break-even consistency (#142/#145)
 def _do_not_proceed_base_reaches_downside_fails(opening_month_number=1):
     """A do_not_proceed result whose BASE case reaches break-even but whose DOWNSIDE
-    does not — the canonical 60%-labor economics, parameterizable on opening month so
-    the consistency holds when the timeline is shifted, not just at month 1."""
+    does not — the Grace Mission economics, parameterizable on opening month so
+    the consistency holds when the timeline is shifted, not just at month 1.
+
+    (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report:
+    canonical's downside now reaches break-even, so canonical is raise_cash and
+    Grace is the fixture whose downside legitimately never breaks even.)"""
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    from engine.tests.conftest import GRACE_PAYROLL_OVERRIDE
     inputs = Inputs(
-        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
-        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
-        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+        org_name="Grace Mission", city="Tyler, Texas", opening_status="pre_launch",
+        share_y1="0.04", share_y2="0.05", share_y3="0.06", share_y4="0.07", share_y5="0.08",
+        donation_value="74", building_sqft="6000", salesfloor_pct="0.70",
+        rent_per_sqft="14", lease_type="gross", source_of_funds="250000",
         opening_month_number=opening_month_number,
     )
-    return compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
-                   TradeArea(basis="city", households="31798"))
+    return compute(inputs, Assumptions(), DemandDrivers(),
+                   TradeArea(basis="city", households="25000"),
+                   overrides=dict(GRACE_PAYROLL_OVERRIDE))
 
 
-def test_do_not_proceed_sub_is_engine_reason_not_static_fallback(canonical_result):
+def test_do_not_proceed_sub_is_engine_reason_not_static_fallback(grace_result):
     # The verdict sub for do_not_proceed must be the engine's precise break-even
     # reason (single source of truth) — NOT the static _RECO_HEADLINES fallback —
     # so reco.sub can never drift from the metric's reason text (#142).
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import _RECO_HEADLINES, to_view_model
-    vm = to_view_model(canonical_result)
+    vm = to_view_model(grace_result)
     assert vm["reco"]["tag"] == "do_not_proceed"
     static_sub = _RECO_HEADLINES["do_not_proceed"][1]
     assert vm["reco"]["sub"] != static_sub
-    assert vm["reco"]["sub"] == canonical_result.decision.reco_reasons["breakeven"]
+    assert vm["reco"]["sub"] == grace_result.decision.reco_reasons["breakeven"]
 
 
-def test_do_not_proceed_sub_equals_reason_breakeven(canonical_result):
+def test_do_not_proceed_sub_equals_reason_breakeven(grace_result):
     # The banner sub and the break-even tile's reason are the SAME server string,
     # so the two surfaces can never tell a board member different stories (#145).
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
-    vm = to_view_model(canonical_result)
+    vm = to_view_model(grace_result)
+    assert vm["reco"]["tag"] == "do_not_proceed"
     assert vm["reco"]["sub"] == vm["metrics"]["reasonBreakeven"]
 
 
-def test_do_not_proceed_reason_month_matches_breakeven_metric(canonical_result):
+def test_do_not_proceed_reason_month_matches_breakeven_metric(grace_result):
     # The Month-N named in the reason text is exactly the base-case break-even month
     # rendered in metrics.breakeven — they are derived from the same value, so the
     # words and the number can never disagree.
+    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
-    vm = to_view_model(canonical_result)
+    vm = to_view_model(grace_result)
     be = vm["metrics"]["breakeven"]
     assert be["raw"] is not None
     assert f"Month {be['raw']}" in vm["reco"]["sub"]
