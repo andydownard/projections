@@ -33,14 +33,34 @@ def _canonical_inputs(labor_pct="0.60"):
     return inputs, assumptions, demand, trade
 
 
+def build_canonical_inputs():
+    """Plain (non-fixture) builder — importable from outside pytest, e.g. by
+    scripts/regen_goldens.py, which needs the exact same fixture inputs the
+    frozen goldens were generated from without going through pytest collection.
+    """
+    return _canonical_inputs("0.60")
+
+
+def build_design_parity_inputs():
+    return _canonical_inputs("0.40")
+
+
+def build_canonical_result():
+    return compute(*build_canonical_inputs(), overrides={})
+
+
+def build_design_parity_result():
+    return compute(*build_design_parity_inputs(), overrides={})
+
+
 @pytest.fixture
 def canonical_inputs():
-    return _canonical_inputs("0.60")
+    return build_canonical_inputs()
 
 
 @pytest.fixture
 def design_parity_inputs():
-    return _canonical_inputs("0.40")
+    return build_design_parity_inputs()
 
 
 @pytest.fixture
