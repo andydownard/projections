@@ -103,6 +103,13 @@ _CLAIM_WINDOW_SECONDS = 3600
 _EXPORT_IP_LIMIT = 30  # xlsx + packet, per IP
 _EXPORT_TOKEN_LIMIT = 60  # xlsx + packet, per token when a bearer is presented
 _EXPORT_WINDOW_SECONDS = 3600
+# duplicate mirrors create's cost profile (mints tokens + runs the engine + a durable
+# write + one revision), so it reuses create's per-IP budget; it is authenticated
+# (owner-only), so a per-token cap is also meaningful (a compromised owner token
+# cannot fork-flood past 20/hr either).
+_DUPLICATE_IP_LIMIT = _CREATE_IP_LIMIT
+_DUPLICATE_TOKEN_LIMIT = _CREATE_IP_LIMIT
+_DUPLICATE_WINDOW_SECONDS = _CREATE_WINDOW_SECONDS
 _STATICMAP_IP_LIMIT = 120  # cached per (lat,lng,kind); per IP only (view-capability)
 _STATICMAP_WINDOW_SECONDS = 3600
 
@@ -165,6 +172,35 @@ def _clerk_owns(row: dict, ident: ClerkOwner) -> bool:
     if oid and ident.org_id and oid == ident.org_id:
         return True
     return False
+
+
+def _resolve_owner_columns(
+    authorization: Optional[str],
+) -> tuple[str, Optional[str], dict[str, Any]]:
+    """Resolve (owner_token_hash, minted_owner_or_None, clerk_columns) for a NEW row.
+
+    Cookie-blind (Authorization header only). A verified Clerk owner stamps the
+    identity + mints a capability owner token (the schema requires owner_token_hash;
+    it is the recovery/claim seam); a capability bearer JOINS that token's workspace
+    (no new mint — the copy/second-create lands beside its siblings); anonymous mints
+    a fresh ~256-bit owner. Shared by create AND duplicate so the two mint paths can
+    never drift. ``minted_owner`` is the one-time plaintext to return (None when a
+    capability bearer joined an existing workspace)."""
+    identity = resolve_bearer_identity(authorization)
+    minted_owner = None
+    clerk_cols: dict[str, Any] = {}
+    if isinstance(identity, ClerkOwner):
+        presented_owner = secrets.token_urlsafe(32)
+        minted_owner = presented_owner
+        clerk_cols["owner_clerk_user_id"] = identity.clerk_user_id
+        if identity.org_id:
+            clerk_cols["owner_org_id"] = identity.org_id
+    elif isinstance(identity, CapabilityBearer):
+        presented_owner = identity.token  # join that token's workspace (unchanged)
+    else:  # Anonymous
+        presented_owner = secrets.token_urlsafe(32)  # ~256-bit
+        minted_owner = presented_owner
+    return hash_token(presented_owner), minted_owner, clerk_cols
 
 
 def _require_owner(store: Store, view_slug: str, authorization: Optional[str]) -> dict:
@@ -835,24 +871,9 @@ def create_projection(
 
     # Resolve the caller COOKIE-BLIND: a verified Clerk owner (when CLERK_ENABLED),
     # an opaque capability owner token, or anonymous. With Clerk off this is
-    # byte-for-byte today's behavior (every bearer is a capability token).
-    identity = resolve_bearer_identity(authorization)
-    minted_owner = None
-    clerk_cols: dict[str, Any] = {}
-    if isinstance(identity, ClerkOwner):
-        # Clerk-owned: stamp the verified identity and still mint a capability owner
-        # token (the schema requires owner_token_hash; it is the recovery/claim seam).
-        presented_owner = secrets.token_urlsafe(32)
-        minted_owner = presented_owner
-        clerk_cols["owner_clerk_user_id"] = identity.clerk_user_id
-        if identity.org_id:
-            clerk_cols["owner_org_id"] = identity.org_id
-    elif isinstance(identity, CapabilityBearer):
-        presented_owner = identity.token  # join that token's workspace (unchanged)
-    else:  # Anonymous
-        presented_owner = secrets.token_urlsafe(32)  # ~256-bit
-        minted_owner = presented_owner
-    owner_hash = hash_token(presented_owner)
+    # byte-for-byte today's behavior (every bearer is a capability token). Shared with
+    # duplicate so the two mint paths can never drift.
+    owner_hash, minted_owner, clerk_cols = _resolve_owner_columns(authorization)
 
     view_slug = secrets.token_urlsafe(16)  # ~128-bit
     edit_token = secrets.token_urlsafe(32)
@@ -895,6 +916,153 @@ def create_projection(
     }
     if minted_owner is not None:
         out["owner_token"] = minted_owner  # one-time; client stores in localStorage
+    return out
+
+
+class DuplicateIn(BaseModel):
+    """Optional edit applied to the COPY before compute (API_SPEC §4.4).
+
+    ``patch`` is the SAME partial the autosave PATCH accepts. On a 409 the client's
+    "Save as copy" sends the conflicted edit here so it lands on the fork instead of
+    being dropped (the audited P0). Omitted / null -> a verbatim copy of the source's
+    editable surface. ``extra = "forbid"`` so a stray key is a 422, never silently
+    ignored."""
+    patch: Optional[PatchProjectionIn] = None
+
+    class Config:
+        extra = "forbid"
+
+
+@router.post("/{view_slug}/duplicate", status_code=201)
+def duplicate_projection(
+    view_slug: str,
+    request: Request,
+    body: Optional[DuplicateIn] = None,
+    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
+    authorization: Optional[str] = Header(default=None),
+):
+    """Server-side copy into a FRESH row — the real "Save as copy" (API_SPEC §4.4).
+
+    Owner-only (``_require_owner``): edit/view/anonymous -> 403, exactly like
+    rotate/trash/delete (capability routes have no 401 path). The copy is a NEW
+    projection — new id / view_slug / edit token, FRESH revision — and NEVER reuses
+    the source's secrets (a shared slug/edit token would leak the source). The caller
+    is the owner, so the copy JOINS the owner's workspace (mirrors create's
+    identity-join: no new owner token when a capability owner presents one).
+
+    Duplicate creates a row and never version-mutates the source, so it carries no
+    If-Match (like create). The optional ``patch`` flows through the SAME
+    ``_merge_patch`` + ``_validate_schedule_inputs`` path as PATCH — override-DAG
+    validation, AssumptionsIn/InputsIn bounds, and fixed_annual ACCUMULATION are
+    therefore identical, so save-as-copy carries the conflicted edit faithfully.
+    """
+    # §10.1: mirror create's cost-DoS brake — cap per IP (and per owner token) BEFORE
+    # the auth read + compute + durable write.
+    _dup_token = _bearer(authorization)
+    limited = _rate_limited(
+        "duplicate_projection", request,
+        ip_limit=_DUPLICATE_IP_LIMIT,
+        token=hash_token(_dup_token) if _dup_token else None,
+        token_limit=_DUPLICATE_TOKEN_LIMIT, window_seconds=_DUPLICATE_WINDOW_SECONDS,
+    )
+    if limited is not None:
+        return limited
+
+    row = _require_owner(store, view_slug, authorization)
+
+    # Resolve the copy's editable surface. With a patch, run the EXACT PATCH merge/
+    # validation path against the SOURCE row (fixed_annual accumulates over the
+    # source's stored map, override ops validate through the DAG); without one, copy
+    # the stored surface verbatim.
+    patch = body.patch if body is not None else None
+    if patch is not None:
+        try:
+            inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name = (
+                _merge_patch(row, patch))
+        except dag.PinRejected as exc:
+            node = exc.node if hasattr(exc, "node") else None
+            raise HTTPException(status_code=422, detail={
+                "error": "node_not_pinnable", "node": node,
+                "message": str(exc)}) from exc
+        _validate_schedule_inputs(inputs_d)
+    else:
+        inputs_d = json.loads(row["inputs_json"] or "{}")
+        assumptions_d = json.loads(row["assumptions_json"] or "{}")
+        demand_d = json.loads(row["demand_drivers_json"] or "{}")
+        trade_d = json.loads(row["trade_area_json"] or "{}")
+        overrides_d = json.loads(row["overrides_json"] or "{}")
+        name = row["name"]
+
+    try:
+        vm = _compute_view_model_from_dicts(
+            inputs_d, assumptions_d, demand_d, trade_d, overrides_d)
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
+        raise HTTPException(
+            status_code=422, detail={"error": "invalid_inputs", "message": str(exc)}
+        ) from exc
+    location_d = loads_obj(row.get("location_json"))
+    _enrich_view_model(vm, location_d, trade_d)
+
+    owner_hash, minted_owner, clerk_cols = _resolve_owner_columns(authorization)
+    view_slug_new = secrets.token_urlsafe(16)  # ~128-bit — FRESH, never the source's
+    edit_token = secrets.token_urlsafe(32)      # FRESH edit capability
+    pid = _new_id()
+    now = _utcnow()
+    copy_name = f"{name} (copy)"
+
+    copy_row = {
+        "id": pid,
+        "view_slug": view_slug_new,
+        "owner_token_hash": owner_hash,
+        "edit_token_hash": hash_token(edit_token),
+        "name": copy_name,
+        "model_version": vm.get("model_version", ""),
+        "compute_schema_version": vm.get("compute_schema_version", ""),
+        # Copy the source's resolved location verbatim (byte-faithful column copy).
+        "location_json": row.get("location_json") or json.dumps({}),
+        "trade_area_json": json.dumps(trade_d),
+        "inputs_json": json.dumps(inputs_d),
+        "demand_drivers_json": json.dumps(demand_d),
+        "assumptions_json": json.dumps(assumptions_d),
+        "overrides_json": json.dumps(overrides_d),
+        "computed_json": json.dumps(vm),
+        # The owner already accepted the planning-estimates caveat for this data; the
+        # copy inherits it so exports are reachable without a surprising re-accept.
+        "terms_accepted_at": row.get("terms_accepted_at"),
+        "created_at": now,
+        "updated_at": now,
+        **clerk_cols,
+        **_schedule_columns(inputs_d),
+    }
+    store.create_projection(copy_row)
+
+    # One fresh revision snapshot for the copy (seq 1) so its history starts at the
+    # duplicate, not an empty log (parity with every other mutation's audit trail).
+    store.insert_revision({
+        "id": _new_id(),
+        "projection_id": pid,
+        "seq": 1,
+        "inputs_json": copy_row["inputs_json"],
+        "assumptions_json": copy_row["assumptions_json"],
+        "overrides_json": copy_row["overrides_json"],
+        "monthly_json": "{}",
+        "computed_json": copy_row["computed_json"],
+        "model_version": copy_row["model_version"],
+        "actor_token_hash": hash_token(_dup_token) if _dup_token else None,
+        "actor": "user",
+        "change_summary": "duplicated",
+        "created_at": now,
+    })
+
+    out = {
+        **vm,
+        "view_slug": view_slug_new,
+        "version": 1,
+        "name": copy_name,
+        "edit_token": edit_token,  # one-time
+    }
+    if minted_owner is not None:
+        out["owner_token"] = minted_owner  # one-time (Clerk/anon owner only)
     return out
 
 
