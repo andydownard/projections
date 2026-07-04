@@ -76,9 +76,15 @@ export function CostScheduleEditor({
   const matrix = pivotToMatrix(rows, monthCount);
 
   // Server totals indexed for O(1) lookup; rendered verbatim (display strings only).
-  const rowTotalByCategory = new Map(totals?.rowTotals.map((t) => [t.category, t.total.display]));
-  const colTotalByMonth = new Map(totals?.columnTotals.map((t) => [t.month, t.total.display]));
-  const grandDisplay = totals?.grandTotal.display ?? TOTAL_PLACEHOLDER;
+  // Both arrays get the FULL optional chain (`totals?.rowTotals?.map`, not just
+  // `totals?.rowTotals.map`): a partial /preview response can arrive with a truthy
+  // `totals` object but a missing rowTotals/columnTotals array, and the bare
+  // `.map` on `undefined` threw synchronously during render (an intermittent
+  // uncaught TypeError under parallel test runs, and a potential prod crash on a
+  // partial response) — the grid must degrade to the placeholder, never throw.
+  const rowTotalByCategory = new Map(totals?.rowTotals?.map((t) => [t.category, t.total.display]));
+  const colTotalByMonth = new Map(totals?.columnTotals?.map((t) => [t.month, t.total.display]));
+  const grandDisplay = totals?.grandTotal?.display ?? TOTAL_PLACEHOLDER;
 
   function columnClass(month: number): string {
     if (month === opening) return "cost-matrix__col--opening";

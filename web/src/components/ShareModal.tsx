@@ -15,8 +15,13 @@
 //
 // The owner token is never surfaced here. Rendered through a portal to <body> so it
 // overlays the whole app; a11y (focus trap, autofocus, Escape, scroll lock, focus
-// restore) lives in useDialog. Copy feedback reuses the global useToast().
-import { useRef } from "react";
+// restore) lives in useDialog. Copy feedback reuses the global useToast() — but
+// ONLY on an actual clipboard-write success (audit P2: the modal used to toast
+// "Link copied" unconditionally, even when navigator.clipboard.writeText REJECTED,
+// which lies to the owner about whether the link ever reached their clipboard). A
+// rejected write instead renders an inline "Press Ctrl+C to copy" hint next to that
+// link's field, which is still focused/selected for a manual copy.
+import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { useToast } from "./Toast";
@@ -46,20 +51,37 @@ export function ShareModal({ slug, editToken, onClose }: ShareModalProps) {
   const dialogRef = useDialog<HTMLDivElement>(onClose);
   const readOnlyRef = useRef<HTMLInputElement>(null);
   const editRef = useRef<HTMLInputElement>(null);
+  // Which link's clipboard write most recently REJECTED (honesty fix, audit P2):
+  // only that link's row shows the manual "Press Ctrl+C to copy" hint, and only
+  // until a write for that same link succeeds.
+  const [copyFailed, setCopyFailed] = useState<{ readonly: boolean; edit: boolean }>({
+    readonly: false,
+    edit: false,
+  });
 
-  async function copy(url: string, field: HTMLInputElement | null) {
-    try {
-      if (navigator.clipboard?.writeText) {
+  async function copy(kind: "readonly" | "edit", url: string, field: HTMLInputElement | null) {
+    if (navigator.clipboard?.writeText) {
+      try {
         await navigator.clipboard.writeText(url);
-      } else if (field) {
-        // No Clipboard API (older/insecure context): select so the user can copy.
-        field.focus();
-        field.select();
+      } catch {
+        // Do NOT toast success on a rejected write — that would tell the owner the
+        // link is on their clipboard when it is not. Surface the manual fallback
+        // instead; the field is still selected below so Ctrl+C works immediately.
+        field?.focus();
+        field?.select();
+        setCopyFailed((s) => ({ ...s, [kind]: true }));
+        return;
       }
-    } catch {
-      // A rejected write still leaves the readOnly field on screen to copy by hand.
+      setCopyFailed((s) => ({ ...s, [kind]: false }));
+      showToast("Link copied");
+      return;
     }
-    showToast("Link copied");
+    // No Clipboard API (older/insecure context): select so the user can copy by
+    // hand. NOTHING reached the clipboard, so "Link copied" would be a lie — show
+    // the same inline manual-copy hint as the reject path (3.5 review, honesty rule).
+    field?.focus();
+    field?.select();
+    setCopyFailed((s) => ({ ...s, [kind]: true }));
   }
 
   return createPortal(
@@ -103,11 +125,16 @@ export function ShareModal({ slug, editToken, onClose }: ShareModalProps) {
               type="button"
               className="btn"
               data-testid="share-copy-readonly"
-              onClick={() => void copy(readOnlyUrl(slug), readOnlyRef.current)}
+              onClick={() => void copy("readonly", readOnlyUrl(slug), readOnlyRef.current)}
             >
               Copy
             </button>
           </div>
+          {copyFailed.readonly && (
+            <p className="share-modal__link-help" data-testid="share-copy-readonly-manual">
+              Press Ctrl+C to copy
+            </p>
+          )}
         </div>
 
         {/* Editable link — only when this device holds the edit token. */}
@@ -136,11 +163,16 @@ export function ShareModal({ slug, editToken, onClose }: ShareModalProps) {
                   type="button"
                   className="btn"
                   data-testid="share-copy-edit"
-                  onClick={() => void copy(editUrl(slug, editToken), editRef.current)}
+                  onClick={() => void copy("edit", editUrl(slug, editToken), editRef.current)}
                 >
                   Copy
                 </button>
               </div>
+              {copyFailed.edit && (
+                <p className="share-modal__link-help" data-testid="share-copy-edit-manual">
+                  Press Ctrl+C to copy
+                </p>
+              )}
             </>
           ) : (
             <p className="share-modal__link-help" data-testid="share-edit-unavailable">

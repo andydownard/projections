@@ -23,8 +23,10 @@
 //
 // a11y: the undo is a real <button> (keyboard focusable + Enter/Space), the change
 // is announced in a polite live region, and meaning is carried by an icon + TEXT
-// (never color alone). Styles are inline/component-local (the PE1 pattern) so new
-// elements never collide with the shared tokens.css across parallel agents.
+// (never color alone). Static styling lives in tokens.css (.field-change*, Task
+// 3.4 — the original all-inline PE1 pattern bypassed the tokens.coverage.test.ts
+// gate and hard-coded --brand-primary as a raw hex); only the genuinely dynamic
+// per-render touch-target sizing (24px desktop / 44px touch) stays inline below.
 import { useEffect, useState, type CSSProperties } from "react";
 
 export type FieldChangeActor = "penny" | "user";
@@ -75,68 +77,6 @@ export interface FieldChangeProps {
    *  value (a cell button / an input) pass false and apply their own prominence. */
   showCurrent?: boolean;
 }
-
-const BRAND = "#35644f";
-
-const wrapStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: "0.375rem",
-  flexWrap: "wrap",
-  fontSize: "0.8125rem",
-  lineHeight: 1.3,
-};
-
-const currentStyle: CSSProperties = {
-  fontWeight: 700,
-};
-
-const badgeStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: "0.25rem",
-  padding: "0.05rem 0.4rem",
-  borderRadius: "999px",
-  border: `1px solid ${BRAND}`,
-  background: "rgba(53, 100, 79, 0.08)",
-  color: BRAND,
-  fontSize: "0.6875rem",
-  fontWeight: 600,
-  whiteSpace: "nowrap",
-};
-
-const wasStyle: CSSProperties = {
-  color: "#6b7280",
-  fontSize: "0.75rem",
-  fontStyle: "italic",
-};
-
-const iconBtnStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: "1.4rem",
-  height: "1.4rem",
-  padding: 0,
-  border: "1px solid transparent",
-  borderRadius: "0.3rem",
-  background: "transparent",
-  color: BRAND,
-  cursor: "pointer",
-  lineHeight: 1,
-};
-
-const srOnly: CSSProperties = {
-  position: "absolute",
-  width: 1,
-  height: 1,
-  padding: 0,
-  margin: -1,
-  overflow: "hidden",
-  clip: "rect(0 0 0 0)",
-  whiteSpace: "nowrap",
-  border: 0,
-};
 
 /** A small icon glyph. Reverted shows an undo-arrow; a change shows a sparkle.
  *  aria-hidden — the adjacent TEXT carries the meaning (never color alone). */
@@ -212,22 +152,22 @@ export function FieldChange({
       data-testid="field-change"
       data-actor={by}
       data-reverted={reverted || undefined}
-      style={wrapStyle}
+      className="field-change"
     >
       {showCurrent && (
-        <span data-testid="field-change-current" style={currentStyle}>
+        <span data-testid="field-change-current" className="field-change__current">
           {current}
         </span>
       )}
 
       {!dismissed && (
-        <span data-testid="field-change-badge" style={badgeStyle}>
+        <span data-testid="field-change-badge" className="field-change__badge">
           <ChangeIcon reverted={reverted} />
           <span>{badgeText}</span>
         </span>
       )}
 
-      <span data-testid="field-change-was" style={wasStyle}>
+      <span data-testid="field-change-was" className="field-change__was">
         was {previous}
       </span>
 
@@ -238,15 +178,11 @@ export function FieldChange({
           onClick={onUndo}
           disabled={busy}
           aria-label={`Undo change to ${label}, restore ${previous}`}
-          style={{
-            ...iconBtnStyle,
-            ...controlSizing,
-            cursor: busy ? "default" : "pointer",
-            opacity: busy ? 0.5 : 1,
-          }}
+          className="field-change__icon-btn"
+          style={controlSizing}
         >
           <ChangeIcon reverted />
-          <span style={srOnly}>Undo</span>
+          <span className="sr-only">Undo</span>
         </button>
       )}
 
@@ -256,7 +192,8 @@ export function FieldChange({
           data-testid="field-change-dismiss"
           onClick={handleDismiss}
           aria-label={`Dismiss change highlight for ${label}`}
-          style={{ ...iconBtnStyle, ...controlSizing, color: "#6b7280" }}
+          className="field-change__icon-btn field-change__icon-btn--muted"
+          style={controlSizing}
         >
           <span aria-hidden="true">×</span>
         </button>
@@ -267,7 +204,7 @@ export function FieldChange({
         role="status"
         aria-live="polite"
         data-testid="field-change-announce"
-        style={srOnly}
+        className="sr-only"
       >
         {announce}
       </span>

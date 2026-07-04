@@ -53,6 +53,7 @@ import type {
 import type { SaveState } from "../components/TopBar";
 import type { ConflictBody } from "../state/autosaveReducer";
 import { clearDetailHeader, setDetailHeader } from "../state/detailHeader";
+import { formatListDate } from "../components/displayLabels";
 import type { ServerValue } from "../api/client";
 import type { PatchHandlerArgs } from "../components/SettingsTab";
 import { readFragmentSecret } from "../router/route";
@@ -191,11 +192,24 @@ function auditItems(vm: ViewModel): OverrideAuditItem[] {
 }
 
 /** Build the SettingsTab view-model from the server settings map. The 2.6.0 / E2
- *  drivers (shareY4/Y5, donationValue, basket, donationsPerHouseholdPerYear) are
- *  included ONLY when the snapshot carries them, so a legacy 3-year snapshot renders
- *  just the drivers it actually has (the merged grid filters on presence). */
+ *  drivers (shareY4/Y5, donationValue, basket, donationsPerHouseholdPerYear) AND the
+ *  1.6.0 params (reserveBuffer, sensitivityDelta, nnnOpexAnnual, buildingSqft,
+ *  salesfloorPct, rentPerSqft, utilitiesPerSqft, fixedAnnual, leaseType) are included
+ *  ONLY when the snapshot carries them, so a legacy snapshot renders just the drivers
+ *  it actually has (the merged grid filters on presence and drops empty groups). */
 function settingsVm(s: ViewModel["settings"]) {
   const has = (k: string) => s[k] !== undefined && s[k] !== null;
+  // A numeric setting that may arrive as a number OR a string (old Penny-edited rows
+  // stored e.g. reserve_buffer as a string): coerce via Number() before wrapping so
+  // the field seeds from the value, not 0. Display coercion only — no client math.
+  const numSv = (v: ServerValue | number | string | undefined): ServerValue => {
+    if (v && typeof v === "object" && "raw" in v) return v;
+    const n = Number(v);
+    return { raw: Number.isFinite(n) ? n : 0, display: String(v ?? "") };
+  };
+  // fixedAnnual is a nested {label: $/yr} dict; the settings map's value type does not
+  // model objects, so read it through an explicit cast.
+  const fixedAnnual = s.fixedAnnual as unknown as Record<string, number> | undefined;
   return {
     laborPct: sv(s.laborPct),
     marketingPct: sv(s.marketingPct),
@@ -214,21 +228,30 @@ function settingsVm(s: ViewModel["settings"]) {
     ...(has("donationsPerHouseholdPerYear")
       ? { donationsPerHouseholdPerYear: sv(s.donationsPerHouseholdPerYear) }
       : {}),
+    // 1.6.0 params — presence-filtered for legacy snapshots.
+    ...(has("reserveBuffer") ? { reserveBuffer: numSv(s.reserveBuffer) } : {}),
+    ...(has("sensitivityDelta") ? { sensitivityDelta: numSv(s.sensitivityDelta) } : {}),
+    ...(has("nnnOpexAnnual") ? { nnnOpexAnnual: numSv(s.nnnOpexAnnual) } : {}),
+    ...(has("buildingSqft") ? { buildingSqft: numSv(s.buildingSqft) } : {}),
+    ...(has("salesfloorPct") ? { salesfloorPct: numSv(s.salesfloorPct) } : {}),
+    ...(has("rentPerSqft") ? { rentPerSqft: numSv(s.rentPerSqft) } : {}),
+    ...(has("utilitiesPerSqft") ? { utilitiesPerSqft: numSv(s.utilitiesPerSqft) } : {}),
+    ...(fixedAnnual && typeof fixedAnnual === "object" ? { fixedAnnual } : {}),
+    ...(has("leaseType") ? { leaseType: String(s.leaseType) } : {}),
   };
 }
 
 /** Format an ISO timestamp as a short "Updated MMM D, YYYY" string for the header.
  *  Display only; rendered ONLY when the server provides `updated_at` (never a
- *  fabricated date). Returns null for a missing/unparseable value. */
+ *  fabricated date). Returns null for a missing/unparseable value. Reuses the SAME
+ *  `formatListDate` helper the list page renders (audit P2: this used to call its
+ *  own `toLocaleDateString(undefined, …)` — locale-dependent and liable to render a
+ *  different calendar day than the list for the exact same `updated_at` timestamp). */
 function updatedLabel(iso?: string): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return `Updated ${d.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  })}`;
+  return `Updated ${formatListDate(iso)}`;
 }
 
 /** The 4-cell header metric bar (D1): Income sparkline · Capital required (RED) ·
