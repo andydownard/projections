@@ -259,15 +259,18 @@ export function useWizardState(
     return s != null && JSON.stringify(s) !== baselineDraftJsonRef.current;
   });
   const draftWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Skip the very first effect run (mount) so a stored draft is never overwritten by
-  // the fresh default before the operator chooses Resume / Start fresh.
-  const skipInitialDraftWriteRef = useRef(true);
+  // Never write until the draft OBJECT has actually changed from the initial state.
+  // Identity (not a consumed boolean ref) is the guard because React StrictMode runs
+  // the effect setup->cleanup->setup on the SAME instance with persistent refs — a
+  // skip-first boolean is spent by the first setup, letting the second schedule a
+  // debounced write of the pristine default over a stored draft the operator hasn't
+  // chosen to resume yet (2.6 review, Important #1). The initial state object's
+  // identity survives StrictMode re-runs; only a real setDraft produces a new object.
+  const initialDraftObjRef = useRef<WizardDraft | null>(null);
+  if (initialDraftObjRef.current === null) initialDraftObjRef.current = draft;
 
   useEffect(() => {
-    if (skipInitialDraftWriteRef.current) {
-      skipInitialDraftWriteRef.current = false;
-      return;
-    }
+    if (draft === initialDraftObjRef.current) return;
     if (draftWriteTimerRef.current) clearTimeout(draftWriteTimerRef.current);
     draftWriteTimerRef.current = setTimeout(() => {
       try {
@@ -292,7 +295,10 @@ export function useWizardState(
 
   const resumeDraft = useCallback(() => {
     const s = storedDraftRef.current;
-    if (s) setDraft(s);
+    // Merge over DEFAULT_DRAFT: a draft persisted before a deploy that added new
+    // draft fields must resume with those fields at their defaults, never undefined
+    // (String(undefined) === "undefined" would 422 at Generate) — 2.6 review #2.
+    if (s) setDraft({ ...DEFAULT_DRAFT, ...s });
     setResumeAvailable(false);
   }, []);
 

@@ -1,4 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
+import { createElement, StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { advancedKey, DEFAULT_DRAFT, STEPS, useWizardState } from "./useWizardState";
@@ -474,5 +475,47 @@ describe("useWizardState — setBuildoutPerSqft (Task 2.2)", () => {
     const sched = result.current.draft.costSchedule ?? [];
     const fixtures = sched.find((r) => r.category === "Equipment & Fixtures");
     expect(fixtures?.amount).toBe(56250); // unchanged: 4.50 × 12,500
+  });
+});
+
+// --- 2.6 review fast-follows -------------------------------------------------
+describe("draft persistence hardening (2.6 review)", () => {
+  const KEY = "wizard-draft-v1";
+
+  afterEach(() => {
+    localStorage.clear();
+    vi.useRealTimers();
+  });
+
+  it("does not clobber a stored draft on mount even under React StrictMode (dev double-effect)", async () => {
+    vi.useFakeTimers();
+    const stored = { ...DEFAULT_DRAFT, name: "Precious Draft", buildingSqft: 9999 };
+    localStorage.setItem(KEY, JSON.stringify(stored));
+    renderHook(() => useWizardState(), {
+      wrapper: ({ children }) => createElement(StrictMode, null, children),
+    });
+    // StrictMode runs the persistence effect setup->cleanup->setup with persistent
+    // refs; a boolean skip-first ref is consumed by the FIRST setup, letting the
+    // second schedule a debounced write of the pristine default over the stored
+    // draft. Advance past the debounce and assert the stored bytes are untouched.
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(JSON.parse(localStorage.getItem(KEY)!).name).toBe("Precious Draft");
+    expect(JSON.parse(localStorage.getItem(KEY)!).buildingSqft).toBe(9999);
+  });
+
+  it("resume merges the stored draft over DEFAULT_DRAFT so fields added after persist resume with defaults", () => {
+    const legacy: Record<string, unknown> = { ...DEFAULT_DRAFT, name: "Old Session" };
+    delete legacy.salvagePct; // simulate a draft persisted before this field existed
+    delete legacy.fixedAnnual;
+    localStorage.setItem(KEY, JSON.stringify(legacy));
+    const { result } = renderHook(() => useWizardState());
+    expect(result.current.resumeAvailable).toBe(true);
+    act(() => result.current.resumeDraft());
+    expect(result.current.draft.name).toBe("Old Session");
+    // must NOT be undefined -> "undefined" in the create body (422 at the server)
+    expect(result.current.draft.salvagePct).toBe(DEFAULT_DRAFT.salvagePct);
+    expect(result.current.draft.fixedAnnual).toEqual(DEFAULT_DRAFT.fixedAnnual);
   });
 });
