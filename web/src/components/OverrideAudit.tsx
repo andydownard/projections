@@ -12,16 +12,12 @@
 // set/clear, key "{node}#{year}" -> {value, note, ts}); this component only renders the
 // audit and RAISES those intents — it never touches the override data model or the
 // server contract (decision #42: move WHERE the comment is captured, nothing else).
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type CSSProperties,
-  type FormEvent,
-} from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
-const BRAND_DEEP = "#1d4733";
+// Task 3.4 (design audit): static styling moved into tokens.css (.override-audit*)
+// — the old inline styles hard-coded --brand-deep as a raw "#1d4733" constant and
+// bypassed tokens.coverage.test.ts entirely. Only the CommentForm's own container/
+// textarea/button-row layout stays inline below (already var()-driven, no raw hex).
 
 /** One overridden DAG node, shaped for verbatim display (no client math). */
 export interface OverrideAuditItem {
@@ -68,39 +64,6 @@ export interface OverrideAuditProps {
   /** Section heading text. */
   title?: string;
 }
-
-const sectionStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "0.5rem",
-  padding: "0.75rem 1rem",
-  borderBottom: "1px solid var(--line, #e2e2e2)",
-};
-
-const headingStyle: CSSProperties = {
-  margin: 0,
-  fontSize: "0.8125rem",
-  fontWeight: 700,
-  color: "var(--text, #1a1a1a)",
-};
-
-const labelStyle: CSSProperties = {
-  fontSize: "0.6875rem",
-  fontWeight: 600,
-  color: "var(--text-muted, #666)",
-};
-
-const mutedSmall: CSSProperties = { fontSize: "0.6875rem", color: "var(--text-muted, #666)" };
-
-const pillButtonStyle: CSSProperties = {
-  fontSize: "0.6875rem",
-  padding: "0.2rem 0.55rem",
-  border: "1px solid var(--line, #e2e2e2)",
-  borderRadius: "999px",
-  background: "var(--surface, #fff)",
-  color: BRAND_DEEP,
-  cursor: "pointer",
-};
 
 /** The focused "why did you override {node} {year}?" prompt. Mounted only while an
  *  override is being justified; its textarea is labelled + auto-focused so a keyboard
@@ -157,7 +120,7 @@ function CommentForm({
         background: "var(--surface-alt, #f7f7f5)",
       }}
     >
-      <label htmlFor={fieldId} style={{ ...labelStyle, color: BRAND_DEEP }}>
+      <label htmlFor={fieldId} className="override-audit__label override-audit__label--brand">
         {`Why did you override ${target.label}?`}
       </label>
       <textarea
@@ -187,18 +150,16 @@ function CommentForm({
           type="submit"
           data-testid="override-comment-save"
           disabled={draft.trim().length === 0}
-          style={{
-            ...pillButtonStyle,
-            border: "none",
-            background: "var(--brand-primary, #35644f)",
-            color: "#fff",
-            cursor: draft.trim().length === 0 ? "not-allowed" : "pointer",
-            opacity: draft.trim().length === 0 ? 0.5 : 1,
-          }}
+          className="override-audit__pill override-audit__pill--primary"
         >
           Save justification
         </button>
-        <button type="button" data-testid="override-comment-cancel" onClick={onCancel} style={pillButtonStyle}>
+        <button
+          type="button"
+          data-testid="override-comment-cancel"
+          onClick={onCancel}
+          className="override-audit__pill"
+        >
           Cancel
         </button>
       </div>
@@ -227,11 +188,11 @@ export function OverrideAudit({
   const headingId = useId();
 
   return (
-    <section data-testid="override-audit" aria-labelledby={headingId} style={sectionStyle}>
-      <h3 id={headingId} style={headingStyle}>
+    <section data-testid="override-audit" aria-labelledby={headingId} className="override-audit__section">
+      <h3 id={headingId} className="override-audit__heading">
         {title}
         {overrides.length > 0 && (
-          <span aria-hidden="true" style={{ ...mutedSmall, fontWeight: 600, marginLeft: "0.4rem" }}>
+          <span aria-hidden="true" className="override-audit__muted override-audit__count">
             {overrides.length}
           </span>
         )}
@@ -247,7 +208,7 @@ export function OverrideAudit({
       )}
 
       {overrides.length === 0 ? (
-        <p data-testid="override-audit-empty" style={mutedSmall}>
+        <p data-testid="override-audit-empty" className="override-audit__muted">
           No overrides pinned. Pin a component cell to track it here.
         </p>
       ) : (
@@ -267,11 +228,16 @@ export function OverrideAudit({
                   gap: "0.25rem",
                 }}
               >
-                <span style={labelStyle}>{o.label}</span>
+                <span className="override-audit__label">{o.label}</span>
                 <span style={{ fontWeight: 700, fontSize: "0.8125rem" }}>{o.value}</span>
-                {o.calculated && <span style={mutedSmall}>was computed {o.calculated}</span>}
+                {o.calculated && (
+                  <span className="override-audit__muted">was computed {o.calculated}</span>
+                )}
                 {o.stale && (
-                  <span data-testid={`override-stale-${o.node}-y${o.year}`} style={{ ...mutedSmall, color: "var(--warn-text, #8a5a00)" }}>
+                  <span
+                    data-testid={`override-stale-${o.node}-y${o.year}`}
+                    className="override-audit__muted override-audit__muted--warn"
+                  >
                     {/* Meaning is in the text, never color alone (a11y). */}
                     ⚠ Upstream input changed — review this pin.
                   </span>
@@ -282,7 +248,10 @@ export function OverrideAudit({
                   </p>
                 ) : (
                   o.needsNote && (
-                    <span data-testid={`override-needs-note-${o.node}-y${o.year}`} style={{ ...mutedSmall, color: "var(--warn-text, #8a5a00)" }}>
+                    <span
+                      data-testid={`override-needs-note-${o.node}-y${o.year}`}
+                      className="override-audit__muted override-audit__muted--warn"
+                    >
                       Needs a justification for the board packet.
                     </span>
                   )
@@ -294,7 +263,7 @@ export function OverrideAudit({
                       data-testid={`override-comment-${o.node}-y${o.year}`}
                       aria-expanded={isTarget}
                       onClick={() => onComment(o.node, o.year)}
-                      style={pillButtonStyle}
+                      className="override-audit__pill"
                     >
                       {o.note ? "Edit justification" : "Add justification"}
                     </button>
@@ -304,7 +273,7 @@ export function OverrideAudit({
                       type="button"
                       data-testid={`override-reset-${o.node}-y${o.year}`}
                       onClick={() => onResetPin(o.node, o.year)}
-                      style={pillButtonStyle}
+                      className="override-audit__pill"
                     >
                       Reset pin
                     </button>

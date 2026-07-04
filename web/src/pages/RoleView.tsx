@@ -65,9 +65,10 @@ export function RoleView({ slug }: RoleViewProps) {
     <div className="role-view" data-role={vm.role}>
       {/* #203 — the board/funder read view previously had ZERO headings of any
           level. A visible h1 names the projection so AT users can orient + navigate
-          (WCAG 1.3.1 / 2.4.6). Inline style only (tokens.css owned elsewhere; the
-          role-view screen is still in its parity backlog). */}
-      <h1 style={{ margin: "0 0 1rem", fontSize: "1.5rem", lineHeight: 1.25 }}>
+          (WCAG 1.3.1 / 2.4.6). Task 3.4: tokenized (.role-view__heading) — the
+          role-view screen container itself is still in the tokens.coverage.test.ts
+          parity backlog (KNOWN_ORPHANS), but this heading now has a real rule. */}
+      <h1 className="role-view__heading">
         {(vm.name || "").trim() || "Thrift store projection"}
       </h1>
       {/* Read-only notice (M7 I2): a shared link can read/download/export but not
