@@ -2,6 +2,20 @@
 
 > Final calls from the convening (product lead deciding, informed by the product team + 6 unicorn founders). Supersedes the open blockers in the Engineering Handoff §2.
 
+## ⚑ 2.8.0 fusion: cash-display engine × params/gaps engine (`model_version` 2.7.0-A + 2.7.0-B → 2.8.0 / `compute_schema_version` 1.7.0)
+
+**Call:** Two engines were independently stamped `2.7.0`. **2.7.0-A** (deployed to prod, epic #321) made the projection cash-based; **2.7.0-B** (this branch, never deployed — Wave-6 params/gaps close-out) added the 990 constants + monthly split + sensitivity/confidence surfacing. Rather than pick one, **fuse both** (owner-approved 2026-07-04, "fuse both, then deploy") into `model_version 2.8.0` / `compute_schema_version 1.7.0`.
+
+**Composition rules (the semantics of the fused engine):**
+- **Display layer = 2.7.0-A (cash-based).** Displayed Net income AND Net margin subtract the one-time Year-1 startup and are congruent (`cash_net[1] = operating_net[1] − startup_total`, `cash_net[y≥2] = operating_net[y]`, `net_margin[y] = cash_net[y] / total_rev[y]`); `monthly[]` spans the full 60-month horizon; payback = the first project-month cumulative cash ≥ 0 after going negative ("Month N"); the §12.2 net-margin guardrail runs on the DISPLAYED (cash) margin; the `.xlsx` Year-1 Net-income cell subtracts Total Startup Costs and payback rides the MILESTONES Month-N row.
+- **Operating layer = 2.7.0-B (params/gaps).** The internal operating net (unchanged) still drives the verdict (`_recommend` gates), `simple_payback`, sensitivity re-runs, and the monthly roll-up. The **Year-1 monthly window uses the 6.2 three-stream split** (fixed flat 1/12, payroll+taxes on the payroll ramp, %-of-revenue on the revenue S-curve); Years 2–5 uniform 1/12; every year rolls up to the penny. **Capital / break-even / first-year cash gap are Year-1-anchored on the 6.2 distribution.** The 990-grounded constants, the 6.3 advisory flags, `money_view` single-rounding-authority, exact lease-deposit arithmetic, and the conservative NNN resolved-occupancy reading all carry over.
+- **Consequences (re-derived expectations):** canonical capital **$347,853.76** / break-even **month 8** / **raise_cash** / cash Y1 net **($292,214)** / payback N/A; design-parity capital **$302,238.41** / break-even **month 6** / **raise_cash** / cash Y1 net **($199,995)** / payback **Month 32**; aggressive reco **revise** with the **>30% net-margin guardrail firing on Y4/Y5** (cash margin, since the Year-1 cash margin is dragged to ~8.9% by the startup) + the share (>8%) guardrail on Y1/Y4/Y5. Neither canonical nor design-parity reco changed from `raise_cash` (both operating-driven — no owner-visible verdict flip beyond the pre-fusion 2.7.0-B state).
+- **Versions:** `MODEL_VERSION = "2.8.0"`, `COMPUTE_SCHEMA_VERSION = "1.7.0"` (the union of A's cash surfaces + 60-row monthly + Month-N milestone × B's `sensitivity{base,downside,upside}` + `confidence{ramp}` + editable settings knobs). Stored 2.7.0 snapshots read verbatim with `upgrade_available`; recompute writes a NEW 2.8.0 revision.
+
+**Rationale:** Both engines' changes are real improvements that don't conflict at the layer boundary — cash accounting is a *display* concern, the 990 constants + monthly split are an *operating* concern. The one interaction (the §12.2 guardrail now reads the cash margin) shifts the aggressive fixture's flag-years but preserves its purpose (the flag still fires). All five goldens regenerated in one pass; the three-way LibreOffice recalc gate passes with and without overrides.
+
+---
+
 ## ⚑ 990-grounded constants: payroll tax 7.5% → 8.0%, Insurance liability $2,000 → $10,000/yr (`model_version` 2.7.0, Task 6.4)
 
 **Call:** Re-default two cost constants from real filings.
