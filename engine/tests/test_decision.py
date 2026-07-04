@@ -191,6 +191,46 @@ def test_sensitivity_default_unchanged():
         assert D(str(sens[scen]["capital"])) == D(str(cap)), scen
 
 
+# --------------------------- pins must NOT defeat the sensitivity stress (panel P0)
+def test_pinned_share_at_base_does_not_defeat_the_sensitivity_stress(canonical_inputs):
+    # A pin asserts a LEVEL, not immunity to the ± stress: pinning share#1 to its own
+    # computed base value (0.06) must leave the whole sensitivity dict byte-identical
+    # to the unpinned run. Pre-fix the pin froze the donation stress inside the
+    # scenario re-runs — the downside net came out -$74,433 instead of the correct
+    # -$100,850, making the downside artificially rosy (and able to flip the verdict).
+    inputs, a, demand, trade = canonical_inputs
+    unpinned = compute(inputs, a, demand, trade, overrides={}).decision.sensitivity
+    pin = {"share#1": {"value": "0.06", "note": "pinned to base",
+                       "ts": "2026-07-04T00:00:00Z"}}
+    pinned = compute(inputs, a, demand, trade, overrides=pin).decision.sensitivity
+    for scen in ("base", "downside", "upside"):
+        assert D(str(pinned[scen]["net"])) == D(str(unpinned[scen]["net"])), scen
+        assert pinned[scen]["breakeven"] == unpinned[scen]["breakeven"], scen
+        assert D(str(pinned[scen]["capital"])) == D(str(unpinned[scen]["capital"])), scen
+    # ...and the donation stress genuinely bites THROUGH the pin (not a vacuous pass):
+    # the downside donation shock still drives net below the base case.
+    assert D(str(pinned["downside"]["net"])) < D(str(pinned["base"]["net"]))
+
+
+def test_pinned_rent_at_base_still_takes_the_downside_rent_shock(canonical_inputs):
+    # Pinning Rent#1 to its base level ($120,000) must NOT shield the downside from the
+    # +25% rent shock: the pinned run's whole sensitivity dict must equal the unpinned
+    # run's (which stresses rent to $150,000). Pre-fix the rent pin froze the shock, so
+    # the downside capital came out $342,215 instead of the correct $371,850.
+    inputs, a, demand, trade = canonical_inputs
+    unpinned = compute(inputs, a, demand, trade, overrides={}).decision.sensitivity
+    pin = {"Rent#1": {"value": "120000", "note": "pinned to base",
+                      "ts": "2026-07-04T00:00:00Z"}}
+    pinned = compute(inputs, a, demand, trade, overrides=pin).decision.sensitivity
+    for scen in ("base", "downside", "upside"):
+        assert D(str(pinned[scen]["net"])) == D(str(unpinned[scen]["net"])), scen
+        assert pinned[scen]["breakeven"] == unpinned[scen]["breakeven"], scen
+        assert D(str(pinned[scen]["capital"])) == D(str(unpinned[scen]["capital"])), scen
+    # The +25% rent shock genuinely deepens the downside capital vs base (bites through
+    # the pin).
+    assert D(str(pinned["downside"]["capital"])) > D(str(pinned["base"]["capital"]))
+
+
 def test_reco_tag_is_semantic_enum(canonical_result):
     valid = {"proceed", "revise", "find_cheaper_rent", "raise_cash", "delay", "do_not_proceed"}
     assert canonical_result.decision.reco_tag in valid

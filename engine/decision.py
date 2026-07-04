@@ -35,6 +35,36 @@ class Decision:
     payback_month: int | None = None
 
 
+def _stress_overrides(overrides, rent_mult, donation_mult):
+    """A scenario-local copy of ``overrides`` with the stress applied to the pins.
+
+    A pin asserts a *level*, not immunity to the ± sensitivity stress. Inside a
+    scenario re-run a pinned ``share#y`` value is scaled by ``donation_mult`` and a
+    pinned ``Rent#y`` value by ``rent_mult`` — exactly the same multipliers the run
+    applies to the un-pinned share inputs and the resolved occupancy — so the pinned
+    cell moves WITH the stress instead of freezing it. Every other pin passes through
+    unchanged. Pre-fix the un-scaled pin defeated the stress: e.g. a ``share#1`` pin
+    held the donation shock at its base level, so the downside net came out
+    -$74,433 instead of -$100,850 and the downside was artificially rosy.
+
+    Keys are ``"{node}#{year}"``; ``rpartition('#')`` isolates the node (expense
+    labels never contain '#'). The pin dict is shallow-copied with only ``value``
+    replaced, preserving its note/timestamp metadata.
+    """
+    if not overrides:
+        return overrides
+    stressed = {}
+    for key, pin in overrides.items():
+        node = key.rpartition("#")[0]
+        if node == "share":
+            stressed[key] = {**pin, "value": str(D(pin["value"]) * D(str(donation_mult)))}
+        elif node == "Rent":
+            stressed[key] = {**pin, "value": str(D(pin["value"]) * D(str(rent_mult)))}
+        else:
+            stressed[key] = pin
+    return stressed
+
+
 def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, donation_mult):
     """Full re-run of the core with perturbed rent & donations -> (net, breakeven, capital).
 
@@ -46,6 +76,10 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
     projection silently skipped the +25% rent shock — making the downside artificially
     rosier and flipping the go/no-go verdict on identical economics. Resolving to one
     quantity here makes the stress encoding-independent by construction (§6.2).
+
+    Pinned ``share#y`` / ``Rent#y`` cells are stressed too (``_stress_overrides``): a
+    pin sets a level, not immunity to the scenario — otherwise a pin silently defeats
+    the downside/upside on the very cell it fixes.
     """
     from engine.compute import (
         Inputs,
@@ -72,8 +106,9 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
            "lease_type": "gross",
            "nnn_opex_annual": "0"}
     )
+    stressed_overrides = _stress_overrides(overrides, rent_mult, donation_mult)
     years, startup, startup_total, occupancy = compute_annual(
-        new_inputs, assumptions, demand, trade, overrides)
+        new_inputs, assumptions, demand, trade, stressed_overrides)
     startup_by_month = startup_outflows_by_month(new_inputs, assumptions, occupancy[1])
     rows, be = build_monthly(years[1], assumptions, new_inputs.opening_month_number,
                              startup_by_month)
