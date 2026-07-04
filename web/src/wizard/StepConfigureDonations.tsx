@@ -5,13 +5,22 @@
 // (a) confirm # households (Census-resolved count, pencil to edit),
 // (b) donor market share for each of the 5 years (compact NumberField unit="%"),
 // (c) $/donation (default $50, NumberField with decimals=2).
-// No basket or donations/yr fields here — those are detail KPIs (D11).
 // No client math — inputs only (PRD §13).
+//
+// Task 2.3 (Wave 2): an Advanced Options group ("Donation economics", the shared
+// paramGroups.ts "donation-econ" taxonomy entry, closed by default) surfaces the
+// average basket value (previously a dead field — now real), donations/household/yr,
+// and salvage % of retail.
 import { useState } from "react";
 
+import { AdvancedOptions } from "../components/AdvancedOptions";
 import { NumberField } from "../components/NumberField";
 import { formatCount } from "../format";
+import { groupsForStep } from "./paramGroups";
+import { advancedKey } from "./useWizardState";
 import type { WizardState } from "./useWizardState";
+
+const STEP_KEY = "configure-donations" as const;
 
 const BASES = ["city", "county"] as const;
 
@@ -25,8 +34,9 @@ const SHARES: ReadonlyArray<{ key: ShareKey; label: string; id: string }> = [
 ];
 
 export function StepConfigureDonations({ state }: { state: WizardState }) {
-  const { resolved, basis, householdsValue, householdsDisabled, householdsSource } = state;
+  const { draft, resolved, basis, householdsValue, householdsDisabled, householdsSource } = state;
   const [editingHouseholds, setEditingHouseholds] = useState(false);
+  const [donationEconGroup] = groupsForStep(STEP_KEY);
 
   const showHouseholdsInput = editingHouseholds || householdsValue == null;
 
@@ -156,6 +166,54 @@ export function StepConfigureDonations({ state }: { state: WizardState }) {
           aria-label="Dollars per donation"
         />
       </label>
+
+      <AdvancedOptions
+        label={donationEconGroup.label}
+        open={!!state.advancedOpen[advancedKey(STEP_KEY, donationEconGroup.id)]}
+        onToggle={(open) => state.toggleAdvanced(STEP_KEY, donationEconGroup.id, open)}
+      >
+        <label className="wizard__field" htmlFor="wizard-basket">
+          Average basket
+          <NumberField
+            id="wizard-basket"
+            value={draft.basket ?? null}
+            onChange={(v) => state.set("basket", v ?? 0)}
+            unit="$"
+            unitPosition="prefix"
+            decimals={2}
+            min={0}
+            aria-label="Average basket value in dollars"
+          />
+        </label>
+
+        <label className="wizard__field" htmlFor="wizard-donations-per-hh">
+          Donations per household
+          <NumberField
+            id="wizard-donations-per-hh"
+            value={draft.donationsPerHh ?? null}
+            onChange={(v) => state.set("donationsPerHh", v ?? 0)}
+            unit="/yr"
+            unitPosition="suffix"
+            decimals={0}
+            min={0}
+            aria-label="Donations per household per year"
+          />
+        </label>
+
+        <label className="wizard__field" htmlFor="wizard-salvage-pct">
+          Salvage
+          <NumberField
+            id="wizard-salvage-pct"
+            value={draft.salvagePct ?? null}
+            onChange={(v) => state.set("salvagePct", v ?? 0)}
+            unit="%"
+            unitPosition="suffix"
+            decimals={2}
+            min={0}
+            aria-label="Salvage percentage of retail"
+          />
+        </label>
+      </AdvancedOptions>
     </section>
   );
 }

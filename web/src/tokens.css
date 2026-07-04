@@ -1090,6 +1090,77 @@ body {
   color: var(--text-muted);
 }
 
+/* Source of funds (Wave 2 Task 2.4): ALWAYS-visible fieldset on startup-costs —
+ * modeled on .space-assumptions above (bordered group), but with NO computed
+ * total (NO-CLIENT-MATH, PRD §13 — the server sums after Generate). */
+.source-of-funds {
+  margin: 1rem 0 0;
+  padding: 0.75rem 1rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.source-of-funds > legend {
+  padding: 0 0.4rem;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text);
+}
+.source-of-funds__note {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+/* --- AdvancedOptions: shared controlled disclosure (Wave 2 Task 2.1) ---------
+ * Modeled on .assumption__sources above: a muted, compact <details> summary
+ * row. Shared by every wizard step's advanced group AND the Settings tab. */
+.advanced-options {
+  border-top: 1px solid var(--line);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+.advanced-options__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  list-style: none;
+}
+.advanced-options__summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-options__badge {
+  font-size: var(--text-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  border-radius: var(--radius);
+  padding: 0 var(--space-2);
+}
+
+.advanced-options__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+/* Honest mobile (≤560px): one column so dense controls don't crowd. */
+@media (max-width: 560px) {
+  .advanced-options__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* --- Settings & assumptions tab (SLICE 4) --- */
 /* Review-first on mobile-375: status banner above the slider controls. */
 .settings-tab {
@@ -2533,6 +2604,50 @@ body {
   }
 }
 
+/* A failed Generate (audit P0, Task 2.5): draft-preserving alert + Retry — never a
+   silent failure and never a navigate to /p/undefined/edit. */
+.wizard__generate-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.wizard__generate-error p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--error);
+}
+
+/* Resume-an-in-progress-draft banner (Task 2.6): shown when a non-default draft was
+   restored from localStorage on mount. Subtle highlight panel — Resume adopts the
+   saved inputs, Start fresh discards them. */
+.wizard__resume {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+  margin-bottom: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--brand-primary);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  font-size: var(--text-base);
+  color: var(--text);
+}
+.wizard__resume p {
+  margin: 0;
+}
+.wizard__resume-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 /* Make the current breadcrumb step prominent — the page's de-facto heading (#17). */
 .wizard-steps__item--current .wizard-steps__label,
 .wizard-steps__item--current .wizard-steps__btn {
@@ -2969,6 +3084,19 @@ body {
   font-size: var(--text-base);
   line-height: 1.45;
   color: var(--text-muted);
+}
+
+/* A failed submit (Task 2.5): the draft (title/description) stays intact, so this
+   alert plus the still-enabled Send button is the retry affordance. */
+.feedback-modal__error {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border-left: 3px solid var(--error);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-alt);
+  font-size: var(--text-base);
+  line-height: 1.45;
+  color: var(--error);
 }
 
 .feedback-modal__success p {
