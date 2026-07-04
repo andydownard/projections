@@ -1,277 +1,517 @@
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { CashflowChart } from "./CashflowChart";
-import type { MonthlyPoint, Milestones } from "../api/viewModel";
+import type { Milestones, MonthlyPoint } from "../api/viewModel";
 
-function pt(month: number, cum: number): MonthlyPoint {
-  const sv = (raw: number) => ({ raw, display: `$${raw}` });
-  return { month, revenue: sv(0), expenses: sv(0), net: sv(0), cumulativeCash: sv(cum) };
+const here = dirname(fileURLToPath(import.meta.url));
+
+// A server money value {raw, display} — display matches the server convention
+// (whole dollars, "$", parentheses for negatives) since the module renders it
+// verbatim (never re-derives it).
+function sv(raw: number) {
+  const abs = Math.abs(Math.round(raw));
+  const grouped = abs.toLocaleString("en-US");
+  return { raw, display: raw < 0 ? `($${grouped})` : `$${grouped}` };
 }
 
-const monthly: MonthlyPoint[] = [
-  pt(0, -200000),
-  pt(1, -150000),
-  pt(2, -50000),
-  pt(3, 10000),
-];
+function pt(month: number, revenue: number, expenses: number, net: number, cum: number): MonthlyPoint {
+  return {
+    month,
+    revenue: sv(revenue),
+    expenses: sv(expenses),
+    net: sv(net),
+    cumulativeCash: sv(cum),
+  };
+}
 
-// A months-1..N series (x-axis from month 1) with three distinct milestones.
-const monthlyV3: MonthlyPoint[] = [
-  pt(1, -50000),
-  pt(2, -120000),
-  pt(3, -150000),
-  pt(4, -90000),
-  pt(5, -20000),
-  pt(6, 30000),
-  pt(7, 90000),
-];
+// A full 60-month series with grand opening at month 1 (no pre-opening). A deep
+// startup trough early, break-even mid-year-1, recovering thereafter.
+function series60(): MonthlyPoint[] {
+  const pts: MonthlyPoint[] = [];
+  for (let m = 1; m <= 60; m++) {
+    // A cumulative curve that dips to a trough around month 4 then climbs.
+    const cum = m <= 4 ? -50000 * m : -200000 + (m - 4) * 8000;
+    const net = m === 1 ? -200000 : m <= 4 ? -50000 : 8000;
+    pts.push(pt(m, 20000 + m * 100, 25000, net, cum));
+  }
+  return pts;
+}
 
-const milestones: Milestones = {
-  grandOpening: { raw: 3, display: "Month 3" },
-  breakEven: { raw: 5, display: "Month 5" },
-  payback: { raw: 7, display: "Month 7", duration: "5 months" },
+const milestones60: Milestones = {
+  grandOpening: { raw: 1, display: "Month 1" },
+  breakEven: { raw: 29, display: "Month 29" },
+  payback: { raw: 45, display: "Month 45", duration: "44 months" },
 };
 
-describe("CashflowChart", () => {
-  it("renders an SVG cash-flow figure", () => {
-    render(<CashflowChart monthly={monthly} breakevenMonth={3} />);
+// A series whose grand opening is month 3 → months 1-2 are Pre-opening.
+function seriesPreopen(): MonthlyPoint[] {
+  const pts: MonthlyPoint[] = [];
+  for (let m = 1; m <= 27; m++) {
+    pts.push(pt(m, 10000, 12000, m < 3 ? -30000 : -2000, -30000 * Math.min(m, 3) - m * 100));
+  }
+  return pts;
+}
+const milestonesPreopen: Milestones = {
+  grandOpening: { raw: 3, display: "Month 3" },
+  breakEven: { raw: 10, display: "Month 10" },
+  payback: { raw: 22, display: "Month 22", duration: "20 months" },
+};
+
+// A legacy 2.6.0-era snapshot: 12 monthly rows, NO milestones block.
+function legacy12(): MonthlyPoint[] {
+  const pts: MonthlyPoint[] = [];
+  for (let m = 1; m <= 12; m++) pts.push(pt(m, 1000 * m, 500 * m, 500 * m, 500 * m));
+  return pts;
+}
+
+describe("CashflowChart module", () => {
+  it("renders the 'Cash flow' module with a CSV export link (href + download)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} viewSlug="abc123" />);
+    expect(screen.getByTestId("cashflow-module")).toHaveAttribute("aria-label", "Cash flow");
+    expect(screen.getByRole("heading", { level: 2, name: "Cash flow" })).toBeInTheDocument();
+    const csv = screen.getByTestId("cashflow-export");
+    expect(csv).toHaveAttribute("href", "/api/projections/abc123/cashflow.csv");
+    expect(csv).toHaveAttribute("download");
+  });
+
+  it("omits the CSV link when no viewSlug is available", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    expect(screen.queryByTestId("cashflow-export")).not.toBeInTheDocument();
+  });
+
+  it("renders an SVG cash-flow figure with role=img and a headline aria-label", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
     expect(screen.getByTestId("cashflow-chart")).toBeInTheDocument();
-  });
-
-  it("marks the break-even month", () => {
-    render(<CashflowChart monthly={monthly} breakevenMonth={3} />);
-    expect(screen.getByTestId("breakeven-marker")).toBeInTheDocument();
-  });
-
-  it("does not pin a fixed pixel height — follows the viewBox aspect so phones don't letterbox [#196]", () => {
-    const { container } = render(<CashflowChart monthly={monthly} breakevenMonth={3} />);
     const svg = container.querySelector("svg")!;
-    expect(svg.getAttribute("height")).not.toBe("240");
-    expect(svg).toHaveAttribute("width", "100%");
-    expect(svg).toHaveAttribute("viewBox", "0 0 660 240");
+    expect(svg).toHaveAttribute("role", "img");
+    expect(svg.getAttribute("aria-label")).toMatch(/table below/i);
   });
 
-  it("omits the marker when break-even never occurs", () => {
-    render(<CashflowChart monthly={monthly} breakevenMonth={null} />);
-    expect(screen.queryByTestId("breakeven-marker")).not.toBeInTheDocument();
-  });
-
-  // D3: only Grand Opening + Break-even are labeled ON the chart; Payback is NOT
-  // drawn on the plot (it lives in the header metric bar + the sr-only summary).
-  it("marks ONLY Grand Opening + Break-even on the chart (Payback is not on-plot, D3)", () => {
-    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
-    expect(screen.getByTestId("grandopening-marker")).toBeInTheDocument();
-    expect(screen.getByTestId("breakeven-marker")).toBeInTheDocument();
-    expect(screen.queryByTestId("payback-marker")).not.toBeInTheDocument();
-  });
-
-  // D3: the on-chart labels use SHORT leader lines, never a full vertical line that
-  // runs through the label text and across the plot.
-  it("labels Grand Opening + Break-even ON the chart with short leader lines (no full vertical line, D3)", () => {
+  it("draws one net bar per month across the full 60-month horizon (dual-axis, not a slice)", () => {
     const { container } = render(
-      <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
     );
-    const onChart = Array.from(container.querySelectorAll(".cashflow-chart__milestone-label")).map(
+    expect(container.querySelectorAll(".cashflow-chart__bar")).toHaveLength(60);
+    expect(container.querySelector(".cashflow-chart__line")).toBeInTheDocument();
+  });
+
+  it("signs the net bars: positive bars are base, negative bars carry --neg", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    // Month 1 net is a deep loss → a --neg bar exists; later months are positive.
+    expect(container.querySelectorAll(".cashflow-chart__bar--neg").length).toBeGreaterThan(0);
+    const positive = container.querySelectorAll(".cashflow-chart__bar:not(.cashflow-chart__bar--neg)");
+    expect(positive.length).toBeGreaterThan(0);
+  });
+
+  it("labels the right (cumulative) axis with nice-number $ ticks incl. $0", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const right = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--right")).map(
       (t) => t.textContent,
     );
-    expect(onChart.some((t) => t?.includes("Grand Opening") && t.includes("Month 3"))).toBe(true);
-    expect(onChart.some((t) => t?.includes("Break-even") && t.includes("Month 5"))).toBe(true);
-    expect(onChart.some((t) => t?.includes("Payback"))).toBe(false);
-    // The old full-height vertical milestone line is gone; only short leaders remain.
-    expect(container.querySelector(".cashflow-chart__milestone-line")).toBeNull();
-    expect(container.querySelectorAll(".cashflow-chart__milestone-leader").length).toBe(2);
+    expect(right).toContain("$0");
+    // A client-derived nice number (e.g. ($200,000)/($100,000)) — parenthesized neg.
+    expect(right.some((t) => /^\(\$[\d,]+\)$/.test(t ?? ""))).toBe(true);
   });
 
-  it("removes the separate visible milestone legend LIST (#40)", () => {
-    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
-    expect(screen.queryByTestId("chart-milestones")).not.toBeInTheDocument();
-  });
-
-  it("renders the series legend (Cumulative cash + Net) on the left", () => {
-    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
-    const legend = screen.getByTestId("cashflow-legend");
-    expect(legend).toHaveTextContent("Cumulative cash");
-    expect(legend).toHaveTextContent("Net");
-  });
-
-  it("labels the left y-axis in $ with gridline ticks (server display strings)", () => {
+  it("anchors both axes' $0 on the same pixel row (shared-zero)", () => {
     const { container } = render(
-      <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
     );
-    expect(screen.getByTestId("cashflow-axis-label")).toHaveTextContent("$");
-    const ticks = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick")).map(
+    const zeroRight = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--right")).find(
+      (t) => t.textContent === "$0",
+    );
+    const zeroLeft = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--left")).find(
+      (t) => t.textContent === "$0",
+    );
+    expect(zeroRight).toBeTruthy();
+    expect(zeroLeft).toBeTruthy();
+    expect(zeroRight!.getAttribute("y")).toBe(zeroLeft!.getAttribute("y"));
+  });
+
+  it("replaces the standalone legend with two axis titles (net + cumulative)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    // The old legend LIST is gone.
+    expect(screen.queryByTestId("cashflow-legend")).not.toBeInTheDocument();
+    const svg = screen.getByTestId("cashflow-chart").querySelector("svg")!;
+    expect(svg.textContent).toMatch(/Monthly net/);
+    expect(svg.textContent).toMatch(/Cumulative cash/);
+  });
+
+  it("draws year dividers + Year labels across the horizon", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    expect(container.querySelectorAll(".cashflow-chart__year-divider").length).toBeGreaterThan(0);
+    const labels = Array.from(container.querySelectorAll(".cashflow-chart__year-label")).map(
       (t) => t.textContent,
     );
-    // The $0 baseline tick is always present (a constant, not a re-derived figure).
-    expect(ticks).toContain("$0");
+    expect(labels).toContain("Year 1");
+    expect(labels).toContain("Year 5");
   });
 
-  it("provides an sr-only milestone summary as the keyboard/SR text alternative", () => {
-    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
-    const sr = screen.getByTestId("chart-milestones-sr");
-    expect(sr).toHaveTextContent("Grand Opening");
-    expect(sr).toHaveTextContent("Month 5");
-    expect(sr).toHaveTextContent("Payback");
-  });
-
-  // D4: the SVG no longer carries x-axis month ticks; months are labeled ONCE in the
-  // monthly table (so they are never double-labeled). #320 transposes the table so the
-  // months are abbreviated "M N" ROW headers and the dense table stays compact.
-  it("removes the x-axis month ticks from the SVG and labels months once as 'M N' table rows (D4 / #320)", () => {
+  it("draws a pre-opening band + caption when grand opening is after month 1", () => {
     const { container } = render(
-      <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
+      <CashflowChart monthly={seriesPreopen()} breakevenMonth={10} milestones={milestonesPreopen} />,
     );
-    expect(container.querySelectorAll(".cashflow-chart__tick").length).toBe(0);
+    expect(container.querySelector(".cashflow-chart__preopen-band")).toBeInTheDocument();
+    expect(container.textContent).toMatch(/Pre-opening/);
+  });
+
+  // ── the grouped table ──────────────────────────────────────────────────────
+  it("renders ONE table with the five month columns and a <tbody> per year group", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
     const table = screen.getByTestId("cashflow-table");
-    expect(within(table).getByRole("rowheader", { name: /^M1\b/ })).toBeInTheDocument();
+    expect(table.tagName).toBe("TABLE");
+    const cols = within(table).getAllByRole("columnheader").map((h) => h.textContent);
+    expect(cols).toEqual(["Month", "Revenue", "Expenses", "Net", "Cumulative cash"]);
+    // Five operating-year groups (opening month 1 → no pre-opening).
+    expect(table.querySelectorAll("tbody.cashflow-table__group").length).toBe(5);
   });
 
-  // D5: the bottom "Cash low point … · Break-even …" figcaption is removed.
-  it("removes the bottom cash-low-point / break-even figcaption (D5)", () => {
-    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
-    expect(screen.queryByText(/cash low point/i)).not.toBeInTheDocument();
+  it("gives each group a native <button aria-expanded> toggle", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    const toggle = screen.getByTestId("cashflow-group-toggle-year-1");
+    expect(toggle.tagName).toBe("BUTTON");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-controls");
   });
 
-  // D2: the chart's accessible description no longer names a "cash low point".
-  it("does not name a 'cash low point' / 'low point' in the SVG accessible label (D2)", () => {
+  it("shows the group's ending cash (last-month cumulative, verbatim server display)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    const toggle = screen.getByTestId("cashflow-group-toggle-year-1");
+    // Year 1 = months 1..12; ending cash = month 12 cumulative display.
+    const y1EndingRaw = series60().find((m) => m.month === 12)!.cumulativeCash.display;
+    expect(toggle.textContent).toContain("Ending cash");
+    expect(toggle.textContent).toContain(y1EndingRaw);
+  });
+
+  it("expands Pre-opening + Year 1 by default and collapses Years 2-5", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    // Year-1 month rows are visible (not hidden).
+    expect(screen.getByTestId("cashflow-month-1")).not.toHaveAttribute("hidden");
+    expect(screen.getByTestId("cashflow-month-12")).not.toHaveAttribute("hidden");
+    // Year-2 month row is present in the DOM but hidden.
+    expect(screen.getByTestId("cashflow-month-13")).toHaveAttribute("hidden");
+    expect(screen.getByTestId("cashflow-group-toggle-year-2")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("also auto-expands the group containing break-even when it falls outside Year 1", () => {
+    // break-even month 29 → Year 3 (months 25..36). It must start expanded.
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    expect(screen.getByTestId("cashflow-group-toggle-year-3")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("cashflow-month-29")).not.toHaveAttribute("hidden");
+  });
+
+  it("toggles a collapsed group open on click (aria-expanded flips, rows un-hide)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    const toggle = screen.getByTestId("cashflow-group-toggle-year-2");
+    expect(screen.getByTestId("cashflow-month-13")).toHaveAttribute("hidden");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("cashflow-month-13")).not.toHaveAttribute("hidden");
+  });
+
+  it("flags the break-even and payback month rows (icon + sr-only label)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    // Break-even row (month 29, Year 3 — expanded by the auto-expand rule).
+    const be = screen.getByTestId("cashflow-month-29");
+    expect(be.textContent).toMatch(/break-even/i);
+    // Payback row (month 45, Year 4 — expand it first, then assert the flag).
+    fireEvent.click(screen.getByTestId("cashflow-group-toggle-year-4"));
+    expect(screen.getByTestId("cashflow-month-45").textContent).toMatch(/payback/i);
+  });
+
+  it("flags the grand-opening month row", () => {
+    render(<CashflowChart monthly={seriesPreopen()} breakevenMonth={10} milestones={milestonesPreopen} />);
+    expect(screen.getByTestId("cashflow-month-3")).toHaveAttribute("data-grand-opening", "true");
+    expect(screen.getByTestId("cashflow-month-4")).not.toHaveAttribute("data-grand-opening");
+  });
+
+  // ── bidirectional hover / focus linking ────────────────────────────────────
+  it("hovering a visible table row highlights it AND shows the chart point (row→chart)", () => {
     const { container } = render(
-      <CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />,
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
     );
-    const svg = container.querySelector("svg")!;
-    expect(svg.getAttribute("aria-label")).not.toMatch(/low point/i);
+    const row = screen.getByTestId("cashflow-month-2"); // Year 1, visible
+    expect(container.querySelector(".cashflow-chart__point")).toBeNull();
+    fireEvent.mouseEnter(row);
+    expect(row).toHaveClass("cashflow-table__row--active");
+    expect(container.querySelector(".cashflow-chart__point")).toBeInTheDocument();
+    expect(container.querySelector(".cashflow-chart__crosshair")).toBeInTheDocument();
   });
 
-  it("renders an unreached milestone as N/A with reason in the sr summary, never a 0 marker", () => {
+  it("has a keyboard scrubber (role=slider) that moves the active month (chart→row)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    const slider = screen.getByRole("slider");
+    expect(slider).toHaveAttribute("aria-valuemin", "1");
+    expect(slider).toHaveAttribute("aria-valuemax", "60");
+    slider.focus();
+    fireEvent.keyDown(slider, { key: "Home" }); // month 1
+    expect(slider).toHaveAttribute("aria-valuenow", "1");
+    expect(screen.getByTestId("cashflow-month-1")).toHaveClass("cashflow-table__row--active");
+    expect(slider.getAttribute("aria-valuetext")).toMatch(/Month 1/);
+    fireEvent.keyDown(slider, { key: "ArrowRight" }); // month 2
+    expect(slider).toHaveAttribute("aria-valuenow", "2");
+  });
+
+  it("auto-expands + reveals the landed month's group when the scrubber lands in a collapsed group", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    const slider = screen.getByRole("slider");
+    // Year 5 (months 49-60) starts collapsed; End lands on month 60.
+    expect(screen.getByTestId("cashflow-month-60")).toHaveAttribute("hidden");
+    slider.focus();
+    fireEvent.keyDown(slider, { key: "End" });
+    expect(slider).toHaveAttribute("aria-valuenow", "60");
+    expect(screen.getByTestId("cashflow-month-60")).not.toHaveAttribute("hidden");
+    expect(screen.getByTestId("cashflow-group-toggle-year-5")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // ── a11y text alternative ──────────────────────────────────────────────────
+  it("provides an sr-only milestone summary incl. an unreached milestone's N/A reason", () => {
     const naMilestones: Milestones = {
-      grandOpening: { raw: 3, display: "Month 3" },
-      breakEven: { raw: 5, display: "Month 5" },
+      grandOpening: { raw: 1, display: "Month 1" },
+      breakEven: { raw: 29, display: "Month 29" },
       payback: {
         raw: null,
         display: "N/A",
         reason: "N/A — startup costs are not recovered within the projection horizon",
       },
     };
-    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={naMilestones} />);
-    // No phantom marker drawn at month 0 / position 0.
-    expect(screen.queryByTestId("payback-marker")).not.toBeInTheDocument();
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={naMilestones} />);
     const sr = screen.getByTestId("chart-milestones-sr");
-    expect(sr).toHaveTextContent("N/A");
+    expect(sr).toHaveTextContent("Grand Opening");
+    expect(sr).toHaveTextContent("Break-even");
     expect(sr).toHaveTextContent("startup costs are not recovered");
   });
 
-  // #320: engine 2.7.0 emits the full 60-month horizon. The TABLE must show ONLY the
-  // first project year (months up to grand opening + 11) so 61 columns don't crush to
-  // ~12px and force heavy horizontal scroll; the CHART keeps the full series.
-  function series60(): MonthlyPoint[] {
-    const sv = (raw: number) => ({ raw, display: `$${raw.toLocaleString()}` });
-    const pts: MonthlyPoint[] = [];
-    for (let m = 1; m <= 60; m++) {
-      // A V-shaped cash curve whose GLOBAL trough sits at month 30, well past the
-      // year-1 table cut, so the chart provably reads the FULL series, not the slice.
-      const cum = m <= 30 ? -1000 * m : -30000 + (m - 30) * 2000;
-      pts.push({
-        month: m,
-        revenue: sv(100 * m),
-        expenses: sv(-50 * m),
-        net: sv(50 * m),
-        cumulativeCash: sv(cum),
-      });
-    }
-    return pts;
-  }
-
-  const milestones60: Milestones = {
-    grandOpening: { raw: 2, display: "Month 2" }, // year-1 cut = 2 + 11 = month 13
-    breakEven: { raw: 6, display: "Month 6" },
-    payback: { raw: 45, display: "Month 45", duration: "44 months" },
-  };
-
-  // #320: the table is transposed to months-as-ROWS (line items are the columns), so
-  // "only the first year" means only the first-year MONTH ROWS render (not all 60),
-  // while the chart keeps the full series. Month rows are <th scope="row"> "M N".
-  const monthRows = (table: HTMLElement) =>
-    within(table)
-      .getAllByRole("rowheader")
-      .map((h) => (h.textContent ?? "").replace(/\s*\(grand opening\)\s*/, "").trim())
-      .filter((t) => /^M\d+/.test(t));
-
-  it("shows ONLY the first project year (months 1..opening+11) as table rows, not all 60 [#320]", () => {
-    render(<CashflowChart monthly={series60()} breakevenMonth={6} milestones={milestones60} />);
-    const table = screen.getByTestId("cashflow-table");
-    const rows = monthRows(table);
-    // grand opening month 2 → first year = months 1..13 → 13 month rows, not 60.
-    expect(rows).toHaveLength(13);
-    expect(rows[0]).toMatch(/^M1\b/);
-    expect(rows[rows.length - 1]).toMatch(/^M13\b/);
-    expect(table.querySelector('[data-testid="cashflow-month-14"]')).toBeNull();
-    expect(table.querySelector('[data-testid="cashflow-month-60"]')).toBeNull();
-    // The four line items are the COLUMNS now.
-    const cols = within(table)
-      .getAllByRole("columnheader")
-      .map((h) => h.textContent);
-    expect(cols).toEqual(["Month", "Revenue", "Expenses", "Net", "Cumulative cash"]);
-  });
-
-  it("keeps the FULL 60-month series in the chart even though the table is sliced to year 1 [#320]", () => {
-    const { container } = render(
-      <CashflowChart monthly={series60()} breakevenMonth={6} milestones={milestones60} />,
-    );
-    // One net bar per month across the whole horizon = 60 (the table shows only 13).
-    expect(container.querySelectorAll(".cashflow-chart__bar")).toHaveLength(60);
-    // The chart's lowest cash balance is the month-30 trough, only reachable if the
-    // chart reads the full series, not the year-1 slice.
-    const svg = container.querySelector("svg")!;
-    expect(svg.getAttribute("aria-label")).toMatch(/month 30/);
-  });
-
-  it("flags the grand-opening month row when it falls in the shown range [#320]", () => {
-    render(<CashflowChart monthly={series60()} breakevenMonth={6} milestones={milestones60} />);
-    const row = screen.getByTestId("cashflow-month-2"); // grand opening = month 2
-    expect(row).toHaveAttribute("data-grand-opening", "true");
-    expect(screen.getByTestId("cashflow-month-1")).not.toHaveAttribute("data-grand-opening");
-  });
-
-  it("falls back to the first 13 months when no milestones carry the opening month [#320]", () => {
-    render(<CashflowChart monthly={series60()} breakevenMonth={6} />);
-    const rows = monthRows(screen.getByTestId("cashflow-table"));
-    expect(rows).toHaveLength(13);
-    expect(rows[rows.length - 1]).toMatch(/^M13\b/);
-  });
-
-  it("notes that only year 1 is shown and points to the chart for the full horizon [#320]", () => {
-    render(<CashflowChart monthly={series60()} breakevenMonth={6} milestones={milestones60} />);
-    const note = screen.getByTestId("cashflow-year1-note");
-    expect(note).toHaveTextContent("Showing year 1 (months 1 to 13)");
-    expect(note).toHaveTextContent("Month 45"); // payback, server display string
-  });
-
-  it("does NOT show the year-1 note when the whole series already fits in year 1 [#320]", () => {
-    // monthlyV3 is 7 months, all within the year-1 cut → nothing is hidden.
-    render(<CashflowChart monthly={monthlyV3} breakevenMonth={5} milestones={milestones} />);
-    expect(screen.queryByTestId("cashflow-year1-note")).not.toBeInTheDocument();
-  });
-
-  it("colors negative cells in the monthly data table — loss color paired with the server parentheses [#148]", () => {
-    const loss: MonthlyPoint = {
-      month: 0,
-      revenue: { raw: 0, display: "$0" },
-      expenses: { raw: -31870, display: "($31,870)" },
-      net: { raw: -14793, display: "($14,793)" },
-      cumulativeCash: { raw: -199793, display: "($199,793)" },
-    };
-    const gain: MonthlyPoint = {
-      month: 1,
-      revenue: { raw: 20000, display: "$20,000" },
-      expenses: { raw: -10000, display: "($10,000)" },
-      net: { raw: 10000, display: "$10,000" },
-      cumulativeCash: { raw: 5000, display: "$5,000" },
-    };
-    render(<CashflowChart monthly={[loss, gain]} breakevenMonth={1} />);
+  it("colors negative table cells via the server parentheses display (never color alone) [#148]", () => {
+    const rows: MonthlyPoint[] = [pt(1, 0, 31870, -14793, -199793), pt(2, 20000, 10000, 10000, 5000)];
+    render(<CashflowChart monthly={rows} breakevenMonth={2} />);
     const table = screen.getByTestId("cashflow-table");
     expect(within(table).getByText("($14,793)")).toHaveAttribute("data-negative", "true");
-    expect(within(table).getByText("($199,793)")).toHaveAttribute("data-negative", "true");
     expect(within(table).getByText("$20,000")).not.toHaveAttribute("data-negative");
-    expect(within(table).getByText("$10,000")).not.toHaveAttribute("data-negative");
+  });
+
+  // ── legacy degradation ─────────────────────────────────────────────────────
+  it("renders a legacy 12-row snapshot with no milestones (G=1 fallback, one Year 1 group)", () => {
+    render(<CashflowChart monthly={legacy12()} breakevenMonth={null} />);
+    const table = screen.getByTestId("cashflow-table");
+    // No milestones → G=1 → all 12 months in a single Year 1 group.
+    expect(table.querySelectorAll("tbody.cashflow-table__group").length).toBe(1);
+    expect(screen.getByTestId("cashflow-group-toggle-year-1")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("cashflow-month-1")).toBeInTheDocument();
+    expect(screen.getByTestId("cashflow-month-12")).toBeInTheDocument();
+  });
+
+  it("renders nothing but an empty-state caption when there is no monthly data", () => {
+    render(<CashflowChart monthly={[]} breakevenMonth={null} />);
+    expect(screen.getByTestId("cashflow-chart")).toBeInTheDocument();
+    expect(screen.getByText(/no monthly cash-flow data/i)).toBeInTheDocument();
+  });
+});
+
+// ── review C1: the shared-zero pass must stay NON-DEGENERATE when a series is
+// one-signed. On the CANONICAL 60%-labor default (payback N/A → cumulative never
+// reaches $0 → cum.max === 0) the unguarded pass yielded zeroFrac=1 → zeroY=padT
+// → sNet=0: all 60 net bars collapsed to the 0.5px floor and every left-axis
+// label stacked on one y. Pinned to the REAL golden fixture, not a synthetic. ──
+describe("shared-zero degenerate guard (review C1)", () => {
+  const golden = JSON.parse(
+    readFileSync(
+      join(here, "..", "..", "..", "engine", "tests", "golden", "house_of_hope_canonical_60.json"),
+      "utf8",
+    ),
+  ) as { monthly: MonthlyPoint[]; breakevenMonth: number | null; milestones: Milestones };
+
+  it("canonical 60%-labor golden: net bars are visible and VARY; left tick ys are distinct", () => {
+    const { container } = render(
+      <CashflowChart
+        monthly={golden.monthly}
+        breakevenMonth={golden.breakevenMonth}
+        milestones={golden.milestones}
+      />,
+    );
+    const heights = Array.from(container.querySelectorAll(".cashflow-chart__bar")).map((b) =>
+      parseFloat(b.getAttribute("height") ?? "0"),
+    );
+    expect(heights).toHaveLength(60);
+    // The bars must not all sit at the 0.5px degenerate floor: they vary, and the
+    // deep month-1 loss bar is tall.
+    expect(new Set(heights.map((h) => h.toFixed(1))).size).toBeGreaterThan(1);
+    expect(Math.max(...heights)).toBeGreaterThan(20);
+    // Left (net) axis tick labels render on DISTINCT rows, never stacked.
+    const leftYs = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--left")).map(
+      (t) => t.getAttribute("y"),
+    );
+    expect(leftYs.length).toBeGreaterThan(1);
+    expect(new Set(leftYs).size).toBe(leftYs.length);
+    // The shared-$0 property is PRESERVED: both axes' $0 on the same pixel row.
+    const zeroY = (sel: string) =>
+      Array.from(container.querySelectorAll(sel))
+        .find((t) => t.textContent === "$0")!
+        .getAttribute("y");
+    expect(zeroY(".cashflow-chart__axis-tick--right")).toBe(zeroY(".cashflow-chart__axis-tick--left"));
+  });
+
+  it("mirror case: both series entirely non-negative stays well-formed (bars vary, ticks distinct, $0 on both axes)", () => {
+    // A profitable-from-day-1 shape: every net >= 0, cumulative never below 0
+    // (min === 0 on both domains — the zeroFrac=0 mirror of the C1 case).
+    const pts: MonthlyPoint[] = [];
+    let cum = 0;
+    for (let m = 1; m <= 24; m++) {
+      const net = 1000 * m;
+      cum += net;
+      pts.push(pt(m, 2000 * m, 1000 * m, net, cum));
+    }
+    const { container } = render(<CashflowChart monthly={pts} breakevenMonth={1} />);
+    const heights = Array.from(container.querySelectorAll(".cashflow-chart__bar")).map((b) =>
+      parseFloat(b.getAttribute("height") ?? "0"),
+    );
+    expect(new Set(heights.map((h) => h.toFixed(1))).size).toBeGreaterThan(1);
+    expect(Math.max(...heights)).toBeGreaterThan(20);
+    const leftYs = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--left")).map(
+      (t) => t.getAttribute("y"),
+    );
+    expect(new Set(leftYs).size).toBe(leftYs.length);
+    const rightTicks = Array.from(
+      container.querySelectorAll(".cashflow-chart__axis-tick--right"),
+    ).map((t) => t.textContent);
+    expect(rightTicks).toContain("$0");
+  });
+});
+
+// ── review C2 + I1: plot→row pointer hover and tap/click-to-pin. The scrubber
+// rect is the single pointer surface (the whole month band = the ≥24px hit
+// target). jsdom has no layout, so the rect's box is mocked. ──
+function mockScrubberRect(scrubber: Element) {
+  vi.spyOn(scrubber, "getBoundingClientRect").mockReturnValue({
+    left: 0,
+    top: 0,
+    x: 0,
+    y: 0,
+    width: 600,
+    height: 228,
+    right: 600,
+    bottom: 228,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+// The mocked plot is 600px wide over 60 months → each band 10px; band center of
+// month m is at (m - 0.5) * 10.
+const bandX = (month: number) => (month - 0.5) * 10;
+
+describe("plot→row pointer hover (review C2)", () => {
+  function setup() {
+    const utils = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const scrubber = screen.getByTestId("cashflow-scrubber");
+    mockScrubberRect(scrubber);
+    return { ...utils, scrubber };
+  }
+
+  it("mousemove over a month band highlights that month's table row + crosshair + point + tooltip", () => {
+    const { container, scrubber } = setup();
+    fireEvent.mouseMove(scrubber, { clientX: bandX(2) });
+    expect(screen.getByTestId("cashflow-month-2")).toHaveClass("cashflow-table__row--active");
+    expect(container.querySelector(".cashflow-chart__crosshair")).toBeInTheDocument();
+    expect(container.querySelector(".cashflow-chart__point")).toBeInTheDocument();
+    expect(screen.getByTestId("cashflow-tooltip")).toBeInTheDocument();
+  });
+
+  it("moving to another band moves the linked highlight", () => {
+    const { scrubber } = setup();
+    fireEvent.mouseMove(scrubber, { clientX: bandX(2) });
+    fireEvent.mouseMove(scrubber, { clientX: bandX(5) });
+    expect(screen.getByTestId("cashflow-month-5")).toHaveClass("cashflow-table__row--active");
+    expect(screen.getByTestId("cashflow-month-2")).not.toHaveClass("cashflow-table__row--active");
+  });
+
+  it("mouseleave clears the transient hover (no pin)", () => {
+    const { container, scrubber } = setup();
+    fireEvent.mouseMove(scrubber, { clientX: bandX(2) });
+    fireEvent.mouseLeave(scrubber);
+    expect(container.querySelector(".cashflow-chart__point")).toBeNull();
+    expect(screen.queryByTestId("cashflow-tooltip")).not.toBeInTheDocument();
+  });
+
+  it("passive hover over a collapsed group does NOT auto-expand it — tooltip still shows (spec §5)", () => {
+    const { scrubber } = setup();
+    // Month 20 lives in Year 2 (months 13-24), which starts collapsed.
+    fireEvent.mouseMove(scrubber, { clientX: bandX(20) });
+    expect(screen.getByTestId("cashflow-group-toggle-year-2")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.getByTestId("cashflow-month-20")).toHaveAttribute("hidden");
+    expect(screen.getByTestId("cashflow-tooltip")).toBeInTheDocument();
+  });
+});
+
+describe("tap/click-to-pin (review I1, spec §5 touch)", () => {
+  function setup() {
+    const utils = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const scrubber = screen.getByTestId("cashflow-scrubber");
+    mockScrubberRect(scrubber);
+    return { ...utils, scrubber };
+  }
+
+  it("click pins the month: highlight + tooltip survive pointer leave; a second click unpins", () => {
+    const { container, scrubber } = setup();
+    fireEvent.click(scrubber, { clientX: bandX(3) });
+    expect(screen.getByTestId("cashflow-month-3")).toHaveClass("cashflow-table__row--active");
+    fireEvent.mouseLeave(scrubber);
+    // Pinned: the readout persists after the pointer leaves.
+    expect(screen.getByTestId("cashflow-month-3")).toHaveClass("cashflow-table__row--active");
+    expect(screen.getByTestId("cashflow-tooltip")).toBeInTheDocument();
+    // Second tap on the same month unpins and dismisses.
+    fireEvent.click(scrubber, { clientX: bandX(3) });
+    expect(screen.queryByTestId("cashflow-tooltip")).not.toBeInTheDocument();
+    expect(container.querySelector(".cashflow-chart__point")).toBeNull();
+  });
+
+  it("tapping another month MOVES the pin", () => {
+    const { scrubber } = setup();
+    fireEvent.click(scrubber, { clientX: bandX(3) });
+    fireEvent.click(scrubber, { clientX: bandX(7) });
+    fireEvent.mouseLeave(scrubber);
+    expect(screen.getByTestId("cashflow-month-7")).toHaveClass("cashflow-table__row--active");
+    expect(screen.getByTestId("cashflow-month-3")).not.toHaveClass("cashflow-table__row--active");
+  });
+
+  it("tapping a month in a collapsed group auto-expands it (deliberate navigation, spec §5)", () => {
+    const { scrubber } = setup();
+    expect(screen.getByTestId("cashflow-month-20")).toHaveAttribute("hidden");
+    fireEvent.click(scrubber, { clientX: bandX(20) });
+    expect(screen.getByTestId("cashflow-group-toggle-year-2")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByTestId("cashflow-month-20")).not.toHaveAttribute("hidden");
+    expect(screen.getByTestId("cashflow-month-20")).toHaveClass("cashflow-table__row--active");
+  });
+
+  it("tapping a table row pins that month (row-side tap parity)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    const row = screen.getByTestId("cashflow-month-4");
+    fireEvent.click(row);
+    fireEvent.mouseLeave(row);
+    // Pinned via the row: the highlight persists after the pointer leaves.
+    expect(row).toHaveClass("cashflow-table__row--active");
+    fireEvent.click(row); // second tap unpins
+    expect(row).not.toHaveClass("cashflow-table__row--active");
   });
 });

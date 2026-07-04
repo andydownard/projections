@@ -237,6 +237,13 @@ export function xlsxHref(viewSlug: string): string {
   return `${BASE}/projections/${encodeURIComponent(viewSlug)}/xlsx`;
 }
 
+/** Absolute URL to the monthly cash-flow CSV export (a plain anchor href). Like
+ *  {@link xlsxHref} the GET is reachable with the slug alone (terms stamped at
+ *  create), so this is a plain download link — no auth header in the URL. */
+export function cashflowCsvHref(viewSlug: string): string {
+  return `${BASE}/projections/${encodeURIComponent(viewSlug)}/cashflow.csv`;
+}
+
 /** Absolute URL to the board-packet .docx export (a plain anchor href). The GET
  *  packet endpoint is reachable with the slug alone (terms already stamped at
  *  create), so this is a plain download link — no auth header in the URL. */

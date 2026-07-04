@@ -162,12 +162,14 @@ export function ProjectionTab({
         </div>
       </section>
 
-      {/* First-year cash-flow detail. The chart's months align to the monthly
-          table's columns (see CashflowChart). */}
-      <section className="projection-tab__cashflow" aria-label="First-year cash flow">
-        <h2 className="projection-tab__heading">First-year cash flow</h2>
-        <CashflowChart monthly={monthly} breakevenMonth={breakevenMonth} milestones={vm.milestones} />
-      </section>
+      {/* Cash-flow module (redesign 2026-07-04): the module owns its own section,
+          "Cash flow" heading, CSV export, dual-axis chart + year-grouped table. */}
+      <CashflowChart
+        monthly={monthly}
+        breakevenMonth={breakevenMonth}
+        milestones={vm.milestones}
+        viewSlug={vm.view_slug}
+      />
     </div>
   );
 }

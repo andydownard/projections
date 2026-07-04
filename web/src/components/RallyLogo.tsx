@@ -18,8 +18,6 @@ export function RallyLogo({ className }: RallyLogoProps) {
   return (
     <svg
       className={className}
-      width="28"
-      height="16"
       viewBox="0 0 254.22 144"
       aria-hidden="true"
       focusable="false"
