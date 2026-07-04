@@ -728,6 +728,222 @@ describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
   });
 });
 
+// Wave 3.2 (audited P0) — the 409 modal's Overwrite/Save-as-copy must actually
+// PRESERVE the user's edit. Before: Overwrite replayed only {name} and Save-as-copy
+// was a no-op, so a conflicting settings/override edit was silently lost while the UI
+// claimed "saved". After: Overwrite replays the EXACT failed body with the server's
+// fresh If-Match; Save-as-copy POSTs …/duplicate carrying the conflicted edit and
+// navigates to the fork; Reload discards.
+describe("ProjectionDetail — 409 modal preserves the edit (#P0 3.2)", () => {
+  beforeEach(() => {
+    localStorage.setItem("projections.owner_token", "owner-tok");
+  });
+  afterEach(() => {
+    localStorage.clear();
+    window.history.pushState({}, "", "/");
+    vi.unstubAllGlobals();
+  });
+
+  /** A view-model with an editable Payroll (non-share) component cell. */
+  function payrollVm(version: number, over: Partial<ViewModel> = {}): ViewModel {
+    return fullVm({
+      version,
+      rows: [
+        {
+          label: "Payroll",
+          group: "expenses",
+          node: "payroll",
+          y1: { raw: 120000, display: "$120,000" },
+          y2: null,
+          y3: null,
+          class: "overridden",
+          editable: true,
+        },
+      ],
+      overrides: [
+        {
+          node: "payroll",
+          year: 1,
+          calculated: { raw: 140000, display: "$140,000" },
+          value: { raw: 120000, display: "$120,000" },
+          note: "",
+        },
+      ],
+      staleNodes: [],
+      ...over,
+    });
+  }
+
+  const CONFLICT_DETAIL = {
+    error: "version_conflict",
+    message: "This projection changed elsewhere",
+    current_version: 9,
+    your_version: 3,
+    recovery: "reload | overwrite | save_as_copy",
+  };
+
+  /** Edit the Payroll cell to 130000 (an overrides.set body) and wait for the
+   *  conflict modal that the stale PATCH (If-Match 3) surfaces. */
+  async function editCellIntoConflict(user: ReturnType<typeof userEvent.setup>) {
+    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
+    await screen.findByTestId("decision-banner");
+    await user.click(screen.getByTestId("cell-Payroll-y1"));
+    const input = await screen.findByTestId("cell-Payroll-y1-input");
+    await user.clear(input);
+    await user.type(input, "130000{Enter}");
+    await screen.findByTestId("save-conflict-modal");
+  }
+
+  const EXPECTED_EDIT = {
+    overrides: { set: [{ node: "payroll", year: 1, value: "130000" }] },
+  };
+
+  it("Overwrite replays the EXACT failed body (overrides.set — not {name}) with the fresh If-Match", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
+    const bodies: Array<Record<string, unknown>> = [];
+    const ifMatches: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          const ifMatch = new Headers(init?.headers).get("If-Match") ?? "";
+          ifMatches.push(ifMatch);
+          bodies.push(JSON.parse(String(init?.body)));
+          if (ifMatch === "3") {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: payrollVm(9) } }),
+                { status: 409, headers: { "Content-Type": "application/json" } },
+              ),
+            );
+          }
+          const next = Number(ifMatch) + 1;
+          return Promise.resolve(
+            new Response(JSON.stringify(payrollVm(next)), {
+              status: 200,
+              headers: { "Content-Type": "application/json", ETag: `"${next}"` },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    await editCellIntoConflict(user);
+
+    await user.click(screen.getByRole("button", { name: /overwrite/i }));
+    await waitFor(() => expect(screen.queryByTestId("save-conflict-modal")).toBeNull());
+
+    // The decisive proof: the force-save replayed the ORIGINAL override edit (not the
+    // old {name}-only replay) with the SERVER's current version.
+    expect(bodies[bodies.length - 1]).toEqual(EXPECTED_EDIT);
+    expect(ifMatches[ifMatches.length - 1]).toBe("9");
+  });
+
+  it("Save-as-copy POSTs …/duplicate carrying the conflicted edit, then navigates to the fork", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
+    const dupCalls: Array<{ url: string; body: unknown; auth: string | null }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/duplicate")) {
+          dupCalls.push({
+            url: u,
+            body: JSON.parse(String(init?.body)),
+            auth: new Headers(init?.headers).get("Authorization"),
+          });
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                view_slug: "p_copy",
+                version: 1,
+                name: "House of Hope (copy)",
+                edit_token: "edit_copy",
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          // Always stale → 409, so the only way to keep the edit is Save-as-copy.
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: payrollVm(9) } }),
+              { status: 409, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    await editCellIntoConflict(user);
+
+    await user.click(screen.getByRole("button", { name: /save as copy/i }));
+
+    // The fork POST carries the conflicted edit as {patch}, with the owner Bearer.
+    await waitFor(() => expect(dupCalls).toHaveLength(1));
+    expect(dupCalls[0].url).toBe("/api/projections/p_8x/duplicate");
+    expect(dupCalls[0].body).toEqual({ patch: EXPECTED_EDIT });
+    expect(dupCalls[0].auth).toBe("Bearer owner-tok");
+
+    // Navigates to the editable copy + retains its fresh edit token (owner's device).
+    await waitFor(() => expect(window.location.pathname).toBe("/p/p_copy/edit"));
+    expect(localStorage.getItem("projections.edit_token.p_copy")).toBe("edit_copy");
+    // The modal is dismissed.
+    expect(screen.queryByTestId("save-conflict-modal")).toBeNull();
+  });
+
+  it("Reload discards the edit (no duplicate, no force-PATCH) and clears the modal", async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
+    const dupCalls: string[] = [];
+    const patchIfMatches: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/duplicate")) {
+          dupCalls.push(u);
+          return Promise.resolve(
+            new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
+          patchIfMatches.push(new Headers(init?.headers).get("If-Match") ?? "");
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: payrollVm(9) } }),
+              { status: 409, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    await editCellIntoConflict(user);
+    const patchesBeforeReload = patchIfMatches.length;
+
+    await user.click(screen.getByRole("button", { name: /reload latest/i }));
+    await waitFor(() => expect(screen.queryByTestId("save-conflict-modal")).toBeNull());
+
+    // Reload never forks and never force-PATCHes — it just re-reads the server.
+    expect(dupCalls).toHaveLength(0);
+    expect(patchIfMatches.length).toBe(patchesBeforeReload);
+    await waitFor(() => expect(vi.mocked(fetchProjection).mock.calls.length).toBeGreaterThan(1));
+  });
+});
+
 // EPIC SHARE (Decision 12) — the unified Share affordance on the detail header. The
 // read-only link is always offered; the editable link appears only when this device
 // holds the projection's edit token (localStorage), and carries it in the fragment.

@@ -27,8 +27,14 @@ import {
   xlsxHref,
   docxHref,
 } from "../api/viewModel";
-import { getEditToken, getOwnerToken } from "../api/projections";
-import { patchProjection, PatchConflictError } from "../api/patch";
+import {
+  duplicateProjection,
+  getEditToken,
+  getOwnerToken,
+  setEditToken,
+  setOwnerToken,
+} from "../api/projections";
+import { patchProjection, PatchConflictError, type PatchBody } from "../api/patch";
 import { ShareModal } from "../components/ShareModal";
 import { ProjectionTab, fieldChangeKey, type FieldChangeInfo } from "../components/ProjectionTab";
 import type { FieldChangeActor } from "../components/FieldChange";
@@ -289,6 +295,10 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const [name, setName] = useState("");
   const [saveLabel, setSaveLabel] = useState<SaveLabel>("");
   const [conflict, setConflict] = useState<ConflictBody | null>(null);
+  // The exact PATCH body the stale save carried (audited P0). Overwrite replays it
+  // with the server's fresh If-Match; Save-as-copy carries it onto …/duplicate — so a
+  // conflicting settings/override edit is preserved, never dropped.
+  const [failedBody, setFailedBody] = useState<PatchBody | null>(null);
   // D1 / Decision 13: the always-on "Store name" input is replaced by an inline
   // pencil-to-rename. `renaming` reveals the inline input; committing returns to the
   // heading. The input keeps aria-label "Store name" so it stays addressable.
@@ -426,6 +436,19 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     setPennyOpen(true);
   }, [vm, edit]);
 
+  // One place to fan a save failure into the recovery UI: a 409 opens the conflict
+  // modal AND stashes the exact body that failed, so Overwrite can replay it (not
+  // just {name}) and Save-as-copy can carry it onto the fork. Anything else is a
+  // retryable error.
+  function onSaveError(err: unknown) {
+    if (err instanceof PatchConflictError) {
+      setConflict(err.conflict);
+      setFailedBody(err.failedBody);
+    } else {
+      setSaveLabel("Save failed — retry");
+    }
+  }
+
   // PE7: per-field inline undo — a FORWARD PATCH restoring the share input to its
   // prior value (carries Bearer + If-Match), producing a NEW revision. Never erases
   // the revision that introduced the change; re-undoable (the revert is itself a
@@ -437,10 +460,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     setSaveLabel("Saving…");
     doPatch({ inputs: { [revert.patchKey]: revert.raw } }, version)
       .then(() => setSaveLabel("All changes saved"))
-      .catch((err) => {
-        if (err instanceof PatchConflictError) setConflict(err.conflict);
-        else setSaveLabel("Save failed — retry");
-      });
+      .catch(onSaveError);
   }
 
   // Epic G2 (#42) / P1 regression (#284): commit an inline edit from a 3-year-table
@@ -465,10 +485,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     setSaveLabel("Saving…");
     doPatch(body, version)
       .then(() => setSaveLabel("All changes saved"))
-      .catch((err) => {
-        if (err instanceof PatchConflictError) setConflict(err.conflict);
-        else setSaveLabel("Save failed — retry");
-      });
+      .catch(onSaveError);
   }
 
   // Epic G2 (#42): reset a pin — a host-owned FORWARD edit clearing the override
@@ -483,10 +500,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     }
     doPatch({ overrides: { clear: [{ node, year }] } }, version)
       .then(() => setSaveLabel("All changes saved"))
-      .catch((err) => {
-        if (err instanceof PatchConflictError) setConflict(err.conflict);
-        else setSaveLabel("Save failed — retry");
-      });
+      .catch(onSaveError);
   }
 
   // Slide Penny OUT with the focused "why did you override {node} {year}?" prompt for
@@ -513,10 +527,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       version,
     )
       .then(() => setSaveLabel("All changes saved"))
-      .catch((err) => {
-        if (err instanceof PatchConflictError) setConflict(err.conflict);
-        else setSaveLabel("Save failed — retry");
-      });
+      .catch(onSaveError);
   }
 
   async function doPatch(body: Record<string, unknown>, ver: number) {
@@ -557,13 +568,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     nameTimer.current = setTimeout(() => {
       doPatch({ name: value }, version)
         .then(() => setSaveLabel("All changes saved"))
-        .catch((err) => {
-          if (err instanceof PatchConflictError) {
-            setConflict(err.conflict);
-          } else {
-            setSaveLabel("Save failed — retry");
-          }
-        });
+        .catch(onSaveError);
     }, 150);
   }
 
@@ -576,11 +581,9 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       setSaveLabel("All changes saved");
       return { version: v, viewModel: vm };
     } catch (err) {
-      if (err instanceof PatchConflictError) {
-        setConflict(err.conflict);
-      } else {
-        setSaveLabel("Save failed — retry");
-      }
+      // The SettingsTab body is a full PatchBody, so err.failedBody carries the exact
+      // driver edit (both the page modal's and the tab banner's Save-as-copy use it).
+      onSaveError(err);
       throw err;
     }
   }
@@ -598,16 +601,40 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   }
 
   function resolveOverwrite() {
+    // Replay the EXACT body that lost the race, with the SERVER's current version as
+    // the fresh If-Match — force-saving the conflicting edit (not just the name). The
+    // {name} fallback only covers a conflict raised before any body was captured.
     const v = conflict?.current_version ?? version;
+    const body: PatchBody = failedBody ?? { name };
     setConflict(null);
-    doPatch({ name }, v)
+    setFailedBody(null);
+    setSaveLabel("Saving…");
+    doPatch(body as Record<string, unknown>, v)
       .then(() => setSaveLabel("All changes saved"))
-      .catch(() => setSaveLabel("Save failed — retry"));
+      .catch(onSaveError);
   }
 
   function resolveSaveAsCopy() {
+    // The real fork: POST …/duplicate carrying the conflicted edit as {patch}, so the
+    // copy is born WITH the user's unsaved change (server-side compute), then land on
+    // it. Owner-only; the token stays in the header. The copy's fresh edit token is
+    // retained on this device so its Share panel can rebuild the editable link.
+    const pending = failedBody ?? undefined;
     setConflict(null);
-    setSaveLabel("All changes saved");
+    setFailedBody(null);
+    setSaveLabel("Saving…");
+    duplicateProjection(slug, token.current ?? "", pending)
+      .then((res) => {
+        if (res.edit_token) setEditToken(res.view_slug, res.edit_token);
+        // A capability owner joins their workspace (no owner_token). Only store a
+        // minted one (Clerk/anon) when this device holds none — never clobber the
+        // existing owner token that anchors the owner's other projections.
+        if (res.owner_token && !getOwnerToken()) setOwnerToken(res.owner_token);
+        setSaveLabel("All changes saved");
+        window.history.pushState(null, "", `/p/${res.view_slug}/edit`);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      })
+      .catch(() => setSaveLabel("Save failed — retry"));
   }
 
   if (loadError) {

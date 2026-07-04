@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   OWNER_TOKEN_KEY,
+  duplicateProjection,
   editTokenKey,
   getEditToken,
   getOwnerToken,
@@ -99,6 +100,53 @@ describe("listProjections (owner-scoped)", () => {
     const result = await listProjections();
     expect(result.projections).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// The real "Save as copy": POST …/{slug}/duplicate carrying the conflicted edit as
+// {patch}, so the fork is born with the user's unsaved change (never dropped).
+describe("duplicateProjection (409 Save-as-copy)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("POSTs …/{slug}/duplicate with the owner Bearer + {patch} and returns the new copy", async () => {
+    const created = {
+      view_slug: "p_copy",
+      version: 1,
+      name: "House of Hope (copy)",
+      edit_token: "edit_copy",
+    };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => created });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const patch = { assumptions: { labor_pct: 0.45 } };
+    const out = await duplicateProjection("p_8x", "owner_abc", patch);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/projections/p_8x/duplicate");
+    expect((init as RequestInit).method).toBe("POST");
+    const headers = new Headers((init as RequestInit).headers);
+    expect(headers.get("Authorization")).toBe("Bearer owner_abc");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ patch });
+    // The token never leaks into the URL (PRD §20).
+    expect(String(url)).not.toContain("owner_abc");
+    expect(out.view_slug).toBe("p_copy");
+    expect(out.edit_token).toBe("edit_copy");
+  });
+
+  it("omits the patch envelope for a verbatim copy (no conflicted edit)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ view_slug: "p_copy", version: 1, name: "x (copy)" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    await duplicateProjection("p_8x", "owner_abc");
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({});
+  });
+
+  it("throws on a non-ok duplicate (e.g. 403 owner-only) so the caller can surface retry", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 403 });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(duplicateProjection("p_8x", "owner_abc")).rejects.toThrow(/403/);
   });
 });
 

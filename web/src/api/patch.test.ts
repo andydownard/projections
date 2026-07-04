@@ -102,6 +102,26 @@ describe("patchProjection — 409 conflict (API_SPEC §1.4)", () => {
     ).rejects.not.toBeInstanceOf(PatchConflictError);
   });
 
+  // The 409 modal's Overwrite/Save-as-copy must replay the EXACT body the stale write
+  // carried — not just {name} (the audited P0: a conflicting settings edit was lost).
+  // So the conflict error carries `failedBody` = the PATCH body that just 409'd.
+  it("carries the exact failed PATCH body on the conflict error (Overwrite/Save-as-copy replay)", async () => {
+    mockFetch(() =>
+      jsonResponse(
+        { detail: { error: "version_conflict", current_version: 9, your_version: 7 } },
+        { status: 409 },
+      ),
+    );
+    const body = { assumptions: { labor_pct: 0.45 } };
+    try {
+      await patchProjection({ viewSlug: "p_abc", token: "t", version: 7, body });
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(PatchConflictError);
+      expect((e as PatchConflictError).failedBody).toEqual(body);
+    }
+  });
+
   // #188 — the LIVE server raises 409 via FastAPI `HTTPException(detail={...})`,
   // which serializes as `{"detail": {...}}` (NOT the flat body the old mock used).
   // The client must read the nested envelope or `current_version` is undefined and

@@ -11,6 +11,7 @@
 
 import { authHeader } from "./authHeader";
 import type { ServerValue } from "./client";
+import type { PatchBody } from "./patch";
 
 export const OWNER_TOKEN_KEY = "projections.owner_token";
 
@@ -113,4 +114,39 @@ export async function listProjections(): Promise<ProjectionListResponse> {
     return { projections: [] };
   }
   return request<ProjectionListResponse>("/projections", { headers });
+}
+
+/** The create-shaped response of POST …/{slug}/duplicate. `owner_token` is present
+ *  only for a Clerk/anonymous owner (a capability owner joins their existing
+ *  workspace, so none is minted). */
+export interface DuplicateResult {
+  view_slug: string;
+  version: number;
+  name: string;
+  edit_token?: string;
+  owner_token?: string;
+}
+
+/**
+ * The real "Save as copy" (API_SPEC §4.4): POST …/{slug}/duplicate copies the
+ * projection into a FRESH server row (new id / view_slug / edit token, one revision)
+ * and applies the optional `patch` (the conflicted edit) to the copy before compute,
+ * so the user's unsaved change lands on the fork instead of being dropped. Owner-only
+ * — the Bearer travels in the header, never the URL (PRD §20). No client math: the
+ * copy's view-model is computed server-side and rendered verbatim after navigation.
+ */
+export async function duplicateProjection(
+  viewSlug: string,
+  token: string,
+  patch?: PatchBody,
+): Promise<DuplicateResult> {
+  const resp = await fetch(`${BASE}/projections/${viewSlug}/duplicate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(patch ? { patch } : {}),
+  });
+  if (!resp.ok) {
+    throw new Error(`duplicate ${viewSlug} failed: ${resp.status}`);
+  }
+  return (await resp.json()) as DuplicateResult;
 }
