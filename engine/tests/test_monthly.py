@@ -11,7 +11,7 @@ import pytest
 
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.money import D
-from engine.monthly import _BLEND_MONTHS, _blend_then_flat
+from engine.monthly import _BLEND_MONTHS, _blend_then_flat, _year_slices
 
 
 def _opening_at(opening_month_number, cost_schedule=()):
@@ -414,9 +414,6 @@ def test_build_monthly_chains_years_2_5_off_each_other_not_just_year_1(aggressiv
     # consistent. Reconstruct Year 2's exit revenue/expense directly and confirm
     # Year 3's month-25 (its first month) sits on the SAME glide chain implied by
     # that exact anchor, to the penny.
-    from engine.monthly import _year_slices
-    from engine.money import D
-
     rev1, exp1, _ = _year_slices(aggressive_result.annual[1], 1)
     rev2, exp2, _ = _year_slices(
         aggressive_result.annual[2], 2, prev_rev_last=rev1[-1], prev_exp_last=exp1[-1],
