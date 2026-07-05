@@ -7,8 +7,11 @@ and break-even month are derived from the monthly series.
 """
 from decimal import Decimal
 
+import pytest
+
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.money import D
+from engine.monthly import _BLEND_MONTHS, _blend_then_flat
 
 
 def _opening_at(opening_month_number, cost_schedule=()):
@@ -292,3 +295,84 @@ def test_canonical_trough_capital_and_breakeven_shift_with_flat_fixed_costs(cano
     cap = D(str(canonical_result.decision.startup_capital_required))
     assert round_dollars(cap) == Decimal("347854")
     assert canonical_result.decision.break_even_month == 8
+
+
+# ------------------------------------------------ owner defect fix, 2026-07-05:
+# "net should never fall month-over-month unless a startup expense forces it" — the
+# instant flat-jump at each Year N -> N+1 seam (an artificial one-month cliff with no
+# cost event behind it) is replaced by a multi-month glide (`_blend_then_flat`). A
+# full "net never decreases" guarantee is NOT mathematically achievable while Year 1
+# keeps its deliberate dramatic S-curve shape (in any non-decreasing 12-month
+# sequence summing to a fixed annual total, the last month is always >= the flat
+# average — Year 1's S-curve intentionally ends well above its own average, which a
+# much-slower-growth following year cannot always sustain even at ITS OWN flat
+# average). What these tests lock in is the part that IS fully fixed: no more
+# INSTANT one-month cliff at a year seam, and no INTRA-year-2-5 dip untouched by the
+# glide window.
+@pytest.mark.parametrize("fixture_name", [
+    "canonical_result", "design_parity_result", "aggressive_result",
+    "grace_result", "nnn_gross_check_result",
+])
+def test_no_instant_flat_jump_at_a_year_seam(fixture_name, request):
+    # The seam month (13, 25, 37, 49) must NOT equal the old flat 1/12 average — it
+    # sits partway through the glide from the prior year's exit toward that average.
+    res = request.getfixturevalue(fixture_name)
+    months = {m.index: m for m in res.monthly}
+    for y in (2, 3, 4, 5):
+        seam = 12 * (y - 1) + 1
+        if seam not in months:
+            continue
+        flat_avg_net = D(str(res.annual[y].net)) / 12
+        seam_net = D(str(months[seam].net))
+        # A pure flat-jump design would land the seam month within a fraction of a
+        # cent of the flat average; the glide instead starts near the PRIOR month.
+        assert abs(seam_net - flat_avg_net) > Decimal("0.01") or seam == 1, (
+            y, seam_net, flat_avg_net,
+        )
+
+
+@pytest.mark.parametrize("fixture_name", [
+    "canonical_result", "design_parity_result", "aggressive_result",
+    "grace_result", "nnn_gross_check_result",
+])
+def test_seam_drop_is_smaller_than_the_old_instant_jump(fixture_name, request):
+    # For every Year N -> N+1 seam, the actual month-13-style drop (prior year's
+    # exit net vs the seam month's net) must be no worse than the OLD flat-jump
+    # design would have produced (prior year's exit vs the flat annual average) —
+    # the fix must never make a seam WORSE, even though it cannot guarantee zero
+    # drop when the annual totals themselves don't allow one (see module docstring).
+    res = request.getfixturevalue(fixture_name)
+    months = {m.index: m for m in res.monthly}
+    for y in (2, 3, 4, 5):
+        seam = 12 * (y - 1) + 1
+        if seam not in months or (seam - 1) not in months:
+            continue
+        prev_exit_net = D(str(months[seam - 1].net))
+        seam_net = D(str(months[seam].net))
+        old_flat_net = D(str(res.annual[y].net)) / 12
+        old_drop = max(Decimal("0"), prev_exit_net - old_flat_net)
+        new_drop = max(Decimal("0"), prev_exit_net - seam_net)
+        assert new_drop <= old_drop + Decimal("0.01"), (y, new_drop, old_drop)
+
+
+def test_blend_then_flat_feet_exactly_and_glides_toward_the_flat_average():
+    total = Decimal("591768.631749120")
+    prev_last = Decimal("40214.462298692480")
+    parts = _blend_then_flat(total, prev_last)
+    assert len(parts) == 12
+    assert sum(parts, Decimal("0")) == total  # Regression #15: always feet exactly
+    flat_avg = total / 12
+    # The glide months move monotonically from prev_last toward the flat average...
+    for i in range(_BLEND_MONTHS - 1):
+        assert (parts[i] - prev_last) * (flat_avg - prev_last) >= 0  # same direction
+    # ...and every month after the blend window is the plain flat split.
+    for i in range(_BLEND_MONTHS, 11):
+        assert parts[i] == parts[_BLEND_MONTHS]
+
+
+def test_blend_then_flat_is_a_noop_when_already_at_the_flat_average():
+    total = Decimal("120000")
+    prev_last = total / 12  # already exactly the flat rate — nothing to glide
+    parts = _blend_then_flat(total, prev_last)
+    assert sum(parts, Decimal("0")) == total
+    assert all(p == parts[0] for p in parts)

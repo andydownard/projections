@@ -10,9 +10,12 @@ exactly the scheduled one-time costs landing that month (a real monthly loss). M
 
 Operating months map to years: offset ``oi = month - G`` (0..59) -> year ``oi // 12 +
 1`` (1..5), within-year slice ``oi % 12``. Year 1 keeps the launch **S-curve** weights
-byte-for-byte; Years 2-5 use a uniform (1/12) intra-year split (steady state, not a
-seasonality claim) — the intra-year shape for Years 2-5 affects only the EXACT payback
-month by a few positions, never the annual totals, capital, break-even, or cash gap.
+byte-for-byte; Years 2-5 GLIDE from the prior year's own last month toward that year's
+flat steady-state average over `_BLEND_MONTHS` months, then hold flat (owner defect
+fix, 2026-07-05 — an instant flat-jump at the Year N -> N+1 seam read as an
+unexplained one-month cliff on the chart) — the intra-year shape for Years 2-5 affects
+only the EXACT payback month by a few positions, never the annual totals, capital,
+break-even, or cash gap.
 
 The model is monthly-first: for EVERY year, the annual totals are the *roll-up* of that
 year's 12 operating months, so the annual P&L and the monthly model can never disagree
@@ -104,12 +107,51 @@ def _flat_monthly(total: Decimal, months: int = 12):
     return parts
 
 
-# Steady-state intra-year split for Years 2-5: uniform 1/12 (the launch S-curve is a
-# Year-1 ramp only). Same `_distribute` path, last bucket absorbs the residual.
-_UNIFORM_WEIGHTS = [Decimal("1")] * 12
+# Owner defect fix (2026-07-05): "net should never fall month-over-month unless a
+# startup expense forces it" — the Year1->Year2 seam (and every later year boundary)
+# used to jump INSTANTLY from Year N's S-curve/ramp exit rate to Year N+1's flat
+# annual average, an artificial one-month cliff with no cost event behind it. A full
+# mathematical guarantee that NO month ever decreases is not achievable while Year 1's
+# S-curve keeps its deliberate dramatic recovery shape (proof: in any non-decreasing
+# 12-month sequence summing to a fixed annual total, the LAST month is always >= the
+# flat average — Year 1's S-curve intentionally ends well ABOVE its own flat average,
+# which a following, much-lower-growth year cannot always sustain even at ITS OWN flat
+# average). What IS fixed here: the artificial INSTANT jump. Years 2-5 now GLIDE from
+# the prior year's actual exit value toward the new year's steady-state average over
+# `_BLEND_MONTHS`, instead of snapping to it in month one — the same total change
+# lands over a handful of months instead of a single cliff, and every month beyond the
+# blend window is back to the plain flat steady-state (unaffected).
+_BLEND_MONTHS = 3
 
 
-def _year_slices(annual_year, year):
+def _blend_then_flat(total: Decimal, prev_last: Decimal, months: int = 12,
+                      blend: int = _BLEND_MONTHS):
+    """Distribute `total` across `months` as a `blend`-month linear glide from
+    `prev_last` (the prior year's own last month) toward this year's flat steady-state
+    average, then flat for the remaining months. Feet to `total` exactly: the blend
+    months take their interpolated share, and the remaining months flat-split
+    whatever total is left over (so the whole vector always sums to `total`,
+    regardless of the blend shape — Regression #15).
+    """
+    blend = min(blend, months)
+    target_flat = total / months
+    parts = []
+    for i in range(blend):
+        frac = Decimal(i + 1) / Decimal(blend + 1)
+        parts.append(prev_last + frac * (target_flat - prev_last))
+    remaining_total = total - sum(parts, Decimal("0"))
+    remaining_months = months - blend
+    if remaining_months > 0:
+        flat_each = (remaining_total / remaining_months).quantize(_CENT, rounding=ROUND_HALF_UP)
+        rest = [flat_each] * (remaining_months - 1)
+        rest.append(remaining_total - sum(rest, Decimal("0")))
+        parts.extend(rest)
+    else:
+        parts[-1] = parts[-1] + remaining_total
+    return parts
+
+
+def _year_slices(annual_year, year, *, prev_rev_last=None, prev_exp_last=None):
     """The 12 monthly (revenue, operating-expense, net) slices for one annual year.
 
     Every line's slices sum to that year's annual line to the penny (residual in the last
@@ -132,15 +174,17 @@ def _year_slices(annual_year, year):
     ``total_exp`` (and, with ``rev_parts``, to net) EXACTLY at 28-digit Decimal precision
     (Regression #15) — no residual correction needed; ``net = rev − exp`` per month.
 
-    Years 2-5 (steady state) distribute revenue AND operating expense independently on
-    uniform 1/12 weights (each foots exactly via the last-bucket residual), then take
-    ``net = revenue − expense`` for the first 11 months and let the 12th month absorb the
-    net residual (``net[11] = annual_net − Σnet[:11]``). The uniform 1/12 weight is a
-    non-terminating Decimal, so two independently-rounded splits would otherwise leave a
-    ~1e-22 residual in the per-element ``net = rev − exp`` sum; absorbing it keeps ALL
-    THREE lines footing EXACTLY. The 12th month's stored net then differs from its
-    ``rev − exp`` by ~1e-22 — far below any tolerance, and the xlsx Net column recomputes
-    it as ``=B−C−D`` anyway, so the workbook and the engine still reconcile.
+    Years 2-5 (owner defect fix, 2026-07-05) distribute revenue AND operating expense
+    independently on a `_BLEND_MONTHS`-month GLIDE from the prior year's own last month
+    toward the new flat steady-state average, then flat for the rest of the year
+    (``_blend_then_flat``, replacing the old INSTANT flat-jump — each foots exactly via
+    its own remaining-months residual), then take ``net = revenue − expense`` for the
+    first 11 months and let the 12th month absorb the net residual (``net[11] =
+    annual_net − Σnet[:11]``). Two independently-rounded splits leave a ~1e-22 residual
+    in the per-element ``net = rev − exp`` sum; absorbing it keeps ALL THREE lines
+    footing EXACTLY. The 12th month's stored net then differs from its ``rev − exp`` by
+    ~1e-22 — far below any tolerance, and the xlsx Net column recomputes it as
+    ``=B−C−D`` anyway, so the workbook and the engine still reconcile.
     """
     total_rev = D(str(annual_year.total_rev))
     if year == 1:
@@ -160,8 +204,8 @@ def _year_slices(annual_year, year):
         return rev_parts, exp_parts, net_parts
     total_exp = D(str(annual_year.total_exp))
     net_annual = D(str(annual_year.net))
-    rev_parts = _distribute(total_rev, _UNIFORM_WEIGHTS)
-    exp_parts = _distribute(total_exp, _UNIFORM_WEIGHTS)
+    rev_parts = _blend_then_flat(total_rev, prev_rev_last)
+    exp_parts = _blend_then_flat(total_exp, prev_exp_last)
     net_parts = [rev_parts[i] - exp_parts[i] for i in range(11)]
     net_parts.append(net_annual - sum(net_parts, Decimal("0")))
     return rev_parts, exp_parts, net_parts
@@ -171,8 +215,10 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
     """Return (rows, breakeven_month) over the project-month timeline 1..N.
 
     `annual` is the full ``{1..5}`` AnnualYear dict; the 60 operating months re-express
-    each year's P&L (Year 1 = the launch S-curve, Years 2-5 = a uniform intra-year
-    split). `opening_month_number` (G) is the grand-opening milestone; ``N = G + 59``.
+    each year's P&L (Year 1 = the launch S-curve, unchanged; Years 2-5 = a short glide
+    from the prior year's own last month into the new flat steady-state, replacing an
+    instant flat-jump at the seam — owner defect fix, 2026-07-05). `opening_month_number`
+    (G) is the grand-opening milestone; ``N = G + 59``.
     `startup_by_month` maps a project-month int -> one-time outflow Decimal; the sum of
     its values is the total startup (placed by the schedule, never double-counted).
 
@@ -196,8 +242,15 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
     last_scheduled = max(startup_by_month.keys(), default=0)
     n = max(g + 59, int(last_scheduled))
 
-    # Per-year monthly slices (Year 1 = 6.2 three-stream split; Years 2-5 uniform).
-    slices = {y: _year_slices(annual[y], y) for y in (1, 2, 3, 4, 5)}
+    # Per-year monthly slices, computed SEQUENTIALLY so each of Years 2-5 can anchor
+    # its glide on the prior year's own last month (Year 1 = the unchanged 6.2
+    # three-stream split).
+    slices = {1: _year_slices(annual[1], 1)}
+    for y in (2, 3, 4, 5):
+        prev_rev_last, prev_exp_last = slices[y - 1][0][-1], slices[y - 1][1][-1]
+        slices[y] = _year_slices(
+            annual[y], y, prev_rev_last=prev_rev_last, prev_exp_last=prev_exp_last,
+        )
 
     rows = []
     cumulative = Decimal("0")
