@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CashflowChart } from "./CashflowChart";
+import { CashflowChart, computeDualAxis } from "./CashflowChart";
 import type { Milestones, MonthlyPoint } from "../api/viewModel";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -148,6 +148,109 @@ describe("CashflowChart module", () => {
     expect(svg.textContent).toMatch(/Cumulative cash/);
   });
 
+  // ── owner-feedback polish (2026-07-04 second live review) — rotated axis
+  // titles. The horizontal top-row title chips read as sloppy/unlabeled to the
+  // owner; they are replaced with CONVENTIONAL rotated y-axis titles, one in
+  // each gutter, vertically centered on the plot, glyph riding along with the
+  // text as one rotated group. "($)" is dropped from both — the tick labels
+  // already carry "$", so repeating it in the title is redundant. ──────────────
+  describe("rotated axis titles (owner item, 2026-07-04 second review)", () => {
+    it("drops the redundant '($)' from both axis titles — ticks already show $", () => {
+      render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+      const net = screen.getByTestId("cashflow-axis-title-net");
+      const cum = screen.getByTestId("cashflow-axis-title-cum");
+      expect(net.textContent).toBe("Monthly net");
+      expect(cum.textContent).toBe("Cumulative cash");
+      expect(net.textContent).not.toMatch(/\(\$\)/);
+      expect(cum.textContent).not.toMatch(/\(\$\)/);
+    });
+
+    it("rotates the net title -90° (reads bottom-to-top) and the cumulative title 90° (reads top-to-bottom)", () => {
+      const { container } = render(
+        <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+      );
+      const netGroup = container.querySelector(".cashflow-chart__axis-label--net")!;
+      const cumGroup = container.querySelector(".cashflow-chart__axis-label--cum")!;
+      const netTransform = netGroup.getAttribute("transform") ?? "";
+      const cumTransform = cumGroup.getAttribute("transform") ?? "";
+      expect(netTransform).toMatch(/^rotate\(-90 /);
+      expect(cumTransform).toMatch(/^rotate\(90 /);
+    });
+
+    it("vertically centers both rotated titles on the plot area, on the SAME pixel row", () => {
+      const { container } = render(
+        <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+      );
+      const netGroup = container.querySelector(".cashflow-chart__axis-label--net")!;
+      const cumGroup = container.querySelector(".cashflow-chart__axis-label--cum")!;
+      const parse = (t: string) => t.match(/rotate\((-?[\d.]+) ([\d.]+) ([\d.]+)\)/)!;
+      const [, , netCx, netCy] = parse(netGroup.getAttribute("transform")!);
+      const [, , cumCx, cumCy] = parse(cumGroup.getAttribute("transform")!);
+      // Plot area is H = 300 + chipBandH, padT = 44 + chipBandH, padB = 28 →
+      // plotH stays 228 (invariant under the milestone-chip reserved band —
+      // fix 2026-07-04 third pass) → vertical center = padT + 114. milestones60
+      // renders 4 chips (grandOpening, breakEven, payback, minCash) →
+      // chipBandH = 4·13 + 8 = 60 → padT = 104 → center = 218, fixed regardless
+      // of viewport width (chart geometry constant for THIS fixture's chip count).
+      expect(netCy).toBe("218");
+      expect(cumCy).toBe(netCy);
+      // The net title sits in the LEFT gutter, the cumulative title in the RIGHT.
+      expect(parseFloat(netCx)).toBeLessThan(parseFloat(cumCx));
+    });
+
+    it("places the net title in the left gutter and the cumulative title in the right gutter (outside the tick labels)", () => {
+      const { container } = render(
+        <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+      );
+      const netGroup = container.querySelector(".cashflow-chart__axis-label--net")!;
+      const cumGroup = container.querySelector(".cashflow-chart__axis-label--cum")!;
+      const parse = (t: string) => parseFloat(t.match(/rotate\(-?[\d.]+ ([\d.]+)/)![1]);
+      const netCx = parse(netGroup.getAttribute("transform")!);
+      const cumCx = parse(cumGroup.getAttribute("transform")!);
+      // Wide viewBox is 660 units wide; the net pivot is near the left edge,
+      // the cumulative pivot near the right edge.
+      expect(netCx).toBeLessThan(30);
+      expect(cumCx).toBeGreaterThan(630);
+    });
+
+    it("renders the glyph BEFORE the text in DOM/reading order for both titles", () => {
+      const { container } = render(
+        <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+      );
+      const netGroup = container.querySelector(".cashflow-chart__axis-label--net")!;
+      const cumGroup = container.querySelector(".cashflow-chart__axis-label--cum")!;
+      const netChildren = Array.from(netGroup.children).map((c) => c.tagName.toLowerCase());
+      const cumChildren = Array.from(cumGroup.children).map((c) => c.tagName.toLowerCase());
+      expect(netChildren.indexOf("text")).toBe(netChildren.length - 1);
+      expect(cumChildren.indexOf("text")).toBe(cumChildren.length - 1);
+    });
+
+    it("still renders both titles rotated + centered at the narrow (<=480px) viewport", () => {
+      const mql = {
+        matches: true,
+        media: "(max-width: 480px)",
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      };
+      vi.stubGlobal("matchMedia", vi.fn().mockReturnValue(mql as unknown as MediaQueryList));
+      const { container } = render(
+        <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+      );
+      const netGroup = container.querySelector(".cashflow-chart__axis-label--net")!;
+      const cumGroup = container.querySelector(".cashflow-chart__axis-label--cum")!;
+      expect(netGroup.getAttribute("transform")).toMatch(/^rotate\(-90 /);
+      expect(cumGroup.getAttribute("transform")).toMatch(/^rotate\(90 /);
+      // Narrow viewBox is 380 units wide; the cumulative pivot tracks the
+      // narrower right edge (never clipped, never dropped).
+      const cumCx = parseFloat(
+        cumGroup.getAttribute("transform")!.match(/rotate\(-?[\d.]+ ([\d.]+)/)![1],
+      );
+      expect(cumCx).toBeGreaterThan(350);
+      expect(cumCx).toBeLessThan(380);
+      vi.unstubAllGlobals();
+    });
+  });
+
   // ── owner-feedback polish (2026-07-04 live review) ─────────────────────────
   it("marks the axis-title swatches aria-hidden (the text label already names the series)", () => {
     const { container } = render(
@@ -166,39 +269,29 @@ describe("CashflowChart module", () => {
     });
   });
 
-  it("net gridlines span the full plot width and never duplicate a cumulative gridline row (item 2, collision rule)", () => {
+  it("draws ONE shared horizontal grid: cumulative gridlines span the full plot width and every net tick label sits on a cumulative gridline row (owner defect 1 — no moiré second family)", () => {
     const { container } = render(
       <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
     );
-    const netLines = Array.from(container.querySelectorAll(".cashflow-chart__gridline--net"));
-    const cumLines = Array.from(
-      container.querySelectorAll(".cashflow-chart__gridline:not(.cashflow-chart__gridline--net)"),
-    );
-    expect(netLines.length).toBeGreaterThan(0);
+    // The balanced segmentation makes both axes share the SAME tick rows, so the
+    // redundant net-tinted gridline family is gone entirely (one clean grid).
+    expect(container.querySelectorAll(".cashflow-chart__gridline--net")).toHaveLength(0);
+    const cumLines = Array.from(container.querySelectorAll(".cashflow-chart__gridline"));
     expect(cumLines.length).toBeGreaterThan(0);
-    // Full width: same x1/x2 span as the cumulative (hero) gridlines.
+    // Full width.
     const [plotX1, plotX2] = [cumLines[0].getAttribute("x1"), cumLines[0].getAttribute("x2")];
-    netLines.forEach((l) => {
+    cumLines.forEach((l) => {
       expect(l.getAttribute("x1")).toBe(plotX1);
       expect(l.getAttribute("x2")).toBe(plotX2);
     });
-    // Collision rule: no net gridline within 1 viewBox unit of any cumulative one.
-    const cumYs = cumLines.map((l) => parseFloat(l.getAttribute("y1")!));
-    netLines.forEach((l) => {
-      const y = parseFloat(l.getAttribute("y1")!);
-      expect(cumYs.some((cy) => Math.abs(cy - y) < 1)).toBe(false);
+    // Rows are shared: every LEFT (net) tick label lands on a cumulative gridline y.
+    const gridYs = cumLines.map((l) => parseFloat(l.getAttribute("y1")!));
+    const leftYs = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--left")).map(
+      (t) => parseFloat(t.getAttribute("y")!) - 3, // tick text sits at yFor(t)+3
+    );
+    leftYs.forEach((y) => {
+      expect(gridYs.some((gy) => Math.abs(gy - y) < 0.5)).toBe(true);
     });
-  });
-
-  it("never draws a duplicate net gridline at the shared-zero row (item 2)", () => {
-    const { container } = render(
-      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
-    );
-    const zeroY = container.querySelector(".cashflow-chart__zero")!.getAttribute("y1");
-    const netAtZero = Array.from(container.querySelectorAll(".cashflow-chart__gridline--net")).some(
-      (l) => l.getAttribute("y1") === zeroY,
-    );
-    expect(netAtZero).toBe(false);
   });
 
   it("gives every month row a fixed leading milestone slot BEFORE 'M{n}' (item 3, consistent labels)", () => {
@@ -457,39 +550,348 @@ describe("shared-zero degenerate guard (review C1)", () => {
   });
 });
 
-// ── owner-feedback item 1 (live review 2026-07-04): at <=480px the wide layout's
-// fixed right-anchor offset for the cumulative axis title collided with the net
-// title's text with ZERO gap (confirmed in a real 375px browser render — the two
-// labels ran together as "Monthly net ($)—Cumulative cash ($)"), which is exactly
-// why the owner read the axes as unlabeled. The spec explicitly allows the title
-// pair to STACK at narrow widths (§7); this locks that stacked, non-colliding
-// layout in place. jsdom has no matchMedia, so it's stubbed to force `narrow`. ──
-describe("axis-title layout at <=480px (owner item 1, narrow stack)", () => {
-  function stubNarrowMatchMedia() {
-    const mql = {
-      matches: true,
-      media: "(max-width: 480px)",
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    };
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn().mockReturnValue(mql as unknown as MediaQueryList),
+// ── owner defect 1 (2026-07-04 second live review): each axis's tick ladder must
+// span the FULL plot height. The old shared-zero pass let whichever axis had the
+// deeper below-zero fraction dictate the shared $0 pixel; the OTHER axis then had
+// its whole ladder crammed into a sliver (on the owner's real 5-year projection
+// the cumulative axis's $1.5M…($500k) ticks all piled into the top quarter and
+// nothing showed below). The fix balances the shared zero to the AVERAGE of both
+// axes' natural above-zero fractions and emits nice ticks over each axis's full
+// visible range, so BOTH ladders are complete and $0 stays pixel-shared. ──
+describe("owner defect 1 — full-height balanced dual axes", () => {
+  const plotH = 228; // H(300) - padT(44) - padB(28); a chart geometry constant
+  const span = (container: HTMLElement, sel: string) => {
+    const ys = Array.from(container.querySelectorAll(sel)).map((t) =>
+      parseFloat(t.getAttribute("y") ?? "NaN"),
     );
+    return Math.max(...ys) - Math.min(...ys);
+  };
+  const zeroY = (container: HTMLElement, sel: string) =>
+    Array.from(container.querySelectorAll(sel)).find((t) => t.textContent === "$0")!.getAttribute("y");
+
+  // The owner's reported shape, reproduced: net ≈ −$286k…+$60k (mostly negative),
+  // cumulative ≈ −$334k…+$1.5M (mostly positive). The two natural fractions are
+  // near-opposite, so the balanced zero lands near the middle and BOTH axes come
+  // out roughly symmetric — net ≈ ±$300k, cumulative ≈ ±$1.5M.
+  function ownerShape(): MonthlyPoint[] {
+    const pts: MonthlyPoint[] = [];
+    for (let m = 1; m <= 60; m++) {
+      // net: deep negative early, small positive later.
+      const net = m <= 6 ? -286000 + (m - 1) * 8000 : 20000 + (m % 5) * 8000;
+      // cumulative: dips to ≈ −$334k, then climbs steadily to ≈ +$1.5M.
+      const cum = m <= 8 ? -42000 * m : -334000 + (m - 8) * 35000;
+      pts.push(pt(m, 30000, 25000, net, cum));
+    }
+    return pts;
   }
 
-  it("stacks the cumulative title BELOW the net title instead of sharing its row", () => {
-    stubNarrowMatchMedia();
+  it("owner's 5-year shape: the RIGHT (cumulative) ladder spans the full plot height (was crammed into the top quarter)", () => {
+    const { container } = render(<CashflowChart monthly={ownerShape()} breakevenMonth={9} />);
+    expect(span(container, ".cashflow-chart__axis-tick--right")).toBeGreaterThanOrEqual(0.9 * plotH);
+    // The cumulative ladder reaches up past $1,000,000 (a complete ladder, not a sliver).
+    const right = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--right")).map(
+      (t) => t.textContent,
+    );
+    expect(right.some((t) => /^\$1,[05]00,000$/.test(t ?? ""))).toBe(true);
+    // …and both axes still anchor $0 on the SAME pixel row.
+    expect(zeroY(container, ".cashflow-chart__axis-tick--right")).toBe(
+      zeroY(container, ".cashflow-chart__axis-tick--left"),
+    );
+  });
+
+  it("owner's 5-year shape: the LEFT (net) ladder also spans the full plot height", () => {
+    const { container } = render(<CashflowChart monthly={ownerShape()} breakevenMonth={9} />);
+    expect(span(container, ".cashflow-chart__axis-tick--left")).toBeGreaterThanOrEqual(0.9 * plotH);
+  });
+
+  const goldens: Array<[string, string]> = [
+    ["canonical 60%-labor", "house_of_hope_canonical_60.json"],
+    ["design-parity 40%", "house_of_hope_design_parity_40.json"],
+  ];
+  for (const [label, file] of goldens) {
+    it(`${label} golden: BOTH axis ladders span the full plot height and share the $0 pixel row`, () => {
+      const g = JSON.parse(
+        readFileSync(join(here, "..", "..", "..", "engine", "tests", "golden", file), "utf8"),
+      ) as { monthly: MonthlyPoint[]; breakevenMonth: number | null; milestones: Milestones };
+      const { container } = render(
+        <CashflowChart monthly={g.monthly} breakevenMonth={g.breakevenMonth} milestones={g.milestones} />,
+      );
+      expect(span(container, ".cashflow-chart__axis-tick--right")).toBeGreaterThanOrEqual(0.9 * plotH);
+      expect(span(container, ".cashflow-chart__axis-tick--left")).toBeGreaterThanOrEqual(0.9 * plotH);
+      expect(zeroY(container, ".cashflow-chart__axis-tick--right")).toBe(
+        zeroY(container, ".cashflow-chart__axis-tick--left"),
+      );
+    });
+  }
+
+  it("computeDualAxis: the owner-shape f-balance yields symmetric ±ladders sharing the $0 fraction (pure math)", () => {
+    // The two natural above-zero shares are near-opposite → f ≈ 0.5 → a symmetric
+    // segmentation (a === b) → both axes come out ± with $0 at the same fraction.
+    const nets = ownerShape().map((m) => m.net.raw);
+    const cums = ownerShape().map((m) => m.cumulativeCash.raw);
+    const d = computeDualAxis(nets, cums, 228);
+    // Symmetric-ish: zero sits near the middle (not pinned to an edge like before).
+    expect(d.zeroFrac).toBeGreaterThan(0.3);
+    expect(d.zeroFrac).toBeLessThan(0.7);
+    // Each axis has the SAME number of ticks (shared segmentation) and both include $0.
+    expect(d.net.ticks.length).toBe(d.cum.ticks.length);
+    expect(d.net.ticks).toContain(0);
+    expect(d.cum.ticks).toContain(0);
+    // The cumulative axis reaches the seven-figure range the owner expects (±~$1.5M),
+    // and the net axis the ±~$300k range — both COMPLETE, not slivers.
+    expect(Math.max(...d.cum.ticks)).toBeGreaterThanOrEqual(1_000_000);
+    expect(Math.max(...d.net.ticks)).toBeLessThan(1_000_000);
+    expect(Math.max(...d.net.ticks)).toBeGreaterThanOrEqual(200_000);
+  });
+
+  it("computeDualAxis: the canonical 60%-labor golden (both series ≤ $0) still spans full height with a headroom band above $0", () => {
+    const g = JSON.parse(
+      readFileSync(
+        join(here, "..", "..", "..", "engine", "tests", "golden", "house_of_hope_canonical_60.json"),
+        "utf8",
+      ),
+    ) as { monthly: MonthlyPoint[] };
+    const d = computeDualAxis(
+      g.monthly.map((m) => m.net.raw),
+      g.monthly.map((m) => m.cumulativeCash.raw),
+      228,
+    );
+    // A ≥1-tick headroom band above $0 even though the data never exceeds it
+    // (a ≥ 1 by construction) — so no axis collapses to a plot-edge zero (review C1).
+    expect(Math.max(...d.net.ticks)).toBeGreaterThan(0);
+    expect(Math.max(...d.cum.ticks)).toBeGreaterThan(0);
+    // Deep negatives are reached: both bottoms cover the ≈ −$263k / −$323k data.
+    expect(Math.min(...d.net.ticks)).toBeLessThanOrEqual(-263_269);
+    expect(Math.min(...d.cum.ticks)).toBeLessThanOrEqual(-322_854);
+  });
+
+  it("degenerate/legacy unification: when the two nice domains agree at both ends, left and right show ONE identical ladder", () => {
+    // legacy12 has net === cumulative (both 500·m) → the two domains are identical,
+    // so the axes must UNIFY to a single tick ladder rendered on both sides.
+    const { container } = render(<CashflowChart monthly={legacy12()} breakevenMonth={null} />);
+    const left = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--left")).map(
+      (t) => t.textContent,
+    );
+    const right = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--right")).map(
+      (t) => t.textContent,
+    );
+    expect(left.length).toBeGreaterThan(1);
+    expect(left).toEqual(right);
+  });
+});
+
+// ── owner defect 3: the first/last net bars must be INSET from the plot edges
+// (they sat flush against them, so month 1 read as clipped). An inner x-pad on
+// the band layout clears both ends at 12- AND 60-month horizons. ──
+describe("owner defect 3 — bars inset from the plot edges", () => {
+  const edges = (container: HTMLElement) => {
+    const scrubber = container.querySelector(".cashflow-chart__scrubber")!;
+    const padL = parseFloat(scrubber.getAttribute("x")!);
+    const plotW = parseFloat(scrubber.getAttribute("width")!);
+    const bars = Array.from(container.querySelectorAll<SVGRectElement>(".cashflow-chart__bar"));
+    const first = bars[0];
+    const last = bars[bars.length - 1];
+    return {
+      padL,
+      plotRight: padL + plotW,
+      firstLeft: parseFloat(first.getAttribute("x")!),
+      lastRight: parseFloat(last.getAttribute("x")!) + parseFloat(last.getAttribute("width")!),
+    };
+  };
+
+  it("insets the first + last bars at the 60-month horizon", () => {
+    const { container } = render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    const e = edges(container);
+    expect(e.firstLeft).toBeGreaterThanOrEqual(e.padL + 6);
+    expect(e.lastRight).toBeLessThanOrEqual(e.plotRight - 6);
+  });
+
+  it("insets the first + last bars at the legacy 12-month horizon too", () => {
+    const { container } = render(<CashflowChart monthly={legacy12()} breakevenMonth={null} />);
+    const e = edges(container);
+    expect(e.firstLeft).toBeGreaterThanOrEqual(e.padL + 6);
+    expect(e.lastRight).toBeLessThanOrEqual(e.plotRight - 6);
+  });
+});
+
+// ── owner defect 2 (2026-07-04 second live review): milestone treatment.
+// Chips STAY on the plot but get ONE flush-left text edge (no staircase); each
+// milestone's vertical line is a light CONSISTENT stroke; EVERY plotted marker
+// is labeled — including the minimum-cash red ring, which was previously drawn
+// with no callout at all; payback is audited (labeled when within the horizon). ──
+describe("owner defect 2 — left-aligned labeled milestone chips + light lines", () => {
+  it("stacks the milestone chips on ONE flush-left text edge (no staircase) and in a vertical column", () => {
     const { container } = render(
       <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
     );
-    const netText = container.querySelector(".cashflow-chart__axis-label--net text")!;
-    const cumText = container.querySelector(".cashflow-chart__axis-label--cum text")!;
-    const netY = parseFloat(netText.getAttribute("y")!);
-    const cumY = parseFloat(cumText.getAttribute("y")!);
-    // Stacked, not side-by-side: cum sits on a LOWER row than net.
-    expect(cumY).toBeGreaterThan(netY);
-    vi.unstubAllGlobals();
+    const chips = Array.from(container.querySelectorAll(".cashflow-chart__milestone-chip"));
+    expect(chips.length).toBeGreaterThan(1);
+    // ONE flush-left text edge: all chip <text> share the same x.
+    expect(new Set(chips.map((c) => c.getAttribute("x"))).size).toBe(1);
+    // A vertical stack: strictly increasing, distinct y (never staircased across x).
+    const ys = chips.map((c) => parseFloat(c.getAttribute("y")!));
+    for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeGreaterThan(ys[i - 1]);
+  });
+
+  it("calls out the minimum-cash (red-ring) position with its own labeled chip (was unlabeled)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    // The red-ring trough marker still exists on the plot…
+    expect(screen.getByTestId("trough-marker")).toBeInTheDocument();
+    // …and now carries a labeled chip naming it + its month.
+    const chip = screen.getByTestId("milestone-chip-minCash");
+    expect(chip.textContent).toMatch(/lowest cash/i);
+    expect(chip.textContent).toMatch(/Month \d+/);
+  });
+
+  it("labels EVERY plotted milestone incl. payback when it is within the horizon (audit)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    for (const key of ["grandOpening", "breakEven", "payback", "minCash"]) {
+      expect(screen.getByTestId(`milestone-chip-${key}`)).toBeInTheDocument();
+    }
+  });
+
+  it("omits the payback chip + line when payback is N/A (not reached in the horizon)", () => {
+    const na: Milestones = {
+      grandOpening: { raw: 1, display: "Month 1" },
+      breakEven: { raw: 29, display: "Month 29" },
+      payback: { raw: null, display: "N/A", reason: "not recovered within the horizon" },
+    };
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={na} />);
+    expect(screen.queryByTestId("milestone-chip-payback")).not.toBeInTheDocument();
+    expect(screen.getByTestId("milestone-chip-minCash")).toBeInTheDocument();
+    expect(screen.getByTestId("milestone-chip-grandOpening")).toBeInTheDocument();
+  });
+
+  it("draws each milestone's vertical line as ONE consistent light full-height stroke", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const lines = Array.from(container.querySelectorAll(".cashflow-chart__milestone-line"));
+    expect(lines.length).toBeGreaterThan(0);
+    lines.forEach((l) => {
+      // Full plot height. milestones60 renders 4 chips → chipBandH = 4·13+8 = 60
+      // → padT = 44+60 = 104 .. padT+plotH(228) = 332 (chip-band fix, third pass;
+      // plotH itself is invariant under the chip band — see the reserved-band
+      // describe block below).
+      expect(l.getAttribute("y1")).toBe("104");
+      expect(l.getAttribute("y2")).toBe("332");
+      expect(l.getAttribute("x1")).toBe(l.getAttribute("x2"));
+    });
+  });
+
+  it("preserves the break-even marker testid (ProjectionTab depends on it)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    expect(screen.getByTestId("breakeven-marker")).toBeInTheDocument();
+  });
+});
+
+// ── design-review follow-up (2026-07-04 third pass): the chip stack from
+// commit 47bda6f still collided with tick labels / gridlines / bars — it was
+// drawn on a translucent panel OVERLAID INSIDE the plot's top-left corner, so
+// "Payback · Month 32" ran through the "$100,000" tick, the panel hid the left
+// "$0" label and crossed gridlines, and at 375px it covered roughly a third of
+// the plot including bars. The structural fix: reserve a BAND above the plot
+// sized to the actual chip count and push the plot's top edge (padT) down by
+// exactly that; the SVG's total height grows by the same amount so the PLOT
+// AREA itself never shrinks. Because every chip row then lives at a y strictly
+// LESS than the plot's top edge, and every gridline/tick-label/bar lives at a y
+// >= the plot's top edge, the two sets occupy disjoint y-ranges — collision is
+// impossible BY CONSTRUCTION, not by per-viewport tuning. ──────────────────────
+describe("chips get a reserved band above the plot (no overlap by construction)", () => {
+  const plotRect = (container: HTMLElement) => {
+    const scrubber = container.querySelector(".cashflow-chart__scrubber")!;
+    return {
+      x: parseFloat(scrubber.getAttribute("x")!),
+      y: parseFloat(scrubber.getAttribute("y")!),
+      width: parseFloat(scrubber.getAttribute("width")!),
+      height: parseFloat(scrubber.getAttribute("height")!),
+    };
+  };
+  const chipYs = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll(".cashflow-chart__milestone-chip")).map((c) =>
+      parseFloat(c.getAttribute("y")!),
+    );
+
+  it("removes the translucent on-plot chip panel entirely (nothing left to overlap)", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    expect(container.querySelector(".cashflow-chart__milestone-chips-bg")).not.toBeInTheDocument();
+  });
+
+  it("every chip row sits strictly ABOVE the plot's top edge — 1 chip (minCash only, no milestones)", () => {
+    const { container } = render(<CashflowChart monthly={legacy12()} breakevenMonth={null} />);
+    const plot = plotRect(container);
+    const ys = chipYs(container);
+    expect(ys.length).toBe(1);
+    for (const y of ys) expect(y).toBeLessThan(plot.y);
+  });
+
+  it("every chip row sits strictly ABOVE the plot's top edge — 3 chips (payback N/A)", () => {
+    const na: Milestones = {
+      grandOpening: { raw: 1, display: "Month 1" },
+      breakEven: { raw: 29, display: "Month 29" },
+      payback: { raw: null, display: "N/A", reason: "not recovered within the horizon" },
+    };
+    const { container } = render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={na} />);
+    const plot = plotRect(container);
+    const ys = chipYs(container);
+    expect(ys.length).toBe(3);
+    for (const y of ys) expect(y).toBeLessThan(plot.y);
+  });
+
+  it("every chip row sits strictly ABOVE the plot's top edge — 4 chips (all milestones resolved)", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const plot = plotRect(container);
+    const ys = chipYs(container);
+    expect(ys.length).toBe(4);
+    for (const y of ys) expect(y).toBeLessThan(plot.y);
+  });
+
+  it("left-flush chip edge aligns with the plot's own left edge (x = padL), not indented past it", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const plot = plotRect(container);
+    const chipXs = Array.from(container.querySelectorAll(".cashflow-chart__milestone-chip")).map((c) =>
+      c.getAttribute("x"),
+    );
+    expect(new Set(chipXs)).toEqual(new Set([String(plot.x)]));
+  });
+
+  it("the reserved band grows the SVG height, never the plot height — the plot is IDENTICAL between a 1-chip and a 4-chip shape", () => {
+    const one = render(<CashflowChart monthly={legacy12()} breakevenMonth={null} />);
+    const four = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const plotOne = plotRect(one.container);
+    const plotFour = plotRect(four.container);
+    // Same plot HEIGHT (the reserved band never shrinks the plot)…
+    expect(plotFour.height).toBe(plotOne.height);
+    // …but the 4-chip shape's plot starts further down (its band is taller),
+    // and the SVG viewBox grows by exactly that same difference.
+    expect(plotFour.y).toBeGreaterThan(plotOne.y);
+    const svgHeight = (c: HTMLElement) =>
+      parseFloat(c.querySelector("svg")!.getAttribute("viewBox")!.split(" ")[3]);
+    expect(svgHeight(four.container) - svgHeight(one.container)).toBe(plotFour.y - plotOne.y);
+    one.unmount();
+    four.unmount();
+  });
+
+  it("no chip row's y intersects any tick-label's y (structural disjointness — max chip y < min tick y < plot top)", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const plot = plotRect(container);
+    const tickYs = Array.from(
+      container.querySelectorAll(".cashflow-chart__axis-tick--left, .cashflow-chart__axis-tick--right"),
+    ).map((t) => parseFloat(t.getAttribute("y")!));
+    const maxChipY = Math.max(...chipYs(container));
+    const minTickY = Math.min(...tickYs);
+    expect(maxChipY).toBeLessThan(minTickY);
+    expect(maxChipY).toBeLessThan(plot.y);
   });
 });
 
