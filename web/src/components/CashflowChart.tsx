@@ -176,7 +176,7 @@ function buildGroups(monthly: MonthlyPoint[], opening: number): Group[] {
 // (chip stack, plot markers, table slots) via the shared `cashflow-glyph` class.
 const MILESTONE_META: Array<{ key: keyof Milestones; label: string; icon: string }> = [
   { key: "grandOpening", label: "Grand Opening", icon: "⚑" },
-  { key: "breakEven", label: "Break-even", icon: "▲" },
+  { key: "breakEven", label: "Break-even", icon: "=" },
   { key: "payback", label: "Payback", icon: "★" },
 ];
 
@@ -262,7 +262,7 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   if (milestones) {
     for (const meta of MILESTONE_META) pushMs(meta.key, meta.icon, meta.label, milestones[meta.key]);
   } else if (beMonth != null && idxOfMonth(beMonth) >= 0) {
-    milestoneCallouts.push({ key: "breakEven", icon: "▲", label: "Break-even", display: `Month ${beMonth}`, idx: idxOfMonth(beMonth) });
+    milestoneCallouts.push({ key: "breakEven", icon: "=", label: "Break-even", display: `Month ${beMonth}`, idx: idxOfMonth(beMonth) });
   }
 
   // ── chart geometry (spec §7) ──────────────────────────────────────────────
@@ -310,6 +310,12 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   // left text edge — not an approximation of it — and the chip stack anchors
   // there instead of at padL.
   const chipStackX = 0;
+  // Fixed glyph column width + label gap so every chip row's glyph is
+  // center-anchored on the SAME x regardless of that glyph's own natural
+  // width, and every label starts flush at the SAME x regardless of its
+  // glyph's width (see the chip <text> render below).
+  const CHIP_GLYPH_COL_W = 14;
+  const CHIP_LABEL_PAD = 6;
   // The axis titles no longer live in a top row (owner item, 2026-07-04 second
   // review — they rotate into the left/right gutters instead), so the BASE
   // headroom reverts to the pre-axis-title-chip constant: just enough room for
@@ -705,12 +711,25 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
                   className={`cashflow-chart__milestone-chip cashflow-chart__milestone-chip--${c.key}`}
                   x={chipStackX}
                   y={chipGap / 2 + chipRowH * (i + 1)}
-                  textAnchor="start"
                 >
-                  <tspan className="cashflow-glyph cashflow-chart__milestone-glyph" aria-hidden="true">
+                  {/* Fixed glyph column, center-anchored, so ⚑ / = / ★ (each a
+                      different natural width) land on ONE shared center line
+                      instead of drifting the label start by their own advance
+                      width (the old `dx` offset made narrower glyphs like the
+                      former ▲ sit closer to their label than wider ones). */}
+                  <tspan
+                    className="cashflow-glyph cashflow-chart__milestone-glyph"
+                    x={chipStackX + CHIP_GLYPH_COL_W / 2}
+                    textAnchor="middle"
+                    aria-hidden="true"
+                  >
                     {c.icon}
                   </tspan>
-                  <tspan className="cashflow-chart__milestone-chip-label" dx="5">
+                  <tspan
+                    className="cashflow-chart__milestone-chip-label"
+                    x={chipStackX + CHIP_GLYPH_COL_W + CHIP_LABEL_PAD}
+                    textAnchor="start"
+                  >
                     {`${c.label} · ${c.display}`}
                   </tspan>
                 </text>
