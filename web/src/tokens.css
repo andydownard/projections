@@ -1995,7 +1995,14 @@ body {
   flex: 0 0 auto;
 }
 
-/* --- axis titles (replace the standalone legend, spec §3.5) --- */
+/* --- axis titles (replace the standalone legend, spec §3.5). Owner item,
+   2026-07-04 second review: each title's <g> carries an SVG `transform:
+   rotate(...)` set inline in CashflowChart.tsx (layout geometry, the
+   sanctioned exception — same doctrine as the chart's x/y/points/d). The
+   glyph + text both rotate as one group; text-anchor stays "start" in both
+   local (pre-rotation) frames, since glyph-then-text reading order is what
+   the rotation math flips into bottom-to-top (net, rotate(-90)) or
+   top-to-bottom (cumulative, rotate(90)). --- */
 .cashflow-chart__axis-label {
   pointer-events: none;
 }

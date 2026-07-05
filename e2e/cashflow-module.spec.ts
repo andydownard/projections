@@ -205,5 +205,35 @@ test.describe("evidence screenshots — canonical 60%-labor default", () => {
     await module.scrollIntoViewIfNeeded();
     await module.screenshot({ path: join(ASSETS, `cashflow-module-${tag}.png`) });
     await expect(module).toBeVisible();
+
+    // Close-up crops of the two ROTATED axis titles (owner item, 2026-07-04
+    // second review) — real-browser evidence that each renders rotated,
+    // glyph-riding-with-text, and legible at this viewport (not just present
+    // in the DOM — jsdom can't render SVG rotation at all). boundingBox()
+    // returns the axis-aligned box that fully contains the rotated content.
+    for (const [key, groupClass] of [
+      ["net", ".cashflow-chart__axis-label--net"],
+      ["cum", ".cashflow-chart__axis-label--cum"],
+    ] as const) {
+      // The whole rotated <g> (glyph + text), not just the <text>, so the
+      // crop shows the glyph riding along with its label.
+      const title = page.locator(groupClass);
+      await expect(title).toBeVisible();
+      const box = (await title.boundingBox())!;
+      // A tight pad: wide enough to frame the glyph without bleeding into the
+      // adjacent tick-label column (the gutter between the rotated title and
+      // the tick labels is intentionally narrow — see the padL/padR comment
+      // in CashflowChart.tsx).
+      const pad = 6;
+      await page.screenshot({
+        path: join(ASSETS, `cashflow-axis-title-${key}-${tag}-closeup.png`),
+        clip: {
+          x: Math.max(0, box.x - pad),
+          y: Math.max(0, box.y - pad),
+          width: box.width + pad * 2,
+          height: box.height + pad * 2,
+        },
+      });
+    }
   });
 });

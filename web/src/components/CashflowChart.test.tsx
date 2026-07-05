@@ -148,6 +148,105 @@ describe("CashflowChart module", () => {
     expect(svg.textContent).toMatch(/Cumulative cash/);
   });
 
+  // ── owner-feedback polish (2026-07-04 second live review) — rotated axis
+  // titles. The horizontal top-row title chips read as sloppy/unlabeled to the
+  // owner; they are replaced with CONVENTIONAL rotated y-axis titles, one in
+  // each gutter, vertically centered on the plot, glyph riding along with the
+  // text as one rotated group. "($)" is dropped from both — the tick labels
+  // already carry "$", so repeating it in the title is redundant. ──────────────
+  describe("rotated axis titles (owner item, 2026-07-04 second review)", () => {
+    it("drops the redundant '($)' from both axis titles — ticks already show $", () => {
+      render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+      const net = screen.getByTestId("cashflow-axis-title-net");
+      const cum = screen.getByTestId("cashflow-axis-title-cum");
+      expect(net.textContent).toBe("Monthly net");
+      expect(cum.textContent).toBe("Cumulative cash");
+      expect(net.textContent).not.toMatch(/\(\$\)/);
+      expect(cum.textContent).not.toMatch(/\(\$\)/);
+    });
+
+    it("rotates the net title -90° (reads bottom-to-top) and the cumulative title 90° (reads top-to-bottom)", () => {
+      const { container } = render(
+        <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+      );
+      const netGroup = container.querySelector(".cashflow-chart__axis-label--net")!;
+      const cumGroup = container.querySelector(".cashflow-chart__axis-label--cum")!;
+      const netTransform = netGroup.getAttribute("transform") ?? "";
+      const cumTransform = cumGroup.getAttribute("transform") ?? "";
+      expect(netTransform).toMatch(/^rotate\(-90 /);
+      expect(cumTransform).toMatch(/^rotate\(90 /);
+    });
+
+    it("vertically centers both rotated titles on the plot area, on the SAME pixel row", () => {
+      const { container } = render(
+        <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+      );
+      const netGroup = container.querySelector(".cashflow-chart__axis-label--net")!;
+      const cumGroup = container.querySelector(".cashflow-chart__axis-label--cum")!;
+      const parse = (t: string) => t.match(/rotate\((-?[\d.]+) ([\d.]+) ([\d.]+)\)/)!;
+      const [, , netCx, netCy] = parse(netGroup.getAttribute("transform")!);
+      const [, , cumCx, cumCy] = parse(cumGroup.getAttribute("transform")!);
+      // Plot area is H=300, padT=44, padB=28 → plotH=228 → vertical center = 158,
+      // fixed regardless of viewport width (chart geometry constant).
+      expect(netCy).toBe("158");
+      expect(cumCy).toBe(netCy);
+      // The net title sits in the LEFT gutter, the cumulative title in the RIGHT.
+      expect(parseFloat(netCx)).toBeLessThan(parseFloat(cumCx));
+    });
+
+    it("places the net title in the left gutter and the cumulative title in the right gutter (outside the tick labels)", () => {
+      const { container } = render(
+        <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+      );
+      const netGroup = container.querySelector(".cashflow-chart__axis-label--net")!;
+      const cumGroup = container.querySelector(".cashflow-chart__axis-label--cum")!;
+      const parse = (t: string) => parseFloat(t.match(/rotate\(-?[\d.]+ ([\d.]+)/)![1]);
+      const netCx = parse(netGroup.getAttribute("transform")!);
+      const cumCx = parse(cumGroup.getAttribute("transform")!);
+      // Wide viewBox is 660 units wide; the net pivot is near the left edge,
+      // the cumulative pivot near the right edge.
+      expect(netCx).toBeLessThan(30);
+      expect(cumCx).toBeGreaterThan(630);
+    });
+
+    it("renders the glyph BEFORE the text in DOM/reading order for both titles", () => {
+      const { container } = render(
+        <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+      );
+      const netGroup = container.querySelector(".cashflow-chart__axis-label--net")!;
+      const cumGroup = container.querySelector(".cashflow-chart__axis-label--cum")!;
+      const netChildren = Array.from(netGroup.children).map((c) => c.tagName.toLowerCase());
+      const cumChildren = Array.from(cumGroup.children).map((c) => c.tagName.toLowerCase());
+      expect(netChildren.indexOf("text")).toBe(netChildren.length - 1);
+      expect(cumChildren.indexOf("text")).toBe(cumChildren.length - 1);
+    });
+
+    it("still renders both titles rotated + centered at the narrow (<=480px) viewport", () => {
+      const mql = {
+        matches: true,
+        media: "(max-width: 480px)",
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      };
+      vi.stubGlobal("matchMedia", vi.fn().mockReturnValue(mql as unknown as MediaQueryList));
+      const { container } = render(
+        <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+      );
+      const netGroup = container.querySelector(".cashflow-chart__axis-label--net")!;
+      const cumGroup = container.querySelector(".cashflow-chart__axis-label--cum")!;
+      expect(netGroup.getAttribute("transform")).toMatch(/^rotate\(-90 /);
+      expect(cumGroup.getAttribute("transform")).toMatch(/^rotate\(90 /);
+      // Narrow viewBox is 380 units wide; the cumulative pivot tracks the
+      // narrower right edge (never clipped, never dropped).
+      const cumCx = parseFloat(
+        cumGroup.getAttribute("transform")!.match(/rotate\(-?[\d.]+ ([\d.]+)/)![1],
+      );
+      expect(cumCx).toBeGreaterThan(350);
+      expect(cumCx).toBeLessThan(380);
+      vi.unstubAllGlobals();
+    });
+  });
+
   // ── owner-feedback polish (2026-07-04 live review) ─────────────────────────
   it("marks the axis-title swatches aria-hidden (the text label already names the series)", () => {
     const { container } = render(
@@ -454,42 +553,6 @@ describe("shared-zero degenerate guard (review C1)", () => {
       container.querySelectorAll(".cashflow-chart__axis-tick--right"),
     ).map((t) => t.textContent);
     expect(rightTicks).toContain("$0");
-  });
-});
-
-// ── owner-feedback item 1 (live review 2026-07-04): at <=480px the wide layout's
-// fixed right-anchor offset for the cumulative axis title collided with the net
-// title's text with ZERO gap (confirmed in a real 375px browser render — the two
-// labels ran together as "Monthly net ($)—Cumulative cash ($)"), which is exactly
-// why the owner read the axes as unlabeled. The spec explicitly allows the title
-// pair to STACK at narrow widths (§7); this locks that stacked, non-colliding
-// layout in place. jsdom has no matchMedia, so it's stubbed to force `narrow`. ──
-describe("axis-title layout at <=480px (owner item 1, narrow stack)", () => {
-  function stubNarrowMatchMedia() {
-    const mql = {
-      matches: true,
-      media: "(max-width: 480px)",
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    };
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn().mockReturnValue(mql as unknown as MediaQueryList),
-    );
-  }
-
-  it("stacks the cumulative title BELOW the net title instead of sharing its row", () => {
-    stubNarrowMatchMedia();
-    const { container } = render(
-      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
-    );
-    const netText = container.querySelector(".cashflow-chart__axis-label--net text")!;
-    const cumText = container.querySelector(".cashflow-chart__axis-label--cum text")!;
-    const netY = parseFloat(netText.getAttribute("y")!);
-    const cumY = parseFloat(cumText.getAttribute("y")!);
-    // Stacked, not side-by-side: cum sits on a LOWER row than net.
-    expect(cumY).toBeGreaterThan(netY);
-    vi.unstubAllGlobals();
   });
 });
 

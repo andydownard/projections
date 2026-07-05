@@ -195,34 +195,39 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   // labels ("($300,000)") — ~62px wide — so the narrower spec paddings (sized for
   // the abbreviated "$300k" labels in the spec's illustrative worked example)
   // clipped them at both edges. Verified un-clipped in the QA screenshot (§7 says
-  // to confirm padding by screenshot, not formula).
-  const padL = 74;
-  const padR = 82;
-  // Axis-title block + milestone-label row height depends on layout: at <=480px
-  // the two axis titles STACK into two rows (spec §7 "axis-title pair may
-  // stack") instead of sharing one row — owner-feedback fix (item 1): at the
-  // wide layout's fixed right-anchor offset, the cumulative title's text
-  // collided with the net title's text at ZERO gap on the narrower 380-unit
-  // reference viewBox (confirmed in a real 375px browser render — the two read
-  // as one run-together string, which is why the owner saw the axes as
-  // unlabeled). Stacking needs more headroom before the milestone-label row,
-  // which itself needs more headroom before the plot starts.
-  const padT = narrow ? 58 : 44;
+  // to confirm padding by screenshot, not formula). +16 on each side (owner
+  // live-review, 2026-07-04 second pass) is the rotated axis title's own
+  // "thickness" (a vertical title's footprint in the gutter is its font
+  // line-height, ~12px, not its text length) — the minimum needed so the
+  // rotated title clears the tick-label column; the plot keeps the rest.
+  const padL = 90;
+  const padR = 98;
+  // The axis titles no longer live in a top row (owner item, 2026-07-04 second
+  // review — they rotate into the left/right gutters instead), so padT reverts
+  // to the pre-axis-title-chip constant: just enough headroom for the on-chart
+  // milestone-label row before the plot starts (no narrow/wide split needed —
+  // that split existed only to stack the old horizontal title chips).
+  const padT = 44;
   const padB = 28;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   const tCum = narrow ? 3 : 5;
   const tNet = narrow ? 3 : 4;
-  // Cumulative axis-title position: same row as net (right-anchored) at
-  // wide/tablet; a second row, left-aligned under the net title, when narrow.
-  const cumTitleY = narrow ? 20 : 6;
-  const cumTitleTextY = narrow ? 27 : 13;
-  const cumTitleX1 = narrow ? padL : W - padR - 130;
-  const cumTitleX2 = narrow ? padL + 14 : W - padR - 116;
-  const cumTitleTextX = narrow ? padL + 18 : W - padR - 112;
-  // Milestone on-chart labels sit below the axis-title block; narrow needs the
-  // extra row's worth of headroom the stacked titles now occupy.
-  const milestoneBaseY = narrow ? 36 : 24;
+  // Rotated axis-title geometry: each title is one <g> rotated about a pivot
+  // point (pivotX, plotCenterY) — see the render below for the rotation-math
+  // doctrine (rotate(-90,·) on the left puts the FIRST local-x content, the
+  // glyph, at the bottom, reading bottom-to-top; rotate(90,·) on the right
+  // puts it at the top, reading top-to-bottom — the standard mirrored
+  // twin-axis convention). Vertically centering both on the plot means both
+  // pivots share the same Y, so the shared-$0 spirit extends to the titles
+  // too. leftTitleX/rightTitleX sit just inside the SVG edge, outside the
+  // tick-label column (padL/padR above already reserve the room).
+  const plotCenterY = padT + plotH / 2;
+  const leftTitleX = 10;
+  const rightTitleX = W - 14;
+  // Milestone on-chart labels sit below where the axis-title row used to be;
+  // a single constant now that titles never occupy this row (narrow or wide).
+  const milestoneBaseY = 24;
 
   const n = monthly.length;
   const bandW = plotW / n;
@@ -422,19 +427,49 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
             </g>
           )}
 
-          {/* axis titles (identity carried here, not a standalone legend). At
-              <=480px the two stack into two rows instead of sharing one — see
-              the padT/cumTitle* comment above (owner item 1). The swatch
-              shapes are aria-hidden; the text label already names the series. */}
-          <g className="cashflow-chart__axis-label cashflow-chart__axis-label--net">
-            <rect aria-hidden="true" className="cashflow-chart__axis-swatch--net-pos" x={padL} y={6} width={5} height={8} />
-            <rect aria-hidden="true" className="cashflow-chart__axis-swatch--net-neg" x={padL + 5} y={6} width={5} height={8} />
-            <text x={padL + 14} y={13} className="cashflow-chart__axis-label-text">Monthly net ($)</text>
+          {/* axis titles (identity carried here, not a standalone legend) —
+              owner item, 2026-07-04 second review: CONVENTIONAL rotated
+              y-axis titles, one per gutter, vertically centered on the plot,
+              instead of the horizontal top-row chips that read as sloppy /
+              unlabeled. "($)" is dropped — the tick labels already carry "$".
+              Each title is glyph-then-text in LOCAL (pre-rotation) reading
+              order, rotated as ONE group so the glyph rides along with the
+              text. rotate(-90, pivot) on the left sends the first
+              (smallest-local-x) content — the glyph — to the BOTTOM of the
+              rotated block, so the net title reads bottom-to-top;
+              rotate(90, pivot) on the right sends it to the TOP, so the
+              cumulative title reads top-to-bottom — the standard mirrored
+              twin-axis convention. The swatch shapes stay aria-hidden; the
+              text is the real, readable label. */}
+          <g
+            className="cashflow-chart__axis-label cashflow-chart__axis-label--net"
+            transform={`rotate(-90 ${leftTitleX} ${plotCenterY})`}
+          >
+            <rect aria-hidden="true" className="cashflow-chart__axis-swatch--net-pos" x={leftTitleX - 34} y={plotCenterY - 4} width={5} height={8} />
+            <rect aria-hidden="true" className="cashflow-chart__axis-swatch--net-neg" x={leftTitleX - 29} y={plotCenterY - 4} width={5} height={8} />
+            <text
+              data-testid="cashflow-axis-title-net"
+              x={leftTitleX - 20}
+              y={plotCenterY + 3}
+              className="cashflow-chart__axis-label-text"
+            >
+              Monthly net
+            </text>
           </g>
-          <g className="cashflow-chart__axis-label cashflow-chart__axis-label--cum">
-            <line aria-hidden="true" className="cashflow-chart__axis-swatch--cum" x1={cumTitleX1} x2={cumTitleX2} y1={cumTitleY} y2={cumTitleY} />
-            <circle aria-hidden="true" className="cashflow-chart__axis-swatch--cum-dot" cx={cumTitleX2} cy={cumTitleY} r={2} />
-            <text x={cumTitleTextX} y={cumTitleTextY} className="cashflow-chart__axis-label-text">Cumulative cash ($)</text>
+          <g
+            className="cashflow-chart__axis-label cashflow-chart__axis-label--cum"
+            transform={`rotate(90 ${rightTitleX} ${plotCenterY})`}
+          >
+            <line aria-hidden="true" className="cashflow-chart__axis-swatch--cum" x1={rightTitleX - 46} x2={rightTitleX - 32} y1={plotCenterY} y2={plotCenterY} />
+            <circle aria-hidden="true" className="cashflow-chart__axis-swatch--cum-dot" cx={rightTitleX - 32} cy={plotCenterY} r={2} />
+            <text
+              data-testid="cashflow-axis-title-cum"
+              x={rightTitleX - 28}
+              y={plotCenterY + 3}
+              className="cashflow-chart__axis-label-text"
+            >
+              Cumulative cash
+            </text>
           </g>
 
           {/* full-width gridlines: HERO (cumulative) only, at its nice ticks */}
