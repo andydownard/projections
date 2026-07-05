@@ -1710,17 +1710,14 @@ body {
 .cashflow-chart__milestone-chip--minCash .cashflow-chart__milestone-glyph {
   fill: var(--error);
 }
-/* left-aligned chip stack: a subtle panel keeps the rows legible over the plot
-   and off the gridlines/ticks; text-anchor:start + a shared x give ONE flush-left
-   text edge (no staircase). */
+/* left-aligned chip stack: lives in its OWN RESERVED BAND above the plot (fix,
+   2026-07-04 third pass) — the plot's top edge is pushed down by exactly the
+   stack's height (see chipBandH in CashflowChart.tsx), so there is no longer a
+   translucent panel here to keep the rows legible over gridlines/ticks; there
+   is nothing left to overlap. text-anchor:start + a shared x give ONE
+   flush-left text edge (no staircase). */
 .cashflow-chart__milestone-chips {
   pointer-events: none;
-}
-.cashflow-chart__milestone-chips-bg {
-  fill: var(--surface);
-  opacity: 0.82;
-  stroke: var(--line);
-  stroke-width: 1;
 }
 .cashflow-chart__milestone-chip {
   font-size: 11px;

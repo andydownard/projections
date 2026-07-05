@@ -2,7 +2,104 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+
+// Design-review follow-up (2026-07-04 third pass): the milestone chip stack
+// (commit 47bda6f) was drawn on a translucent panel OVERLAID INSIDE the plot's
+// top-left corner — real-browser evidence showed "Payback · Month 32" running
+// through the "$100,000" tick label, the panel hiding the left "$0" tick and
+// crossing gridlines, and ~a third of the plot (incl. bars) covered at 375px.
+// The fix (see CashflowChart.tsx) reserves a BAND above the plot sized to the
+// actual chip count and pushes the plot's top edge down by that amount, so
+// chips and plot content occupy disjoint y-ranges by construction. This
+// bbox-intersection check is the real-browser lock for that: every chip's
+// rendered rect must be fully disjoint from the plot rect AND from every
+// tick-label rect, at whatever viewport/shape is under test.
+async function assertChipsNeverOverlapPlot(page: Page, shape: string) {
+  const result = await page.evaluate(() => {
+    const disjoint = (a: DOMRect, b: DOMRect) =>
+      a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top;
+    const chips = Array.from(document.querySelectorAll(".cashflow-chart__milestone-chip"));
+    const plot = document.querySelector(".cashflow-chart__scrubber");
+    const ticks = Array.from(
+      document.querySelectorAll(".cashflow-chart__axis-tick--left, .cashflow-chart__axis-tick--right"),
+    );
+    if (!plot) return { ok: false, bad: ["no .cashflow-chart__scrubber found"], chipCount: chips.length };
+    const plotRect = plot.getBoundingClientRect();
+    const bad: string[] = [];
+    for (const chip of chips) {
+      const c = chip.getBoundingClientRect();
+      const id = chip.getAttribute("data-testid") ?? "(chip)";
+      if (!disjoint(c, plotRect)) bad.push(`${id} intersects the plot rect`);
+      for (const tick of ticks) {
+        const t = tick.getBoundingClientRect();
+        if (!disjoint(c, t)) bad.push(`${id} intersects tick label "${tick.textContent}"`);
+      }
+    }
+    return { ok: bad.length === 0, bad, chipCount: chips.length };
+  });
+  expect(result.chipCount ?? 0, `${shape}: expected at least one milestone chip`).toBeGreaterThan(0);
+  expect(result.ok, `${shape}: chip/plot overlaps found: ${JSON.stringify(result.bad)}`).toBe(true);
+}
+
+// The reserved chip band (this fix) makes the module taller — at 1440x900 the
+// full module (chart + table) now exceeds the viewport height by more than it
+// used to. Playwright's element screenshot can capture an element taller than
+// the viewport, but doing so for an element that overflows by a wide margin
+// mis-renders the app's sticky `position: fixed` topbar INTO the captured
+// image (a Playwright/CDP artifact of capturing beyond the viewport with a
+// fixed-position ancestor — confirmed NOT a real rendering bug: a real user
+// scroll to the same position renders cleanly). The fix for evidence capture:
+// briefly grow the PAGE viewport to fit the whole module before shooting, so
+// no beyond-viewport capture is ever needed, then restore the original
+// viewport for the next shape/assertion.
+async function screenshotWholeModule(page: Page, module: Locator, path: string) {
+  const original = page.viewportSize();
+  const box = await module.boundingBox();
+  if (!original || !box) {
+    await module.scrollIntoViewIfNeeded();
+    await module.screenshot({ path });
+    return;
+  }
+  // The sticky `.topbar` can wrap to two lines at narrow widths (up to ~73px
+  // tall — see the `.cashflow-module { scroll-margin-top }` comment in
+  // tokens.css); read its REAL height rather than assuming the desktop value.
+  const topbarH = await page.evaluate(
+    () => document.querySelector(".topbar")?.getBoundingClientRect().height ?? 45,
+  );
+  const safeTop = Math.ceil(topbarH) + 16; // clearance below the topbar
+  const neededHeight = Math.ceil(box.height) + safeTop + 20;
+  if (neededHeight > original.height) {
+    await page.setViewportSize({ width: original.width, height: neededHeight });
+  }
+  // Deterministic scroll: land the module's top at a fixed offset clear of the
+  // topbar, computed directly rather than via `scrollIntoViewIfNeeded()`'s
+  // "nearest" + CSS `scroll-margin-top` — empirically inconsistent for an
+  // element this tall (it can leave the module's top scrolled behind the
+  // topbar, or even off-screen, depending on viewport/shape). This ALSO fixes
+  // the reserved chip band making the module taller: a Playwright element
+  // screenshot of something taller than the viewport can otherwise mis-render
+  // the app's `position: fixed` topbar INTO the captured image (a Playwright/
+  // CDP "capture beyond viewport" artifact — confirmed not a real rendering
+  // bug: a real user scrolled to the same position renders cleanly).
+  await page.evaluate(
+    ({ testId, top }) => {
+      const el = document.querySelector(`[data-testid="${testId}"]`) as HTMLElement | null;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      window.scrollBy(0, rect.top - top);
+    },
+    { testId: "cashflow-module", top: safeTop },
+  );
+  await module.screenshot({ path });
+  if (original.height !== neededHeight) {
+    await page.setViewportSize(original);
+    // Re-settle scroll at the restored (original) viewport size — the grown
+    // viewport's scroll offset can otherwise leave content off-screen once
+    // shrunk back down, which would affect any capture right after this call.
+    await module.scrollIntoViewIfNeeded();
+  }
+}
 
 // E2E — the redesigned "Cash flow" module (spec 2026-07-04): the dual-axis chart
 // + year-grouped expand/collapse monthly table + CSV export + BIDIRECTIONAL
@@ -246,7 +343,8 @@ test.describe("evidence screenshots — three data shapes", () => {
     expect(rightSpan).toBeGreaterThanOrEqual(0.9 * 228);
 
     await module.scrollIntoViewIfNeeded();
-    await module.screenshot({ path: join(ASSETS, `cashflow-module-canonical-${tag}.png`) });
+    await assertChipsNeverOverlapPlot(page, `canonical-${tag}`);
+    await screenshotWholeModule(page, module, join(ASSETS, `cashflow-module-canonical-${tag}.png`));
 
     // Fresh close-up crops of the two ROTATED axis titles (geometry moved this
     // pass): real-browser evidence each renders rotated, glyph-riding-with-text.
@@ -274,7 +372,8 @@ test.describe("evidence screenshots — three data shapes", () => {
     await expect(module).toBeVisible();
     await expect(page.getByTestId("cashflow-chart")).toBeVisible();
     await module.scrollIntoViewIfNeeded();
-    await module.screenshot({ path: join(ASSETS, `cashflow-module-parity-${tag}.png`) });
+    await assertChipsNeverOverlapPlot(page, `parity-${tag}`);
+    await screenshotWholeModule(page, module, join(ASSETS, `cashflow-module-parity-${tag}.png`));
 
     // ── Shape 3: a LEGACY 12-row snapshot (no milestones). Injected by rewriting
     // the `example` view-model's monthly series + dropping milestones — the real
@@ -300,7 +399,8 @@ test.describe("evidence screenshots — three data shapes", () => {
     expect(leftTicks.length).toBeGreaterThan(1);
     expect(leftTicks).toEqual(rightTicks);
     await module.scrollIntoViewIfNeeded();
-    await module.screenshot({ path: join(ASSETS, `cashflow-module-legacy-${tag}.png`) });
+    await assertChipsNeverOverlapPlot(page, `legacy-${tag}`);
+    await screenshotWholeModule(page, module, join(ASSETS, `cashflow-module-legacy-${tag}.png`));
     await page.unroute("**/api/projections/example");
   });
 });
