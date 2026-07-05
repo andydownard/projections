@@ -122,6 +122,60 @@ test.describe("cash-flow module", () => {
     ]);
     expect(download.suggestedFilename()).toMatch(/Cash Flow\.csv$/);
   });
+
+  // Owner item 1 (live review 2026-07-04): "label the right and left axes and
+  // have the appropriate symbol ... to indicate what it's for." Both titles
+  // exist in the DOM at every viewport, but at 375px the wide layout's fixed
+  // right-anchor offset for the cumulative title collided with the net
+  // title's text at ZERO gap (confirmed via getBoundingClientRect: the two
+  // ran together with no visible separation) — which is exactly why an owner
+  // scanning the live page read the axes as unlabeled. This runs at all three
+  // Playwright projects (desktop-1440/tablet-768/mobile-375) via the project
+  // matrix, so it is the real regression lock for the narrow-width fix.
+  test("both axis titles are visible and never overlap, at this viewport (owner item 1)", async ({ page }) => {
+    const chart = page.getByTestId("cashflow-chart");
+    await chart.scrollIntoViewIfNeeded();
+    const rects = await page.evaluate(() => {
+      const r = (sel: string) => document.querySelector(sel)!.getBoundingClientRect();
+      const net = r(".cashflow-chart__axis-label--net");
+      const cum = r(".cashflow-chart__axis-label--cum");
+      return { net: { ...net.toJSON() }, cum: { ...cum.toJSON() } };
+    });
+    // Both present and non-degenerate (real width/height, not display:none).
+    expect(rects.net.width).toBeGreaterThan(0);
+    expect(rects.net.height).toBeGreaterThan(0);
+    expect(rects.cum.width).toBeGreaterThan(0);
+    expect(rects.cum.height).toBeGreaterThan(0);
+    // Rectangles do not intersect (works whether stacked vertically or laid
+    // out side by side): disjoint on at least one axis.
+    const disjoint =
+      rects.net.right <= rects.cum.left ||
+      rects.cum.right <= rects.net.left ||
+      rects.net.bottom <= rects.cum.top ||
+      rects.cum.bottom <= rects.net.top;
+    expect(disjoint).toBe(true);
+  });
+
+  // Owner item 1, second finding: `scrollIntoViewIfNeeded()` (the "nearest"
+  // scroll strategy — a close proxy for a real user scrolling down until the
+  // module comes into view, rather than snapping it flush to the very top)
+  // left the module's top ~28px ABOVE the viewport top on a 1440x900 window,
+  // because the module (full 60-month chart + table) is taller than the
+  // viewport. That put the axis-title row (y ~33-50) almost entirely BEHIND
+  // the sticky `.topbar` (y 0-45, z-index 20) — confirmed via
+  // getBoundingClientRect against the real seeded page, not simulated. This is
+  // the "dropped at some viewport" the owner saw live. `scroll-margin-top` on
+  // `.cashflow-module` is the fix (CSS-only, module-scoped, no TopBar change).
+  test("scrolling the module into view never lands the axis titles behind the sticky topbar (owner item 1)", async ({ page }) => {
+    const module = page.getByTestId("cashflow-module");
+    await module.scrollIntoViewIfNeeded();
+    const rects = await page.evaluate(() => {
+      const r = (sel: string) => document.querySelector(sel)!.getBoundingClientRect().toJSON();
+      return { topbar: r(".topbar"), net: r(".cashflow-chart__axis-label--net"), cum: r(".cashflow-chart__axis-label--cum") };
+    });
+    expect(rects.net.top).toBeGreaterThanOrEqual(rects.topbar.bottom);
+    expect(rects.cum.top).toBeGreaterThanOrEqual(rects.topbar.bottom);
+  });
 });
 
 test.describe("evidence screenshots — canonical 60%-labor default", () => {
