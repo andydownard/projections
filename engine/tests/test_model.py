@@ -5,19 +5,16 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    # 2.8.0 = THE FUSION of two 2.7.0 lineages: DISPLAY layer cash-based (2.7.0-A, deployed —
-    # displayed Net income + Net margin subtract the one-time Year-1 startup and are congruent;
-    # monthly[] spans the full 60-month horizon; payback = Month-N cash recovery; the §12.2
-    # guardrail runs on the cash margin) × OPERATING layer params/gaps (2.7.0-B, this branch —
-    # 990-grounded constants payroll tax 8% + Insurance $10k, the 6.2 monthly three-stream
-    # split, the 6.3 advisory flags, money_view single-rounding-authority + exact lease-deposit
-    # arithmetic). The internal operating net still drives the verdict; capital / break-even /
-    # first-year cash gap are Year-1-anchored on the 6.2 distribution. Both move OUTPUTS, so
-    # MODEL_VERSION bumps to the fused 2.8.0.
-    assert model.MODEL_VERSION == "2.8.0"
+    # 2.9.0 fixes an owner defect (2026-07-05): Years 2-5 of monthly[] used to jump
+    # INSTANTLY to the new year's flat annual average at each seam (an artificial
+    # one-month Net cliff); they now glide from the prior year's own last month over
+    # `engine.monthly._BLEND_MONTHS` months first. Annual totals, capital, break-even,
+    # and Year 1 itself are byte-unchanged — only the Years 2-5 intra-year shape moved,
+    # which is still an OUTPUT change, so MODEL_VERSION bumps.
+    assert model.MODEL_VERSION == "2.9.0"
     # 1.7.0 = the union of both 1.6.0 lineages: cash income/margin surfaces + monthly[] 60 rows
     # + Month-N milestone (A) and +sensitivity{base,downside,upside}+delta +confidence{ramp} +
-    # the full editable settings knob set (B). The NUMBERS change with model 2.8.0.
+    # the full editable settings knob set (B). Unchanged by the 2.9.0 monthly-shape fix.
     assert model.COMPUTE_SCHEMA_VERSION == "1.7.0"
 
 

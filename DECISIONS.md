@@ -2,6 +2,10 @@
 
 > Final calls from the convening (product lead deciding, informed by the product team + 6 unicorn founders). Supersedes the open blockers in the Engineering Handoff §2.
 
+## ⚑ 2.9.0: Years 2-5 monthly glide replaces the instant flat-jump (`model_version` 2.8.0 → 2.9.0)
+
+**Call:** Owner defect (2026-07-05): the monthly series jumped INSTANTLY from a year's exit run-rate to the next year's flat annual average at every seam, an artificial one-month Net cliff. Fixed: Years 2-5 now glide from the prior year's own last month into a solved flat level over 3 months, then hold flat — one smooth arithmetic progression, no second jump at the blend/flat boundary. **Accepted scope limit (Fable panel, confirmed mathematically):** a hard "net never decreases" guarantee is NOT achievable while Year 1 keeps its deliberate S-curve recovery shape — a much-slower-growth following year cannot always sustain Year 1's exit rate even at its own flat average. Year 1 itself is untouched; capital, break-even, and all annual totals are byte-unchanged. `MODEL_VERSION = "2.9.0"`.
+
 ## ⚑ 2.8.0 fusion: cash-display engine × params/gaps engine (`model_version` 2.7.0-A + 2.7.0-B → 2.8.0 / `compute_schema_version` 1.7.0)
 
 **Call:** Two engines were independently stamped `2.7.0`. **2.7.0-A** (deployed to prod, epic #321) made the projection cash-based; **2.7.0-B** (this branch, never deployed — Wave-6 params/gaps close-out) added the 990 constants + monthly split + sensitivity/confidence surfacing. Rather than pick one, **fuse both** (owner-approved 2026-07-04, "fuse both, then deploy") into `model_version 2.8.0` / `compute_schema_version 1.7.0`.

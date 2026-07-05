@@ -6,7 +6,17 @@ the point of use; these module constants name the *default* assumption values.
 """
 from __future__ import annotations
 
-MODEL_VERSION = "2.8.0"          # math change => bump. 2.8.0 = THE FUSION of two
+MODEL_VERSION = "2.9.0"          # math change => bump. 2.9.0 fixes an owner defect
+# (2026-07-05): Years 2-5 of monthly[] used to jump INSTANTLY from the prior year's
+# S-curve/ramp exit rate to the new year's flat annual average — an artificial
+# one-month "cliff" in the Net line with no cost event behind it. Years 2-5 now GLIDE
+# from the prior year's own last month toward the new flat average over
+# `engine.monthly._BLEND_MONTHS` months before holding flat (`_blend_then_flat`,
+# replacing the old uniform-1/12 `_distribute` call) — annual totals, capital,
+# break-even, and Year 1 itself are all BYTE-UNCHANGED (only the Years 2-5 intra-year
+# shape moved); see engine/monthly.py module docstring for why a full "net never
+# decreases" guarantee isn't mathematically achievable while Year 1 keeps its S-curve.
+# 2.8.0 = THE FUSION of two
 # independently-stamped 2.7.0 engines (see the both-lineages block below). Composition:
 # the DISPLAY layer is CASH-BASED (lineage A) and the OPERATING layer uses this branch's
 # 6.2 Year-1 monthly split (lineage B). The DISPLAYED Net income AND Net margin subtract the

@@ -37,7 +37,7 @@ def test_canonical_is_a_loss_case():
     # Cash-based Net margin display negative (parentheses) and reco is not proceed.
     assert vm["rows"][-1]["y1"]["display"].startswith("(")
     assert vm["reco"]["tag"] != "proceed"
-    assert vm["model_version"] == "2.8.0"
+    assert vm["model_version"] == "2.9.0"
     # FUSION cash display (2.7.0-A): the displayed Year-1 Net income subtracts the one-time
     # startup. Fused = operating net (−$53,713.72, with the 990 constants) − startup_total
     # ($238,500) = −$292,213.72 → −$292,214 (was pre-990 −$282,933).
@@ -113,7 +113,7 @@ def test_aggressive_triggers_the_two_named_guardrail_flags():
     # The late-year (steady-state) margin is above the ~30% band; verdict is "revise".
     assert vm["rows"][-1]["y4"]["raw"] > 0.30
     assert vm["reco"]["tag"] == "revise"
-    assert vm["model_version"] == "2.8.0"
+    assert vm["model_version"] == "2.9.0"
 
 
 # ------------------------------------------------------------- Grace Mission
@@ -139,7 +139,7 @@ def test_grace_is_a_loss_case_with_payback_na_and_one_pinned_payroll():
     assert ov["node"] == "Payroll" and ov["year"] == 1
     assert ov["value"]["raw"] == 110000.0
     assert ov["calculated"]["raw"] != ov["value"]["raw"]  # calc-vs-override, no back-solve
-    assert vm["model_version"] == "2.8.0"
+    assert vm["model_version"] == "2.9.0"
 
 
 # --------------------------------------------------------- NNN gross-check
@@ -162,4 +162,4 @@ def test_nnn_resolution_escalates_and_deposits_on_resolved_occupancy():
                    if c["category"].startswith("Lease Deposit"))
     assert deposit["amount"]["raw"] == 37500.0
     assert deposit["amount"]["display"] == "$37,500"
-    assert vm["model_version"] == "2.8.0"
+    assert vm["model_version"] == "2.9.0"

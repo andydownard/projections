@@ -7,8 +7,11 @@ and break-even month are derived from the monthly series.
 """
 from decimal import Decimal
 
+import pytest
+
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.money import D
+from engine.monthly import _BLEND_MONTHS, _blend_then_flat, _year_slices
 
 
 def _opening_at(opening_month_number, cost_schedule=()):
@@ -292,3 +295,132 @@ def test_canonical_trough_capital_and_breakeven_shift_with_flat_fixed_costs(cano
     cap = D(str(canonical_result.decision.startup_capital_required))
     assert round_dollars(cap) == Decimal("347854")
     assert canonical_result.decision.break_even_month == 8
+
+
+# ------------------------------------------------ owner defect fix, 2026-07-05:
+# "net should never fall month-over-month unless a startup expense forces it" — the
+# instant flat-jump at each Year N -> N+1 seam (an artificial one-month cliff with no
+# cost event behind it) is replaced by a multi-month glide (`_blend_then_flat`). A
+# full "net never decreases" guarantee is NOT mathematically achievable while Year 1
+# keeps its deliberate dramatic S-curve shape (in any non-decreasing 12-month
+# sequence summing to a fixed annual total, the last month is always >= the flat
+# average — Year 1's S-curve intentionally ends well above its own average, which a
+# much-slower-growth following year cannot always sustain even at ITS OWN flat
+# average). What these tests lock in is the part that IS fully fixed: no more
+# INSTANT one-month cliff at a year seam, and no INTRA-year-2-5 dip untouched by the
+# glide window.
+@pytest.mark.parametrize("fixture_name", [
+    "canonical_result", "design_parity_result", "aggressive_result",
+    "grace_result", "nnn_gross_check_result",
+])
+def test_no_instant_flat_jump_at_a_year_seam(fixture_name, request):
+    # The seam month (13, 25, 37, 49) must NOT equal the naive flat 1/12 average — it
+    # sits partway through the glide from the prior year's exit toward the SOLVED
+    # flat level (which generally differs from the naive average — see
+    # _blend_then_flat's derivation).
+    res = request.getfixturevalue(fixture_name)
+    months = {m.index: m for m in res.monthly}
+    for y in (2, 3, 4, 5):
+        seam = 12 * (y - 1) + 1
+        if seam not in months:
+            continue
+        flat_avg_net = D(str(res.annual[y].net)) / 12
+        seam_net = D(str(months[seam].net))
+        # A pure flat-jump design would land the seam month within a fraction of a
+        # cent of the naive average; the glide instead starts near the PRIOR month.
+        assert abs(seam_net - flat_avg_net) > Decimal("0.01"), (y, seam_net, flat_avg_net)
+
+
+@pytest.mark.parametrize("fixture_name", [
+    "canonical_result", "design_parity_result", "aggressive_result",
+    "grace_result", "nnn_gross_check_result",
+])
+def test_no_month_over_month_drop_in_years_2_5_exceeds_the_old_seam_cliff(fixture_name, request):
+    # CAUGHT IN REVIEW: an earlier version of this fix passed a test that only
+    # checked the SEAM month, while a naive-average flat tail hid a SECOND, larger
+    # cliff at the blend/flat boundary a few months later. Assert over EVERY
+    # month-over-month step across the full Years 2-5 span (not just the seam): none
+    # may exceed what the OLD instant flat-jump would have produced at that year's
+    # own seam — the fix must never introduce a drop worse than the bug it replaces,
+    # anywhere in the year, not just on day one.
+    res = request.getfixturevalue(fixture_name)
+    ops = [m for m in res.monthly if m.kind == "operating"]
+    nets = [D(str(m.net)) for m in ops]
+    old_seam_drops = []
+    for y in (2, 3, 4, 5):
+        seam_idx = 12 * (y - 1)  # 0-based index of the seam month among operating months
+        if seam_idx <= 0 or seam_idx >= len(nets):
+            continue
+        old_flat_net = D(str(res.annual[y].net)) / 12
+        old_seam_drops.append(max(Decimal("0"), nets[seam_idx - 1] - old_flat_net))
+    if not old_seam_drops:
+        return
+    worst_old_drop = max(old_seam_drops)
+    for i in range(len(nets) - 1):
+        if 12 <= i < 48:  # scope to the Years 2-5 span this fix touches
+            actual_drop = nets[i] - nets[i + 1]
+            assert actual_drop <= worst_old_drop + Decimal("0.01"), (i, actual_drop, worst_old_drop)
+
+
+def test_blend_then_flat_feet_exactly_and_is_one_smooth_progression():
+    total = Decimal("591768.631749120")
+    prev_last = Decimal("40214.462298692480")
+    parts = _blend_then_flat(total, prev_last)
+    assert len(parts) == 12
+    assert sum(parts, Decimal("0")) == total  # Regression #15: always feet exactly
+    # `prev_last, parts[0..blend-1], parts[blend]` is ONE arithmetic progression —
+    # every consecutive gap (including prev_last -> parts[0] and the blend -> flat
+    # boundary) is identical, so there's no second jump where the glide meets the
+    # flat tail (the bug an earlier, naive-average version of this fix had).
+    chain = [prev_last] + parts[:_BLEND_MONTHS + 1]
+    gaps = [chain[i + 1] - chain[i] for i in range(len(chain) - 1)]
+    for g in gaps[1:]:
+        assert abs(g - gaps[0]) < Decimal("0.0001"), gaps
+    # every month after the blend window is the plain flat split, at that same level.
+    for i in range(_BLEND_MONTHS, 11):
+        assert parts[i] == parts[_BLEND_MONTHS]
+
+
+def test_blend_then_flat_is_a_noop_when_already_at_the_flat_average():
+    total = Decimal("120000")
+    prev_last = total / 12  # already exactly the flat rate — nothing to glide
+    parts = _blend_then_flat(total, prev_last)
+    assert sum(parts, Decimal("0")) == total
+    assert all(p == parts[0] for p in parts)
+
+
+def test_blend_then_flat_glides_upward_smoothly_when_growth_outpaces_the_exit_rate():
+    # The symmetric case to the canonical fixture's decline: a year whose annual
+    # total implies a HIGHER run-rate than the prior year's exit. The glide must
+    # step UP monotonically into the (also higher) solved flat level — same one-
+    # smooth-progression property, opposite direction.
+    total = Decimal("900000")
+    prev_last = Decimal("40000")
+    parts = _blend_then_flat(total, prev_last)
+    assert sum(parts, Decimal("0")) == total
+    chain = [prev_last] + parts[:_BLEND_MONTHS + 1]
+    for i in range(len(chain) - 1):
+        assert chain[i + 1] > chain[i], chain  # strictly increasing, no dip
+    gaps = [chain[i + 1] - chain[i] for i in range(len(chain) - 1)]
+    for g in gaps[1:]:
+        assert abs(g - gaps[0]) < Decimal("0.0001"), gaps
+    for i in range(_BLEND_MONTHS, 11):
+        assert parts[i] == parts[_BLEND_MONTHS]
+
+
+def test_build_monthly_chains_years_2_5_off_each_other_not_just_year_1(aggressive_result):
+    # Regression: Year 3 must anchor its glide on Year 2's OWN computed exit value
+    # (not, say, Year 1's), so a multi-year run of glides stays internally
+    # consistent. Reconstruct Year 2's exit revenue/expense directly and confirm
+    # Year 3's month-25 (its first month) sits on the SAME glide chain implied by
+    # that exact anchor, to the penny.
+    rev1, exp1, _ = _year_slices(aggressive_result.annual[1], 1)
+    rev2, exp2, _ = _year_slices(
+        aggressive_result.annual[2], 2, prev_rev_last=rev1[-1], prev_exp_last=exp1[-1],
+    )
+    rev3, exp3, _ = _year_slices(
+        aggressive_result.annual[3], 3, prev_rev_last=rev2[-1], prev_exp_last=exp2[-1],
+    )
+    month25 = next(m for m in aggressive_result.monthly if m.index == 25)
+    assert D(str(month25.revenue)) == rev3[0]
+    assert D(str(month25.expenses)) == exp3[0]
