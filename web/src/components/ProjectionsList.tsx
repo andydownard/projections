@@ -19,7 +19,6 @@
 import type { ProjectionListItem } from "../api/projections";
 import { RecoChip } from "./RecoChip";
 import { Sparkline } from "./Sparkline";
-import { RowActionsMenu } from "./RowActionsMenu";
 import { formatListDate, isNegative } from "./displayLabels";
 
 export interface ProjectionsListProps {
@@ -28,11 +27,10 @@ export interface ProjectionsListProps {
   /** Called with the view_slug when a row is activated → routes to /p/<slug>/edit.
    *  The list is owner-scoped, so every listed row is owner-editable. */
   onRowClick: (viewSlug: string) => void;
-  /** Owner chose "Move to Trash" on a row's actions menu. When omitted, the per-row
-   *  menu is not rendered (e.g. the "Shared with me" section — owner-only affordances
-   *  never appear on a shared row). */
-  onTrash?: (item: ProjectionListItem) => void;
-  /** Navigate to the Trash view. When omitted, the header Trash link is hidden. */
+  /** Navigate to the Trash view. When omitted, the header Trash link is hidden.
+   *  Moving a projection to Trash is now a detail-page-only action (its own
+   *  "Delete" button + confirm dialog) — the list no longer carries a per-row
+   *  "⋯" menu duplicating that affordance. */
   onOpenTrash?: () => void;
   /** Section heading. Defaults to "Projections" (the owner list). The "Shared with
    *  me" section (#323) passes its own heading. */
@@ -48,7 +46,6 @@ export function ProjectionsList({
   projections,
   onCreate,
   onRowClick,
-  onTrash,
   onOpenTrash,
   heading = "Projections",
   headingId = "list-heading",
@@ -113,10 +110,6 @@ export function ProjectionsList({
             <th scope="col" className="num">
               Breakeven
             </th>
-            {/* Actions column (per-row "⋯" menu): present only when onTrash is wired. */}
-            {onTrash && (
-              <th scope="col" className="list__actions-col" aria-label="Actions"></th>
-            )}
             {/* Caret column: no visible label; aria-label tells screen readers this
                 column holds the row-open affordance. */}
             <th scope="col" className="list__caret-col" aria-label="Open"></th>
@@ -194,14 +187,6 @@ export function ProjectionsList({
                 {/* L3 col 5: Breakeven — server display string verbatim, right-aligned
                     tabular-nums (same audit P2 fix). */}
                 <td className="num">{p.breakeven.display}</td>
-
-                {/* Actions cell: the per-row "⋯" menu (Move to Trash). It stops event
-                    propagation so opening it never triggers the row navigation. */}
-                {onTrash && (
-                  <td className="list__actions">
-                    <RowActionsMenu name={p.name} onTrash={() => onTrash(p)} />
-                  </td>
-                )}
 
                 {/* L3 col 6: Caret — visual affordance for the row click target.
                     aria-hidden because the row's own aria-label already names the
