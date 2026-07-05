@@ -387,3 +387,43 @@ def test_blend_then_flat_is_a_noop_when_already_at_the_flat_average():
     parts = _blend_then_flat(total, prev_last)
     assert sum(parts, Decimal("0")) == total
     assert all(p == parts[0] for p in parts)
+
+
+def test_blend_then_flat_glides_upward_smoothly_when_growth_outpaces_the_exit_rate():
+    # The symmetric case to the canonical fixture's decline: a year whose annual
+    # total implies a HIGHER run-rate than the prior year's exit. The glide must
+    # step UP monotonically into the (also higher) solved flat level — same one-
+    # smooth-progression property, opposite direction.
+    total = Decimal("900000")
+    prev_last = Decimal("40000")
+    parts = _blend_then_flat(total, prev_last)
+    assert sum(parts, Decimal("0")) == total
+    chain = [prev_last] + parts[:_BLEND_MONTHS + 1]
+    for i in range(len(chain) - 1):
+        assert chain[i + 1] > chain[i], chain  # strictly increasing, no dip
+    gaps = [chain[i + 1] - chain[i] for i in range(len(chain) - 1)]
+    for g in gaps[1:]:
+        assert abs(g - gaps[0]) < Decimal("0.0001"), gaps
+    for i in range(_BLEND_MONTHS, 11):
+        assert parts[i] == parts[_BLEND_MONTHS]
+
+
+def test_build_monthly_chains_years_2_5_off_each_other_not_just_year_1(aggressive_result):
+    # Regression: Year 3 must anchor its glide on Year 2's OWN computed exit value
+    # (not, say, Year 1's), so a multi-year run of glides stays internally
+    # consistent. Reconstruct Year 2's exit revenue/expense directly and confirm
+    # Year 3's month-25 (its first month) sits on the SAME glide chain implied by
+    # that exact anchor, to the penny.
+    from engine.monthly import _year_slices
+    from engine.money import D
+
+    rev1, exp1, _ = _year_slices(aggressive_result.annual[1], 1)
+    rev2, exp2, _ = _year_slices(
+        aggressive_result.annual[2], 2, prev_rev_last=rev1[-1], prev_exp_last=exp1[-1],
+    )
+    rev3, exp3, _ = _year_slices(
+        aggressive_result.annual[3], 3, prev_rev_last=rev2[-1], prev_exp_last=exp2[-1],
+    )
+    month25 = next(m for m in aggressive_result.monthly if m.index == 25)
+    assert D(str(month25.revenue)) == rev3[0]
+    assert D(str(month25.expenses)) == exp3[0]
