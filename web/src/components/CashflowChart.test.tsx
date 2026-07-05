@@ -70,10 +70,10 @@ function legacy12(): MonthlyPoint[] {
 }
 
 describe("CashflowChart module", () => {
-  it("renders the 'Cash flow' module with a CSV export link (href + download)", () => {
+  it("renders the 'Cash position and change by month' module with a CSV export link (href + download)", () => {
     render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} viewSlug="abc123" />);
-    expect(screen.getByTestId("cashflow-module")).toHaveAttribute("aria-label", "Cash flow");
-    expect(screen.getByRole("heading", { level: 2, name: "Cash flow" })).toBeInTheDocument();
+    expect(screen.getByTestId("cashflow-module")).toHaveAttribute("aria-label", "Cash position and change by month");
+    expect(screen.getByRole("heading", { level: 2, name: "Cash position and change by month" })).toBeInTheDocument();
     const csv = screen.getByTestId("cashflow-export");
     expect(csv).toHaveAttribute("href", "/api/projections/abc123/cashflow.csv");
     expect(csv).toHaveAttribute("download");
@@ -146,6 +146,72 @@ describe("CashflowChart module", () => {
     const svg = screen.getByTestId("cashflow-chart").querySelector("svg")!;
     expect(svg.textContent).toMatch(/Monthly net/);
     expect(svg.textContent).toMatch(/Cumulative cash/);
+  });
+
+  // ── owner-feedback polish (2026-07-04 live review) ─────────────────────────
+  it("marks the axis-title swatches aria-hidden (the text label already names the series)", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const netSwatches = container.querySelectorAll(
+      ".cashflow-chart__axis-swatch--net-pos, .cashflow-chart__axis-swatch--net-neg",
+    );
+    const cumSwatches = container.querySelectorAll(
+      ".cashflow-chart__axis-swatch--cum, .cashflow-chart__axis-swatch--cum-dot",
+    );
+    expect(netSwatches.length).toBeGreaterThan(0);
+    expect(cumSwatches.length).toBeGreaterThan(0);
+    [...netSwatches, ...cumSwatches].forEach((el) => {
+      expect(el).toHaveAttribute("aria-hidden", "true");
+    });
+  });
+
+  it("net gridlines span the full plot width and never duplicate a cumulative gridline row (item 2, collision rule)", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const netLines = Array.from(container.querySelectorAll(".cashflow-chart__gridline--net"));
+    const cumLines = Array.from(
+      container.querySelectorAll(".cashflow-chart__gridline:not(.cashflow-chart__gridline--net)"),
+    );
+    expect(netLines.length).toBeGreaterThan(0);
+    expect(cumLines.length).toBeGreaterThan(0);
+    // Full width: same x1/x2 span as the cumulative (hero) gridlines.
+    const [plotX1, plotX2] = [cumLines[0].getAttribute("x1"), cumLines[0].getAttribute("x2")];
+    netLines.forEach((l) => {
+      expect(l.getAttribute("x1")).toBe(plotX1);
+      expect(l.getAttribute("x2")).toBe(plotX2);
+    });
+    // Collision rule: no net gridline within 1 viewBox unit of any cumulative one.
+    const cumYs = cumLines.map((l) => parseFloat(l.getAttribute("y1")!));
+    netLines.forEach((l) => {
+      const y = parseFloat(l.getAttribute("y1")!);
+      expect(cumYs.some((cy) => Math.abs(cy - y) < 1)).toBe(false);
+    });
+  });
+
+  it("never draws a duplicate net gridline at the shared-zero row (item 2)", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const zeroY = container.querySelector(".cashflow-chart__zero")!.getAttribute("y1");
+    const netAtZero = Array.from(container.querySelectorAll(".cashflow-chart__gridline--net")).some(
+      (l) => l.getAttribute("y1") === zeroY,
+    );
+    expect(netAtZero).toBe(false);
+  });
+
+  it("gives every month row a fixed leading milestone slot BEFORE 'M{n}' (item 3, consistent labels)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    // Month 1 carries the Grand Opening flag; month 2 carries none.
+    const flaggedCell = screen.getByTestId("cashflow-month-1").querySelector(".cashflow-table__label")!;
+    const plainCell = screen.getByTestId("cashflow-month-2").querySelector(".cashflow-table__label")!;
+    expect(flaggedCell.firstElementChild).toHaveClass("cashflow-table__milestone-slot");
+    expect(plainCell.firstElementChild).toHaveClass("cashflow-table__milestone-slot");
+    // The month text is the LAST child in both — the slot never pushes into it,
+    // so "M1".."M60" all start at the identical x regardless of flags.
+    expect(flaggedCell.lastChild?.textContent).toBe("M1");
+    expect(plainCell.lastChild?.textContent).toBe("M2");
   });
 
   it("draws year dividers + Year labels across the horizon", () => {
@@ -388,6 +454,42 @@ describe("shared-zero degenerate guard (review C1)", () => {
       container.querySelectorAll(".cashflow-chart__axis-tick--right"),
     ).map((t) => t.textContent);
     expect(rightTicks).toContain("$0");
+  });
+});
+
+// ── owner-feedback item 1 (live review 2026-07-04): at <=480px the wide layout's
+// fixed right-anchor offset for the cumulative axis title collided with the net
+// title's text with ZERO gap (confirmed in a real 375px browser render — the two
+// labels ran together as "Monthly net ($)—Cumulative cash ($)"), which is exactly
+// why the owner read the axes as unlabeled. The spec explicitly allows the title
+// pair to STACK at narrow widths (§7); this locks that stacked, non-colliding
+// layout in place. jsdom has no matchMedia, so it's stubbed to force `narrow`. ──
+describe("axis-title layout at <=480px (owner item 1, narrow stack)", () => {
+  function stubNarrowMatchMedia() {
+    const mql = {
+      matches: true,
+      media: "(max-width: 480px)",
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockReturnValue(mql as unknown as MediaQueryList),
+    );
+  }
+
+  it("stacks the cumulative title BELOW the net title instead of sharing its row", () => {
+    stubNarrowMatchMedia();
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const netText = container.querySelector(".cashflow-chart__axis-label--net text")!;
+    const cumText = container.querySelector(".cashflow-chart__axis-label--cum text")!;
+    const netY = parseFloat(netText.getAttribute("y")!);
+    const cumY = parseFloat(cumText.getAttribute("y")!);
+    // Stacked, not side-by-side: cum sits on a LOWER row than net.
+    expect(cumY).toBeGreaterThan(netY);
+    vi.unstubAllGlobals();
   });
 });
 
