@@ -107,6 +107,11 @@
    * never shift on click (the edit-in-place rule). */
   --field-pad-x: 10px;
 
+  /* Reserved trailing-glyph slot ("%", ")", "%)") in the 5-year table so the last
+   * DIGIT of every cell shares one right edge regardless of suffix type — see
+   * .three-year-table .cell__suffix. */
+  --cell-suffix-w: 16px;
+
   /* Label-to-value gap (used in metric-bar cells, KPI grid, etc.). */
   --label-gap: 4px;
 
@@ -1275,9 +1280,11 @@ body {
 }
 
 .projection-tab__heading {
+  /* Match .cashflow-module__title — both are peer top-level section headings
+     on the same page and must read at the same visual weight. */
   margin: 0 0 0.5rem;
-  font-size: var(--text-base);
-  font-weight: 600;
+  font-size: var(--text-lg);
+  font-weight: var(--w-semibold);
 }
 
 /* Visually hidden but exposed to assistive tech (recompute live-region, caption). */
@@ -1552,6 +1559,14 @@ body {
   letter-spacing: 0.04em;
   font-size: var(--text-sm);
 }
+/* Right-aligned numeric headers: letter-spacing adds a trailing gap AFTER the
+   last glyph too, which text-align:right then folds into its "right edge" —
+   pushing "YEAR 1" etc. visibly left of the data digits below. Cancel that
+   trailing gap and reserve the same suffix slot as the data cells so the
+   header's last digit sits exactly over the column's last data digit. */
+.three-year-table thead th.num {
+  padding-right: calc(var(--field-pad-x) + var(--cell-suffix-w) - 0.04em);
+}
 .three-year-table th[scope="col"]:first-child,
 .three-year-table__label {
   text-align: left;
@@ -1573,6 +1588,16 @@ body {
 /* Cell-state classes — SEMANTIC tokens only. */
 .cell {
   font-variant-numeric: tabular-nums;
+}
+/* Fixed suffix slot: trailing "%", ")", "%)" render in reserved space so the
+   last DIGIT of every row shares one right edge regardless of suffix — a
+   suffix-less cell ($2,000 / 6,000) still reserves the slot via its own empty
+   span, so every row in a column ends its digits at the identical x. */
+.three-year-table .cell__suffix {
+  display: inline-block;
+  width: var(--cell-suffix-w);
+  text-align: left;
+  font-variant-numeric: normal;
 }
 .cell-wrap {
   padding: 0;
@@ -4067,9 +4092,14 @@ td.cell-wrap {
 }
 
 /* Inline editor in the 3/5-year table: matching horizontal padding so the
-   displayed number and the input are flush to the same right edge. */
+   displayed number and the input are flush to the same right edge. The display
+   button reserves --cell-suffix-w AFTER its digits (for a "%"/")" glyph, or
+   empty) before its own --field-pad-x padding; the input has no suffix span, so
+   its own padding-right must fold in that same reserved width — otherwise the
+   digits jump left by --cell-suffix-w the instant a cell opens for edit. */
 .cell-wrap input {
   padding: var(--space-1) var(--field-pad-x);
+  padding-right: calc(var(--field-pad-x) + var(--cell-suffix-w));
   text-align: right;
   font-variant-numeric: tabular-nums;
   width: 100%;
