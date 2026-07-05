@@ -1692,31 +1692,22 @@ body {
   fill: var(--text-muted);
 }
 /* `.cashflow-chart__milestone-glyph` is shared by TWO different contexts: the
-   on-plot marker (a standalone <text>, centered atop its vertical line — needs
-   text-anchor:middle) and the chip-stack glyph (a <tspan> inside the chip's
-   <text text-anchor="start">, which must INHERIT "start" so the glyph sits at
-   the chip's own x, not centered on it). Scoping middle-anchor to the <text>
-   tag only (owner feedback, 2026-07-04 fourth pass) keeps the on-plot marker
-   centered while leaving the chip's tspan alone — a same-class conflict here
-   previously fought the parent's text-anchor="start" and shifted/clipped the
-   chip glyph once its anchor moved flush to the module title's left edge
-   (x=0, no longer padL, which used to hide the same latent bug in its margin). */
-text.cashflow-chart__milestone-glyph {
-  text-anchor: middle;
-}
-/* Per-key glyph tint (shape + label already disambiguate; color is a bonus),
-   applied on BOTH the plot marker group and the chip row. */
+   on-plot marker (a standalone <text>, centered atop its vertical line) and
+   the chip-stack glyph (a <tspan> with its own fixed x, center-anchored on a
+   shared glyph column — see CHIP_GLYPH_COL_W in CashflowChart.tsx — so glyphs
+   of different natural widths, e.g. ⚑ / = / ★, land on one shared center
+   line). Both contexts set text-anchor:middle as a presentation attribute
+   directly on the element, so no anchor rule is needed here. */
+/* All milestone glyphs share ONE brand-green tint (shape + label already
+   disambiguate each milestone; color no longer needs to), applied on BOTH the
+   plot marker group and the chip row. */
 .cashflow-chart__milestone--grandOpening .cashflow-chart__milestone-glyph,
-.cashflow-chart__milestone-chip--grandOpening .cashflow-chart__milestone-glyph {
-  fill: var(--brand-primary);
-}
+.cashflow-chart__milestone-chip--grandOpening .cashflow-chart__milestone-glyph,
 .cashflow-chart__milestone--breakEven .cashflow-chart__milestone-glyph,
-.cashflow-chart__milestone-chip--breakEven .cashflow-chart__milestone-glyph {
-  fill: var(--success);
-}
+.cashflow-chart__milestone-chip--breakEven .cashflow-chart__milestone-glyph,
 .cashflow-chart__milestone--payback .cashflow-chart__milestone-glyph,
 .cashflow-chart__milestone-chip--payback .cashflow-chart__milestone-glyph {
-  fill: var(--warning);
+  fill: var(--brand-primary);
 }
 /* left-aligned chip stack: lives in its OWN RESERVED BAND above the plot (fix,
    2026-07-04 third pass) — the plot's top edge is pushed down by exactly the
