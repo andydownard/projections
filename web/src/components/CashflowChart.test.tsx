@@ -710,6 +710,74 @@ describe("owner defect 3 — bars inset from the plot edges", () => {
   });
 });
 
+// ── owner defect 2 (2026-07-04 second live review): milestone treatment.
+// Chips STAY on the plot but get ONE flush-left text edge (no staircase); each
+// milestone's vertical line is a light CONSISTENT stroke; EVERY plotted marker
+// is labeled — including the minimum-cash red ring, which was previously drawn
+// with no callout at all; payback is audited (labeled when within the horizon). ──
+describe("owner defect 2 — left-aligned labeled milestone chips + light lines", () => {
+  it("stacks the milestone chips on ONE flush-left text edge (no staircase) and in a vertical column", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const chips = Array.from(container.querySelectorAll(".cashflow-chart__milestone-chip"));
+    expect(chips.length).toBeGreaterThan(1);
+    // ONE flush-left text edge: all chip <text> share the same x.
+    expect(new Set(chips.map((c) => c.getAttribute("x"))).size).toBe(1);
+    // A vertical stack: strictly increasing, distinct y (never staircased across x).
+    const ys = chips.map((c) => parseFloat(c.getAttribute("y")!));
+    for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeGreaterThan(ys[i - 1]);
+  });
+
+  it("calls out the minimum-cash (red-ring) position with its own labeled chip (was unlabeled)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    // The red-ring trough marker still exists on the plot…
+    expect(screen.getByTestId("trough-marker")).toBeInTheDocument();
+    // …and now carries a labeled chip naming it + its month.
+    const chip = screen.getByTestId("milestone-chip-minCash");
+    expect(chip.textContent).toMatch(/lowest cash/i);
+    expect(chip.textContent).toMatch(/Month \d+/);
+  });
+
+  it("labels EVERY plotted milestone incl. payback when it is within the horizon (audit)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    for (const key of ["grandOpening", "breakEven", "payback", "minCash"]) {
+      expect(screen.getByTestId(`milestone-chip-${key}`)).toBeInTheDocument();
+    }
+  });
+
+  it("omits the payback chip + line when payback is N/A (not reached in the horizon)", () => {
+    const na: Milestones = {
+      grandOpening: { raw: 1, display: "Month 1" },
+      breakEven: { raw: 29, display: "Month 29" },
+      payback: { raw: null, display: "N/A", reason: "not recovered within the horizon" },
+    };
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={na} />);
+    expect(screen.queryByTestId("milestone-chip-payback")).not.toBeInTheDocument();
+    expect(screen.getByTestId("milestone-chip-minCash")).toBeInTheDocument();
+    expect(screen.getByTestId("milestone-chip-grandOpening")).toBeInTheDocument();
+  });
+
+  it("draws each milestone's vertical line as ONE consistent light full-height stroke", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    const lines = Array.from(container.querySelectorAll(".cashflow-chart__milestone-line"));
+    expect(lines.length).toBeGreaterThan(0);
+    lines.forEach((l) => {
+      // full plot height (padT=44 .. padT+plotH=272), and vertical.
+      expect(l.getAttribute("y1")).toBe("44");
+      expect(l.getAttribute("y2")).toBe("272");
+      expect(l.getAttribute("x1")).toBe(l.getAttribute("x2"));
+    });
+  });
+
+  it("preserves the break-even marker testid (ProjectionTab depends on it)", () => {
+    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    expect(screen.getByTestId("breakeven-marker")).toBeInTheDocument();
+  });
+});
+
 // ── review C2 + I1: plot→row pointer hover and tap/click-to-pin. The scrubber
 // rect is the single pointer surface (the whole month band = the ≥24px hit
 // target). jsdom has no layout, so the rect's box is mocked. ──

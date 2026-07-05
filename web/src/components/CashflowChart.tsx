@@ -171,15 +171,18 @@ function buildGroups(monthly: MonthlyPoint[], opening: number): Group[] {
   return groups;
 }
 
-// Distinct, non-color-only icon per milestone (shape carries meaning too).
+// Distinct, non-color-only icon per milestone (shape carries meaning too). Owner
+// defect 2: the flag / triangle / star / ring glyphs render at ONE size everywhere
+// (chip stack, plot markers, table slots) via the shared `cashflow-glyph` class.
 const MILESTONE_META: Array<{ key: keyof Milestones; label: string; icon: string }> = [
   { key: "grandOpening", label: "Grand Opening", icon: "⚑" },
   { key: "breakEven", label: "Break-even", icon: "▲" },
   { key: "payback", label: "Payback", icon: "★" },
 ];
-// Only Grand Opening + Break-even are labeled ON the plot (Payback would crowd the
-// line; it is flagged on its table row + the sr-only summary instead).
-const ON_CHART_KEYS: Array<keyof Milestones> = ["grandOpening", "breakEven"];
+// The minimum-cash trough is a synthetic (non-Milestones) callout — the red ring
+// on the plot, now given its own labeled chip (owner defect 2). The glyph echoes
+// the ring shape.
+const MIN_CASH_ICON = "◯";
 
 export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }: CashflowChartProps) {
   // Responsive geometry (spec §7): a NARROWER reference viewBox at ≤480px so the
@@ -277,9 +280,6 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   const plotCenterY = padT + plotH / 2;
   const leftTitleX = 10;
   const rightTitleX = W - 14;
-  // Milestone on-chart labels sit below where the axis-title row used to be;
-  // a single constant now that titles never occupy this row (narrow or wide).
-  const milestoneBaseY = 24;
 
   const n = monthly.length;
   // Owner defect 3: inset the band layout from the plot edges so the FIRST/LAST
@@ -331,15 +331,26 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   const idxOfMonth = (month: number | null | undefined) =>
     month == null ? -1 : monthly.findIndex((m) => m.month === month);
 
-  // On-chart markers (Grand Opening + Break-even), staggered onto two rows.
-  const markers = milestones
-    ? MILESTONE_META.filter((meta) => ON_CHART_KEYS.includes(meta.key))
-        .map((meta) => ({ ...meta, ms: milestones[meta.key], idx: idxOfMonth(milestones[meta.key].raw) }))
-        .filter((mk) => mk.idx >= 0)
-    : beMonth != null && idxOfMonth(beMonth) >= 0
-      ? [{ key: "breakEven" as const, label: "Break-even", icon: "▲",
-          ms: { raw: beMonth, display: `Month ${beMonth}` } as Milestone, idx: idxOfMonth(beMonth) }]
-      : [];
+  // Unified milestone callouts (owner defect 2). EVERY plotted marker is labeled:
+  // Grand Opening, Break-even, Payback (only when it lands within the horizon), and
+  // the minimum-cash red ring (previously drawn with no callout at all). Each has
+  // an on-plot marker (a light vertical line + a glyph, or the ring for min-cash)
+  // AND a row in the left-aligned chip stack. `label` is the chip's display name.
+  interface Callout { key: string; icon: string; label: string; display: string; idx: number }
+  const milestoneCallouts: Callout[] = [];
+  const pushMs = (key: keyof Milestones, icon: string, label: string, ms: Milestone | undefined) => {
+    const idx = idxOfMonth(ms?.raw);
+    if (ms && ms.raw != null && idx >= 0) milestoneCallouts.push({ key, icon, label, display: ms.display, idx });
+  };
+  if (milestones) {
+    for (const meta of MILESTONE_META) pushMs(meta.key, meta.icon, meta.label, milestones[meta.key]);
+  } else if (beMonth != null && idxOfMonth(beMonth) >= 0) {
+    milestoneCallouts.push({ key: "breakEven", icon: "▲", label: "Break-even", display: `Month ${beMonth}`, idx: idxOfMonth(beMonth) });
+  }
+  // Min-cash trough — the red ring's own callout (label matches the chart's
+  // aria-label "Lowest cash balance …"). "Month N" is chrome (a month index, not a
+  // money figure), consistent with the other milestones' server `display`.
+  milestoneCallouts.push({ key: "minCash", icon: MIN_CASH_ICON, label: "Lowest cash", display: `Month ${trough.month}`, idx: troughIdx });
 
   // Year dividers + span labels (spec §3.6). A boundary sits at the LEFT edge of the
   // grand-opening month and every 12 months thereafter.
@@ -353,8 +364,8 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
     return { y, first, last, xMid: (xLeftOf(first) + xRight) / 2 };
   }).filter((s) => s.last >= s.first);
 
-  const milestoneDesc = markers.length
-    ? ` Milestones: ${markers.map((mk) => `${mk.label} ${mk.ms.display}`).join("; ")}.`
+  const milestoneDesc = milestoneCallouts.length
+    ? ` Milestones: ${milestoneCallouts.map((c) => `${c.label} ${c.display}`).join("; ")}.`
     : "";
   const beLabel = beMonth != null ? `month ${beMonth}` : "not within the horizon";
 
@@ -623,25 +634,80 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
             </text>
           ))}
 
-          {/* on-chart milestone labels (Grand Opening + Break-even), staggered */}
-          {markers.map((mk, i) => {
-            const lx = xCenter(mk.idx);
-            const anchor = lx > W - padR - 40 ? "end" : lx < padL + 40 ? "start" : "middle";
-            const labelY = milestoneBaseY + (i % 2) * 12;
+          {/* milestone markers (owner defect 2): a light CONSISTENT vertical line
+              per plotted milestone, each capped with its glyph above the plot.
+              Min-cash reuses the red ring (drawn above) as its on-plot marker, so
+              it gets a line but no top glyph. All glyphs share `cashflow-glyph`
+              → one size everywhere. */}
+          {milestoneCallouts.map((c) => {
+            const lx = xCenter(c.idx);
             return (
               <g
-                key={mk.key}
-                data-testid={`${String(mk.key).toLowerCase()}-marker`}
-                className={`cashflow-chart__milestone cashflow-chart__milestone--${mk.key}`}
+                key={c.key}
+                data-testid={`${c.key.toLowerCase()}-marker`}
+                className={`cashflow-chart__milestone cashflow-chart__milestone--${c.key}`}
               >
-                <title>{`${mk.label}: ${mk.ms.display}`}</title>
-                <line className="cashflow-chart__milestone-leader" x1={lx} x2={lx} y1={labelY + 3} y2={padT} />
-                <text className="cashflow-chart__milestone-label" x={lx} y={labelY} textAnchor={anchor} aria-hidden="true">
-                  {mk.icon} {mk.label} · {mk.ms.display}
-                </text>
+                <title>{`${c.label}: ${c.display}`}</title>
+                <line className="cashflow-chart__milestone-line" x1={lx} x2={lx} y1={padT} y2={padT + plotH} />
+                {c.key !== "minCash" && (
+                  <text
+                    className="cashflow-glyph cashflow-chart__milestone-glyph"
+                    x={lx}
+                    y={padT - 3}
+                    textAnchor="middle"
+                    aria-hidden="true"
+                  >
+                    {c.icon}
+                  </text>
+                )}
               </g>
             );
           })}
+
+          {/* left-aligned milestone chip stack (owner defect 2): ONE flush-left
+              text edge (all chip <text> share x), stacked vertically inside the
+              plot's top-left on a subtle panel so the chips never collide with the
+              gridlines, tick labels, or each other at any viewport. Each row:
+              glyph + "Label · Month N" (amounts, if ever shown, are server display
+              strings; "Month N" is a month index, chrome — never a re-derived
+              figure). */}
+          {milestoneCallouts.length > 0 &&
+            (() => {
+              const rowH = 13;
+              const chipTextX = padL + 12;
+              const chipTop = padT + 6;
+              const panelW = Math.min(172, plotW - 12);
+              const panelH = milestoneCallouts.length * rowH + 8;
+              return (
+                <g className="cashflow-chart__milestone-chips" data-testid="milestone-chips">
+                  <rect
+                    className="cashflow-chart__milestone-chips-bg"
+                    x={padL + 4}
+                    y={chipTop}
+                    width={panelW}
+                    height={panelH}
+                    rx={5}
+                  />
+                  {milestoneCallouts.map((c, i) => (
+                    <text
+                      key={c.key}
+                      data-testid={`milestone-chip-${c.key}`}
+                      className={`cashflow-chart__milestone-chip cashflow-chart__milestone-chip--${c.key}`}
+                      x={chipTextX}
+                      y={chipTop + 13 + i * rowH}
+                      textAnchor="start"
+                    >
+                      <tspan className="cashflow-glyph cashflow-chart__milestone-glyph" aria-hidden="true">
+                        {c.icon}
+                      </tspan>
+                      <tspan className="cashflow-chart__milestone-chip-label" dx="5">
+                        {`${c.label} · ${c.display}`}
+                      </tspan>
+                    </text>
+                  ))}
+                </g>
+              );
+            })()}
 
           {/* hover/focus crosshair + active point */}
           {activePt && activeIdx >= 0 && (
@@ -791,7 +857,7 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
                         <span className="cashflow-table__milestone-slot">
                           {flags.map((meta) => (
                             <span key={meta.key} className={`cashflow-table__milestone cashflow-table__milestone--${meta.key}`}>
-                              <span aria-hidden="true">{meta.icon}</span>
+                              <span className="cashflow-glyph" aria-hidden="true">{meta.icon}</span>
                               <span className="sr-only">({meta.label})</span>
                             </span>
                           ))}
