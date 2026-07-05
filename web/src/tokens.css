@@ -1670,9 +1670,9 @@ body {
 }
 
 /* --- milestone markers + left-aligned chip stack (owner defect 2, 2026-07-04).
-   EVERY plotted milestone (Grand Opening / Break-even / Payback / Lowest cash)
-   gets a LIGHT, CONSISTENT vertical line + a glyph, plus a row in the left-aligned
-   chip stack. Identity is carried by the glyph SHAPE + the text LABEL (a11y, issue
+   EVERY plotted milestone (Grand Opening / Break-even / Payback) gets a LIGHT,
+   CONSISTENT vertical line + a glyph, plus a row in the left-aligned chip
+   stack. Identity is carried by the glyph SHAPE + the text LABEL (a11y, issue
    #117 — never color alone), so the LINES all share ONE light stroke rather than
    per-key colors/dashes. All glyphs use `.cashflow-glyph` → one size everywhere
    (chip stack, plot markers, table milestone slots). --- */
@@ -1684,12 +1684,24 @@ body {
 }
 .cashflow-glyph {
   /* ONE glyph size across the chart (SVG) and the table (HTML) so the flag /
-     triangle / star / ring read identically everywhere (owner defect 2). */
+     triangle / star read identically everywhere (owner defect 2). */
   font-size: 11px;
   line-height: 1;
 }
 .cashflow-chart__milestone-glyph {
   fill: var(--text-muted);
+}
+/* `.cashflow-chart__milestone-glyph` is shared by TWO different contexts: the
+   on-plot marker (a standalone <text>, centered atop its vertical line — needs
+   text-anchor:middle) and the chip-stack glyph (a <tspan> inside the chip's
+   <text text-anchor="start">, which must INHERIT "start" so the glyph sits at
+   the chip's own x, not centered on it). Scoping middle-anchor to the <text>
+   tag only (owner feedback, 2026-07-04 fourth pass) keeps the on-plot marker
+   centered while leaving the chip's tspan alone — a same-class conflict here
+   previously fought the parent's text-anchor="start" and shifted/clipped the
+   chip glyph once its anchor moved flush to the module title's left edge
+   (x=0, no longer padL, which used to hide the same latent bug in its margin). */
+text.cashflow-chart__milestone-glyph {
   text-anchor: middle;
 }
 /* Per-key glyph tint (shape + label already disambiguate; color is a bonus),
@@ -1706,16 +1718,13 @@ body {
 .cashflow-chart__milestone-chip--payback .cashflow-chart__milestone-glyph {
   fill: var(--warning);
 }
-.cashflow-chart__milestone--minCash .cashflow-chart__milestone-glyph,
-.cashflow-chart__milestone-chip--minCash .cashflow-chart__milestone-glyph {
-  fill: var(--error);
-}
 /* left-aligned chip stack: lives in its OWN RESERVED BAND above the plot (fix,
    2026-07-04 third pass) — the plot's top edge is pushed down by exactly the
    stack's height (see chipBandH in CashflowChart.tsx), so there is no longer a
    translucent panel here to keep the rows legible over gridlines/ticks; there
-   is nothing left to overlap. text-anchor:start + a shared x give ONE
-   flush-left text edge (no staircase). */
+   is nothing left to overlap. text-anchor:start + a shared x (chipStackX = 0,
+   flush with the module title's own left edge — owner feedback, 2026-07-04
+   fourth pass) give ONE flush-left text edge (no staircase). */
 .cashflow-chart__milestone-chips {
   pointer-events: none;
 }
@@ -1857,11 +1866,6 @@ body {
 }
 .cashflow-chart__bar--neg {
   fill: var(--error);
-}
-.cashflow-chart__trough {
-  fill: var(--surface);
-  stroke: var(--error);
-  stroke-width: 2;
 }
 .cashflow-chart__tick {
   fill: var(--text-muted);
