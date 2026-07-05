@@ -178,20 +178,55 @@ test.describe("cash-flow module", () => {
   });
 });
 
-test.describe("evidence screenshots — canonical 60%-labor default", () => {
-  test("the canonical default renders visible, varying net bars; archive the module screenshot", async ({ page }, testInfo) => {
-    // Create the 60%-labor projection through the REAL create endpoint (the
-    // seeded `example` is the 40% design-parity twin, which masked review-C1).
+// A server money value {raw, display} (whole dollars, "$", parens for negatives),
+// mirroring the backend/unit convention — the chart renders `display` verbatim.
+function sv(raw: number) {
+  const abs = Math.abs(Math.round(raw));
+  const grouped = abs.toLocaleString("en-US");
+  return { raw, display: raw < 0 ? `($${grouped})` : `$${grouped}` };
+}
+
+// A LEGACY 2.6.0-era snapshot: 12 monthly rows, NO milestones. A big M1 startup
+// (net M1 ≈ the cumulative trough) so the two nice domains agree at both ends and
+// UNIFY into one identical ladder on both axes (owner defect 1(c) — the case that
+// otherwise read "left ending −$300k, right −$400k" as an error).
+function legacyMonthly() {
+  const rows = [];
+  let cum = 0;
+  for (let m = 1; m <= 12; m++) {
+    const net = m === 1 ? -300_000 : 25_000;
+    cum += net;
+    rows.push({
+      month: m,
+      revenue: sv(40_000),
+      expenses: sv(m === 1 ? 340_000 : 15_000),
+      net: sv(net),
+      cumulativeCash: sv(cum),
+    });
+  }
+  return rows;
+}
+
+test.describe("evidence screenshots — three data shapes", () => {
+  test("archive the cash-flow module for canonical 60% + design-parity 40% + a legacy 12-row snapshot", async ({
+    page,
+  }, testInfo) => {
+    mkdirSync(ASSETS, { recursive: true });
+    const tag = VIEWPORT_TAG[testInfo.project.name] ?? testInfo.project.name;
+    const module = page.getByTestId("cashflow-module");
+
+    // ── Shape 1: canonical 60%-labor default, created through the REAL endpoint
+    // (the seeded `example` is the 40% design-parity twin, which masked review-C1).
     const resp = await page.request.post("/api/projections", { data: CANONICAL_60_BODY });
     expect(resp.status()).toBe(201);
     const { view_slug } = await resp.json();
     await page.goto(`/p/${view_slug}`);
-    await expect(page.getByTestId("cashflow-module")).toBeVisible();
+    await expect(module).toBeVisible();
     await expect(page.getByTestId("cashflow-chart")).toBeVisible();
 
-    // Real-browser C1 regression: on the payback-N/A default the net bars must
-    // NOT collapse to the 0.5px degenerate floor — they vary and the month-1
-    // startup-loss bar is tall (heights are viewBox units).
+    // Real-browser C1 regression: on the payback-N/A default the net bars must NOT
+    // collapse to the 0.5px degenerate floor — they vary and the month-1 loss bar
+    // is tall (heights are viewBox units).
     const heights = await page
       .locator(".cashflow-chart__bar")
       .evaluateAll((els) => els.map((e) => parseFloat(e.getAttribute("height") || "0")));
@@ -199,31 +234,29 @@ test.describe("evidence screenshots — canonical 60%-labor default", () => {
     expect(new Set(heights.map((h) => h.toFixed(1))).size).toBeGreaterThan(1);
     expect(Math.max(...heights)).toBeGreaterThan(20);
 
-    mkdirSync(ASSETS, { recursive: true });
-    const tag = VIEWPORT_TAG[testInfo.project.name] ?? testInfo.project.name;
-    const module = page.getByTestId("cashflow-module");
-    await module.scrollIntoViewIfNeeded();
-    await module.screenshot({ path: join(ASSETS, `cashflow-module-${tag}.png`) });
-    await expect(module).toBeVisible();
+    // Owner defect 1: the RIGHT (cumulative) axis ladder now spans the full plot
+    // height (was crammed into a sliver). Assert the tick-y span is ≥90% of the
+    // plot height in the REAL browser, then archive the module.
+    const rightSpan = await page
+      .locator(".cashflow-chart__axis-tick--right")
+      .evaluateAll((els) => {
+        const ys = els.map((e) => parseFloat(e.getAttribute("y") || "NaN"));
+        return Math.max(...ys) - Math.min(...ys);
+      });
+    expect(rightSpan).toBeGreaterThanOrEqual(0.9 * 228);
 
-    // Close-up crops of the two ROTATED axis titles (owner item, 2026-07-04
-    // second review) — real-browser evidence that each renders rotated,
-    // glyph-riding-with-text, and legible at this viewport (not just present
-    // in the DOM — jsdom can't render SVG rotation at all). boundingBox()
-    // returns the axis-aligned box that fully contains the rotated content.
+    await module.scrollIntoViewIfNeeded();
+    await module.screenshot({ path: join(ASSETS, `cashflow-module-canonical-${tag}.png`) });
+
+    // Fresh close-up crops of the two ROTATED axis titles (geometry moved this
+    // pass): real-browser evidence each renders rotated, glyph-riding-with-text.
     for (const [key, groupClass] of [
       ["net", ".cashflow-chart__axis-label--net"],
       ["cum", ".cashflow-chart__axis-label--cum"],
     ] as const) {
-      // The whole rotated <g> (glyph + text), not just the <text>, so the
-      // crop shows the glyph riding along with its label.
       const title = page.locator(groupClass);
       await expect(title).toBeVisible();
       const box = (await title.boundingBox())!;
-      // A tight pad: wide enough to frame the glyph without bleeding into the
-      // adjacent tick-label column (the gutter between the rotated title and
-      // the tick labels is intentionally narrow — see the padL/padR comment
-      // in CashflowChart.tsx).
       const pad = 6;
       await page.screenshot({
         path: join(ASSETS, `cashflow-axis-title-${key}-${tag}-closeup.png`),
@@ -235,5 +268,39 @@ test.describe("evidence screenshots — canonical 60%-labor default", () => {
         },
       });
     }
+
+    // ── Shape 2: design-parity 40% — the seeded `example` twin.
+    await page.goto("/p/example");
+    await expect(module).toBeVisible();
+    await expect(page.getByTestId("cashflow-chart")).toBeVisible();
+    await module.scrollIntoViewIfNeeded();
+    await module.screenshot({ path: join(ASSETS, `cashflow-module-parity-${tag}.png`) });
+
+    // ── Shape 3: a LEGACY 12-row snapshot (no milestones). Injected by rewriting
+    // the `example` view-model's monthly series + dropping milestones — the real
+    // SPA renders the real CashflowChart, exercising the G=1 legacy fallback and
+    // the unified-ladder path in a real browser.
+    const baseVm = await (await page.request.get("/api/projections/example")).json();
+    const legacyVm = { ...baseVm, monthly: legacyMonthly(), breakevenMonth: null };
+    delete legacyVm.milestones;
+    await page.route("**/api/projections/example", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(legacyVm) })
+        : route.continue(),
+    );
+    await page.goto("/p/example");
+    await expect(module).toBeVisible();
+    await expect(page.getByTestId("cashflow-chart")).toBeVisible();
+    // 12 bars, and the unified ladder: left + right tick labels are identical.
+    await expect(page.locator(".cashflow-chart__bar")).toHaveCount(12);
+    const [leftTicks, rightTicks] = await Promise.all([
+      page.locator(".cashflow-chart__axis-tick--left").allTextContents(),
+      page.locator(".cashflow-chart__axis-tick--right").allTextContents(),
+    ]);
+    expect(leftTicks.length).toBeGreaterThan(1);
+    expect(leftTicks).toEqual(rightTicks);
+    await module.scrollIntoViewIfNeeded();
+    await module.screenshot({ path: join(ASSETS, `cashflow-module-legacy-${tag}.png`) });
+    await page.unroute("**/api/projections/example");
   });
 });
