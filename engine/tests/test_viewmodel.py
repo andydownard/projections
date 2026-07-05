@@ -513,3 +513,26 @@ def test_breakeven_surfaces_all_route_through_one_month_view(canonical_result):
     assert len(kpi) == 1 and kpi[0]["value"] == expected
     assert vm["milestones"]["breakEven"]["raw"] == expected["raw"]
     assert vm["milestones"]["breakEven"]["display"] == expected["display"]
+
+
+def test_derived_driver_chain_rows_are_computed_not_input(canonical_result):
+    """Donating households / Annual donations / Retail Sales are each derived by
+    multiplying the row above (share -> donating_hh -> donations -> retail) — they
+    are NOT raw inputs, so the UI must not give them the green input tint/border.
+    Only "Donor market share" is the true input/pinnable cell in this chain."""
+    vm = to_view_model(canonical_result)
+    by_label = {r["label"]: r for r in vm["rows"]}
+    for label in ("Donating households", "Annual donations", "Retail Sales"):
+        assert by_label[label]["class"] == "computed", label
+        assert by_label[label]["editable"] is False, label
+    assert by_label["Donor market share"]["class"] == "input"
+    assert by_label["Donor market share"]["editable"] is True
+
+
+def test_customers_row_dropped_from_five_year_table(canonical_result):
+    """# of transactions x average transaction value is KPI-strip territory, not a
+    driver-chain row in the 5-year table (owner feedback) — the .xlsx export still
+    builds its own independent Customers line (engine/xlsx.py), unaffected."""
+    vm = to_view_model(canonical_result)
+    labels = [r["label"] for r in vm["rows"]]
+    assert "Customers" not in labels
