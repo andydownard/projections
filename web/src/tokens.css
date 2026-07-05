@@ -2043,16 +2043,10 @@ body {
   text-anchor: end;
   font-variant-numeric: tabular-nums;
 }
-.cashflow-chart__gridline--net {
-  /* Owner item 2: net's tick lines now span the full plot width too, but stay
-     visually SECONDARY to the cumulative (hero) grid — lighter weight, tinted
-     toward the net swatch's positive green so the two grid families read as
-     distinct without leaning on hue alone (shape + opacity carry it; the
-     collision rule in CashflowChart.tsx already drops any row this would
-     double up with a cumulative gridline, incl. the shared $0 row). */
-  stroke: var(--success);
-  opacity: 0.22;
-}
+/* (owner defect 1, 2026-07-04) The former `.cashflow-chart__gridline--net`
+   secondary grid family was removed: the balanced shared segmentation makes both
+   axes share the SAME tick rows (net values labeled left, cumulative right), so
+   the single `.cashflow-chart__gridline` set already serves both — no moiré. */
 
 /* --- net bars: sign-colored, active ring on hover/focus --- */
 .cashflow-chart__bar--active {

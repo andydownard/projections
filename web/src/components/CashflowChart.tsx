@@ -44,35 +44,89 @@ function niceStep(rawStep: number): number {
   return 10 * base;
 }
 
-interface Domain {
-  min: number;
-  max: number;
-  step: number;
+interface AxisScale {
   ticks: number[];
+  step: number;
+  scale: number; // pixels per dollar (identical above & below zero → linear, $0 shared)
+  top: number; // value at the plot's TOP edge (= a·step, ≥ 0)
+  bottom: number; // value at the plot's BOTTOM edge (= −b·step, ≤ 0)
+}
+export interface DualAxis {
+  zeroFrac: number; // BELOW-zero share of the plot (1 − f); zeroY = padT + (1−zeroFrac)·plotH
+  net: AxisScale;
+  cum: AxisScale;
+  unified: boolean;
 }
 
-// The domain ALWAYS includes 0, and min/max are exact multiples of step, so 0 is
-// guaranteed to be a returned tick (the shared anchor).
-function niceDomain(values: number[], targetTicks: number): Domain {
-  const lo = Math.min(0, ...values);
-  const hi = Math.max(0, ...values);
-  const step = niceStep((hi - lo) / targetTicks) || 1;
-  let min = Math.floor(lo / step) * step;
-  let max = Math.ceil(hi / step) * step;
-  // Degenerate guard (review C1): a ONE-SIGNED domain puts $0 at the domain edge.
-  // The shared-zero pass then pins zeroY to a plot edge (zeroFrac 0 or 1), which
-  // collapses the OTHER axis's scale to 0 whenever it has data on the starved
-  // side — on the canonical 60%-labor default (payback N/A → cumulative max is
-  // exactly 0) every net bar rendered at the 0.5px floor and all left-axis labels
-  // stacked on one row. One nice-step of headroom past zero keeps every domain
-  // strictly zero-spanning, so both scales stay finite and positive. When both
-  // series genuinely span zero the domains are untouched and the shared-$0 pixel
-  // row is unchanged (test-pinned).
-  if (max === 0) max = step;
-  if (min === 0) min = -step;
+// The signed extent of a series ALWAYS straddles 0 (lo ≤ 0 ≤ hi) so $0 is a valid
+// shared anchor and always a tick.
+function signedExtent(values: number[]): { lo: number; hi: number } {
+  return { lo: Math.min(0, ...values), hi: Math.max(0, ...values) };
+}
+// The natural ABOVE-zero share of a signed extent (1 = all-positive, 0 = all-negative,
+// 0.5 for an all-zero series).
+function aboveShare({ lo, hi }: { lo: number; hi: number }): number {
+  const span = hi - lo;
+  return span > 0 ? hi / span : 0.5;
+}
+
+// One axis's full-extent nice ladder, given a SHARED tick segmentation (a ticks
+// above zero, b below). `a·step` covers the positive extent, `b·step` the
+// negative, so the ladder runs EDGE TO EDGE of the plot and $0 is always a tick.
+// The pixels-per-dollar scale is identical above and below zero, so the mapping
+// is linear and $0 lands at fraction b/(a+b) — the SAME on every axis built with
+// the same (a,b), which is what pins the shared-$0 pixel row (owner defect 1).
+function axisLadder(ext: { lo: number; hi: number }, a: number, b: number, plotH: number): AxisScale {
+  const need = Math.max(ext.hi > 0 ? ext.hi / a : 0, ext.lo < 0 ? -ext.lo / b : 0);
+  const step = niceStep(need) || 1;
   const ticks: number[] = [];
-  for (let v = min; v <= max + step / 2; v += step) ticks.push(Math.round(v));
-  return { min, max, step, ticks };
+  for (let k = a; k >= -b; k--) ticks.push(Math.round(k * step));
+  return { ticks, step, scale: plotH / ((a + b) * step), top: a * step, bottom: -b * step };
+}
+
+// Balanced shared-zero dual axis (owner defect 1 — "each axis's ticks+gridlines
+// must span the FULL vertical extent"). The old pass let whichever axis had the
+// deeper below-zero fraction dictate the shared $0 pixel; the OTHER axis's whole
+// ladder was then crammed into a sliver (on the owner's real 5-year projection
+// the $1.5M…($500k) cumulative ticks all piled into the top quarter). The fix:
+//  (a) the shared zero fraction is the AVERAGE of each axis's natural above-zero
+//      share (clamped for sane headroom), so neither axis dictates it;
+//  (b) a SINGLE integer segmentation (a ticks above zero, b below) is shared by
+//      both axes — pinning the SAME zero fraction a/(a+b) on both ($0 pixel-shared
+//      by construction) — while each axis picks its OWN nice step to cover its OWN
+//      data, so BOTH ladders run the full plot height;
+//  (c) if the two nice domains agree within one tick-step at both ends (the legacy
+//      net≈cumulative-trough case, which otherwise reads as an error), UNIFY to a
+//      single ladder rendered identically on both sides.
+export function computeDualAxis(netVals: number[], cumVals: number[], plotH: number): DualAxis {
+  const netExt = signedExtent(netVals);
+  const cumExt = signedExtent(cumVals);
+  const f = Math.min(0.92, Math.max(0.08, (aboveShare(netExt) + aboveShare(cumExt)) / 2));
+  // Shared tick counts (a above, b below) approximating f with 5–8 total ticks;
+  // a,b ≥ 1 guarantees a headroom band on each side (zero is never at a plot edge,
+  // which is what re-triggered the review-C1 collapse). Tie-break to the DENSER
+  // ladder so a balanced f≈0.5 yields the fuller 7-rung ±ladders the owner expects.
+  let best = { a: 1, b: 1, err: Infinity, total: 0 };
+  for (let total = 4; total <= 7; total++) {
+    const a = Math.max(1, Math.min(total - 1, Math.round(f * total)));
+    const err = Math.abs(a / total - f);
+    if (err < best.err - 1e-9 || (Math.abs(err - best.err) <= 1e-9 && total > best.total)) {
+      best = { a, b: total - a, err, total };
+    }
+  }
+  const { a, b } = best;
+  let net = axisLadder(netExt, a, b, plotH);
+  let cum = axisLadder(cumExt, a, b, plotH);
+  const commonStep = Math.max(net.step, cum.step);
+  const unified =
+    Math.abs(net.top - cum.top) <= commonStep && Math.abs(net.bottom - cum.bottom) <= commonStep;
+  if (unified && net.step !== cum.step) {
+    // Re-cut both axes on the coarser shared step so the two ladders are identical.
+    const union = { lo: Math.min(net.bottom, cum.bottom), hi: Math.max(net.top, cum.top) };
+    net = axisLadder(union, a, b, plotH);
+    cum = net;
+  }
+  return { zeroFrac: b / (a + b), net, cum, unified };
 }
 
 // ── year grouping (spec §4.2 — pure integer month bucketing, NO client math) ──
@@ -211,8 +265,6 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   const padB = 28;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
-  const tCum = narrow ? 3 : 5;
-  const tNet = narrow ? 3 : 4;
   // Rotated axis-title geometry: each title is one <g> rotated about a pivot
   // point (pivotX, plotCenterY) — see the render below for the rotation-math
   // doctrine (rotate(-90,·) on the left puts the FIRST local-x content, the
@@ -234,36 +286,26 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   const xCenter = (i: number) => padL + (i + 0.5) * bandW;
   const xLeftOf = (month: number) => padL + ((month - 1) / n) * plotW;
 
-  const net = niceDomain(monthly.map((m) => m.net.raw), tNet);
-  const cum = niceDomain(monthly.map((m) => m.cumulativeCash.raw), tCum);
+  // Balanced full-height dual axes (owner defect 1). Both $0 land on the SAME pixel
+  // row by construction (a shared tick segmentation → shared zero fraction), and
+  // each axis's ladder spans the FULL plot height. See computeDualAxis above.
+  const dual = computeDualAxis(
+    monthly.map((m) => m.net.raw),
+    monthly.map((m) => m.cumulativeCash.raw),
+    plotH,
+  );
+  const net = dual.net;
+  const cum = dual.cum;
+  const zeroY = padT + (1 - dual.zeroFrac) * plotH;
+  const sNet = net.scale;
+  const sCum = cum.scale;
+  const yFor = (v: number, s: number) => (v >= 0 ? zeroY - v * s : zeroY + Math.abs(v) * s);
 
-  // Shared-zero positioning pass: both $0 land on the SAME pixel row. `zeroFrac` is
-  // the largest fraction of any axis' range that sits BELOW zero; the below-zero
-  // band gets that share of the plot, so the axis with the deepest negative reaches
-  // the bottom and $0 is one shared reference row for both series.
-  const fracBelow = (d: Domain) => (d.max - d.min ? (0 - d.min) / (d.max - d.min) : 0);
-  const zeroFrac = Math.max(fracBelow(net), fracBelow(cum));
-  const zeroY = padT + (1 - zeroFrac) * plotH;
-  const scaleOf = (d: Domain) =>
-    Math.min(
-      d.max > 0 ? (zeroY - padT) / d.max : Infinity,
-      d.min < 0 ? (padT + plotH - zeroY) / Math.abs(d.min) : Infinity,
-    );
-  const sNet = scaleOf(net);
-  const sCum = scaleOf(cum);
-  const yFor = (v: number, s: number) =>
-    !Number.isFinite(s) ? zeroY : v >= 0 ? zeroY - v * s : zeroY + Math.abs(v) * s;
-
-  // Owner item 2: the net axis's tick lines now span the full plot width too
-  // (previously a 4px left-edge stub only). Collision rule — if a net gridline
-  // lands within 1 viewBox unit of a cumulative (hero) gridline, draw ONLY the
-  // cumulative one (no moiré doubles). $0 is always exactly coincident by
-  // construction (yFor(0,*) === zeroY for both axes), so this rule also
-  // naturally absorbs the shared-zero row: the heavier `.cashflow-chart__zero`
-  // line (drawn later, on top) stays the single emphasized zero anchor.
-  const cumGridYs = cum.ticks.map((t) => yFor(t, sCum));
-  const netGridVisible = (y: number) => !cumGridYs.some((cy) => Math.abs(cy - y) < 1);
-
+  // With the balanced shared segmentation (owner defect 1) both axes have the SAME
+  // number of ticks at the SAME pixel rows — tick k of either axis lands at
+  // `zeroY − k·plotH/(a+b)`, independent of that axis's step. So the horizontal
+  // grid is ONE clean shared set of rows (net values labeled left, cumulative
+  // right); no separate net-tinted gridline family and no moiré to collide-guard.
   const barW = Math.max(1, Math.min(24, bandW * 0.6));
 
   const linePts = monthly.map((m, i) => `${xCenter(i)},${yFor(m.cumulativeCash.raw, sCum)}`).join(" ");
@@ -496,33 +538,20 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
             </text>
           ))}
 
-          {/* left (net) axis: full-width gridlines (owner item 2) + labels. A
-              lighter, net-tinted variant so the two grid families stay tellable
-              apart; any row within 1 unit of a cumulative gridline is skipped
-              here (collision rule — see the netGridVisible comment above). */}
-          {net.ticks.map((t) => {
-            const y = yFor(t, sNet);
-            return (
-              <g key={`ntick-${t}`}>
-                {netGridVisible(y) && (
-                  <line
-                    className="cashflow-chart__gridline cashflow-chart__gridline--net"
-                    x1={padL}
-                    x2={padL + plotW}
-                    y1={y}
-                    y2={y}
-                  />
-                )}
-                <text
-                  className="cashflow-chart__axis-tick cashflow-chart__axis-tick--left"
-                  x={padL - 6}
-                  y={y + 3}
-                >
-                  {formatAxisTick(t)}
-                </text>
-              </g>
-            );
-          })}
+          {/* left (net) axis: tick labels ONLY. The gridline ROWS are shared with
+              the cumulative axis by construction (see the comment above), so the
+              net axis reuses those same rows — labeling them on the left — rather
+              than drawing a redundant second gridline family. */}
+          {net.ticks.map((t) => (
+            <text
+              key={`ntick-${t}`}
+              className="cashflow-chart__axis-tick cashflow-chart__axis-tick--left"
+              x={padL - 6}
+              y={yFor(t, sNet) + 3}
+            >
+              {formatAxisTick(t)}
+            </text>
+          ))}
 
           {/* underwater area wash under the cumulative line */}
           <path d={areaPath} className="cashflow-chart__area" />

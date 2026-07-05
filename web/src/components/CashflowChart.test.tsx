@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CashflowChart } from "./CashflowChart";
+import { CashflowChart, computeDualAxis } from "./CashflowChart";
 import type { Milestones, MonthlyPoint } from "../api/viewModel";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -265,39 +265,29 @@ describe("CashflowChart module", () => {
     });
   });
 
-  it("net gridlines span the full plot width and never duplicate a cumulative gridline row (item 2, collision rule)", () => {
+  it("draws ONE shared horizontal grid: cumulative gridlines span the full plot width and every net tick label sits on a cumulative gridline row (owner defect 1 — no moiré second family)", () => {
     const { container } = render(
       <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
     );
-    const netLines = Array.from(container.querySelectorAll(".cashflow-chart__gridline--net"));
-    const cumLines = Array.from(
-      container.querySelectorAll(".cashflow-chart__gridline:not(.cashflow-chart__gridline--net)"),
-    );
-    expect(netLines.length).toBeGreaterThan(0);
+    // The balanced segmentation makes both axes share the SAME tick rows, so the
+    // redundant net-tinted gridline family is gone entirely (one clean grid).
+    expect(container.querySelectorAll(".cashflow-chart__gridline--net")).toHaveLength(0);
+    const cumLines = Array.from(container.querySelectorAll(".cashflow-chart__gridline"));
     expect(cumLines.length).toBeGreaterThan(0);
-    // Full width: same x1/x2 span as the cumulative (hero) gridlines.
+    // Full width.
     const [plotX1, plotX2] = [cumLines[0].getAttribute("x1"), cumLines[0].getAttribute("x2")];
-    netLines.forEach((l) => {
+    cumLines.forEach((l) => {
       expect(l.getAttribute("x1")).toBe(plotX1);
       expect(l.getAttribute("x2")).toBe(plotX2);
     });
-    // Collision rule: no net gridline within 1 viewBox unit of any cumulative one.
-    const cumYs = cumLines.map((l) => parseFloat(l.getAttribute("y1")!));
-    netLines.forEach((l) => {
-      const y = parseFloat(l.getAttribute("y1")!);
-      expect(cumYs.some((cy) => Math.abs(cy - y) < 1)).toBe(false);
+    // Rows are shared: every LEFT (net) tick label lands on a cumulative gridline y.
+    const gridYs = cumLines.map((l) => parseFloat(l.getAttribute("y1")!));
+    const leftYs = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--left")).map(
+      (t) => parseFloat(t.getAttribute("y")!) - 3, // tick text sits at yFor(t)+3
+    );
+    leftYs.forEach((y) => {
+      expect(gridYs.some((gy) => Math.abs(gy - y) < 0.5)).toBe(true);
     });
-  });
-
-  it("never draws a duplicate net gridline at the shared-zero row (item 2)", () => {
-    const { container } = render(
-      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
-    );
-    const zeroY = container.querySelector(".cashflow-chart__zero")!.getAttribute("y1");
-    const netAtZero = Array.from(container.querySelectorAll(".cashflow-chart__gridline--net")).some(
-      (l) => l.getAttribute("y1") === zeroY,
-    );
-    expect(netAtZero).toBe(false);
   });
 
   it("gives every month row a fixed leading milestone slot BEFORE 'M{n}' (item 3, consistent labels)", () => {
@@ -553,6 +543,136 @@ describe("shared-zero degenerate guard (review C1)", () => {
       container.querySelectorAll(".cashflow-chart__axis-tick--right"),
     ).map((t) => t.textContent);
     expect(rightTicks).toContain("$0");
+  });
+});
+
+// ── owner defect 1 (2026-07-04 second live review): each axis's tick ladder must
+// span the FULL plot height. The old shared-zero pass let whichever axis had the
+// deeper below-zero fraction dictate the shared $0 pixel; the OTHER axis then had
+// its whole ladder crammed into a sliver (on the owner's real 5-year projection
+// the cumulative axis's $1.5M…($500k) ticks all piled into the top quarter and
+// nothing showed below). The fix balances the shared zero to the AVERAGE of both
+// axes' natural above-zero fractions and emits nice ticks over each axis's full
+// visible range, so BOTH ladders are complete and $0 stays pixel-shared. ──
+describe("owner defect 1 — full-height balanced dual axes", () => {
+  const plotH = 228; // H(300) - padT(44) - padB(28); a chart geometry constant
+  const span = (container: HTMLElement, sel: string) => {
+    const ys = Array.from(container.querySelectorAll(sel)).map((t) =>
+      parseFloat(t.getAttribute("y") ?? "NaN"),
+    );
+    return Math.max(...ys) - Math.min(...ys);
+  };
+  const zeroY = (container: HTMLElement, sel: string) =>
+    Array.from(container.querySelectorAll(sel)).find((t) => t.textContent === "$0")!.getAttribute("y");
+
+  // The owner's reported shape, reproduced: net ≈ −$286k…+$60k (mostly negative),
+  // cumulative ≈ −$334k…+$1.5M (mostly positive). The two natural fractions are
+  // near-opposite, so the balanced zero lands near the middle and BOTH axes come
+  // out roughly symmetric — net ≈ ±$300k, cumulative ≈ ±$1.5M.
+  function ownerShape(): MonthlyPoint[] {
+    const pts: MonthlyPoint[] = [];
+    for (let m = 1; m <= 60; m++) {
+      // net: deep negative early, small positive later.
+      const net = m <= 6 ? -286000 + (m - 1) * 8000 : 20000 + (m % 5) * 8000;
+      // cumulative: dips to ≈ −$334k, then climbs steadily to ≈ +$1.5M.
+      const cum = m <= 8 ? -42000 * m : -334000 + (m - 8) * 35000;
+      pts.push(pt(m, 30000, 25000, net, cum));
+    }
+    return pts;
+  }
+
+  it("owner's 5-year shape: the RIGHT (cumulative) ladder spans the full plot height (was crammed into the top quarter)", () => {
+    const { container } = render(<CashflowChart monthly={ownerShape()} breakevenMonth={9} />);
+    expect(span(container, ".cashflow-chart__axis-tick--right")).toBeGreaterThanOrEqual(0.9 * plotH);
+    // The cumulative ladder reaches up past $1,000,000 (a complete ladder, not a sliver).
+    const right = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--right")).map(
+      (t) => t.textContent,
+    );
+    expect(right.some((t) => /^\$1,[05]00,000$/.test(t ?? ""))).toBe(true);
+    // …and both axes still anchor $0 on the SAME pixel row.
+    expect(zeroY(container, ".cashflow-chart__axis-tick--right")).toBe(
+      zeroY(container, ".cashflow-chart__axis-tick--left"),
+    );
+  });
+
+  it("owner's 5-year shape: the LEFT (net) ladder also spans the full plot height", () => {
+    const { container } = render(<CashflowChart monthly={ownerShape()} breakevenMonth={9} />);
+    expect(span(container, ".cashflow-chart__axis-tick--left")).toBeGreaterThanOrEqual(0.9 * plotH);
+  });
+
+  const goldens: Array<[string, string]> = [
+    ["canonical 60%-labor", "house_of_hope_canonical_60.json"],
+    ["design-parity 40%", "house_of_hope_design_parity_40.json"],
+  ];
+  for (const [label, file] of goldens) {
+    it(`${label} golden: BOTH axis ladders span the full plot height and share the $0 pixel row`, () => {
+      const g = JSON.parse(
+        readFileSync(join(here, "..", "..", "..", "engine", "tests", "golden", file), "utf8"),
+      ) as { monthly: MonthlyPoint[]; breakevenMonth: number | null; milestones: Milestones };
+      const { container } = render(
+        <CashflowChart monthly={g.monthly} breakevenMonth={g.breakevenMonth} milestones={g.milestones} />,
+      );
+      expect(span(container, ".cashflow-chart__axis-tick--right")).toBeGreaterThanOrEqual(0.9 * plotH);
+      expect(span(container, ".cashflow-chart__axis-tick--left")).toBeGreaterThanOrEqual(0.9 * plotH);
+      expect(zeroY(container, ".cashflow-chart__axis-tick--right")).toBe(
+        zeroY(container, ".cashflow-chart__axis-tick--left"),
+      );
+    });
+  }
+
+  it("computeDualAxis: the owner-shape f-balance yields symmetric ±ladders sharing the $0 fraction (pure math)", () => {
+    // The two natural above-zero shares are near-opposite → f ≈ 0.5 → a symmetric
+    // segmentation (a === b) → both axes come out ± with $0 at the same fraction.
+    const nets = ownerShape().map((m) => m.net.raw);
+    const cums = ownerShape().map((m) => m.cumulativeCash.raw);
+    const d = computeDualAxis(nets, cums, 228);
+    // Symmetric-ish: zero sits near the middle (not pinned to an edge like before).
+    expect(d.zeroFrac).toBeGreaterThan(0.3);
+    expect(d.zeroFrac).toBeLessThan(0.7);
+    // Each axis has the SAME number of ticks (shared segmentation) and both include $0.
+    expect(d.net.ticks.length).toBe(d.cum.ticks.length);
+    expect(d.net.ticks).toContain(0);
+    expect(d.cum.ticks).toContain(0);
+    // The cumulative axis reaches the seven-figure range the owner expects (±~$1.5M),
+    // and the net axis the ±~$300k range — both COMPLETE, not slivers.
+    expect(Math.max(...d.cum.ticks)).toBeGreaterThanOrEqual(1_000_000);
+    expect(Math.max(...d.net.ticks)).toBeLessThan(1_000_000);
+    expect(Math.max(...d.net.ticks)).toBeGreaterThanOrEqual(200_000);
+  });
+
+  it("computeDualAxis: the canonical 60%-labor golden (both series ≤ $0) still spans full height with a headroom band above $0", () => {
+    const g = JSON.parse(
+      readFileSync(
+        join(here, "..", "..", "..", "engine", "tests", "golden", "house_of_hope_canonical_60.json"),
+        "utf8",
+      ),
+    ) as { monthly: MonthlyPoint[] };
+    const d = computeDualAxis(
+      g.monthly.map((m) => m.net.raw),
+      g.monthly.map((m) => m.cumulativeCash.raw),
+      228,
+    );
+    // A ≥1-tick headroom band above $0 even though the data never exceeds it
+    // (a ≥ 1 by construction) — so no axis collapses to a plot-edge zero (review C1).
+    expect(Math.max(...d.net.ticks)).toBeGreaterThan(0);
+    expect(Math.max(...d.cum.ticks)).toBeGreaterThan(0);
+    // Deep negatives are reached: both bottoms cover the ≈ −$263k / −$323k data.
+    expect(Math.min(...d.net.ticks)).toBeLessThanOrEqual(-263_269);
+    expect(Math.min(...d.cum.ticks)).toBeLessThanOrEqual(-322_854);
+  });
+
+  it("degenerate/legacy unification: when the two nice domains agree at both ends, left and right show ONE identical ladder", () => {
+    // legacy12 has net === cumulative (both 500·m) → the two domains are identical,
+    // so the axes must UNIFY to a single tick ladder rendered on both sides.
+    const { container } = render(<CashflowChart monthly={legacy12()} breakevenMonth={null} />);
+    const left = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--left")).map(
+      (t) => t.textContent,
+    );
+    const right = Array.from(container.querySelectorAll(".cashflow-chart__axis-tick--right")).map(
+      (t) => t.textContent,
+    );
+    expect(left.length).toBeGreaterThan(1);
+    expect(left).toEqual(right);
   });
 });
 
