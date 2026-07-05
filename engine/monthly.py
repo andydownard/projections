@@ -117,37 +117,46 @@ def _flat_monthly(total: Decimal, months: int = 12):
 # flat average — Year 1's S-curve intentionally ends well ABOVE its own flat average,
 # which a following, much-lower-growth year cannot always sustain even at ITS OWN flat
 # average). What IS fixed here: the artificial INSTANT jump. Years 2-5 now GLIDE from
-# the prior year's actual exit value toward the new year's steady-state average over
-# `_BLEND_MONTHS`, instead of snapping to it in month one — the same total change
-# lands over a handful of months instead of a single cliff, and every month beyond the
-# blend window is back to the plain flat steady-state (unaffected).
+# the prior year's actual exit value over `_BLEND_MONTHS` months into a flat level
+# held for the rest of the year, instead of snapping straight to the flat average in
+# month one -- one smooth arithmetic progression, no second jump at the blend/flat
+# boundary (see `_blend_then_flat`'s derivation of that flat level).
 _BLEND_MONTHS = 3
 
 
 def _blend_then_flat(total: Decimal, prev_last: Decimal, months: int = 12,
                       blend: int = _BLEND_MONTHS):
     """Distribute `total` across `months` as a `blend`-month linear glide from
-    `prev_last` (the prior year's own last month) toward this year's flat steady-state
-    average, then flat for the remaining months. Feet to `total` exactly: the blend
-    months take their interpolated share, and the remaining months flat-split
-    whatever total is left over (so the whole vector always sums to `total`,
-    regardless of the blend shape — Regression #15).
+    `prev_last` (the prior year's own last month) into a flat level `f` held for the
+    remaining months — NOT the naive `total/months` average (that undercounts/
+    overcounts what the glide months already delivered relative to a pure flat year,
+    which left a hidden secondary cliff at the blend/flat boundary — caught in review).
+    `f` is solved directly from the footing equation so the WHOLE vector, glide months
+    included, sums to `total` exactly:
+        Σ_{i=1..blend} [prev_last + i/(blend+1)*(f−prev_last)] + (months−blend)*f = total
+        => f = (total − blend*prev_last/2) / (months − blend/2)
+    A pleasant consequence: the step from the last blend month to `f` works out to
+    exactly the SAME increment as every blend step (algebra: f − [prev_last +
+    blend/(blend+1)*(f−prev_last)] = (f−prev_last)/(blend+1), identical to each blend
+    step's own increment) — so `prev_last, step_1, .., step_blend, f, f, ..` is one
+    single, perfectly smooth arithmetic progression into the flat tail, not a glide
+    followed by a second jump. Feet to `total` exactly regardless of `blend`/`months`/
+    `prev_last` (Regression #15) — the last bucket absorbs the Decimal rounding
+    residual.
     """
     blend = min(blend, months)
-    target_flat = total / months
+    denom = Decimal(months) - Decimal(blend) / 2
+    f = (total - Decimal(blend) * prev_last / 2) / denom
     parts = []
     for i in range(blend):
         frac = Decimal(i + 1) / Decimal(blend + 1)
-        parts.append(prev_last + frac * (target_flat - prev_last))
-    remaining_total = total - sum(parts, Decimal("0"))
+        parts.append(prev_last + frac * (f - prev_last))
     remaining_months = months - blend
     if remaining_months > 0:
-        flat_each = (remaining_total / remaining_months).quantize(_CENT, rounding=ROUND_HALF_UP)
-        rest = [flat_each] * (remaining_months - 1)
-        rest.append(remaining_total - sum(rest, Decimal("0")))
-        parts.extend(rest)
+        parts.extend([f] * (remaining_months - 1))
+        parts.append(total - sum(parts, Decimal("0")))
     else:
-        parts[-1] = parts[-1] + remaining_total
+        parts[-1] = parts[-1] + (total - sum(parts, Decimal("0")))
     return parts
 
 
