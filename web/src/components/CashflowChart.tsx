@@ -172,17 +172,13 @@ function buildGroups(monthly: MonthlyPoint[], opening: number): Group[] {
 }
 
 // Distinct, non-color-only icon per milestone (shape carries meaning too). Owner
-// defect 2: the flag / triangle / star / ring glyphs render at ONE size everywhere
+// defect 2: the flag / triangle / star glyphs render at ONE size everywhere
 // (chip stack, plot markers, table slots) via the shared `cashflow-glyph` class.
 const MILESTONE_META: Array<{ key: keyof Milestones; label: string; icon: string }> = [
   { key: "grandOpening", label: "Grand Opening", icon: "⚑" },
   { key: "breakEven", label: "Break-even", icon: "▲" },
   { key: "payback", label: "Payback", icon: "★" },
 ];
-// The minimum-cash trough is a synthetic (non-Milestones) callout — the red ring
-// on the plot, now given its own labeled chip (owner defect 2). The glyph echoes
-// the ring shape.
-const MIN_CASH_ICON = "◯";
 
 export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }: CashflowChartProps) {
   // Responsive geometry (spec §7): a NARROWER reference viewBox at ≤480px so the
@@ -247,24 +243,16 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
 
   const n = monthly.length;
 
-  // Cash trough = capital required (= the most-negative cumulative). Server
-  // display. Hoisted above the chart-geometry block (below) because the
-  // milestone callouts need it, and the callout COUNT in turn sizes the
-  // milestone-chip reserved band that the plot's top edge (padT) is built from.
-  let troughIdx = 0;
-  for (let i = 1; i < n; i++) {
-    if (monthly[i].cumulativeCash.raw < monthly[troughIdx].cumulativeCash.raw) troughIdx = i;
-  }
-  const trough = monthly[troughIdx];
-
   const idxOfMonth = (month: number | null | undefined) =>
     month == null ? -1 : monthly.findIndex((m) => m.month === month);
 
   // Unified milestone callouts (owner defect 2). EVERY plotted marker is labeled:
-  // Grand Opening, Break-even, Payback (only when it lands within the horizon), and
-  // the minimum-cash red ring (previously drawn with no callout at all). Each has
-  // an on-plot marker (a light vertical line + a glyph, or the ring for min-cash)
-  // AND a row in the left-aligned chip stack. `label` is the chip's display name.
+  // Grand Opening, Break-even, Payback (only when it lands within the horizon).
+  // Each has an on-plot marker (a light vertical line + a glyph) AND a row in
+  // the left-aligned chip stack. `label` is the chip's display name.
+  // (2026-07-04 owner feedback: the "Lowest cash" callout is removed — it always
+  // lands the month before break-even, so it was a redundant, negatively-toned
+  // restatement of break-even rather than new information.)
   interface Callout { key: string; icon: string; label: string; display: string; idx: number }
   const milestoneCallouts: Callout[] = [];
   const pushMs = (key: keyof Milestones, icon: string, label: string, ms: Milestone | undefined) => {
@@ -276,10 +264,6 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   } else if (beMonth != null && idxOfMonth(beMonth) >= 0) {
     milestoneCallouts.push({ key: "breakEven", icon: "▲", label: "Break-even", display: `Month ${beMonth}`, idx: idxOfMonth(beMonth) });
   }
-  // Min-cash trough — the red ring's own callout (label matches the chart's
-  // aria-label "Lowest cash balance …"). "Month N" is chrome (a month index, not a
-  // money figure), consistent with the other milestones' server `display`.
-  milestoneCallouts.push({ key: "minCash", icon: MIN_CASH_ICON, label: "Lowest cash", display: `Month ${trough.month}`, idx: troughIdx });
 
   // ── chart geometry (spec §7) ──────────────────────────────────────────────
   const W = narrow ? 380 : 660;
@@ -290,8 +274,8 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   // through the "$100,000" tick; the panel hid the left "$0" label at other
   // shapes; at 375px it covered roughly a third of the plot). The structural
   // fix: reserve a BAND above the plot, sized to the ACTUAL chip count for this
-  // projection (1–4: grand opening, break-even, payback-when-resolved, lowest
-  // cash), and push the plot's top edge (padT) down by exactly that band
+  // projection (0–3: grand opening, break-even, payback-when-resolved), and
+  // push the plot's top edge (padT) down by exactly that band
   // height. The SVG's total height grows by the same amount, so plotH below is
   // unaffected and the plot area never shrinks — every chip row then lives at a
   // y strictly LESS than the plot's top edge, and every gridline / tick label /
@@ -314,6 +298,18 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   // rotated title clears the tick-label column; the plot keeps the rest.
   const padL = 90;
   const padR = 98;
+  // Milestone chip stack LEFT EDGE (owner feedback, 2026-07-04 fourth pass):
+  // align flush with the MODULE TITLE's left edge ("Cash position and change by
+  // month"), not the plot's left edge (padL). The title <h2> and this <figure>/
+  // <svg> are sibling children of the SAME `.cashflow-module` flex column, which
+  // applies its 1.125rem horizontal padding once, at the section level
+  // (tokens.css `.cashflow-module`); `.cashflow-chart` (the figure) and
+  // `.cashflow-chart__svg` carry NO padding/margin of their own (tokens.css:
+  // `.cashflow-chart { margin: 0; }`, `.cashflow-chart__svg { width: 100%; }`).
+  // So the SVG's own x=0 lands on the exact same visual column as the title's
+  // left text edge — not an approximation of it — and the chip stack anchors
+  // there instead of at padL.
+  const chipStackX = 0;
   // The axis titles no longer live in a top row (owner item, 2026-07-04 second
   // review — they rotate into the left/right gutters instead), so the BASE
   // headroom reverts to the pre-axis-title-chip constant: just enough room for
@@ -435,8 +431,10 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
     return monthly[idx].month;
   };
 
-  // Keyboard scrubber (spec §6): one composite role="slider" tab stop.
-  const currentMonth = activeMonth ?? trough.month;
+  // Keyboard scrubber (spec §6): one composite role="slider" tab stop. Absent an
+  // active (hovered/pinned) month, the default readout position is the first
+  // month of the horizon.
+  const currentMonth = activeMonth ?? monthly[0].month;
   const moveTo = (month: number) => {
     const clamped = Math.max(monthly[0].month, Math.min(monthly[n - 1].month, month));
     setHovered(clamped);
@@ -501,7 +499,7 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
           width="100%"
           role="img"
           preserveAspectRatio="xMidYMid meet"
-          aria-label={`Monthly net (bars) and cumulative cash (line) over ${n} months. Lowest cash balance ${trough.cumulativeCash.display} in month ${trough.month}; break-even ${beLabel}.${milestoneDesc} Full figures in the table below.`}
+          aria-label={`Monthly net (bars) and cumulative cash (line) over ${n} months. Break-even ${beLabel}.${milestoneDesc} Full figures in the table below.`}
         >
           {/* pre-opening background band */}
           {opening > 1 && (
@@ -636,15 +634,6 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
           <polyline points={linePts} fill="none" className="cashflow-chart__line-ring" />
           <polyline points={linePts} fill="none" className="cashflow-chart__line" />
 
-          {/* cash-trough marker (= capital required) */}
-          <circle
-            cx={xCenter(troughIdx)}
-            cy={yFor(trough.cumulativeCash.raw, sCum)}
-            r={4}
-            className="cashflow-chart__trough"
-            data-testid="trough-marker"
-          />
-
           {/* year dividers + span labels */}
           {yearSpans.map((s) =>
             s.y > 1 || opening > 1 ? (
@@ -666,9 +655,7 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
 
           {/* milestone markers (owner defect 2): a light CONSISTENT vertical line
               per plotted milestone, each capped with its glyph above the plot.
-              Min-cash reuses the red ring (drawn above) as its on-plot marker, so
-              it gets a line but no top glyph. All glyphs share `cashflow-glyph`
-              → one size everywhere. */}
+              All glyphs share `cashflow-glyph` → one size everywhere. */}
           {milestoneCallouts.map((c) => {
             const lx = xCenter(c.idx);
             return (
@@ -679,33 +666,33 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
               >
                 <title>{`${c.label}: ${c.display}`}</title>
                 <line className="cashflow-chart__milestone-line" x1={lx} x2={lx} y1={padT} y2={padT + plotH} />
-                {c.key !== "minCash" && (
-                  <text
-                    className="cashflow-glyph cashflow-chart__milestone-glyph"
-                    x={lx}
-                    y={padT - 3}
-                    textAnchor="middle"
-                    aria-hidden="true"
-                  >
-                    {c.icon}
-                  </text>
-                )}
+                <text
+                  className="cashflow-glyph cashflow-chart__milestone-glyph"
+                  x={lx}
+                  y={padT - 3}
+                  textAnchor="middle"
+                  aria-hidden="true"
+                >
+                  {c.icon}
+                </text>
               </g>
             );
           })}
 
-          {/* left-aligned milestone chip stack, now in its OWN RESERVED BAND
-              above the plot (fix, 2026-07-04 third pass) rather than overlaid
-              inside it — the prior on-plot panel could still collide with tick
-              labels / gridlines / bars at some shape × viewport combinations.
-              Because the band's height (chipBandH above) is baked into padT
-              itself, every row here sits strictly ABOVE the plot's top edge —
+          {/* left-aligned milestone chip stack, in its OWN RESERVED BAND above
+              the plot (fix, 2026-07-04 third pass) rather than overlaid inside
+              it — the prior on-plot panel could still collide with tick labels
+              / gridlines / bars at some shape × viewport combinations. Because
+              the band's height (chipBandH above) is baked into padT itself,
+              every row here sits strictly ABOVE the plot's top edge —
               collision-free BY CONSTRUCTION, not by visual tuning. The left
-              edge is flush with the plot's own left edge (x=padL, the SAME
-              column the gridlines/bars start from) — ONE flush-left text edge,
-              same order as before. Each row: glyph + "Label · Month N"
-              (amounts, if ever shown, are server display strings; "Month N" is
-              a month index, chrome — never a re-derived figure). The glyph
+              edge (owner feedback, 2026-07-04 fourth pass) is flush with the
+              MODULE TITLE's left edge (chipStackX = 0, see the geometry block
+              above) rather than the plot's left edge (padL) — ONE flush-left
+              text edge that lines up with "Cash position and change by month"
+              above it, not indented past it. Each row: glyph + "Label · Month
+              N" (amounts, if ever shown, are server display strings; "Month N"
+              is a month index, chrome — never a re-derived figure). The glyph
               here matches the glyph atop that milestone's vertical line down
               in the plot (rendered above) — that shared glyph is the
               association; the chip text no longer sits at the line's x. */}
@@ -716,7 +703,7 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
                   key={c.key}
                   data-testid={`milestone-chip-${c.key}`}
                   className={`cashflow-chart__milestone-chip cashflow-chart__milestone-chip--${c.key}`}
-                  x={padL}
+                  x={chipStackX}
                   y={chipGap / 2 + chipRowH * (i + 1)}
                   textAnchor="start"
                 >

@@ -13,9 +13,21 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 // actual chip count and pushes the plot's top edge down by that amount, so
 // chips and plot content occupy disjoint y-ranges by construction. This
 // bbox-intersection check is the real-browser lock for that: every chip's
-// rendered rect must be fully disjoint from the plot rect AND from every
-// tick-label rect, at whatever viewport/shape is under test.
-async function assertChipsNeverOverlapPlot(page: Page, shape: string) {
+// rendered rect must be fully disjoint from the plot rect, from every
+// tick-label rect, AND from the two rotated axis titles ("Monthly net" /
+// "Cumulative cash") at whatever viewport/shape is under test — the last of
+// those matters most at 375px (owner feedback, 2026-07-04 fourth pass: the
+// chip stack moved from the plot's left edge to the MODULE TITLE's left edge,
+// which is further left and closer to the rotated "Monthly net" title's
+// gutter, so this is the real regression lock proving they still never touch).
+//
+// `minChips` defaults to 1 (every real projection resolves at least Grand
+// Opening); the synthetic legacy 12-row shape (no milestones, no break-even)
+// now renders ZERO chips — "Lowest cash" was the only callout it ever had, and
+// that callout is removed (owner feedback: redundant with break-even,
+// negatively toned) — so that call site passes `{ minChips: 0 }`.
+async function assertChipsNeverOverlapPlot(page: Page, shape: string, opts: { minChips?: number } = {}) {
+  const minChips = opts.minChips ?? 1;
   const result = await page.evaluate(() => {
     const disjoint = (a: DOMRect, b: DOMRect) =>
       a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top;
@@ -23,6 +35,9 @@ async function assertChipsNeverOverlapPlot(page: Page, shape: string) {
     const plot = document.querySelector(".cashflow-chart__scrubber");
     const ticks = Array.from(
       document.querySelectorAll(".cashflow-chart__axis-tick--left, .cashflow-chart__axis-tick--right"),
+    );
+    const axisTitles = Array.from(
+      document.querySelectorAll(".cashflow-chart__axis-label--net, .cashflow-chart__axis-label--cum"),
     );
     if (!plot) return { ok: false, bad: ["no .cashflow-chart__scrubber found"], chipCount: chips.length };
     const plotRect = plot.getBoundingClientRect();
@@ -35,10 +50,19 @@ async function assertChipsNeverOverlapPlot(page: Page, shape: string) {
         const t = tick.getBoundingClientRect();
         if (!disjoint(c, t)) bad.push(`${id} intersects tick label "${tick.textContent}"`);
       }
+      for (const title of axisTitles) {
+        const t = title.getBoundingClientRect();
+        if (!disjoint(c, t)) {
+          bad.push(`${id} intersects the rotated axis title "${title.getAttribute("class")}"`);
+        }
+      }
     }
     return { ok: bad.length === 0, bad, chipCount: chips.length };
   });
-  expect(result.chipCount ?? 0, `${shape}: expected at least one milestone chip`).toBeGreaterThan(0);
+  expect(
+    result.chipCount ?? 0,
+    `${shape}: expected at least ${minChips} milestone chip(s)`,
+  ).toBeGreaterThanOrEqual(minChips);
   expect(result.ok, `${shape}: chip/plot overlaps found: ${JSON.stringify(result.bad)}`).toBe(true);
 }
 
@@ -273,6 +297,32 @@ test.describe("cash-flow module", () => {
     expect(rects.net.top).toBeGreaterThanOrEqual(rects.topbar.bottom);
     expect(rects.cum.top).toBeGreaterThanOrEqual(rects.topbar.bottom);
   });
+
+  // Owner feedback (2026-07-04 fourth pass): "align the legend with the
+  // milestones, left, with the title." A real-browser lock: the unit test can
+  // only assert the SVG viewBox coordinate (x=0); this proves the RENDERED
+  // pixel column that coordinate lands in matches the <h2> module title's own
+  // left text edge, given the shared `.cashflow-module` padding (tokens.css).
+  //
+  // This compares the <svg> element's own rendered box (where chipStackX=0
+  // geometrically lands) rather than an individual chip <text>'s ink bounding
+  // box: real-browser measurement showed the milestone glyphs (⚑ ▲ ★) carry
+  // large, GLYPH-DEPENDENT left side-bearing under font substitution — each
+  // one's ink box starts tens of pixels left of its x=0 anchor, by a different
+  // amount per glyph — which is a font-rendering artifact orthogonal to the
+  // layout fix under test and would make an ink-box assertion flaky/
+  // environment-dependent. The SVG element's own box is a stable, scale-exact
+  // proxy for "where x=0 renders" (its left edge IS x=0 in viewBox space).
+  test("the milestone chip stack's left edge aligns with the module title's left edge (owner item)", async ({ page }) => {
+    const module = page.getByTestId("cashflow-module");
+    await module.scrollIntoViewIfNeeded();
+    const rects = await page.evaluate(() => {
+      const title = document.querySelector(".cashflow-module__title")!.getBoundingClientRect();
+      const svg = document.querySelector(".cashflow-chart__svg")!.getBoundingClientRect();
+      return { titleLeft: title.left, svgLeft: svg.left };
+    });
+    expect(Math.abs(rects.svgLeft - rects.titleLeft)).toBeLessThan(1);
+  });
 });
 
 // A server money value {raw, display} (whole dollars, "$", parens for negatives),
@@ -399,7 +449,9 @@ test.describe("evidence screenshots — three data shapes", () => {
     expect(leftTicks.length).toBeGreaterThan(1);
     expect(leftTicks).toEqual(rightTicks);
     await module.scrollIntoViewIfNeeded();
-    await assertChipsNeverOverlapPlot(page, `legacy-${tag}`);
+    // No milestones + no break-even → zero chips now that "Lowest cash" (the
+    // only callout this shape ever had) is removed.
+    await assertChipsNeverOverlapPlot(page, `legacy-${tag}`, { minChips: 0 });
     await screenshotWholeModule(page, module, join(ASSETS, `cashflow-module-legacy-${tag}.png`));
     await page.unroute("**/api/projections/example");
   });

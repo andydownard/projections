@@ -189,10 +189,11 @@ describe("CashflowChart module", () => {
       // Plot area is H = 300 + chipBandH, padT = 44 + chipBandH, padB = 28 →
       // plotH stays 228 (invariant under the milestone-chip reserved band —
       // fix 2026-07-04 third pass) → vertical center = padT + 114. milestones60
-      // renders 4 chips (grandOpening, breakEven, payback, minCash) →
-      // chipBandH = 4·13 + 8 = 60 → padT = 104 → center = 218, fixed regardless
-      // of viewport width (chart geometry constant for THIS fixture's chip count).
-      expect(netCy).toBe("218");
+      // renders 3 chips (grandOpening, breakEven, payback — "Lowest cash" was
+      // removed, 2026-07-04 owner feedback) → chipBandH = 3·13 + 8 = 47 →
+      // padT = 91 → center = 205, fixed regardless of viewport width (chart
+      // geometry constant for THIS fixture's chip count).
+      expect(netCy).toBe("205");
       expect(cumCy).toBe(netCy);
       // The net title sits in the LEFT gutter, the cumulative title in the RIGHT.
       expect(parseFloat(netCx)).toBeLessThan(parseFloat(cumCx));
@@ -717,8 +718,7 @@ describe("owner defect 3 — bars inset from the plot edges", () => {
 // ── owner defect 2 (2026-07-04 second live review): milestone treatment.
 // Chips STAY on the plot but get ONE flush-left text edge (no staircase); each
 // milestone's vertical line is a light CONSISTENT stroke; EVERY plotted marker
-// is labeled — including the minimum-cash red ring, which was previously drawn
-// with no callout at all; payback is audited (labeled when within the horizon). ──
+// is labeled; payback is audited (labeled when within the horizon). ──
 describe("owner defect 2 — left-aligned labeled milestone chips + light lines", () => {
   it("stacks the milestone chips on ONE flush-left text edge (no staircase) and in a vertical column", () => {
     const { container } = render(
@@ -733,19 +733,27 @@ describe("owner defect 2 — left-aligned labeled milestone chips + light lines"
     for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeGreaterThan(ys[i - 1]);
   });
 
-  it("calls out the minimum-cash (red-ring) position with its own labeled chip (was unlabeled)", () => {
-    render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
-    // The red-ring trough marker still exists on the plot…
-    expect(screen.getByTestId("trough-marker")).toBeInTheDocument();
-    // …and now carries a labeled chip naming it + its month.
-    const chip = screen.getByTestId("milestone-chip-minCash");
-    expect(chip.textContent).toMatch(/lowest cash/i);
-    expect(chip.textContent).toMatch(/Month \d+/);
+  // ── owner feedback (2026-07-04 fourth pass): "eliminate lowest cash — it will
+  // always be the month before break-even so it's redundant and negatively
+  // toned." The chip, the red-ring trough marker + its vline, and any
+  // hover/aria text calling it out are all removed; break-even remains. ──
+  it("removes the 'Lowest cash' chip and the red-ring trough marker entirely (redundant with break-even, negatively toned)", () => {
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
+    );
+    expect(screen.queryByTestId("trough-marker")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("milestone-chip-minCash")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("mincash-marker")).not.toBeInTheDocument();
+    expect(container.querySelector(".cashflow-chart__trough")).not.toBeInTheDocument();
+    expect(screen.queryByText(/lowest cash/i)).not.toBeInTheDocument();
+    // The SVG's own aria-label no longer calls out a lowest-cash figure either.
+    const svg = screen.getByTestId("cashflow-chart").querySelector("svg")!;
+    expect(svg.getAttribute("aria-label")).not.toMatch(/lowest cash/i);
   });
 
   it("labels EVERY plotted milestone incl. payback when it is within the horizon (audit)", () => {
     render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
-    for (const key of ["grandOpening", "breakEven", "payback", "minCash"]) {
+    for (const key of ["grandOpening", "breakEven", "payback"]) {
       expect(screen.getByTestId(`milestone-chip-${key}`)).toBeInTheDocument();
     }
   });
@@ -758,8 +766,8 @@ describe("owner defect 2 — left-aligned labeled milestone chips + light lines"
     };
     render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={na} />);
     expect(screen.queryByTestId("milestone-chip-payback")).not.toBeInTheDocument();
-    expect(screen.getByTestId("milestone-chip-minCash")).toBeInTheDocument();
     expect(screen.getByTestId("milestone-chip-grandOpening")).toBeInTheDocument();
+    expect(screen.getByTestId("milestone-chip-breakEven")).toBeInTheDocument();
   });
 
   it("draws each milestone's vertical line as ONE consistent light full-height stroke", () => {
@@ -769,12 +777,13 @@ describe("owner defect 2 — left-aligned labeled milestone chips + light lines"
     const lines = Array.from(container.querySelectorAll(".cashflow-chart__milestone-line"));
     expect(lines.length).toBeGreaterThan(0);
     lines.forEach((l) => {
-      // Full plot height. milestones60 renders 4 chips → chipBandH = 4·13+8 = 60
-      // → padT = 44+60 = 104 .. padT+plotH(228) = 332 (chip-band fix, third pass;
-      // plotH itself is invariant under the chip band — see the reserved-band
+      // Full plot height. milestones60 renders 3 chips (grandOpening, breakEven,
+      // payback — "Lowest cash" removed, 2026-07-04 owner feedback) →
+      // chipBandH = 3·13+8 = 47 → padT = 44+47 = 91 .. padT+plotH(228) = 319
+      // (plotH itself is invariant under the chip band — see the reserved-band
       // describe block below).
-      expect(l.getAttribute("y1")).toBe("104");
-      expect(l.getAttribute("y2")).toBe("332");
+      expect(l.getAttribute("y1")).toBe("91");
+      expect(l.getAttribute("y2")).toBe("319");
       expect(l.getAttribute("x1")).toBe(l.getAttribute("x2"));
     });
   });
@@ -819,15 +828,30 @@ describe("chips get a reserved band above the plot (no overlap by construction)"
     expect(container.querySelector(".cashflow-chart__milestone-chips-bg")).not.toBeInTheDocument();
   });
 
-  it("every chip row sits strictly ABOVE the plot's top edge — 1 chip (minCash only, no milestones)", () => {
+  it("every chip row sits strictly ABOVE the plot's top edge — 0 chips (no milestones, no break-even)", () => {
     const { container } = render(<CashflowChart monthly={legacy12()} breakevenMonth={null} />);
+    const plot = plotRect(container);
+    const ys = chipYs(container);
+    expect(ys.length).toBe(0);
+    for (const y of ys) expect(y).toBeLessThan(plot.y);
+  });
+
+  it("every chip row sits strictly ABOVE the plot's top edge — 1 chip (grand opening only; break-even + payback N/A)", () => {
+    const grandOpeningOnly: Milestones = {
+      grandOpening: { raw: 1, display: "Month 1" },
+      breakEven: { raw: null, display: "N/A", reason: "not recovered within the horizon" },
+      payback: { raw: null, display: "N/A", reason: "not recovered within the horizon" },
+    };
+    const { container } = render(
+      <CashflowChart monthly={series60()} breakevenMonth={null} milestones={grandOpeningOnly} />,
+    );
     const plot = plotRect(container);
     const ys = chipYs(container);
     expect(ys.length).toBe(1);
     for (const y of ys) expect(y).toBeLessThan(plot.y);
   });
 
-  it("every chip row sits strictly ABOVE the plot's top edge — 3 chips (payback N/A)", () => {
+  it("every chip row sits strictly ABOVE the plot's top edge — 2 chips (payback N/A)", () => {
     const na: Milestones = {
       grandOpening: { raw: 1, display: "Month 1" },
       breakEven: { raw: 29, display: "Month 29" },
@@ -836,21 +860,26 @@ describe("chips get a reserved band above the plot (no overlap by construction)"
     const { container } = render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={na} />);
     const plot = plotRect(container);
     const ys = chipYs(container);
-    expect(ys.length).toBe(3);
+    expect(ys.length).toBe(2);
     for (const y of ys) expect(y).toBeLessThan(plot.y);
   });
 
-  it("every chip row sits strictly ABOVE the plot's top edge — 4 chips (all milestones resolved)", () => {
+  it("every chip row sits strictly ABOVE the plot's top edge — 3 chips (all milestones resolved)", () => {
     const { container } = render(
       <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
     );
     const plot = plotRect(container);
     const ys = chipYs(container);
-    expect(ys.length).toBe(4);
+    expect(ys.length).toBe(3);
     for (const y of ys) expect(y).toBeLessThan(plot.y);
   });
 
-  it("left-flush chip edge aligns with the plot's own left edge (x = padL), not indented past it", () => {
+  // Owner feedback (2026-07-04 fourth pass): "align the legend with the
+  // milestones, left, with the title." The chip stack's left edge now matches
+  // the MODULE TITLE's left edge (x = 0 in the SVG's own coordinate space — see
+  // the `chipStackX` comment in CashflowChart.tsx), which sits strictly LEFT of
+  // the plot's own left edge (padL), not flush with it as before.
+  it("left-flush chip edge aligns with the MODULE TITLE's left edge (x = 0), left of the plot's own left edge", () => {
     const { container } = render(
       <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
     );
@@ -858,26 +887,29 @@ describe("chips get a reserved band above the plot (no overlap by construction)"
     const chipXs = Array.from(container.querySelectorAll(".cashflow-chart__milestone-chip")).map((c) =>
       c.getAttribute("x"),
     );
-    expect(new Set(chipXs)).toEqual(new Set([String(plot.x)]));
+    // ONE shared x, at the SVG's own x=0 — the same visual column as the <h2>
+    // module title's left text edge (shared 1.125rem `.cashflow-module` padding).
+    expect(new Set(chipXs)).toEqual(new Set(["0"]));
+    expect(0).toBeLessThan(plot.x);
   });
 
-  it("the reserved band grows the SVG height, never the plot height — the plot is IDENTICAL between a 1-chip and a 4-chip shape", () => {
-    const one = render(<CashflowChart monthly={legacy12()} breakevenMonth={null} />);
-    const four = render(
+  it("the reserved band grows the SVG height, never the plot height — the plot is IDENTICAL between a 0-chip and a 3-chip shape", () => {
+    const zero = render(<CashflowChart monthly={legacy12()} breakevenMonth={null} />);
+    const three = render(
       <CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />,
     );
-    const plotOne = plotRect(one.container);
-    const plotFour = plotRect(four.container);
+    const plotZero = plotRect(zero.container);
+    const plotThree = plotRect(three.container);
     // Same plot HEIGHT (the reserved band never shrinks the plot)…
-    expect(plotFour.height).toBe(plotOne.height);
-    // …but the 4-chip shape's plot starts further down (its band is taller),
+    expect(plotThree.height).toBe(plotZero.height);
+    // …but the 3-chip shape's plot starts further down (its band is taller),
     // and the SVG viewBox grows by exactly that same difference.
-    expect(plotFour.y).toBeGreaterThan(plotOne.y);
+    expect(plotThree.y).toBeGreaterThan(plotZero.y);
     const svgHeight = (c: HTMLElement) =>
       parseFloat(c.querySelector("svg")!.getAttribute("viewBox")!.split(" ")[3]);
-    expect(svgHeight(four.container) - svgHeight(one.container)).toBe(plotFour.y - plotOne.y);
-    one.unmount();
-    four.unmount();
+    expect(svgHeight(three.container) - svgHeight(zero.container)).toBe(plotThree.y - plotZero.y);
+    zero.unmount();
+    three.unmount();
   });
 
   it("no chip row's y intersects any tick-label's y (structural disjointness — max chip y < min tick y < plot top)", () => {
