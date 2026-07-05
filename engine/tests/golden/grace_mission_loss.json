@@ -1601,7 +1601,7 @@
       }
     },
     {
-      "class": "input",
+      "class": "computed",
       "editable": false,
       "group": "drivers",
       "label": "Donating households",
@@ -1627,7 +1627,7 @@
       }
     },
     {
-      "class": "input",
+      "class": "computed",
       "editable": false,
       "group": "drivers",
       "label": "Annual donations",
@@ -1654,32 +1654,6 @@
     },
     {
       "class": "computed",
-      "editable": false,
-      "group": "drivers",
-      "label": "Customers",
-      "y1": {
-        "display": "12,998",
-        "raw": 12997.658079625293
-      },
-      "y2": {
-        "display": "16,247",
-        "raw": 16247.072599531615
-      },
-      "y3": {
-        "display": "19,496",
-        "raw": 19496.487119437938
-      },
-      "y4": {
-        "display": "22,746",
-        "raw": 22745.90163934426
-      },
-      "y5": {
-        "display": "25,995",
-        "raw": 25995.316159250586
-      }
-    },
-    {
-      "class": "input",
       "editable": false,
       "group": "revenue",
       "label": "Retail Sales",

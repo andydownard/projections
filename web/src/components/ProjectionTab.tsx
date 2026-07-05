@@ -79,6 +79,26 @@ function rowSlug(label: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+// Chrome-only (PRD NO-CLIENT-MATH): split a server display string into its numeric
+// body and trailing suffix glyphs ("%", ")", "%)") so the last significant digit
+// right-aligns across money/percent/plain rows regardless of a trailing suffix's
+// own glyph width. Never parses or recomputes a number — pure string presentation,
+// the same carve-out as formatAxisTick in CashflowChart.tsx.
+function displayParts(display: string): { body: string; suffix: string } {
+  const m = /^([\s\S]*?)([%)]*)$/.exec(display);
+  return m ? { body: m[1], suffix: m[2] } : { body: display, suffix: "" };
+}
+
+function CellText({ display }: { display: string }) {
+  const { body, suffix } = displayParts(display);
+  return (
+    <>
+      {body}
+      <span className="cell__suffix">{suffix}</span>
+    </>
+  );
+}
+
 export function ProjectionTab({
   vm,
   recomputeStatus = "",
@@ -300,7 +320,7 @@ function Cell({
       <span data-testid={rowTestid} aria-disabled="true" className="sr-only">
         {display}
       </span>
-      {display}
+      <CellText display={display} />
     </td>
   );
 }
@@ -376,6 +396,7 @@ function EditableCell({
           defaultValue={String(raw)}
           // eslint-disable-next-line jsx-a11y/no-autofocus
           autoFocus
+          onFocus={(e) => e.currentTarget.select()}
           inputMode="decimal"
           aria-label={`${label}, Year ${year} value`}
           onKeyDown={(e) => {
@@ -418,7 +439,7 @@ function EditableCell({
         onKeyDown={onKey}
         aria-label={`${label}, Year ${year}: ${display}`}
       >
-        {display}
+        <CellText display={display} />
       </button>
       {/* I4 (#322): a small inline "reset to calculated" on an OVERRIDDEN cell clears
           the pin without the (flag-gated) override audit UI. Shown only when the host

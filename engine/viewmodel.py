@@ -180,14 +180,24 @@ def to_view_model(result):
     # ---- 5-year rows (each annual line carries y1..y5)
     rows = []
     rows.append(_driver_row("Donor market share", annual, "share", pct=True, group="drivers"))
+    # Donating households / Annual donations / Retail Sales are each derived by
+    # multiplying the row above by another driver (households x share, then x
+    # donations/hh/yr, then x donation value) — they are NOT raw inputs, so they
+    # get computed=True (the neutral "computed" tint), leaving Donor market share
+    # as the only true input/pinnable cell in this chain. The "Customers" row
+    # (retail / basket, i.e. transaction count) is intentionally NOT surfaced
+    # here — it's KPI-strip territory, not a driver-chain row (owner feedback).
     rows.append(
-        _driver_row("Donating households", annual, "donating_hh", num=True, group="drivers")
+        _driver_row(
+            "Donating households", annual, "donating_hh", num=True, group="drivers", computed=True
+        )
     )
-    rows.append(_driver_row("Annual donations", annual, "donations", num=True, group="drivers"))
     rows.append(
-        _driver_row("Customers", annual, "customers", num=True, group="drivers", computed=True)
+        _driver_row(
+            "Annual donations", annual, "donations", num=True, group="drivers", computed=True
+        )
     )
-    rows.append(_driver_row("Retail Sales", annual, "retail", group="revenue"))
+    rows.append(_driver_row("Retail Sales", annual, "retail", group="revenue", computed=True))
     rows.append(_driver_row("Salvage Sales", annual, "salvage", group="revenue", computed=True))
     rows.append(_driver_row("Total Revenue", annual, "total_rev", group="revenue", computed=True))
     # expense component rows (stable order from year 1)
