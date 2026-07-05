@@ -1,4 +1,4 @@
-// web/src/components/CashflowChart.tsx — the "Cash flow" module (redesign, spec
+// web/src/components/CashflowChart.tsx — the "Cash position and change by month" module (redesign, spec
 // 2026-07-04). A hand-rolled SVG dual-axis chart (bar = monthly Net, line =
 // Cumulative cash, on a SHARED pixel-exact $0 row) paired with a year-grouped,
 // expand/collapse monthly table that is the chart's accessible text-alternative
@@ -177,9 +177,9 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
 
   if (!monthly.length) {
     return (
-      <section className="cashflow-module" data-testid="cashflow-module" aria-label="Cash flow">
+      <section className="cashflow-module" data-testid="cashflow-module" aria-label="Cash position and change by month">
         <div className="cashflow-module__header">
-          <h2 className="cashflow-module__title">Cash flow</h2>
+          <h2 className="cashflow-module__title">Cash position and change by month</h2>
         </div>
         <figure className="cashflow-chart" data-testid="cashflow-chart">
           <figcaption className="cashflow-chart__caption">No monthly cash-flow data.</figcaption>
@@ -381,9 +381,9 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
     `Net ${m.net.display}, Cumulative cash ${m.cumulativeCash.display}`;
 
   return (
-    <section className="cashflow-module" data-testid="cashflow-module" aria-label="Cash flow">
+    <section className="cashflow-module" data-testid="cashflow-module" aria-label="Cash position and change by month">
       <div className="cashflow-module__header">
-        <h2 className="cashflow-module__title">Cash flow</h2>
+        <h2 className="cashflow-module__title">Cash position and change by month</h2>
         {viewSlug && (
           <a
             className="btn btn--download cashflow-module__export"
@@ -621,7 +621,7 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
             height={plotH}
             tabIndex={0}
             role="slider"
-            aria-label="Cash flow — use Left and Right arrow keys to move through months"
+            aria-label="Cash position and change by month — use Left and Right arrow keys to move through months"
             aria-valuemin={monthly[0].month}
             aria-valuemax={monthly[n - 1].month}
             aria-valuenow={currentMonth}

@@ -70,10 +70,10 @@ function legacy12(): MonthlyPoint[] {
 }
 
 describe("CashflowChart module", () => {
-  it("renders the 'Cash flow' module with a CSV export link (href + download)", () => {
+  it("renders the 'Cash position and change by month' module with a CSV export link (href + download)", () => {
     render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} viewSlug="abc123" />);
-    expect(screen.getByTestId("cashflow-module")).toHaveAttribute("aria-label", "Cash flow");
-    expect(screen.getByRole("heading", { level: 2, name: "Cash flow" })).toBeInTheDocument();
+    expect(screen.getByTestId("cashflow-module")).toHaveAttribute("aria-label", "Cash position and change by month");
+    expect(screen.getByRole("heading", { level: 2, name: "Cash position and change by month" })).toBeInTheDocument();
     const csv = screen.getByTestId("cashflow-export");
     expect(csv).toHaveAttribute("href", "/api/projections/abc123/cashflow.csv");
     expect(csv).toHaveAttribute("download");
