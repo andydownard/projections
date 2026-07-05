@@ -282,9 +282,16 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   const milestoneBaseY = 24;
 
   const n = monthly.length;
-  const bandW = plotW / n;
-  const xCenter = (i: number) => padL + (i + 0.5) * bandW;
-  const xLeftOf = (month: number) => padL + ((month - 1) / n) * plotW;
+  // Owner defect 3: inset the band layout from the plot edges so the FIRST/LAST
+  // bars clear the frame (month 1 previously sat flush against the left edge and
+  // read as clipped). One inset both sides, sized off the raw band so it stays
+  // proportionate at 12- and 60-month horizons. The scrubber/hit-test still spans
+  // the full plot, so pointer resolution is unaffected.
+  const xInset = Math.min(14, Math.max(6, (plotW / n) * 0.6));
+  const innerW = plotW - 2 * xInset;
+  const bandW = innerW / n;
+  const xCenter = (i: number) => padL + xInset + (i + 0.5) * bandW;
+  const xLeftOf = (month: number) => padL + xInset + ((month - 1) / n) * innerW;
 
   // Balanced full-height dual axes (owner defect 1). Both $0 land on the SAME pixel
   // row by construction (a shared tick segmentation → shared zero fraction), and
@@ -341,7 +348,9 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
     const y = k + 1;
     const first = Math.max(opening + (y - 1) * 12, opening);
     const last = Math.min(opening + y * 12 - 1, monthly[n - 1].month);
-    return { y, first, last, xMid: (xLeftOf(first) + (padL + (last / n) * plotW)) / 2 };
+    // Right edge of the span uses the SAME inset band mapping as xLeftOf (defect 3).
+    const xRight = padL + xInset + (last / n) * innerW;
+    return { y, first, last, xMid: (xLeftOf(first) + xRight) / 2 };
   }).filter((s) => s.last >= s.first);
 
   const milestoneDesc = markers.length

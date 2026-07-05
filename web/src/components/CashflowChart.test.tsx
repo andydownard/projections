@@ -676,6 +676,40 @@ describe("owner defect 1 — full-height balanced dual axes", () => {
   });
 });
 
+// ── owner defect 3: the first/last net bars must be INSET from the plot edges
+// (they sat flush against them, so month 1 read as clipped). An inner x-pad on
+// the band layout clears both ends at 12- AND 60-month horizons. ──
+describe("owner defect 3 — bars inset from the plot edges", () => {
+  const edges = (container: HTMLElement) => {
+    const scrubber = container.querySelector(".cashflow-chart__scrubber")!;
+    const padL = parseFloat(scrubber.getAttribute("x")!);
+    const plotW = parseFloat(scrubber.getAttribute("width")!);
+    const bars = Array.from(container.querySelectorAll<SVGRectElement>(".cashflow-chart__bar"));
+    const first = bars[0];
+    const last = bars[bars.length - 1];
+    return {
+      padL,
+      plotRight: padL + plotW,
+      firstLeft: parseFloat(first.getAttribute("x")!),
+      lastRight: parseFloat(last.getAttribute("x")!) + parseFloat(last.getAttribute("width")!),
+    };
+  };
+
+  it("insets the first + last bars at the 60-month horizon", () => {
+    const { container } = render(<CashflowChart monthly={series60()} breakevenMonth={29} milestones={milestones60} />);
+    const e = edges(container);
+    expect(e.firstLeft).toBeGreaterThanOrEqual(e.padL + 6);
+    expect(e.lastRight).toBeLessThanOrEqual(e.plotRight - 6);
+  });
+
+  it("insets the first + last bars at the legacy 12-month horizon too", () => {
+    const { container } = render(<CashflowChart monthly={legacy12()} breakevenMonth={null} />);
+    const e = edges(container);
+    expect(e.firstLeft).toBeGreaterThanOrEqual(e.padL + 6);
+    expect(e.lastRight).toBeLessThanOrEqual(e.plotRight - 6);
+  });
+});
+
 // ── review C2 + I1: plot→row pointer hover and tap/click-to-pin. The scrubber
 // rect is the single pointer surface (the whole month band = the ≥24px hit
 // target). jsdom has no layout, so the rect's box is mocked. ──
