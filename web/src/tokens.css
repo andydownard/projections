@@ -1966,6 +1966,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  /* Owner item 1 (live review 2026-07-04): the module (full 60-month chart +
+     table) is taller than a typical 1440x900 viewport, so a "nearest" scroll
+     (scrollIntoViewIfNeeded, or a real user scrolling down until it comes into
+     view) can land the module's top ABOVE the viewport top — putting the axis
+     titles (the first content inside the chart) almost entirely behind the
+     sticky `.topbar` (measured up to 73px tall when it wraps at narrow
+     widths). scroll-margin-top reserves that clearance for every scroll-into-
+     view, native or programmatic. */
+  scroll-margin-top: 84px;
 }
 .cashflow-module__header {
   display: flex;
@@ -2027,9 +2036,15 @@ body {
   text-anchor: end;
   font-variant-numeric: tabular-nums;
 }
-.cashflow-chart__axis-tickmark {
-  stroke: var(--line);
-  stroke-width: 1;
+.cashflow-chart__gridline--net {
+  /* Owner item 2: net's tick lines now span the full plot width too, but stay
+     visually SECONDARY to the cumulative (hero) grid — lighter weight, tinted
+     toward the net swatch's positive green so the two grid families read as
+     distinct without leaning on hue alone (shape + opacity carry it; the
+     collision rule in CashflowChart.tsx already drops any row this would
+     double up with a cumulative gridline, incl. the shared $0 row). */
+  stroke: var(--success);
+  opacity: 0.22;
 }
 
 /* --- net bars: sign-colored, active ring on hover/focus --- */
@@ -2174,6 +2189,14 @@ body {
 }
 .cashflow-table__milestone {
   color: var(--text-muted);
+}
+.cashflow-table__milestone-slot {
+  /* Owner item 3: fixed-width leading slot (see the comment beside its use in
+     CashflowChart.tsx) — reserves the same width whether or not it holds an
+     icon, so every "M{n}" month label starts at the identical x. */
+  display: inline-block;
+  width: 14px;
+  text-align: center;
 }
 
 @media (prefers-reduced-motion: reduce) {

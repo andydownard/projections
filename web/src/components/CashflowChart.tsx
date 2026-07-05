@@ -198,12 +198,31 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   // to confirm padding by screenshot, not formula).
   const padL = 74;
   const padR = 82;
-  const padT = 44;
+  // Axis-title block + milestone-label row height depends on layout: at <=480px
+  // the two axis titles STACK into two rows (spec §7 "axis-title pair may
+  // stack") instead of sharing one row — owner-feedback fix (item 1): at the
+  // wide layout's fixed right-anchor offset, the cumulative title's text
+  // collided with the net title's text at ZERO gap on the narrower 380-unit
+  // reference viewBox (confirmed in a real 375px browser render — the two read
+  // as one run-together string, which is why the owner saw the axes as
+  // unlabeled). Stacking needs more headroom before the milestone-label row,
+  // which itself needs more headroom before the plot starts.
+  const padT = narrow ? 58 : 44;
   const padB = 28;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   const tCum = narrow ? 3 : 5;
   const tNet = narrow ? 3 : 4;
+  // Cumulative axis-title position: same row as net (right-anchored) at
+  // wide/tablet; a second row, left-aligned under the net title, when narrow.
+  const cumTitleY = narrow ? 20 : 6;
+  const cumTitleTextY = narrow ? 27 : 13;
+  const cumTitleX1 = narrow ? padL : W - padR - 130;
+  const cumTitleX2 = narrow ? padL + 14 : W - padR - 116;
+  const cumTitleTextX = narrow ? padL + 18 : W - padR - 112;
+  // Milestone on-chart labels sit below the axis-title block; narrow needs the
+  // extra row's worth of headroom the stacked titles now occupy.
+  const milestoneBaseY = narrow ? 36 : 24;
 
   const n = monthly.length;
   const bandW = plotW / n;
@@ -229,6 +248,16 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
   const sCum = scaleOf(cum);
   const yFor = (v: number, s: number) =>
     !Number.isFinite(s) ? zeroY : v >= 0 ? zeroY - v * s : zeroY + Math.abs(v) * s;
+
+  // Owner item 2: the net axis's tick lines now span the full plot width too
+  // (previously a 4px left-edge stub only). Collision rule — if a net gridline
+  // lands within 1 viewBox unit of a cumulative (hero) gridline, draw ONLY the
+  // cumulative one (no moiré doubles). $0 is always exactly coincident by
+  // construction (yFor(0,*) === zeroY for both axes), so this rule also
+  // naturally absorbs the shared-zero row: the heavier `.cashflow-chart__zero`
+  // line (drawn later, on top) stays the single emphasized zero anchor.
+  const cumGridYs = cum.ticks.map((t) => yFor(t, sCum));
+  const netGridVisible = (y: number) => !cumGridYs.some((cy) => Math.abs(cy - y) < 1);
 
   const barW = Math.max(1, Math.min(24, bandW * 0.6));
 
@@ -393,16 +422,19 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
             </g>
           )}
 
-          {/* axis titles (identity carried here, not a standalone legend) */}
+          {/* axis titles (identity carried here, not a standalone legend). At
+              <=480px the two stack into two rows instead of sharing one — see
+              the padT/cumTitle* comment above (owner item 1). The swatch
+              shapes are aria-hidden; the text label already names the series. */}
           <g className="cashflow-chart__axis-label cashflow-chart__axis-label--net">
-            <rect className="cashflow-chart__axis-swatch--net-pos" x={padL} y={6} width={5} height={8} />
-            <rect className="cashflow-chart__axis-swatch--net-neg" x={padL + 5} y={6} width={5} height={8} />
+            <rect aria-hidden="true" className="cashflow-chart__axis-swatch--net-pos" x={padL} y={6} width={5} height={8} />
+            <rect aria-hidden="true" className="cashflow-chart__axis-swatch--net-neg" x={padL + 5} y={6} width={5} height={8} />
             <text x={padL + 14} y={13} className="cashflow-chart__axis-label-text">Monthly net ($)</text>
           </g>
           <g className="cashflow-chart__axis-label cashflow-chart__axis-label--cum">
-            <line className="cashflow-chart__axis-swatch--cum" x1={W - padR - 130} x2={W - padR - 116} y1={10} y2={10} />
-            <circle className="cashflow-chart__axis-swatch--cum-dot" cx={W - padR - 116} cy={10} r={2} />
-            <text x={W - padR - 112} y={13} className="cashflow-chart__axis-label-text">Cumulative cash ($)</text>
+            <line aria-hidden="true" className="cashflow-chart__axis-swatch--cum" x1={cumTitleX1} x2={cumTitleX2} y1={cumTitleY} y2={cumTitleY} />
+            <circle aria-hidden="true" className="cashflow-chart__axis-swatch--cum-dot" cx={cumTitleX2} cy={cumTitleY} r={2} />
+            <text x={cumTitleTextX} y={cumTitleTextY} className="cashflow-chart__axis-label-text">Cumulative cash ($)</text>
           </g>
 
           {/* full-width gridlines: HERO (cumulative) only, at its nice ticks */}
@@ -429,25 +461,33 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
             </text>
           ))}
 
-          {/* left (net) axis: short tick marks + labels (NOT a second full grid) */}
-          {net.ticks.map((t) => (
-            <g key={`ntick-${t}`}>
-              <line
-                className="cashflow-chart__axis-tickmark"
-                x1={padL - 4}
-                x2={padL}
-                y1={yFor(t, sNet)}
-                y2={yFor(t, sNet)}
-              />
-              <text
-                className="cashflow-chart__axis-tick cashflow-chart__axis-tick--left"
-                x={padL - 6}
-                y={yFor(t, sNet) + 3}
-              >
-                {formatAxisTick(t)}
-              </text>
-            </g>
-          ))}
+          {/* left (net) axis: full-width gridlines (owner item 2) + labels. A
+              lighter, net-tinted variant so the two grid families stay tellable
+              apart; any row within 1 unit of a cumulative gridline is skipped
+              here (collision rule — see the netGridVisible comment above). */}
+          {net.ticks.map((t) => {
+            const y = yFor(t, sNet);
+            return (
+              <g key={`ntick-${t}`}>
+                {netGridVisible(y) && (
+                  <line
+                    className="cashflow-chart__gridline cashflow-chart__gridline--net"
+                    x1={padL}
+                    x2={padL + plotW}
+                    y1={y}
+                    y2={y}
+                  />
+                )}
+                <text
+                  className="cashflow-chart__axis-tick cashflow-chart__axis-tick--left"
+                  x={padL - 6}
+                  y={y + 3}
+                >
+                  {formatAxisTick(t)}
+                </text>
+              </g>
+            );
+          })}
 
           {/* underwater area wash under the cumulative line */}
           <path d={areaPath} className="cashflow-chart__area" />
@@ -514,7 +554,7 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
           {markers.map((mk, i) => {
             const lx = xCenter(mk.idx);
             const anchor = lx > W - padR - 40 ? "end" : lx < padL + 40 ? "start" : "middle";
-            const labelY = 24 + (i % 2) * 12;
+            const labelY = milestoneBaseY + (i % 2) * 12;
             return (
               <g
                 key={mk.key}
@@ -668,14 +708,22 @@ export function CashflowChart({ monthly, breakevenMonth, milestones, viewSlug }:
                       onClick={() => togglePin(m.month)}
                     >
                       <th scope="row" className="cashflow-table__label">
-                        M{m.month}
-                        {flags.map((meta) => (
-                          <span key={meta.key} className={`cashflow-table__milestone cashflow-table__milestone--${meta.key}`}>
-                            {" "}
-                            <span aria-hidden="true">{meta.icon}</span>
-                            <span className="sr-only">({meta.label})</span>
-                          </span>
-                        ))}
+                        {/* Owner item 3: a fixed-width leading slot for the
+                            milestone icon, ALWAYS rendered (empty when the
+                            month carries no flag) so "M1".."M60" all start at
+                            the identical x — previously the icon was appended
+                            AFTER the variable-width month number, so its
+                            column position (and the month text's apparent
+                            alignment) drifted row to row. */}
+                        <span className="cashflow-table__milestone-slot">
+                          {flags.map((meta) => (
+                            <span key={meta.key} className={`cashflow-table__milestone cashflow-table__milestone--${meta.key}`}>
+                              <span aria-hidden="true">{meta.icon}</span>
+                              <span className="sr-only">({meta.label})</span>
+                            </span>
+                          ))}
+                        </span>
+                        {`M${m.month}`}
                       </th>
                       {ROWS.map((r) => {
                         const cell = r.pick(m);
