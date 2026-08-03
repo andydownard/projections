@@ -67,7 +67,8 @@ def test_non_honored_driver_pins_are_rejected_not_silently_ignored():
     # #183 RED: the rate/driver inputs compute() does NOT resolve via a pin are no
     # longer advertised as pinnable, so a pin on them is REJECTED (-> 422), never
     # accepted-and-ignored. They are edited as global assumptions, not per-year pins.
-    for node in ("labor_pct", "marketing_pct", "supplies_pct", "card_pct",
+    for node in ("labor_pct", "marketing_pct", "supplies_pct", "card_share",
+                 "card_rate", "card_per_tx_fee",
                  "payroll_tax_pct", "salvage_pct", "escalator", "basket",
                  "donation_value", "donations_per_hh", "sqft", "rent_per_sqft",
                  "occupancy"):

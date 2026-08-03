@@ -19,9 +19,10 @@ from __future__ import annotations
 # measurably changes computed output, so the API never accepts-and-persists a no-op
 # pin (#183). The per-year revenue driver ``share`` plus the component expense lines
 # are the pinnable cells. The rate/driver inputs (labor_pct, marketing_pct,
-# supplies_pct, card_pct, payroll_tax_pct, salvage_pct, escalator, basket,
-# donation_value, donations_per_hh, sqft, rent_per_sqft, occupancy) are NOT pinned
-# per-year — they are edited as GLOBAL assumptions (app SettingsTab) and compute()
+# supplies_pct, card_share, card_rate, card_per_tx_fee, payroll_tax_pct,
+# salvage_pct, escalator, basket, donation_value, donations_per_hh, sqft,
+# rent_per_sqft, occupancy) are NOT pinned per-year — they are edited as
+# GLOBAL assumptions (app SettingsTab) and compute()
 # reads them directly, never via a pin; advertising them pinnable was a silent lie
 # (a pin on them was accepted yet did nothing). To change one of those, edit the
 # assumption; to fix a year's resulting expense, pin the component line (e.g. pin
@@ -98,7 +99,7 @@ _UPSTREAM_OF = {
     "Payroll taxes": ("share", "labor_pct", "payroll_tax_pct"),
     "Marketing & outreach": ("share", "marketing_pct"),
     "Supplies & processing": ("share", "supplies_pct"),
-    "Credit card fees": ("share", "card_pct"),
+    "Credit card fees": ("share", "card_share", "card_rate", "card_per_tx_fee"),
     "Rent": ("occupancy", "escalator"),
 }
 

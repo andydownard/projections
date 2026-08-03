@@ -82,7 +82,9 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
         ("donation_value", _f(inputs.donation_value), USD),
         ("basket", _f(a.basket), USD),
         ("salvage_pct", _f(a.salvage_pct), PCT),
-        ("card_pct", _f(a.card_pct), PCT),
+        ("card_share", _f(a.card_share), PCT),
+        ("card_rate", _f(a.card_rate), PCT),
+        ("card_per_tx_fee", _f(a.card_per_tx_fee), USD),
         ("labor_pct", _f(a.labor_pct), PCT),
         ("payroll_tax_pct", _f(a.payroll_tax_pct), PCT),
         ("marketing_pct", _f(a.marketing_pct), PCT),
@@ -296,7 +298,12 @@ def _build_disclaimer_block(ws, terms_version, terms_accepted_at):
 def _expense_formula(label, col, tr, sh, rowmap):
     """The live Excel formula for an expense component (sans leading '=')."""
     if label == "Credit card fees":
-        return f"{col}{tr}*{sh['card_pct']}"
+        rt_row = rowmap["Retail Sales"]
+        cust_row = rowmap["Customers"]
+        return (
+            f"{sh['card_share']}*({sh['card_rate']}*{col}{rt_row}"
+            f"+{sh['card_per_tx_fee']}*IF({col}{cust_row}=\"\",0,{col}{cust_row}))"
+        )
     if label == "Marketing & outreach":
         return f"{col}{tr}*{sh['marketing_pct']}"
     if label == "Payroll":

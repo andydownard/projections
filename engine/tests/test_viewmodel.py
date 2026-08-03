@@ -111,7 +111,8 @@ def test_monthly_rows_shape(canonical_result):
 def test_settings_block(canonical_result):
     vm = to_view_model(canonical_result)
     s = vm["settings"]
-    for k in ("laborPct", "marketingPct", "suppliesPct", "cardPct",
+    for k in ("laborPct", "marketingPct", "suppliesPct", "cardShare",
+              "cardRate", "cardPerTxFee",
               "payrollTaxPct", "salvagePct", "escalator", "basket",
               "donationsPerHh", "shareY1", "shareY2", "shareY3",
               "shareY4", "shareY5", "donationValue",

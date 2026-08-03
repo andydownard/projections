@@ -85,7 +85,8 @@ _SET_INPUT_INPUT_FIELDS = {
 # occupancy are stored on ``inputs``). Anything not listed is rejected, fail-closed.
 _ASSUMPTION_BUCKET = {
     "labor_pct": "assumptions", "marketing_pct": "assumptions",
-    "supplies_pct": "assumptions", "card_pct": "assumptions",
+    "supplies_pct": "assumptions", "card_share": "assumptions",
+    "card_rate": "assumptions", "card_per_tx_fee": "assumptions",
     "payroll_tax_pct": "assumptions", "salvage_pct": "assumptions",
     "escalator": "assumptions", "basket": "assumptions",
     # donations per household / year is an engine assumption (E2 editable driver).

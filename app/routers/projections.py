@@ -519,7 +519,7 @@ _ENGINE_TRADE_KEYS = ("basis", "households", "acs_vintage")
 # upper bound of 1 is intentional: the advisory band flag (engine build_flags) warns on
 # the high end; the hard cap only rejects a nonsensical > 100% share (task 1.1 review).
 _PCT_FIELDS = (
-    "labor_pct", "marketing_pct", "supplies_pct", "card_pct",
+    "labor_pct", "marketing_pct", "supplies_pct", "card_share", "card_rate",
     "payroll_tax_pct", "salvage_pct", "escalator",
 )
 
@@ -577,7 +577,9 @@ class AssumptionsIn(BaseModel):
     labor_pct: Optional[str] = None
     marketing_pct: Optional[str] = None
     supplies_pct: Optional[str] = None
-    card_pct: Optional[str] = None
+    card_share: Optional[str] = None
+    card_rate: Optional[str] = None
+    card_per_tx_fee: Optional[str] = None
     payroll_tax_pct: Optional[str] = None
     salvage_pct: Optional[str] = None
     escalator: Optional[str] = None
@@ -625,11 +627,13 @@ class AssumptionsIn(BaseModel):
             _require_fraction(field_name, getattr(self, field_name), lo="0", hi="1")
         # sensitivity_delta in [0, 0.9] (a value > 1 -> negative donation multiplier).
         _require_fraction("sensitivity_delta", self.sensitivity_delta, lo="0", hi="0.9")
-        # basket $ and utilities $/sqft have a lower bound only (review 1.3f, f3): a
-        # negative basket value or negative utilities rate is nonsensical but has no
-        # natural upper bound the way the [0,1] percent knobs do.
+        # basket $, utilities $/sqft, and the per-transaction card fee have a lower
+        # bound only (review 1.3f, f3): a negative basket value, negative utilities
+        # rate, or negative per-tx fee is nonsensical but has no natural upper bound
+        # the way the [0,1] percent knobs do.
         _require_min("basket", self.basket, lo="0")
         _require_min("utilities_per_sqft", self.utilities_per_sqft, lo="0")
+        _require_min("card_per_tx_fee", self.card_per_tx_fee, lo="0")
         if self.fixed_annual is not None:
             for label, value in self.fixed_annual.items():
                 if label not in FIXED_ANNUAL:

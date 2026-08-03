@@ -178,7 +178,9 @@ def test_patch_fe_numeric_buildbody_all_legacy_drivers(client):
                 "labor_pct": 0.45,
                 "marketing_pct": 0.04,
                 "supplies_pct": 0.06,
-                "card_pct": 0.025,
+                "card_share": 0.65,
+                "card_rate": 0.025,
+                "card_per_tx_fee": 0.10,
                 "payroll_tax_pct": 0.08,
                 "salvage_pct": 0.01,
                 "escalator": 0.035,
@@ -196,7 +198,9 @@ def test_patch_fe_numeric_buildbody_all_legacy_drivers(client):
     assert s["laborPct"] == pytest.approx(0.45)
     assert s["marketingPct"] == pytest.approx(0.04)
     assert s["suppliesPct"] == pytest.approx(0.06)
-    assert s["cardPct"] == pytest.approx(0.025)
+    assert s["cardShare"] == pytest.approx(0.65)
+    assert s["cardRate"] == pytest.approx(0.025)
+    assert s["cardPerTxFee"] == pytest.approx(0.10)
     assert s["payrollTaxPct"] == pytest.approx(0.08)
     assert s["salvagePct"] == pytest.approx(0.01)
     assert s["escalator"] == pytest.approx(0.035)
