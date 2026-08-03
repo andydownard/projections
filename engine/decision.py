@@ -202,10 +202,17 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
     # structure. fixed = non-%-of-revenue cost; var_rate = sum of %-of-revenue rates.
     # Card fees' revenue-proportional term is card_share × card_rate; the per-transaction
     # term is folded into fixed costs (not a clean % of revenue).
+    # Under labor_mode == "coverage", Payroll is a headcount/wage max()-and-sum with no
+    # single linear revenue rate — including it in var_rate would produce a
+    # confidently-wrong break_even_revenue (Design Review, fix #2). Drop the labor term
+    # entirely in coverage mode; the actual Payroll dollars remain in total_exp, so they
+    # correctly fall into the `fixed` residual instead of being double-modeled. pct mode
+    # is byte-unchanged.
     y1 = annual[1]
+    labor_var_term = (D(assumptions.labor_pct) * (Decimal("1") + D(assumptions.payroll_tax_pct))
+                       if assumptions.labor_mode != "coverage" else Decimal("0"))
     var_rate = (D(assumptions.card_share) * D(assumptions.card_rate) + D(assumptions.marketing_pct)
-                + D(assumptions.labor_pct) * (Decimal("1") + D(assumptions.payroll_tax_pct))
-                + D(assumptions.supplies_pct))
+                + labor_var_term + D(assumptions.supplies_pct))
     fixed = D(str(y1.total_exp)) - (D(str(y1.total_rev)) * var_rate)
     # var_rate >= 1 (not just == 1): at or above 100% of revenue no revenue level
     # ever recovers fixed costs, so `fixed / (1 - var_rate)` is either a division
@@ -387,5 +394,19 @@ def build_flags(result, assumptions, demand):
                     or sales_per_sqft > D(str(model.SALES_PER_SQFT_MAX))):
                 flags["sales_per_sqft_out_of_band"] = {
                     "value": float(sales_per_sqft), "band": "$50–$300", "requires_note": True}
+
+    # leadership coverage advisory (labor_mode == "coverage" only). Informational
+    # only — requires_note is False, so it never forces a justification note or
+    # blocks anything; it just surfaces the implied manager/AM headcount needed to
+    # cover every open hour, given the store's open_hours_per_week.
+    if assumptions.labor_mode == "coverage":
+        open_hours_per_week = D(assumptions.open_hours_per_week)
+        implied_am = max(0, -(-(int(open_hours_per_week) - 40) // 40))  # ceil((hours-40)/40), floored at 0
+        flags["leadership_coverage_advisory"] = {
+            "open_hours_per_week": float(open_hours_per_week),
+            "note": (f"At {open_hours_per_week} open hrs/week, plan for 1 store manager + "
+                     f"~{implied_am} assistant manager(s) so a manager or AM is on duty all open hours."),
+            "requires_note": False,
+        }
 
     return flags

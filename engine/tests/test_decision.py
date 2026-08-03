@@ -939,3 +939,50 @@ def test_breakeven_consistency_invariant_holds_across_a_scenario_sweep():
     assert seen_downside_driven
     assert seen_base_unreached
     assert seen_reached_and_proceed
+
+
+# ------------------------------------------------- Task 1.4: labor_mode: pct | coverage
+def test_break_even_revenue_excludes_coverage_payroll_from_var_rate():
+    # Under coverage mode, Payroll is a headcount/wage max()-and-sum with no single
+    # linear revenue rate — including it in var_rate would produce a confidently-wrong
+    # break_even_revenue (Design Review, fix #2). var_rate must drop the labor term
+    # entirely; the actual Payroll dollars still land in total_exp, so they correctly
+    # fall into the `fixed` residual instead of being double-modeled.
+    inputs, _, demand, trade = build_canonical_inputs()
+    a_coverage = Assumptions(labor_pct="0.60", labor_mode="coverage")
+    res = compute(inputs, a_coverage, demand, trade, overrides={})
+    y1 = res.annual[1]
+
+    # Recompute fixed/var_rate independently using the coverage-mode formula (labor
+    # term dropped) and assert break_even_revenue_annual matches that recomputation.
+    var_rate = (D(a_coverage.card_share) * D(a_coverage.card_rate)
+                + D(a_coverage.marketing_pct) + D(a_coverage.supplies_pct))
+    fixed = D(str(y1.total_exp)) - (D(str(y1.total_rev)) * var_rate)
+    expected_break_even_revenue = fixed / (Decimal("1") - var_rate)
+
+    assert res.decision.break_even_revenue_annual == expected_break_even_revenue
+
+    # And it must NOT equal what the pct-mode formula (labor term included) would give —
+    # proves the guard is actually active, not a coincidental match.
+    pct_var_rate = (
+        D(a_coverage.card_share) * D(a_coverage.card_rate) + D(a_coverage.marketing_pct)
+        + D(a_coverage.labor_pct) * (Decimal("1") + D(a_coverage.payroll_tax_pct))
+        + D(a_coverage.supplies_pct))
+    pct_fixed = D(str(y1.total_exp)) - (D(str(y1.total_rev)) * pct_var_rate)
+    pct_break_even_revenue = pct_fixed / (Decimal("1") - pct_var_rate)
+    assert res.decision.break_even_revenue_annual != pct_break_even_revenue
+
+
+def test_leadership_coverage_advisory_flag_present_only_in_coverage_mode():
+    inputs, _, demand, trade = build_canonical_inputs()
+
+    pct_res = compute(inputs, Assumptions(labor_pct="0.60", labor_mode="pct"),
+                       demand, trade, overrides={})
+    assert "leadership_coverage_advisory" not in pct_res.flags
+
+    coverage_res = compute(inputs, Assumptions(labor_pct="0.60", labor_mode="coverage"),
+                            demand, trade, overrides={})
+    flag = coverage_res.flags.get("leadership_coverage_advisory")
+    assert flag is not None
+    assert flag["requires_note"] is False
+    assert flag["open_hours_per_week"] == 60.0

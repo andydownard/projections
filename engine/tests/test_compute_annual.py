@@ -274,3 +274,67 @@ def test_production_metrics_zero_guarded():
     assert D(str(res.annual[1].items_sold)) == Decimal("0")
     assert D(str(res.annual[1].items_produced)) == Decimal("0")
     assert D(str(res.annual[1].production_hours)) == Decimal("0")
+
+
+# ------------------------------------------------- Task 1.4: labor_mode: pct | coverage
+def test_labor_mode_pct_is_default_and_byte_unchanged(canonical_result):
+    # Default Assumptions() -> labor_mode == "pct"; Payroll == total_rev * labor_pct,
+    # today's formula, byte-unchanged.
+    y1 = canonical_result.annual[1]
+    assert canonical_result.assumptions.labor_mode == "pct"
+    expected = D(str(y1.total_rev)) * D(canonical_result.assumptions.labor_pct)
+    assert D(str(y1.expenses["Payroll"])) == expected
+
+
+def test_labor_mode_coverage_formula():
+    # Coverage mode: headcount/wage-driven Payroll, using the YEAR'S AVERAGE MONTH
+    # (production_hours/12, customers/12) — not the actual monthly ramp (see Design
+    # Review: compute_annual runs before build_monthly, so depending on the real
+    # monthly ramp would be circular). Recompute expected from the SAME resolved
+    # production_hours/customers the test reads off annual[1], not hand-typed dollars.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    a = Assumptions(labor_pct="0.60", labor_mode="coverage")
+    res = compute(inputs, a, DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    y1 = res.annual[1]
+    production_hours = D(str(y1.production_hours))
+    customers = D(str(y1.customers))
+
+    open_hours_per_month = D(a.open_hours_per_week) * 52 / 12
+    production_hours_month = production_hours / 12
+    transactions_month = customers / 12
+    cashier_hours = max(
+        transactions_month / D(a.cashier_tx_per_hour),
+        D(a.min_staffed_lanes) * open_hours_per_month,
+    )
+    door_hours = (D(a.door_dedicated) + D(a.door_peak)) * open_hours_per_month
+    runner_hours = D(a.runners) * open_hours_per_month
+    hourly_hours_month = production_hours_month + cashier_hours + door_hours + runner_hours
+    salaries = D(a.mgr_salary) + D(str(a.am_count)) * D(a.am_salary)
+    expected = hourly_hours_month * D(a.wage) * 12 + salaries
+
+    assert D(str(y1.expenses["Payroll"])) == expected
+
+
+def test_labor_mode_coverage_zero_guarded():
+    # cashier_tx_per_hour = 0 must never raise ZeroDivisionError.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(
+        inputs, Assumptions(labor_mode="coverage", cashier_tx_per_hour="0"),
+        DemandDrivers(), TradeArea(basis="city", households="31798"), overrides={})
+    # No exception raised; Payroll resolves via the min_staffed_lanes floor term.
+    assert D(str(res.annual[1].expenses["Payroll"])) > Decimal("0")

@@ -150,6 +150,27 @@ SELL_THROUGH = "0.50"                # fraction of produced/processed items that
 ITEMS_PER_HOUR = 75                  # items processed per production labor-hour
 PRODUCTIVE_HOURS_PER_STATION = 160   # productive hours one production station covers/mo
 
+# --- labor_mode: pct | coverage (Model v3, owner session 2026-08-03). "pct" (the
+# default) is today's total_rev × labor_pct formula, byte-unchanged. "coverage" is a
+# headcount/wage-driven alternative: hourly staff (production + cashier + door +
+# runner hours, each a max()/sum() of coverage-band terms) × wage, plus flat manager +
+# assistant-manager salaries. Uses the YEAR'S AVERAGE MONTH (annual/12) for
+# production_hours/customers, not the actual monthly-weighted ramp — compute_annual
+# runs before build_monthly, so depending on the real monthly ramp would be circular
+# (see docs/plans/2026-08-03-model-v3-session-learnings.md Design Review). The
+# existing Payroll-ramp monthly split (_PAYROLL_WEIGHTS) is unchanged either way.
+LABOR_MODE = "pct"
+OPEN_HOURS_PER_WEEK = "60"           # store open hours/week (coverage mode)
+CASHIER_TX_PER_HOUR = "22"           # transactions one cashier can process/hour
+MIN_STAFFED_LANES = "1.5"            # minimum staffed checkout lanes at all times
+DOOR_DEDICATED = "1.0"               # dedicated donation-door staff (FTE-equivalent)
+DOOR_PEAK = "0.25"                   # additional peak-hours donation-door coverage
+RUNNERS = "1.5"                      # floor/backroom runners (FTE-equivalent)
+WAGE = "15.00"                       # hourly wage, coverage mode
+MGR_SALARY = "55000"                 # store manager annual salary
+AM_SALARY = "42000"                  # assistant manager annual salary
+AM_COUNT = 2                         # assistant manager headcount
+
 # --- occupancy
 RENT_ESCALATOR = "0.03"              # §7.3 — compound, Y2–Y3 (resolved §1)
 

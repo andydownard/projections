@@ -101,6 +101,18 @@ class Assumptions:
     sell_through: str = model.SELL_THROUGH
     items_per_hour: int = model.ITEMS_PER_HOUR
     productive_hours_per_station: int = model.PRODUCTIVE_HOURS_PER_STATION
+    # --- labor_mode: pct | coverage (Model v3)
+    labor_mode: str = model.LABOR_MODE
+    open_hours_per_week: str = model.OPEN_HOURS_PER_WEEK
+    cashier_tx_per_hour: str = model.CASHIER_TX_PER_HOUR
+    min_staffed_lanes: str = model.MIN_STAFFED_LANES
+    door_dedicated: str = model.DOOR_DEDICATED
+    door_peak: str = model.DOOR_PEAK
+    runners: str = model.RUNNERS
+    wage: str = model.WAGE
+    mgr_salary: str = model.MGR_SALARY
+    am_salary: str = model.AM_SALARY
+    am_count: int = model.AM_COUNT
 
 
 @dataclass(frozen=True)
@@ -230,8 +242,28 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
                 D(assumptions.card_rate) * retail + D(assumptions.card_per_tx_fee) * customers))
         exp["Marketing & outreach"] = _resolve_get(
             overrides, "Marketing & outreach", y, total_rev * D(assumptions.marketing_pct))
-        payroll = _resolve_get(
-            overrides, "Payroll", y, total_rev * D(assumptions.labor_pct))
+        # labor_mode: pct (default, byte-unchanged) | coverage (headcount/wage-driven).
+        # Coverage mode uses the YEAR'S AVERAGE MONTH (production_hours/12,
+        # customers/12) — not the actual monthly-weighted ramp, since compute_annual
+        # runs before build_monthly and depending on the real monthly ramp would be
+        # circular (docs/plans/2026-08-03-model-v3-session-learnings.md Design Review).
+        if assumptions.labor_mode == "coverage":
+            open_hours_per_month = D(assumptions.open_hours_per_week) * 52 / 12
+            production_hours_month = production_hours / 12
+            transactions_month = customers / 12
+            cashier_hours = max(
+                transactions_month / D(assumptions.cashier_tx_per_hour)
+                if D(assumptions.cashier_tx_per_hour) != 0 else Decimal("0"),
+                D(assumptions.min_staffed_lanes) * open_hours_per_month,
+            )
+            door_hours = (D(assumptions.door_dedicated) + D(assumptions.door_peak)) * open_hours_per_month
+            runner_hours = D(assumptions.runners) * open_hours_per_month
+            hourly_hours_month = production_hours_month + cashier_hours + door_hours + runner_hours
+            salaries = D(assumptions.mgr_salary) + D(str(assumptions.am_count)) * D(assumptions.am_salary)
+            payroll_calculated = hourly_hours_month * D(assumptions.wage) * 12 + salaries
+        else:
+            payroll_calculated = total_rev * D(assumptions.labor_pct)
+        payroll = _resolve_get(overrides, "Payroll", y, payroll_calculated)
         exp["Payroll"] = payroll
         exp["Payroll taxes"] = _resolve_get(
             overrides, "Payroll taxes", y, payroll * D(assumptions.payroll_tax_pct))
