@@ -75,6 +75,7 @@ class MonthRow:
     startup_outflow: Decimal   # one-time cash outflow timed to this month
     cash_net: Decimal          # net - startup_outflow (the cash delta)
     cumulative_cash: Decimal
+    stations_staffed: Decimal  # production-station headcount this month (Task 1.2)
 
 
 def _normalized(weights):
@@ -251,6 +252,13 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
     last_scheduled = max(startup_by_month.keys(), default=0)
     n = max(g + 59, int(last_scheduled))
 
+    # Hoisted once (not per-month) — the production-station module (Task 1.2) rescales
+    # monthly revenue back to monthly retail via the SAME constant salvage_pct that
+    # holds for every year (total_rev = retail*(1+salv_pct) always), so
+    # retail_month = revenue_month / (1+salv_pct) is an exact linear rescale of the
+    # already footing-exact revenue split — no new distribution function needed.
+    salv_pct = D(assumptions.salvage_pct)
+
     # Per-year monthly slices, computed SEQUENTIALLY so each of Years 2-5 can anchor
     # its glide on the prior year's own last month (Year 1 = the unchanged 6.2
     # three-stream split).
@@ -274,6 +282,7 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
             exp = Decimal("0")
             net = Decimal("0")
             kind = "pre_open"
+            stations_staffed = Decimal("0")
         elif month <= g + 59:
             oi = month - g          # 0..59
             y = oi // 12 + 1        # 1..5
@@ -285,6 +294,20 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
             kind = "operating"
             if y == 1:
                 y1_op_nets.append(net)
+            # Production-station module (Task 1.2): rescale this month's revenue
+            # back to retail, then down the items-sold -> items-produced ->
+            # production-hours -> stations-staffed chain, each zero-guarded.
+            retail_m = (rev / (Decimal("1") + salv_pct)
+                       if (Decimal("1") + salv_pct) != 0 else Decimal("0"))
+            items_sold_m = (retail_m / D(assumptions.avg_item_price)
+                            if D(assumptions.avg_item_price) != 0 else Decimal("0"))
+            items_produced_m = (items_sold_m / D(assumptions.sell_through)
+                                if D(assumptions.sell_through) != 0 else Decimal("0"))
+            production_hours_m = (items_produced_m / D(assumptions.items_per_hour)
+                                  if D(assumptions.items_per_hour) != 0 else Decimal("0"))
+            stations_staffed = (
+                production_hours_m / D(assumptions.productive_hours_per_station)
+                if D(assumptions.productive_hours_per_station) != 0 else Decimal("0"))
         else:
             # Beyond the 60-month operating ramp: the store is open but this month
             # carries only its scheduled cost (no modeled operating activity).
@@ -292,11 +315,13 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
             exp = Decimal("0")
             net = Decimal("0")
             kind = "operating"
+            stations_staffed = Decimal("0")
         cash_net = net - outflow
         cumulative += cash_net
         rows.append(MonthRow(
             index=month, kind=kind, revenue=rev, expenses=exp, net=net,
             startup_outflow=outflow, cash_net=cash_net, cumulative_cash=cumulative,
+            stations_staffed=stations_staffed,
         ))
 
     # break-even month: first Year-1 operating month with net>=0 that stays non-negative

@@ -138,6 +138,18 @@ CARD_PER_TX_FEE = "0.10"             # per-transaction fee ($0.10)
 PAYROLL_TAX_PCT_OF_PAYROLL = "0.08"  # §7.3; 990-grounded (6.4) — employer payroll-tax
 # load across the six-EIN sample (docs/2026-07-03-owner-deliverables.md); was 7.5%.
 
+# --- production-station module (Model v3, owner session 2026-08-03). Physical
+# throughput chain bridging retail $ to a staffing/space count: items_sold (retail /
+# avg_item_price) -> items_produced (items_sold / sell_through, the fraction of
+# processed goods that actually sell) -> production_hours (items_produced /
+# items_per_hour) -> stations_staffed (production_hours / productive_hours_per_station,
+# monthly) -> stations_installed (ceil of the peak monthly stations_staffed). Read-only
+# derived metrics; they do not feed back into total_rev/total_exp in this task.
+AVG_ITEM_PRICE = "5.00"              # $ per item sold at retail
+SELL_THROUGH = "0.50"                # fraction of produced/processed items that sell
+ITEMS_PER_HOUR = 75                  # items processed per production labor-hour
+PRODUCTIVE_HOURS_PER_STATION = 160   # productive hours one production station covers/mo
+
 # --- occupancy
 RENT_ESCALATOR = "0.03"              # §7.3 — compound, Y2–Y3 (resolved §1)
 

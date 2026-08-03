@@ -43,6 +43,10 @@ NON_PINNABLE_NODES = frozenset({
     "customers", "salvage_sales", "donating_households", "donations",
     "break_even_month", "startup_capital_required", "first_year_cash_gap",
     "cash_runway_months", "simple_payback_years", "revenue_cagr",
+    # Production-station module (Task 1.2, Model v3) — derived read-only metrics,
+    # implicitly rejected already (not in PINNABLE_NODES), documented explicitly
+    # here per the existing pattern for error-message/test clarity.
+    "items_sold", "items_produced", "production_hours", "stations_installed",
 })
 
 

@@ -175,6 +175,12 @@ def to_view_model(result):
          "sub": "payroll / revenue", "color": "text"},
         {"label": "Revenue CAGR", "value": _pct_or_na(dec.revenue_cagr),
          "sub": "Y1->Y5", "color": "text"},
+        # Production-station module (Model v3, Task 1.2): the peak monthly
+        # stations_staffed, ceiling'd. A count, so number_view (not money_view) —
+        # {raw,display}, matching every other kpis[] entry (KpiStrip.tsx renders
+        # k.value.display unconditionally; a bare int would break that surface).
+        {"label": "Production stations (peak)", "value": number_view(result.stations_installed),
+         "sub": "peak month", "color": "text"},
     ]
 
     # ---- 5-year rows (each annual line carries y1..y5)
@@ -200,6 +206,17 @@ def to_view_model(result):
     rows.append(_driver_row("Retail Sales", annual, "retail", group="revenue", computed=True))
     rows.append(_driver_row("Salvage Sales", annual, "salvage", group="revenue", computed=True))
     rows.append(_driver_row("Total Revenue", annual, "total_rev", group="revenue", computed=True))
+    # Production-station module (Model v3, Task 1.2): read-only physical throughput
+    # rows bridging the $ revenue chain to the expense lines — items_sold (retail /
+    # avg_item_price), items_produced (items_sold / sell_through), production_hours
+    # (items_produced / items_per_hour). A new "production" group; never editable
+    # (derived, non-pinnable per dag.NON_PINNABLE_NODES).
+    rows.append(_driver_row("Items sold", annual, "items_sold", num=True,
+                            group="production", computed=True))
+    rows.append(_driver_row("Items produced", annual, "items_produced", num=True,
+                            group="production", computed=True))
+    rows.append(_driver_row("Production hours", annual, "production_hours", num=True,
+                            group="production", computed=True))
     # expense component rows (stable order from year 1)
     for label in y1.expenses:
         rows.append({
@@ -358,6 +375,9 @@ def to_view_model(result):
         "year5Income": money_view(cash_net(result, 5)),
         "startupCosts": startup_costs,
         "startupTotal": money_view(result.startup_total),
+        # Production-station module (Model v3, Task 1.2): a plain top-level int — a
+        # count, not money/percent (matches the breakevenMonth precedent above).
+        "stationsInstalled": result.stations_installed,
         "rows": rows,
         "overrides": ov_list,
         "settings": settings,

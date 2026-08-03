@@ -408,6 +408,44 @@ def test_blend_then_flat_glides_upward_smoothly_when_growth_outpaces_the_exit_ra
         assert parts[i] == parts[_BLEND_MONTHS]
 
 
+# ------------------------------------------------- Task 1.2: production-station module
+def test_stations_staffed_footing(canonical_result):
+    # stations_staffed is a pure rescale of monthly revenue (not itself footing-exact
+    # additive to a fixed annual total); assert consistency — every operating month's
+    # stations_staffed equals the same formula recomputed independently off that
+    # month's own revenue, proving the wiring rather than a footing identity.
+    a = canonical_result.assumptions
+    salv_pct = D(str(a.salvage_pct))
+    ops = [m for m in canonical_result.monthly if m.kind == "operating"]
+    assert ops
+    for m in ops:
+        retail_m = D(str(m.revenue)) / (Decimal("1") + salv_pct)
+        items_sold_m = retail_m / D(str(a.avg_item_price))
+        items_produced_m = items_sold_m / D(str(a.sell_through))
+        production_hours_m = items_produced_m / D(str(a.items_per_hour))
+        expected = production_hours_m / D(str(a.productive_hours_per_station))
+        assert D(str(m.stations_staffed)) == expected, m.index
+
+
+def test_pre_open_months_have_zero_stations_staffed():
+    res = _opening_at(4, ({"category": "Consultant", "month": 1, "amount": 10000},))
+    pre_open = [m for m in res.monthly if m.kind == "pre_open"]
+    assert pre_open
+    for m in pre_open:
+        assert D(str(m.stations_staffed)) == Decimal("0")
+
+
+def test_stations_installed_is_ceil_of_peak(canonical_result):
+    # compute()'s stations_installed is the CEILING of the peak monthly
+    # stations_staffed across the whole horizon — never floor/round, and never a
+    # crash when the peak is 0 (guarded implicitly: ceil(0) == 0).
+    peak = max(D(str(m.stations_staffed)) for m in canonical_result.monthly)
+    installed = canonical_result.stations_installed
+    assert isinstance(installed, int)
+    assert installed >= peak
+    assert Decimal(installed) - 1 < peak
+
+
 def test_build_monthly_chains_years_2_5_off_each_other_not_just_year_1(aggressive_result):
     # Regression: Year 3 must anchor its glide on Year 2's OWN computed exit value
     # (not, say, Year 1's), so a multi-year run of glides stays internally

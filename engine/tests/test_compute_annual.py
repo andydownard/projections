@@ -242,3 +242,35 @@ def test_card_fees_zero_at_zero_share():
     res = compute(inputs, Assumptions(card_share="0"), DemandDrivers(),
                   TradeArea(basis="city", households="31798"), overrides={})
     assert D(str(res.annual[1].expenses["Credit card fees"])) == Decimal("0")
+
+
+# ------------------------------------------------- Task 1.2: production-station module
+def test_items_sold_items_produced_production_hours(canonical_result):
+    # items_sold = retail / avg_item_price; items_produced = items_sold / sell_through;
+    # production_hours = items_produced / items_per_hour (all default-Assumptions).
+    y1 = canonical_result.annual[1]
+    retail = D(str(y1.retail))
+    items_sold = D(str(y1.items_sold))
+    items_produced = D(str(y1.items_produced))
+    production_hours = D(str(y1.production_hours))
+    assert items_sold == retail / D("5.00")
+    assert items_produced == items_sold / D("0.50")
+    assert production_hours == items_produced / D(75)
+
+
+def test_production_metrics_zero_guarded():
+    # avg_item_price = 0 must never raise ZeroDivisionError — items_sold (and
+    # everything downstream of it) is explicitly 0, not a crash.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(avg_item_price="0"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    assert D(str(res.annual[1].items_sold)) == Decimal("0")
+    assert D(str(res.annual[1].items_produced)) == Decimal("0")
+    assert D(str(res.annual[1].production_hours)) == Decimal("0")

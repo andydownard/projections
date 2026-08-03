@@ -95,6 +95,11 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
         # (feature #245); both are blue inputs so the utilities row is a live formula.
         ("building_sqft", _f(inputs.building_sqft), NUM),
         ("utilities_per_sqft", _f(a.utilities_per_sqft), USD),
+        # --- production-station module (Model v3, Task 1.2)
+        ("avg_item_price", _f(a.avg_item_price), USD),
+        ("sell_through", _f(a.sell_through), PCT),
+        ("items_per_hour", a.items_per_hour, NUM),
+        ("productive_hours_per_station", a.productive_hours_per_station, NUM),
     ]
     for name, value, fmt in input_specs:
         ws[f"A{row}"] = name
@@ -165,6 +170,20 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
     # customers = retail / basket  (guarded)
     line("Customers",
          [f'=IF({sh["basket"]}=0,"",{c}{rt}/{sh["basket"]})' for c in cols], NUM)
+
+    # ---- production-station module (Model v3, Task 1.2): physical throughput
+    # bridging revenue to the expense lines — each division guarded.
+    line("Items sold",
+         [f'=IF({sh["avg_item_price"]}=0,"",{c}{rt}/{sh["avg_item_price"]})'
+          for c in cols], NUM)
+    isr = rowmap["Items sold"]
+    line("Items produced",
+         [f'=IF({sh["sell_through"]}=0,"",{c}{isr}/{sh["sell_through"]})'
+          for c in cols], NUM)
+    ipr = rowmap["Items produced"]
+    line("Production hours",
+         [f'=IF({sh["items_per_hour"]}=0,"",{c}{ipr}/{sh["items_per_hour"]})'
+          for c in cols], NUM)
 
     # ---- expense lines (live formulas, or orange override) ----
     exp_rows = []
@@ -361,6 +380,14 @@ def _build_milestones_block(ws, result, row):
         ws[f"A{row}"].font = BLACK
         ws[f"B{row}"] = milestone["display"]
         row += 1
+    # Production-station module (Model v3, Task 1.2): a server-resolved plain
+    # number (not a formula), consistent with the milestone strings above being
+    # server snapshots rather than live divisions — nothing to guard here.
+    ws[f"A{row}"] = "Production stations needed (peak month)"
+    ws[f"A{row}"].font = BLACK
+    stations_cell = ws[f"B{row}"]
+    stations_cell.value = result.stations_installed
+    stations_cell.number_format = NUM
 
 
 def _build_monthly_tab(ws, result):

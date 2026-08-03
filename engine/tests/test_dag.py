@@ -23,7 +23,10 @@ def test_non_pinnable_nodes_rejected():
     for node in ("total_revenue", "total_expenses", "net_profit", "net_margin",
                  "customers", "salvage_sales", "donating_households", "donations",
                  "break_even_month", "startup_capital_required",
-                 "first_year_cash_gap", "simple_payback_years", "revenue_cagr"):
+                 "first_year_cash_gap", "simple_payback_years", "revenue_cagr",
+                 # Task 1.2: production-station module — derived, non-pinnable.
+                 "items_sold", "items_produced", "production_hours",
+                 "stations_installed"):
         with pytest.raises(dag.PinRejected):
             dag.validate_pin(f"{node}#1")
 

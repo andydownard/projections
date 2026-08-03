@@ -12,6 +12,7 @@ them into a single `ComputeResult`.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -90,6 +91,11 @@ class Assumptions:
     sensitivity_delta: str = model.SENSITIVITY_DELTA
     fixed_annual: dict = field(default_factory=lambda: dict(model.FIXED_ANNUAL))
     startup: dict = field(default_factory=lambda: dict(model.STARTUP))
+    # --- production-station module (Model v3)
+    avg_item_price: str = model.AVG_ITEM_PRICE
+    sell_through: str = model.SELL_THROUGH
+    items_per_hour: int = model.ITEMS_PER_HOUR
+    productive_hours_per_station: int = model.PRODUCTIVE_HOURS_PER_STATION
 
 
 @dataclass(frozen=True)
@@ -120,6 +126,10 @@ class AnnualYear:
     total_exp: Decimal
     net: Decimal
     margin: Decimal | None  # None when total_rev == 0 (§8)
+    # --- production-station module (Model v3) — read-only derived metrics
+    items_sold: Decimal
+    items_produced: Decimal
+    production_hours: Decimal
 
 
 @dataclass
@@ -140,6 +150,7 @@ class ComputeResult:
     view_model: dict = field(default_factory=dict)
     model_version: str = model.MODEL_VERSION
     compute_schema_version: str = model.COMPUTE_SCHEMA_VERSION
+    stations_installed: int = 0     # ceil of the peak monthly stations_staffed
 
 
 # --------------------------------------------------------------------- helpers
@@ -198,6 +209,15 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
         salvage = retail * salv_pct
         total_rev = retail + salvage
 
+        # --- production-station module (Model v3): read-only physical throughput
+        # metrics, each explicitly zero-guarded (never a ZeroDivisionError).
+        items_sold = (retail / D(assumptions.avg_item_price)
+                      if D(assumptions.avg_item_price) != 0 else Decimal("0"))
+        items_produced = (items_sold / D(assumptions.sell_through)
+                          if D(assumptions.sell_through) != 0 else Decimal("0"))
+        production_hours = (items_produced / D(assumptions.items_per_hour)
+                            if D(assumptions.items_per_hour) != 0 else Decimal("0"))
+
         exp = {}
         exp["Credit card fees"] = _resolve_get(
             overrides, "Credit card fees", y,
@@ -235,6 +255,8 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
             year=y, share=share, donating_hh=donating_hh, donations=donations,
             retail=retail, customers=customers, salvage=salvage, total_rev=total_rev,
             expenses=ordered, total_exp=total_exp, net=net, margin=margin,
+            items_sold=items_sold, items_produced=items_produced,
+            production_hours=production_hours,
         )
 
     # one-time startup. A user cost_schedule (Spec §5) supersedes the legacy STARTUP
@@ -387,12 +409,18 @@ def compute(inputs, assumptions=None, demand_drivers=None, trade_area=None, over
     monthly_rows, breakeven = build_monthly(
         years, assumptions, inputs.opening_month_number, startup_by_month)
 
+    # Peak production-station headcount across the WHOLE horizon (pre-open and
+    # beyond-60-month extension rows are already stations_staffed=0, so they never
+    # affect the max) — the ceiling of the peak monthly stations_staffed (Task 1.2).
+    peak_staffed = max((row.stations_staffed for row in monthly_rows), default=Decimal("0"))
+    stations_installed = math.ceil(peak_staffed) if peak_staffed > 0 else 0
+
     result = ComputeResult(
         annual=years, startup=startup, startup_total=startup_total,
         occupancy=occupancy, inputs=inputs, assumptions=assumptions,
         trade_area=trade_area, overrides_applied=dict(overrides),
         monthly=monthly_rows, monthly_breakeven=breakeven,
-        stale_nodes=stale_nodes,
+        stale_nodes=stale_nodes, stations_installed=stations_installed,
     )
 
     from engine.decision import build_decision, build_flags

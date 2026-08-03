@@ -547,6 +547,45 @@ def _label_rows(ws, label):
             if ws.cell(row=r, column=1).value == label]
 
 
+# ---------------------------------------- Task 1.2: production-station module
+def test_production_station_rows_are_guarded_formulas(tmp_path):
+    _res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    for label in ("Items sold", "Items produced", "Production hours"):
+        assert label in labels, label
+        for col in range(2, 7):
+            v = ws.cell(row=labels[label], column=col).value
+            assert isinstance(v, str) and v.startswith("=IF("), (label, v)
+
+
+def test_production_station_input_cells_are_blue(tmp_path):
+    _res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    for name in ("avg_item_price", "sell_through", "items_per_hour",
+                 "productive_hours_per_station"):
+        assert name in labels, name
+        cell = ws.cell(row=labels[name], column=2)
+        assert not (isinstance(cell.value, str) and cell.value.startswith("="))
+        assert cell.font.color.rgb.endswith("0000FF"), f"{name} input not blue"
+
+
+def test_production_stations_needed_cell_near_milestones(tmp_path):
+    res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    assert "Production stations needed (peak month)" in labels
+    cell = ws.cell(row=labels["Production stations needed (peak month)"], column=2)
+    # server-resolved plain number, not a formula (matches how milestone strings
+    # are server snapshots, not live divisions).
+    assert not (isinstance(cell.value, str) and cell.value.startswith("="))
+    assert cell.value == res.stations_installed
+
+
 def test_fixed_annual_lines_are_blue_inputs_referenced_by_formula(tmp_path):
     """Task 1.4 contract: each now-editable ``Assumptions.fixed_annual`` line (e.g.
     'Pest control') is a BLUE input cell in KEY INPUTS, and its 5-YEAR-PROJECTION
