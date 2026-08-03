@@ -216,3 +216,29 @@ def test_occupancy_requires_annual_or_per_sqft():
     with pytest.raises(ValueError, match="occupancy requires"):
         compute(inputs, Assumptions(), DemandDrivers(),
                 TradeArea(basis="city", households="31798"))
+
+
+def test_card_fees_two_term_formula(canonical_result):
+    # Card fees = card_share × (card_rate × retail + per_tx_fee × transactions).
+    # Recompute expected from the same retail/customers values read off annual[1].
+    y1 = canonical_result.annual[1]
+    retail = D(str(y1.retail))
+    customers = D(str(y1.customers))
+    expected_fees = D("0.65") * (D("0.026") * retail + D("0.10") * customers)
+    actual_fees = D(str(y1.expenses["Credit card fees"]))
+    assert actual_fees == expected_fees
+
+
+def test_card_fees_zero_at_zero_share():
+    # When card_share = 0, credit card fees should be 0.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(card_share="0"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    assert D(str(res.annual[1].expenses["Credit card fees"])) == Decimal("0")

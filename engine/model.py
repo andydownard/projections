@@ -130,7 +130,11 @@ DEFAULT_DONATION_VALUE = "74"
 LABOR_PCT_OF_REVENUE = "0.60"        # §7.3 owner decision (DECISIONS.md) — band 0.25–0.60
 MARKETING_PCT_OF_REVENUE = "0.0375"  # §7.3 — NEW line
 SUPPLIES_PCT_OF_REVENUE = "0.05"     # §7.3 — REPLACES fixed "Store/office supplies"
-CARD_FEES_PCT_OF_REVENUE = "0.02"    # §7.3
+# Card-processor formula (Model v3 — card fees, owner session 2026-08-03):
+# fees = card_share × (card_rate × retail + per_tx_fee × transactions)
+CARD_SHARE = "0.65"                  # % of retail sales processed via card (vs. cash)
+CARD_RATE = "0.026"                  # effective rate on card volume (2.6%)
+CARD_PER_TX_FEE = "0.10"             # per-transaction fee ($0.10)
 PAYROLL_TAX_PCT_OF_PAYROLL = "0.08"  # §7.3; 990-grounded (6.4) — employer payroll-tax
 # load across the six-EIN sample (docs/2026-07-03-owner-deliverables.md); was 7.5%.
 

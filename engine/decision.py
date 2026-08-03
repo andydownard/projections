@@ -201,8 +201,10 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
 
     # break-even revenue (annual): revenue at which net == 0 holding the cost
     # structure. fixed = non-%-of-revenue cost; var_rate = sum of %-of-revenue rates.
+    # Card fees' revenue-proportional term is card_share × card_rate; the per-transaction
+    # term is folded into fixed costs (not a clean % of revenue).
     y1 = annual[1]
-    var_rate = (D(assumptions.card_pct) + D(assumptions.marketing_pct)
+    var_rate = (D(assumptions.card_share) * D(assumptions.card_rate) + D(assumptions.marketing_pct)
                 + D(assumptions.labor_pct) * (Decimal("1") + D(assumptions.payroll_tax_pct))
                 + D(assumptions.supplies_pct))
     fixed = D(str(y1.total_exp)) - (D(str(y1.total_rev)) * var_rate)

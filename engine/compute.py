@@ -74,7 +74,9 @@ class Assumptions:
     labor_pct: str = model.LABOR_PCT_OF_REVENUE
     marketing_pct: str = model.MARKETING_PCT_OF_REVENUE
     supplies_pct: str = model.SUPPLIES_PCT_OF_REVENUE
-    card_pct: str = model.CARD_FEES_PCT_OF_REVENUE
+    card_share: str = model.CARD_SHARE
+    card_rate: str = model.CARD_RATE
+    card_per_tx_fee: str = model.CARD_PER_TX_FEE
     payroll_tax_pct: str = model.PAYROLL_TAX_PCT_OF_PAYROLL
     salvage_pct: str = model.SALVAGE_PCT_OF_RETAIL
     escalator: str = model.RENT_ESCALATOR
@@ -198,7 +200,9 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
 
         exp = {}
         exp["Credit card fees"] = _resolve_get(
-            overrides, "Credit card fees", y, total_rev * D(assumptions.card_pct))
+            overrides, "Credit card fees", y,
+            D(assumptions.card_share) * (
+                D(assumptions.card_rate) * retail + D(assumptions.card_per_tx_fee) * customers))
         exp["Marketing & outreach"] = _resolve_get(
             overrides, "Marketing & outreach", y, total_rev * D(assumptions.marketing_pct))
         payroll = _resolve_get(
