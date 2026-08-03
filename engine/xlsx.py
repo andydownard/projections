@@ -88,6 +88,7 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
         ("card_per_tx_fee", _f(a.card_per_tx_fee), USD),
         ("labor_pct", _f(a.labor_pct), PCT),
         ("payroll_tax_pct", _f(a.payroll_tax_pct), PCT),
+        ("workers_comp_pct", _f(a.workers_comp_pct), PCT),
         ("marketing_pct", _f(a.marketing_pct), PCT),
         ("supplies_pct", _f(a.supplies_pct), PCT),
         ("occupancy_y1", _f(result.occupancy[1]), USD),
@@ -166,7 +167,7 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
     rt = rowmap["Retail Sales"]
     line("Salvage Sales", [f"={c}{rt}*{sh['salvage_pct']}" for c in cols], USD)
     sv = rowmap["Salvage Sales"]
-    line("Contributions", [sh['contributions_annual'] for _ in cols], USD)
+    line("Contributions", [f"={sh['contributions_annual']}" for _ in cols], USD)
     con = rowmap["Contributions"]
     line("Total Revenue", [f"={c}{rt}+{c}{sv}+{c}{con}" for c in cols], USD, bold=True)
     tr = rowmap["Total Revenue"]
@@ -333,6 +334,9 @@ def _expense_formula(label, col, tr, sh, rowmap):
     if label == "Payroll taxes":
         pr = rowmap.get("Payroll")
         return f"{col}{pr}*{sh['payroll_tax_pct']}"
+    if label == "Workers' comp expense":
+        pr = rowmap.get("Payroll")
+        return f"{col}{pr}*{sh['workers_comp_pct']}"
     if label == "Supplies & processing":
         return f"{col}{tr}*{sh['supplies_pct']}"
     if label == "Rent":
