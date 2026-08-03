@@ -110,8 +110,7 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
     years, startup, startup_total, occupancy = compute_annual(
         new_inputs, assumptions, demand, trade, stressed_overrides)
     startup_by_month = startup_outflows_by_month(new_inputs, assumptions, occupancy[1])
-    rows, be = build_monthly(years, assumptions, new_inputs.opening_month_number,
-                             startup_by_month)
+    rows, be = build_monthly(years, assumptions, new_inputs, startup_by_month)
     # Scope the trough to the launch window (months <= G+11) — the SAME scoping as the
     # headline `capital` in build_decision — so the 60-month extension cannot drift a
     # later-year operating dip into the launch-capital figure (and so base-scenario

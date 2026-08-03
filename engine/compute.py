@@ -62,6 +62,11 @@ class Inputs:
     rent_per_sqft: str | None = None        # OR sqft x rate
     lease_type: str = "gross"                  # "gross" | "nnn"
     nnn_opex_annual: str = "0"                 # added to occupancy if nnn
+    # Optional within-year Year-1 revenue-share ramp (Task 1.3): a linear alternative
+    # to the default S-curve (`_REVENUE_WEIGHTS`). Both must be set to activate it;
+    # either left `None` (the default) reproduces today's S-curve, byte-identical.
+    share_m1: str | None = None
+    share_m12: str | None = None
     # Opening anchor + timed cost schedule (Spec §5/§6). `opening_month_number` (G)
     # is the project month grand opening lands on (a milestone marker, >= 1).
     # `cost_schedule` is an iterable of {category, month, amount} rows; when empty
@@ -407,7 +412,7 @@ def compute(inputs, assumptions=None, demand_drivers=None, trade_area=None, over
 
     startup_by_month = startup_outflows_by_month(inputs, assumptions, occupancy[1])
     monthly_rows, breakeven = build_monthly(
-        years, assumptions, inputs.opening_month_number, startup_by_month)
+        years, assumptions, inputs, startup_by_month)
 
     # Peak production-station headcount across the WHOLE horizon (pre-open and
     # beyond-60-month extension rows are already stations_staffed=0, so they never

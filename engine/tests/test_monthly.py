@@ -462,3 +462,73 @@ def test_build_monthly_chains_years_2_5_off_each_other_not_just_year_1(aggressiv
     month25 = next(m for m in aggressive_result.monthly if m.index == 25)
     assert D(str(month25.revenue)) == rev3[0]
     assert D(str(month25.expenses)) == exp3[0]
+
+
+# ------------------------------------------- Task 1.3: within-year share ramp (linear)
+def test_share_ramp_unset_is_byte_identical(canonical_result):
+    # canonical_result's Inputs leave share_m1/share_m12 at their None default, so
+    # Year-1 revenue must still ride the S-curve (_REVENUE_WEIGHTS) byte-for-byte —
+    # the new optional linear ramp must not perturb existing behavior when unset.
+    from engine.monthly import _REVENUE_WEIGHTS, _distribute
+
+    y1 = canonical_result.annual[1]
+    expected_rev_parts = _distribute(D(str(y1.total_rev)), _REVENUE_WEIGHTS)
+    ops = [m for m in canonical_result.monthly if m.kind == "operating"][:12]
+    for i in range(12):
+        assert D(str(ops[i].revenue)) == expected_rev_parts[i], i
+
+
+def test_share_ramp_linear_when_set(canonical_inputs):
+    # Setting share_m1/share_m12 switches Year-1 revenue onto a straight linear
+    # interpolation instead of the S-curve. Recompute the expected split via the
+    # SAME _linear_share_weights + _distribute call the engine itself uses (not a
+    # hand-typed dollar literal), for both month 1 and month 12.
+    from dataclasses import replace
+
+    from engine.monthly import _distribute, _linear_share_weights
+
+    inputs, assumptions, demand, trade = canonical_inputs
+    ramped = replace(inputs, share_m1="0.04", share_m12="0.16")
+    result = compute(ramped, assumptions, demand, trade, overrides={})
+
+    y1 = result.annual[1]
+    weights = _linear_share_weights(D("0.04"), D("0.16"))
+    expected_rev_parts = _distribute(D(str(y1.total_rev)), weights)
+    ops = [m for m in result.monthly if m.kind == "operating"][:12]
+    for i in range(12):
+        assert D(str(ops[i].revenue)) == expected_rev_parts[i], i
+    # share_m1 (0.04) < share_m12 (0.16) => month 1 revenue must be the smallest
+    # share and month 12 the largest — the ramp is monotonically increasing.
+    assert ops[0].revenue < ops[-1].revenue
+
+
+def test_share_ramp_annual_roundtrip_holds(canonical_inputs):
+    # Regression #15 on the new path: with the linear ramp active, Year-1's 12
+    # operating months must still sum to the annual total_rev to the penny.
+    from dataclasses import replace
+
+    inputs, assumptions, demand, trade = canonical_inputs
+    ramped = replace(inputs, share_m1="0.04", share_m12="0.16")
+    result = compute(ramped, assumptions, demand, trade, overrides={})
+
+    g = result.decision.grand_opening_month
+    ops = [m for m in result.monthly
+           if m.kind == "operating" and g <= m.index <= g + 11]
+    total_rev = sum((D(str(m.revenue)) for m in ops), Decimal("0"))
+    assert total_rev == D(str(result.annual[1].total_rev))
+
+
+def test_build_monthly_signature_takes_inputs_not_opening_month_number(canonical_inputs):
+    # build_monthly's signature is (annual, assumptions, inputs, startup_by_month) —
+    # NOT (annual, assumptions, opening_month_number, startup_by_month). Exercise it
+    # directly (not just through compute()) to pin the new call shape.
+    from engine.compute import compute_annual, startup_outflows_by_month
+    from engine.monthly import build_monthly
+
+    inputs, assumptions, demand, trade = canonical_inputs
+    years, startup, startup_total, occupancy = compute_annual(
+        inputs, assumptions, demand, trade, overrides={})
+    startup_by_month = startup_outflows_by_month(inputs, assumptions, occupancy[1])
+    rows, breakeven = build_monthly(years, assumptions, inputs, startup_by_month)
+    assert rows
+    assert breakeven is not None
