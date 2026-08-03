@@ -218,7 +218,7 @@ def _year_slices(annual_year, year, *, prev_rev_last=None, prev_exp_last=None,
         pct_annual = sum((D(str(v)) for k, v in exp_by_label.items()
                           if k in _PCT_OF_REVENUE_LABELS), Decimal("0"))
         payroll_annual = sum((D(str(exp_by_label.get(k, Decimal("0"))))
-                              for k in ("Payroll", "Payroll taxes")), Decimal("0"))
+                              for k in ("Payroll", "Payroll taxes", "Workers' comp expense")), Decimal("0"))
         fixed_annual = total_exp - pct_annual - payroll_annual
         weights = revenue_weights if revenue_weights is not None else _REVENUE_WEIGHTS
         rev_parts = _distribute(total_rev, weights)

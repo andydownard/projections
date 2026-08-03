@@ -32,8 +32,8 @@ PINNABLE_NODES = frozenset({
     "share",
     # component expense lines (resolved by compute_annual)
     "Payroll", "Marketing & outreach", "Supplies & processing", "Credit card fees",
-    "Payroll taxes", "Rent", "Insurance liability", "Internet, Phones",
-    "Pest control", "Repairs/maintenance", "Security system",
+    "Payroll taxes", "Workers' comp expense", "Rent", "Insurance liability", "Internet, Phones",
+    "Pest control", "POS platform", "Production software", "Repairs/maintenance", "Security system",
     "Utilities/trash service",
 })
 

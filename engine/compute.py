@@ -62,6 +62,7 @@ class Inputs:
     rent_per_sqft: str | None = None        # OR sqft x rate
     lease_type: str = "gross"                  # "gross" | "nnn"
     nnn_opex_annual: str = "0"                 # added to occupancy if nnn
+    contributions_annual: str = model.CONTRIBUTIONS_ANNUAL  # Model v3 — optional flat contributions revenue
     # Optional within-year Year-1 revenue-share ramp (Task 1.3): a linear alternative
     # to the default S-curve (`_REVENUE_WEIGHTS`). Both must be set to activate it;
     # either left `None` (the default) reproduces today's S-curve, byte-identical.
@@ -84,6 +85,7 @@ class Assumptions:
     card_rate: str = model.CARD_RATE
     card_per_tx_fee: str = model.CARD_PER_TX_FEE
     payroll_tax_pct: str = model.PAYROLL_TAX_PCT_OF_PAYROLL
+    workers_comp_pct: str = model.WORKERS_COMP_PCT_OF_PAYROLL
     salvage_pct: str = model.SALVAGE_PCT_OF_RETAIL
     escalator: str = model.RENT_ESCALATOR
     utilities_per_sqft: str = model.UTILITIES_PER_SQFT
@@ -138,6 +140,7 @@ class AnnualYear:
     retail: Decimal
     customers: Decimal
     salvage: Decimal
+    contributions: Decimal
     total_rev: Decimal
     expenses: dict           # label -> Decimal
     total_exp: Decimal
@@ -224,7 +227,8 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
         retail = donations * dv
         customers = retail / basket if basket != 0 else Decimal("0")
         salvage = retail * salv_pct
-        total_rev = retail + salvage
+        contributions = D(inputs.contributions_annual)
+        total_rev = retail + salvage + contributions
 
         # --- production-station module (Model v3): read-only physical throughput
         # metrics, each explicitly zero-guarded (never a ZeroDivisionError).
@@ -267,6 +271,8 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
         exp["Payroll"] = payroll
         exp["Payroll taxes"] = _resolve_get(
             overrides, "Payroll taxes", y, payroll * D(assumptions.payroll_tax_pct))
+        exp["Workers' comp expense"] = _resolve_get(
+            overrides, "Workers' comp expense", y, payroll * D(assumptions.workers_comp_pct))
         exp["Supplies & processing"] = _resolve_get(
             overrides, "Supplies & processing", y, total_rev * D(assumptions.supplies_pct))
         exp["Rent"] = _resolve_get(overrides, "Rent", y, occupancy[y])
@@ -290,7 +296,7 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
 
         years[y] = AnnualYear(
             year=y, share=share, donating_hh=donating_hh, donations=donations,
-            retail=retail, customers=customers, salvage=salvage, total_rev=total_rev,
+            retail=retail, customers=customers, salvage=salvage, contributions=contributions, total_rev=total_rev,
             expenses=ordered, total_exp=total_exp, net=net, margin=margin,
             items_sold=items_sold, items_produced=items_produced,
             production_hours=production_hours,

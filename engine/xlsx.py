@@ -82,6 +82,7 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
         ("donation_value", _f(inputs.donation_value), USD),
         ("basket", _f(a.basket), USD),
         ("salvage_pct", _f(a.salvage_pct), PCT),
+        ("contributions_annual", _f(inputs.contributions_annual), USD),
         ("card_share", _f(a.card_share), PCT),
         ("card_rate", _f(a.card_rate), PCT),
         ("card_per_tx_fee", _f(a.card_per_tx_fee), USD),
@@ -165,7 +166,9 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
     rt = rowmap["Retail Sales"]
     line("Salvage Sales", [f"={c}{rt}*{sh['salvage_pct']}" for c in cols], USD)
     sv = rowmap["Salvage Sales"]
-    line("Total Revenue", [f"={c}{rt}+{c}{sv}" for c in cols], USD, bold=True)
+    line("Contributions", [sh['contributions_annual'] for _ in cols], USD)
+    con = rowmap["Contributions"]
+    line("Total Revenue", [f"={c}{rt}+{c}{sv}+{c}{con}" for c in cols], USD, bold=True)
     tr = rowmap["Total Revenue"]
     # customers = retail / basket  (guarded)
     line("Customers",

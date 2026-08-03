@@ -145,6 +145,7 @@ PAYROLL_TAX_PCT_OF_PAYROLL = "0.08"  # §7.3; 990-grounded (6.4) — employer pa
 # items_per_hour) -> stations_staffed (production_hours / productive_hours_per_station,
 # monthly) -> stations_installed (ceil of the peak monthly stations_staffed). Read-only
 # derived metrics; they do not feed back into total_rev/total_exp in this task.
+WORKERS_COMP_PCT_OF_PAYROLL = "0.02" # Model v3 — workers' comp as % of payroll
 AVG_ITEM_PRICE = "5.00"              # $ per item sold at retail
 SELL_THROUGH = "0.50"                # fraction of produced/processed items that sell
 ITEMS_PER_HOUR = 75                  # items processed per production labor-hour
@@ -172,6 +173,9 @@ AM_SALARY = "42000"                  # assistant manager annual salary
 AM_COUNT = 2                         # assistant manager headcount
 
 # --- occupancy
+# --- revenue (optional additions)
+CONTRIBUTIONS_ANNUAL = "0"            # Model v3 — optional flat annual contributions revenue (default 0)
+
 RENT_ESCALATOR = "0.03"              # §7.3 — compound, Y2–Y3 (resolved §1)
 
 # --- sq-ft scaling basis (feature #245). The example store is 10,000 sq ft; the
@@ -192,6 +196,8 @@ FIXED_ANNUAL = {
     "Insurance liability": 10000,  # 990-grounded (6.4) — six-EIN sample; was $2,000
     "Internet, Phones": 3000,
     "Pest control": 300,
+    "POS platform": 4800,          # $400/mo (Model v3)
+    "Production software": 1200,   # $100/mo (Model v3)
     "Repairs/maintenance": 1600,
     "Security system": 900,
 }

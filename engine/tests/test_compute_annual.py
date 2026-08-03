@@ -338,3 +338,61 @@ def test_labor_mode_coverage_zero_guarded():
         DemandDrivers(), TradeArea(basis="city", households="31798"), overrides={})
     # No exception raised; Payroll resolves via the min_staffed_lanes floor term.
     assert D(str(res.annual[1].expenses["Payroll"])) > Decimal("0")
+
+
+def test_pos_and_production_software_fixed_lines_default_nonzero(canonical_result):
+    """POS platform ($4800/yr) and Production software ($1200/yr) flow through."""
+    y1 = canonical_result.annual[1]
+    assert "POS platform" in y1.expenses
+    assert D(str(y1.expenses["POS platform"])) == Decimal("4800")
+    assert "Production software" in y1.expenses
+    assert D(str(y1.expenses["Production software"])) == Decimal("1200")
+
+
+def test_workers_comp_is_pct_of_payroll(canonical_result):
+    """Workers' comp expense = Payroll × 2% (default WORKERS_COMP_PCT_OF_PAYROLL)."""
+    y1 = canonical_result.annual[1]
+    payroll = D(str(y1.expenses["Payroll"]))
+    workers_comp = D(str(y1.expenses["Workers' comp expense"]))
+    assert workers_comp == payroll * Decimal("0.02")
+
+
+def test_contributions_revenue_default_zero_byte_unchanged():
+    """Default contributions_annual="0" is byte-identical; total_rev == retail + salvage."""
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+
+    inputs = Inputs(
+        org_name="x", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(
+        inputs, Assumptions(), DemandDrivers(),
+        TradeArea(basis="city", households="31798"), overrides={},
+    )
+    y1 = res.annual[1]
+    # With default contributions_annual="0", total_rev == retail + salvage
+    assert D(str(y1.total_rev)) == D(str(y1.retail)) + D(str(y1.salvage)) + D(str(y1.contributions))
+    assert D(str(y1.contributions)) == Decimal("0")
+
+
+def test_contributions_revenue_adds_to_total():
+    """Contributions revenue adds to total_rev when contributions_annual is set."""
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+
+    inputs = Inputs(
+        org_name="x", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+        contributions_annual="10000",
+    )
+    res = compute(
+        inputs, Assumptions(), DemandDrivers(),
+        TradeArea(basis="city", households="31798"), overrides={},
+    )
+    y1 = res.annual[1]
+    # contributions_annual="10000" adds to total_rev
+    assert D(str(y1.contributions)) == Decimal("10000")
+    assert D(str(y1.total_rev)) == D(str(y1.retail)) + D(str(y1.salvage)) + Decimal("10000")

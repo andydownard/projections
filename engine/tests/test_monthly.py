@@ -532,3 +532,30 @@ def test_build_monthly_signature_takes_inputs_not_opening_month_number(canonical
     rows, breakeven = build_monthly(years, assumptions, inputs, startup_by_month)
     assert rows
     assert breakeven is not None
+
+
+
+
+def test_workers_comp_expense_in_annual():
+    """Workers' comp expense (2% of payroll) is included in annual calculations."""
+    from decimal import Decimal
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    from engine.money import D
+
+    inputs = Inputs(
+        org_name="x", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(
+        inputs, Assumptions(), DemandDrivers(),
+        TradeArea(basis="city", households="31798"), overrides={},
+    )
+    y1 = res.annual[1]
+    
+    # Workers' comp should be 2% of payroll
+    payroll = D(str(y1.expenses["Payroll"]))
+    workers_comp = D(str(y1.expenses["Workers' comp expense"]))
+    expected = payroll * Decimal("0.02")
+    assert workers_comp == expected

@@ -205,6 +205,8 @@ def to_view_model(result):
     )
     rows.append(_driver_row("Retail Sales", annual, "retail", group="revenue", computed=True))
     rows.append(_driver_row("Salvage Sales", annual, "salvage", group="revenue", computed=True))
+    rows.append(
+    _driver_row("Contributions", annual, "contributions", group="revenue", computed=False))
     rows.append(_driver_row("Total Revenue", annual, "total_rev", group="revenue", computed=True))
     # Production-station module (Model v3, Task 1.2): read-only physical throughput
     # rows bridging the $ revenue chain to the expense lines — items_sold (retail /
@@ -418,7 +420,7 @@ def _driver_row(label, annual, attr, group, pct=False, num=False, computed=False
         "label": label, "group": group,
         "y1": cell(1), "y2": cell(2), "y3": cell(3), "y4": cell(4), "y5": cell(5),
         "class": "computed" if computed else "input",
-        "editable": (not computed) and attr == "share",
+        "editable": (not computed) and attr in ("share", "contributions"),
     }
 
 
