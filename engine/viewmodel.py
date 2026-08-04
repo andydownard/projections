@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from engine import dag
-from engine.compute import cash_margin, cash_net
+from engine import dag, model
+from engine.compute import cash_margin, cash_net, cost_schedule_totals
 from engine.money import D, money_view, na_view, number_view, pct_view
 
 _RECO_HEADLINES = {
@@ -342,6 +342,20 @@ def to_view_model(result):
         for label, amount in result.startup.items()
     ]
 
+    # ---- separate/contingent startup-cost sections (schema 1.9.0, Model v3 Phase
+    # 2, Task 2.2): rows the user marked funded-outside-capital or contingent are
+    # already excluded from startup/startupTotal above (compute_annual /
+    # startup_outflows_by_month filter them out by construction) but must stay
+    # ALWAYS VISIBLE here too — a reader should never wonder whether a schedule
+    # row was silently dropped rather than deliberately excluded. Aggregated by
+    # cost_schedule_totals — the SAME cost-aggregation authority the dormant
+    # /api/cost-schedule/preview endpoint uses — so there is no second surface
+    # that could disagree with startup/startupTotal's own filtering.
+    cs_totals = cost_schedule_totals(
+        result.inputs.cost_schedule, building_sqft=result.inputs.building_sqft)
+    startup_costs_separate = _treatment_startup_rows(result, cs_totals, "separate")
+    startup_costs_contingent = _treatment_startup_rows(result, cs_totals, "contingent")
+
     # ---- sensitivity scenarios (schema 1.6.0) — the §12.2 ±stress base/downside/upside
     # runs decision.py already computes, serialized verbatim (no second math surface):
     # net + capital as {raw,display} money views, break-even as a plain project-month
@@ -377,6 +391,8 @@ def to_view_model(result):
         "year5Income": money_view(cash_net(result, 5)),
         "startupCosts": startup_costs,
         "startupTotal": money_view(result.startup_total),
+        "startupCostsSeparate": startup_costs_separate,
+        "startupCostsContingent": startup_costs_contingent,
         # Production-station module (Model v3, Task 1.2): a plain top-level int — a
         # count, not money/percent (matches the breakevenMonth precedent above).
         "stationsInstalled": result.stations_installed,
@@ -422,6 +438,29 @@ def _driver_row(label, annual, attr, group, pct=False, num=False, computed=False
         "class": "computed" if computed else "input",
         "editable": (not computed) and attr in ("share", "contributions"),
     }
+
+
+def _treatment_startup_rows(result, cs_totals, treatment):
+    """``startupCostsSeparate``/``startupCostsContingent`` rows (Model v3 Phase 2,
+    Task 2.2): the SAME ``[{category, amount{raw,display}}]`` shape as
+    ``startupCosts``, plus a ``note`` — cost_schedule_totals' aggregate sums
+    amounts by category (so a note isn't representable there); this looks the
+    note up from the raw schedule instead (first row of that category/treatment
+    wins if a category ever repeats, matching how the amount aggregation folds
+    repeats into one total).
+    """
+    notes = {}
+    for item in result.inputs.cost_schedule:
+        cat = item["category"]
+        row_treatment = item.get("treatment")
+        if row_treatment not in model.COST_SCHEDULE_TREATMENTS:
+            row_treatment = model.COST_SCHEDULE_DEFAULT_TREATMENT
+        if row_treatment == treatment and cat not in notes:
+            notes[cat] = item.get("note")
+    return [
+        {"category": category, "amount": money_view(amount), "note": notes.get(category)}
+        for category, amount in cs_totals[treatment]["by_category"].items()
+    ]
 
 
 def _jsonable(obj):

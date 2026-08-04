@@ -124,8 +124,10 @@ def test_preview_column_totals_are_ascending_regardless_of_input_order(client):
 
 
 def test_preview_ignores_unknown_row_fields(client):
-    # Rows may carry client-only metadata (provenance, note); extra="ignore" drops
-    # it so a richer client payload never 422s the read-only preview.
+    # Rows may carry client-only metadata; extra="ignore" drops anything CostRow
+    # doesn't declare (e.g. "provenance") so a richer client payload never 422s
+    # the read-only preview. "note" IS a declared CostRow field (Task 2.2) but has
+    # no effect on the totals below either way.
     body = {"cost_schedule": [
         {"category": "A", "month": 1, "amount": 1000,
          "note": "from proposal", "provenance": {"source": "ai"}},
@@ -141,6 +143,34 @@ def test_preview_keeps_sub_dollar_raw_but_rounds_display_half_up(client):
     body = {"cost_schedule": [{"category": "A", "month": 1, "amount": "100.50"}]}
     r = client.post("/api/cost-schedule/preview", json=body)
     assert r.json()["grandTotal"] == {"raw": 100.5, "display": "$101"}
+
+
+def test_preview_excludes_separate_and_contingent_rows_from_grand_total(client):
+    # Model v3 Phase 2 (Task 2.2): "separate"/"contingent" rows are funded outside
+    # the modeled capital-required total. engine.compute.cost_schedule_totals (the
+    # one cost-aggregation authority) filters them out of by_category/by_month/
+    # grand_total; this is the one LIVE endpoint that reaches that filtering with
+    # real caller-supplied rows today (the create/PATCH-projection path does not
+    # yet wire cost_schedule into engine compute at all -- see
+    # app/tests/test_cost_schedule_validation.py::
+    # test_build_engine_args_filters_schedule_and_anchor).
+    body = {"cost_schedule": [
+        {"category": "Equipment", "month": 1, "amount": 45000, "treatment": "included"},
+        {"category": "Consultant", "month": 1, "amount": 100000, "treatment": "separate"},
+        {"category": "Contingency", "month": 1, "amount": 20000, "treatment": "contingent"},
+    ]}
+    r = client.post("/api/cost-schedule/preview", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["grandTotal"] == {"raw": 45000.0, "display": "$45,000"}
+    assert [row["category"] for row in data["rowTotals"]] == ["Equipment"]
+
+
+def test_preview_missing_treatment_key_defaults_included(client):
+    body = {"cost_schedule": [{"category": "Legacy", "month": 1, "amount": 1000}]}
+    r = client.post("/api/cost-schedule/preview", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["grandTotal"] == {"raw": 1000.0, "display": "$1,000"}
 
 
 def test_preview_is_rate_limited_per_ip(client):

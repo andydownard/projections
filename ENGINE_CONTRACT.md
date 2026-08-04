@@ -318,6 +318,16 @@ stations_installed    = ceil(max(stations_staffed[m] for all months))       # pe
 startup_total = sum(startup lines)
 ```
 
+**Row treatment (Model v3 Phase 2, Task 2.2, `compute_schema_version` 1.9.0).** Every `cost_schedule` row may carry a `treatment` field: `"included"` (default) | `"separate"` | `"contingent"`, plus a free-text `note`. A row's `treatment`, if absent/`None`/unrecognized, defaults to `"included"` — the backward-compat anchor (every legacy row and every `default_cost_schedule()` row has no `treatment` key at all, so existing projections' numbers never move) that also fails **safe**: a garbage value never silently drops a real cost out of the capital-required total the way misclassifying it as `separate`/`contingent` would.
+
+Only `"included"` rows count toward `startup` / `startup_total` / the monthly startup-outflow map (`startup_outflows_by_month`) / `capital` / `first_year_cash_gap` — filtered in `compute_annual`'s startup aggregation loop and in `startup_outflows_by_month`. `cost_schedule_totals()` (the pre-Generate grid's aggregation authority) applies the SAME filter to its `by_category`/`by_month`/`grand_total` keys and additionally returns `separate`/`contingent` aggregates (`{by_category, grand_total}`, no `by_month` — these rows fund nothing in the monthly cash-flow grid) for the excluded rows.
+
+`"separate"` rows are funded outside the modeled capital-required total (e.g. `default_cost_schedule_v3()` reclassifies the legacy "Thrift Store Consultant" $100,000 line to `separate` with a note directing the user to attach their actual signed consulting agreement, rather than presenting a generic model estimate as derived math). `"contingent"` rows are tracked but excluded from the funding ask.
+
+**Always visible, never silently dropped.** `startup`/`startupTotal` are unaffected in formula — they already only ever summed whatever `compute_annual`/`startup_outflows_by_month` produced, and those now exclude non-`included` rows by construction, so `startupTotal`/`capital`/`cashGap` shrink automatically with zero changes to those metrics' own formulas. The view-model (§9) gains two ALWAYS-present sibling keys, `startupCostsSeparate`/`startupCostsContingent` (same `[{category, amount{raw,display}, note}]` shape as `startupCosts`; empty array when nothing is excluded, never omitted). The exported `.xlsx`'s ONE-TIME STARTUP COSTS block gains two ALWAYS-rendered sub-sections below the (now included-only) total — "Funded separately (not included in capital required)" and "Contingent (not included in capital required)" — each listing its rows + a live `=SUM(...)` subtotal, or the literal text "None" when empty, so a reader can never wonder whether a schedule row was silently dropped rather than deliberately excluded.
+
+`MODEL_VERSION` stays `3.0.0` — byte-identical at the `included` default (matching the `sensitivity_delta`/`utilitiesPerSqft` precedent); only `COMPUTE_SCHEMA_VERSION` bumps (1.8.0 → 1.9.0).
+
 ---
 
 ## 5. Monthly launch cash-flow model (the new core, PRD §10)

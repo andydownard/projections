@@ -272,6 +272,14 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
     # also drops one guarded =IF(net<=0,"",…) division from the recalc gate.
     ws.cell(row=npr, column=2).value = f"=B{tr}-B{te}-B{startup_total_row}"
 
+    # ---------- FUNDED SEPARATELY / CONTINGENT (Model v3 Phase 2, Task 2.2) ---
+    # result.startup / Total Startup Costs above are already "included"-only (the
+    # engine filters non-included rows out by construction); these two ALWAYS-
+    # VISIBLE sub-sections render what got excluded, clearly labeled, so a reader
+    # never wonders whether a schedule row was silently dropped rather than
+    # deliberately funded outside the capital-required total.
+    row = _build_treatment_sections(ws, result, row)
+
     # ---------- MILESTONES (grand opening / break-even / payback) -----------
     # The three timeline milestones (§8 / #117), rendered as the SAME server display
     # strings the view-model emits ("Month 6" / "N/A"). These are engine-resolved
@@ -350,6 +358,59 @@ def _expense_formula(label, col, tr, sh, rowmap):
         return f"{sh['building_sqft']}*{sh['utilities_per_sqft']}"
     # fixed annual line
     return f"{sh[label]}"
+
+
+def _build_one_treatment_section(ws, row, heading, agg):
+    """One "Funded separately"/"Contingent" sub-section (Model v3 Phase 2, Task
+    2.2): ALWAYS rendered, even when empty ("None"), so a reader never wonders
+    whether the section was silently dropped rather than genuinely empty. Rows
+    here are read-only server-resolved amounts (not blue input cells — editing a
+    schedule row's treatment/amount happens through the app, not this export);
+    the subtotal is still a live =SUM(...) formula so the sheet foots.
+    """
+    ws[f"A{row}"] = heading
+    ws[f"A{row}"].font = BOLD
+    row += 1
+    by_category = agg["by_category"]
+    if not by_category:
+        ws[f"A{row}"] = "None"
+        ws[f"A{row}"].font = BLACK
+        return row + 1
+    first = row
+    for category, amount in by_category.items():
+        ws[f"A{row}"] = category
+        ws[f"A{row}"].font = BLACK
+        c = ws[f"B{row}"]
+        c.value = _f(amount)
+        c.number_format = USD
+        row += 1
+    last = row - 1
+    ws[f"A{row}"] = "Subtotal"
+    ws[f"A{row}"].font = BOLD
+    sc = ws[f"B{row}"]
+    sc.value = f"=SUM(B{first}:B{last})"
+    sc.number_format = USD
+    sc.fill = TOT_FILL
+    return row + 1
+
+
+def _build_treatment_sections(ws, result, row):
+    """"Funded separately (not included in capital required)" + "Contingent (not
+    included in capital required)" — the two always-visible sections mirroring
+    the view-model's ``startupCostsSeparate``/``startupCostsContingent`` (same
+    ``cost_schedule_totals`` aggregation authority, no second cost surface).
+    """
+    from engine.compute import cost_schedule_totals
+
+    totals = cost_schedule_totals(
+        result.inputs.cost_schedule, building_sqft=result.inputs.building_sqft)
+    row = _build_one_treatment_section(
+        ws, row, "Funded separately (not included in capital required)",
+        totals["separate"])
+    row = _build_one_treatment_section(
+        ws, row, "Contingent (not included in capital required)",
+        totals["contingent"])
+    return row
 
 
 def _precalc_expense(label, year, result):

@@ -79,6 +79,31 @@ def test_item_requires_category():
         CostScheduleItemIn(month=1, amount=10)
 
 
+# ------------------------------------- treatment enum (Model v3 Phase 2, Task 2.2)
+def test_item_defaults_treatment_to_none():
+    # None means "use the engine default" (included) -- not an explicit value.
+    item = CostScheduleItemIn(category="X", month=1, amount=10)
+    assert item.treatment is None
+
+
+@pytest.mark.parametrize("treatment", ["included", "separate", "contingent"])
+def test_item_accepts_each_valid_treatment(treatment):
+    item = CostScheduleItemIn(category="X", month=1, amount=10, treatment=treatment)
+    assert item.treatment == treatment
+
+
+def test_item_rejects_bogus_treatment():
+    with pytest.raises(ValidationError):
+        CostScheduleItemIn(category="X", month=1, amount=10, treatment="bogus")
+
+
+def test_item_accepts_and_stores_note():
+    item = CostScheduleItemIn(
+        category="Consultant", month=1, amount=100000, treatment="separate",
+        note="Attach the signed proposal once available.")
+    assert item.note == "Attach the signed proposal once available."
+
+
 # ------------------------------------------------------------- InputsIn model
 def test_inputs_defaults_opening_month_to_constant():
     inp = InputsIn(**ENGINE_INPUTS)
@@ -161,6 +186,7 @@ def test_validate_passes_with_none_schedule():
         {"cost_schedule": [{"category": "X", "month": 0, "amount": 1}]},
         {"cost_schedule": [{"category": "X", "month": 1, "amount": -1}]},
         {"cost_schedule": [{"category": "X", "month": -5, "amount": 1}]},
+        {"cost_schedule": [{"category": "X", "month": 1, "amount": 1, "treatment": "bogus"}]},
         {"opening_month_number": 0},
         {"opening_month_number": -3},
     ],

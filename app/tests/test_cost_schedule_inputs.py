@@ -235,3 +235,82 @@ def test_patch_rejects_bad_schedule(client, bad):
         headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
     )
     assert r.status_code == 422, r.text
+
+
+# --------------------------------------- 5. treatment enum (Model v3, Task 2.2)
+def test_patch_rejects_bogus_treatment(client, store):
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"inputs": {"cost_schedule": [
+            {"category": "X", "month": 1, "amount": 1000, "treatment": "bogus"},
+        ]}},
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+    )
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("treatment", ["included", "separate", "contingent"])
+def test_patch_accepts_and_persists_every_valid_treatment(client, store, treatment):
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"inputs": {"cost_schedule": [
+            {"category": "X", "month": 1, "amount": 1000, "treatment": treatment},
+        ]}},
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+    )
+    assert r.status_code == 200, r.text
+    stored = json.loads(store.get_projection_by_slug(slug)["inputs_json"])
+    assert stored["cost_schedule"][0]["treatment"] == treatment
+
+
+def test_patch_persists_a_separate_rows_note(client, store):
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"inputs": {"cost_schedule": [{
+            "category": "Consultant", "month": 1, "amount": 100000,
+            "treatment": "separate",
+            "note": "Attach the signed proposal once available.",
+        }]}},
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+    )
+    assert r.status_code == 200, r.text
+    stored = json.loads(store.get_projection_by_slug(slug)["inputs_json"])
+    assert stored["cost_schedule"][0]["note"] == "Attach the signed proposal once available."
+
+
+def test_patched_treatment_does_not_move_the_live_projection_capital_yet(client, store):
+    """Documents a real, pre-existing, orthogonal gap -- proven independently by
+    test_cost_schedule_validation.py::test_build_engine_args_filters_schedule_and_anchor
+    and test_cost_schedule_api.py::test_create_compute_unaffected_by_schedule_presence:
+    ``cost_schedule`` is NOT wired into ``_build_engine_args_from_dicts`` at the app
+    layer today (issue #113's data-model spine landed the storage/validation
+    surface "until a later wave consumes them" -- that wave has not shipped). The
+    engine ``Inputs.cost_schedule`` the create/PATCH/xlsx compute path builds is
+    ALWAYS ``()`` regardless of what a caller PATCHes, so a PATCHed row's
+    "treatment" -- like its amount, with or without a schedule at all -- has NO
+    effect on THIS projection's ``metrics.capital.raw`` yet. This is not a Task
+    2.2 regression: Task 2.2's math filtering is proven at the engine level
+    (engine/tests/test_compute_annual.py, engine/tests/test_cost_schedule_totals.py)
+    and end-to-end through the one endpoint that DOES call ``cost_schedule_totals``
+    with live caller rows -- POST /api/cost-schedule/preview, covered by
+    test_cost_schedule_router.py::test_preview_excludes_separate_and_contingent_rows_from_grand_total.
+    """
+    created = _create(client)
+    slug, owner = created["view_slug"], created["owner_token"]
+    before = created["metrics"]["capital"]["raw"]
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"inputs": {"cost_schedule": [{
+            "category": "Huge separate line", "month": 1, "amount": 9999999,
+            "treatment": "separate",
+        }]}},
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["metrics"]["capital"]["raw"] == before

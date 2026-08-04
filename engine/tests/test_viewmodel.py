@@ -4,7 +4,9 @@ Top-level field names verbatim; money/percent emitted as {raw, display}; the
 API never hard-codes hex (reco.tag is the semantic enum, color is client-derived).
 """
 import json
+from decimal import Decimal
 
+from engine.money import money_view
 from engine.viewmodel import to_view_model
 
 
@@ -176,8 +178,8 @@ def test_version_stamps(canonical_result):
     # optional linear share ramp, labor_mode coverage, and three new lines (POS
     # platform, Production software, Workers' comp, Contributions revenue).
     assert vm["model_version"] == "3.0.0"
-    # 1.8.0: new settings keys + new view-model rows/fields for Model v3.
-    assert vm["compute_schema_version"] == "1.8.0"
+    # 1.9.0: cost-schedule rows gain treatment (Model v3 Phase 2, Task 2.2).
+    assert vm["compute_schema_version"] == "1.9.0"
     assert "utilitiesPerSqft" in vm["settings"]
     assert "rentPerSqft" in vm["settings"]
 
@@ -199,6 +201,53 @@ def test_startup_costs_exposed_dual_value(canonical_result):
     assert vm["startupTotal"]["display"].startswith("$")
     total = round(sum(c["amount"]["raw"] for c in vm["startupCosts"]))
     assert round(vm["startupTotal"]["raw"]) == total
+
+
+# ------------------- startupCostsSeparate / startupCostsContingent (Task 2.2)
+def test_startup_costs_separate_and_contingent_always_present(canonical_result):
+    # The canonical fixture has no cost_schedule (empty tuple), so both sections
+    # are present but empty -- ALWAYS-visible keys, never omitted, so a reader
+    # never wonders whether the section was silently dropped.
+    vm = to_view_model(canonical_result)
+    assert vm["startupCostsSeparate"] == []
+    assert vm["startupCostsContingent"] == []
+
+
+def test_startup_costs_separate_and_contingent_populated_from_schedule():
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    schedule = (
+        {"category": "Included line", "month": 1, "amount": 10000,
+         "treatment": "included"},
+        {"category": "Consultant", "month": 1, "amount": 100000,
+         "treatment": "separate",
+         "note": "Attach the signed proposal once available."},
+        {"category": "Contingency reserve", "month": 1, "amount": 20000,
+         "treatment": "contingent"},
+    )
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11",
+        share_y5="0.12", donation_value="74", building_sqft="10000",
+        salesfloor_pct="0.70", occupancy_annual="120000", lease_type="nnn",
+        source_of_funds="300000", cost_schedule=schedule, opening_month_number=1,
+    )
+    result = compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
+                     TradeArea(basis="city", households="31798"), overrides={})
+    vm = to_view_model(result)
+
+    assert vm["startupCostsSeparate"] == [{
+        "category": "Consultant",
+        "amount": money_view(Decimal("100000")),
+        "note": "Attach the signed proposal once available.",
+    }]
+    assert vm["startupCostsContingent"] == [{
+        "category": "Contingency reserve",
+        "amount": money_view(Decimal("20000")),
+        "note": None,
+    }]
+    # the separate/contingent rows never leak into the included-only total.
+    assert "Consultant" not in [c["category"] for c in vm["startupCosts"]]
+    assert "Contingency reserve" not in [c["category"] for c in vm["startupCosts"]]
 
 
 # ----------------------------------------------------- three milestones (§8, #117)

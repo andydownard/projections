@@ -11,9 +11,10 @@ def test_model_versions_stamped():
     # Contributions revenue) — bundled under one bump. See model.py's history comment
     # and DECISIONS.md's 3.0.0 entry.
     assert model.MODEL_VERSION == "3.0.0"
-    # 1.8.0: new settings keys + new view-model rows/fields for Model v3 (see
-    # model.py's COMPUTE_SCHEMA_VERSION history comment for the full list).
-    assert model.COMPUTE_SCHEMA_VERSION == "1.8.0"
+    # 1.9.0: cost-schedule rows gain a treatment (included|separate|contingent)
+    # enum + note (Model v3 Phase 2, Task 2.2) — see model.py's
+    # COMPUTE_SCHEMA_VERSION history comment for the full list.
+    assert model.COMPUTE_SCHEMA_VERSION == "1.9.0"
 
 
 def test_demand_constants():

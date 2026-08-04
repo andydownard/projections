@@ -122,13 +122,27 @@ MODEL_VERSION = "3.0.0"          # math change => bump. 3.0.0 = MODEL V3 (owner
 #     startup total); monthly[] grows from 12 to 60 rows (full horizon) so the cash-flow series
 #     spans the payback crossing; payback is the Month-N cash-recovery milestone.
 # The NUMBERS move with model 2.8.0, so this rides the single fusion regeneration.)
+# 1.9.0: Model v3 Phase 2, Task 2.2 — cost-schedule rows gain a "treatment"
+# (included|separate|contingent) + "note" field. Math filtering: compute_annual's
+# startup aggregation, startup_outflows_by_month, and cost_schedule_totals now all
+# skip non-"included" rows (absent/None treatment defaults to "included" — every
+# existing projection's cost_schedule either has no rows or rows with no
+# "treatment" key at all, so startup/startup_total/capital/first_year_cash_gap are
+# BYTE-IDENTICAL). View-model gains +startupCostsSeparate/+startupCostsContingent
+# (same [{category, amount{raw,display}, note}] shape as startupCosts), always
+# present (empty list when nothing is marked non-included) so a reader never
+# wonders whether a section was silently dropped. cost_schedule_totals gains
+# +"separate"/+"contingent" aggregate keys ({by_category, grand_total}) alongside
+# the existing included-only by_category/by_month/grand_total. MODEL_VERSION stays
+# 3.0.0 (settings/shape-only, matching the sensitivity_delta/utilitiesPerSqft
+# precedent).
 # 1.8.0: Model v3 (see MODEL_VERSION 3.0.0 above) — new settings keys (card_share/
 # card_rate/card_per_tx_fee, avg_item_price/sell_through/items_per_hour/
 # productive_hours_per_station, share_m1/share_m12, labor_mode + coverage-mode
 # fields, workers_comp_pct, contributions_annual) and new view-model rows/fields
 # (Items sold/Items produced/Production hours rows, stationsInstalled, Contributions
 # row, leadership_coverage_advisory flag).
-COMPUTE_SCHEMA_VERSION = "1.8.0"
+COMPUTE_SCHEMA_VERSION = "1.9.0"
 
 # --- export trust copy (#192). Single source for the "planning estimates, not
 # advice" disclaimer + AI-narrative disclosure that the terms gate exists to
@@ -357,6 +371,16 @@ def default_cost_schedule_v3(building_sqft=EXAMPLE_BUILDING_SQFT, stations_insta
             "treatment": "included",
         },
     ]
+
+
+# --- Model v3 Phase 2, Task 2.2: the cost-schedule row "treatment" enum. The ONE
+# source of truth for the value set — the app layer (CostScheduleItemIn) and the
+# engine (compute_annual / startup_outflows_by_month / cost_schedule_totals) both
+# import this rather than re-declaring the 3 strings. A row whose "treatment" key
+# is absent/None (every legacy row + every default_cost_schedule() row) defaults to
+# "included" for filtering purposes — see COST_SCHEDULE_DEFAULT_TREATMENT.
+COST_SCHEDULE_TREATMENTS = frozenset({"included", "separate", "contingent"})
+COST_SCHEDULE_DEFAULT_TREATMENT = "included"
 
 
 # --- capital & cash

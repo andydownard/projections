@@ -69,6 +69,7 @@ from engine.compute import (
     unpinned_node_values,
 )
 from engine.model import (
+    COST_SCHEDULE_TREATMENTS,
     DEFAULT_OPENING_MONTH_NUMBER,
     FIXED_ANNUAL,
     MODEL_VERSION,
@@ -388,8 +389,16 @@ class CostScheduleItemIn(BaseModel):
     (``apply_projection_patch`` calls ``_validate_schedule_inputs`` unconditionally,
     even when the patch never touches ``cost_schedule``) — without these two fields
     declared, ``extra="forbid"`` would 422 the very next autosave of a brand-new
-    projection. Value-set enforcement (``included``/``separate``/``contingent``) and
-    math filtering land with Phase 2 Task 2.2; this only guarantees the keys parse."""
+    projection.
+
+    ``treatment`` value-set enforcement + math filtering land with Task 2.2:
+    ``None`` means "use the engine default" (``"included"``, the backward-compat
+    anchor for every legacy row); an explicit value is restricted to
+    ``engine.model.COST_SCHEDULE_TREATMENTS`` — a stray/typo'd value 422s here
+    rather than silently reaching the engine, where it would ALSO default to
+    "included" (fail-safe, never fail-open toward accidentally excluding a real
+    cost from capital) but with no signal back to the caller that their value was
+    ignored."""
     category: str
     month: int = Field(ge=1)
     amount: float = Field(ge=0)
@@ -397,6 +406,14 @@ class CostScheduleItemIn(BaseModel):
     note: Optional[str] = None
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _check_treatment(self) -> CostScheduleItemIn:
+        if self.treatment is not None and self.treatment not in COST_SCHEDULE_TREATMENTS:
+            raise ValueError(
+                f"treatment must be one of {sorted(COST_SCHEDULE_TREATMENTS)} "
+                f"(got {self.treatment!r})")
+        return self
 
 
 # ---- numeric -> string coercion for the deployed wire contract (fix 1.3g) --------
