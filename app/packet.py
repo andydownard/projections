@@ -31,9 +31,15 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
 from app.terms import TERMS_VERSION
-from engine.model import AI_NARRATIVE_DISCLOSURE, EXPORT_DISCLAIMER
+from engine.model import AI_NARRATIVE_DISCLOSURE, CLIENT_COPY_DISCLAIMER, EXPORT_DISCLAIMER
 
 PACKET_ROLES = ("board", "funder", "advisor")
+# Model v3 Phase 3 (Task 3.1): the packet's export variants. "internal" (default)
+# is today's UNCHANGED output. "client" drops the §12.2 guardrails section
+# ENTIRELY (never rewords it in place — the simplest way to guarantee the
+# internal-spec citation and the flag's internal key name can never reach
+# client-facing copy) and swaps in the neutral CLIENT_COPY_DISCLAIMER.
+PACKET_VARIANTS = ("internal", "client")
 
 # Role-tailored call-to-action / emphasis (numbers never change — only framing).
 _ROLE_CTA = {
@@ -256,14 +262,20 @@ def _kpis(vm: dict[str, Any]) -> list[dict[str, str]]:
     return out
 
 
-def _disclaimer(narrative_md: str | None, terms_accepted_at: str | None) -> dict[str, Any]:
-    """The server-owned export footer (#192) — a single source for the "planning
-    estimates, not advice" caveat the terms gate exists to protect, plus the
-    AI-narrative disclosure (only when generated prose is present). Reuses the
-    engine constants + ``app.terms.TERMS_VERSION`` so app and export copy never drift.
+def _disclaimer(
+    narrative_md: str | None, terms_accepted_at: str | None, *, body: str = EXPORT_DISCLAIMER
+) -> dict[str, Any]:
+    """The server-owned export footer (#192) — a single source for the disclaimer
+    caveat the terms gate exists to protect, plus the AI-narrative disclosure
+    (only when generated prose is present). Reuses the engine constants +
+    ``app.terms.TERMS_VERSION`` so app and export copy never drift. ``body``
+    defaults to the internal ``EXPORT_DISCLAIMER``; the client-copy variant
+    (Model v3 Phase 3) passes ``engine.model.CLIENT_COPY_DISCLAIMER`` instead —
+    the SAME constant the client-copy ``.xlsx`` uses, so the two artifacts never
+    carry two different disclaimer strings.
     """
     return {
-        "body": EXPORT_DISCLAIMER,
+        "body": body,
         "ai_disclosure": AI_NARRATIVE_DISCLOSURE if narrative_md else None,
         "terms_version": TERMS_VERSION,
         "terms_accepted_at": terms_accepted_at or "",
@@ -337,6 +349,7 @@ def build_packet(
     role: str = "board",
     narrative_md: str | None = None,
     terms_accepted_at: str | None = None,
+    variant: str = "internal",
 ) -> dict[str, Any]:
     """Assemble the role-tailored packet from a computed_json view-model.
 
@@ -345,8 +358,18 @@ def build_packet(
     prose section but keeps every structured/evidence section (§21 opt-out).
     ``terms_accepted_at`` (when known) stamps the export footer with the acceptance
     date alongside the terms version (#192).
+
+    ``variant`` (Model v3 Phase 3, Task 3.1): ``"internal"`` (default) is today's
+    UNCHANGED output — byte-identical to calling this function before ``variant``
+    existed. ``"client"`` drops the ``guardrails`` section key ENTIRELY (not just
+    an empty list — the key is absent) and swaps the disclaimer body to the
+    neutral ``CLIENT_COPY_DISCLAIMER``. Both ``render_packet_md``/
+    ``render_packet_docx`` already read ``sections.get("guardrails") or []``, so
+    neither renderer needs to change: an absent key silently degrades to "no
+    guardrails section", exactly like a clean projection with no out-of-band flags.
     """
     role = _norm_role(role)
+    variant = variant if variant in PACKET_VARIANTS else "internal"
     sections: dict[str, Any] = {}
     # Order matters: lead with evidence, then the decision, then the detail.
     sections["banner"] = _banner(vm)
@@ -358,9 +381,12 @@ def build_packet(
     }
     sections["assumptions"] = _assumptions(vm)
     sections["sensitivity"] = _sensitivity(vm)
-    # §12.2 guardrails: any out-of-band driver + the justification note it requires,
-    # so the advisory travels into the packet a board reads (empty when all in band).
-    sections["guardrails"] = _guardrails(vm)
+    if variant != "client":
+        # §12.2 guardrails: any out-of-band driver + the justification note it
+        # requires, so the advisory travels into the packet a board reads (empty
+        # when all in band). Internal-only — the client-copy variant omits this
+        # section entirely rather than rewording its "(§12.2)" citation in place.
+        sections["guardrails"] = _guardrails(vm)
     sections["provenance"] = _provenance(vm)
     sections["kpis"] = _kpis(vm)
     # The .docx 2-pager's two tables (EPIC DOCX): the projected income statement
@@ -371,11 +397,14 @@ def build_packet(
     if narrative_md:
         sections["narrative"] = {"body_md": narrative_md}
     # Always present: the planning-estimates caveat + AI disclosure (the latter only
-    # when prose is present) travels into every exported artifact (#192).
-    sections["disclaimer"] = _disclaimer(narrative_md, terms_accepted_at)
+    # when prose is present) travels into every exported artifact (#192). The
+    # client-copy variant uses the SAME neutral constant the client-copy .xlsx uses.
+    disclaimer_body = CLIENT_COPY_DISCLAIMER if variant == "client" else EXPORT_DISCLAIMER
+    sections["disclaimer"] = _disclaimer(narrative_md, terms_accepted_at, body=disclaimer_body)
 
     return {
         "role": role,
+        "variant": variant,
         "name": vm.get("name", ""),
         "emphasis": _ROLE_EMPHASIS[role],
         "cta": _ROLE_CTA[role],

@@ -18,7 +18,7 @@ from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from engine import dag
-from engine.compute import EXPENSE_ORDER
+from engine.compute import EXPENSE_ORDER, cash_net
 from engine.money import D, round_dollars
 
 BLUE = Font(name="Arial", color="0000FF", size=10)
@@ -34,6 +34,14 @@ NUM = '#,##0'
 _OVERRIDE_COMMENT = (
     "Manual override — calc was ={formula} → ${calc:,.0f}; "
     "set to ${value:,.0f} on {date}")
+
+# Model v3 Phase 3 (Task 3.1): the client-copy variant's reworded cell comment —
+# same facts (the pre-adjustment calculated estimate, the adjusted figure, the
+# date) as `_OVERRIDE_COMMENT`, but never the word "override" and no bare Excel
+# formula fragment (internal-jargon-free, per the vocabulary strip).
+_OVERRIDE_COMMENT_CLIENT = (
+    "Manually adjusted from the calculated estimate of ${calc:,.0f} "
+    "to ${value:,.0f} on {date}.")
 
 
 def _f(value):
@@ -296,6 +304,212 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
 
     ws.column_dimensions["A"].width = 34
     wb.save(path)
+
+
+# --------------------------------------------------------------- client copy
+# Model v3 Phase 3 (Task 3.1): a terse, jargon-free export variant for the
+# client/board reader (``?variant=client`` on the export endpoints). Reuses the
+# SAME resolved ``result`` (no second math surface) and the SAME style constants
+# as ``build_xlsx`` above, but is otherwise an independent renderer — it never
+# calls into ``build_xlsx``'s helpers that assume a formula-driven sheet
+# (``_expense_formula``, the KEY INPUTS block, the MILESTONES block), so editing
+# one renderer can never accidentally change the other's byte-for-byte output.
+def build_client_copy_xlsx(result, path):
+    """The client-copy workbook: Projection (revenue/expense rows only, no
+    KPI/sensitivity/guardrails/decision-metrics block), Startup Costs (terse
+    two-column, zero-value lines dropped, separate/contingent always-visible in
+    plain language), and Planning Notes (plain-English assumption sentences +
+    the exact client-copy disclaimer). No Monthly Cash Flow tab.
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Projection"
+
+    inputs = result.inputs
+    overrides = result.overrides_applied
+    pinned = {}
+    for key in overrides:
+        node, year = dag.parse_key(key)
+        pinned[(node, year)] = overrides[key]
+
+    ws["A1"] = f"{inputs.org_name} — Financial Projection"
+    ws["A1"].font = Font(name="Arial", bold=True, size=14)
+
+    row = 3
+    for i, y in enumerate(("Year 1", "Year 2", "Year 3", "Year 4", "Year 5")):
+        ws.cell(row=row, column=2 + i, value=y).font = BOLD
+    row += 1
+
+    rowmap = {}
+
+    def line(label, values, fmt=USD, bold=False):
+        nonlocal row
+        ws[f"A{row}"] = label
+        ws[f"A{row}"].font = BOLD if bold else BLACK
+        for i, val in enumerate(values):
+            c = ws.cell(row=row, column=2 + i, value=val)
+            c.font = BOLD if bold else BLACK
+            c.number_format = fmt
+            c.alignment = Alignment(horizontal="right")
+        rowmap[label] = row
+        row += 1
+
+    years = (1, 2, 3, 4, 5)
+    line("Retail Sales", [_f(result.annual[y].retail) for y in years])
+    line("Salvage Sales", [_f(result.annual[y].salvage) for y in years])
+    line("Contributions", [_f(result.annual[y].contributions) for y in years])
+    line("Total Revenue", [_f(result.annual[y].total_rev) for y in years], bold=True)
+
+    for label in EXPENSE_ORDER:
+        if label not in result.annual[1].expenses:
+            continue
+        line(label, [_f(result.annual[y].expenses[label]) for y in years])
+        r = rowmap[label]
+        # A pinned/overridden component: the value already IS the resolved
+        # (post-override) figure (compute_annual resolves overrides before this
+        # renderer ever runs), so there is nothing to overwrite — only the
+        # highlight + a plain-language explanation of the adjustment.
+        for i, y in enumerate(years):
+            if (label, y) in pinned:
+                pin = pinned[(label, y)]
+                pre = _precalc_expense(label, y, result)
+                cell = ws.cell(row=r, column=2 + i)
+                cell.fill = OVERRIDE_FILL
+                cell.comment = Comment(_OVERRIDE_COMMENT_CLIENT.format(
+                    calc=float(pre), value=float(D(pin["value"])), date=pin["ts"]), "engine")
+
+    line("Total Expenses", [_f(result.annual[y].total_exp) for y in years], bold=True)
+    line("Net income", [_f(cash_net(result, y)) for y in years], bold=True)
+
+    ws.column_dimensions["A"].width = 34
+
+    _build_client_startup_sheet(wb, result)
+    _build_planning_notes_sheet(wb, result)
+
+    wb.save(path)
+
+
+def _build_client_startup_sheet(wb, result):
+    """Terse two-column (category, amount) startup-costs sheet. ``result.startup``
+    is already "included"-only by construction (the engine filters non-included
+    rows out before this renderer ever sees them); the separate/contingent
+    aggregates come from the SAME ``cost_schedule_totals`` authority the internal
+    variant's always-visible sections use. Zero-value lines are dropped entirely
+    in every block — no dash/zero row ever renders.
+    """
+    from engine.compute import cost_schedule_totals
+
+    ws = wb.create_sheet("Startup Costs")
+    ws["A1"] = "STARTUP COSTS"
+    ws["A1"].font = BOLD
+
+    row = _build_client_cost_block(
+        ws, 3, "Included in capital required",
+        {k: v for k, v in result.startup.items() if _f(v) != 0})
+
+    totals = cost_schedule_totals(
+        result.inputs.cost_schedule, building_sqft=result.inputs.building_sqft)
+    row = _build_client_cost_block(
+        ws, row, "Funded separately",
+        {k: v for k, v in totals["separate"]["by_category"].items() if _f(v) != 0})
+    _build_client_cost_block(
+        ws, row, "Contingent",
+        {k: v for k, v in totals["contingent"]["by_category"].items() if _f(v) != 0})
+
+    ws.column_dimensions["A"].width = 40
+
+
+def _build_client_cost_block(ws, row, heading, by_category):
+    """One labeled (category, amount) block, ending in a live =SUM(...) subtotal
+    so the sheet foots. Always rendered (even "None") so a reader never wonders
+    whether a block was silently dropped rather than genuinely empty.
+    """
+    ws[f"A{row}"] = heading
+    ws[f"A{row}"].font = BOLD
+    row += 1
+    if not by_category:
+        ws[f"A{row}"] = "None"
+        ws[f"A{row}"].font = BLACK
+        return row + 2
+    first = row
+    for category, amount in by_category.items():
+        ws[f"A{row}"] = category
+        ws[f"A{row}"].font = BLACK
+        c = ws[f"B{row}"]
+        c.value = _f(amount)
+        c.number_format = USD
+        row += 1
+    last = row - 1
+    ws[f"A{row}"] = "Total"
+    ws[f"A{row}"].font = BOLD
+    tc = ws[f"B{row}"]
+    tc.value = f"=SUM(B{first}:B{last})"
+    tc.number_format = USD
+    tc.fill = TOT_FILL
+    return row + 2
+
+
+def _pct_str(value):
+    """Plain-English percent for a Planning Notes sentence (e.g. '6.0%')."""
+    return f"{float(D(value)) * 100:.1f}%"
+
+
+def _usd_str(value):
+    """Plain-English whole-dollar amount for a Planning Notes sentence."""
+    return f"${float(round_dollars(value)):,.0f}"
+
+
+def _cents_str(value):
+    """Plain-English cents-precision amount (per-transaction fees) — money_view's
+    whole-dollar rounding would silently show a dime fee as "$0"."""
+    return f"${float(D(value)):.2f}"
+
+
+def _build_planning_notes_sheet(wb, result):
+    """Plain-English sentences generated from ``result``'s settings — one per
+    major assumption group (demand share, labor mode, rent/escalator, card
+    processing) — followed by the exact client-copy disclaimer, verbatim.
+    """
+    from engine.model import CLIENT_COPY_DISCLAIMER
+
+    ws = wb.create_sheet("Planning Notes")
+    ws["A1"] = "PLANNING NOTES"
+    ws["A1"].font = BOLD
+
+    a = result.assumptions
+    inputs = result.inputs
+
+    sentences = [
+        (f"This plan assumes a starting donor market share of {_pct_str(inputs.share_y1)} "
+         f"in Year 1, growing to {_pct_str(inputs.share_y5)} by Year 5."),
+        (f"Payroll is modeled as a percentage of revenue ({_pct_str(a.labor_pct)} of "
+         "revenue).")
+        if a.labor_mode != "coverage" else
+        ("Payroll is modeled from projected staffing hours — the cashiers, floor, and "
+         "leadership hours needed to run the store — rather than as a percentage of "
+         "revenue."),
+        (f"Rent starts at {_usd_str(result.occupancy[1])} per year and increases "
+         f"{_pct_str(a.escalator)} each year to keep pace with market rates."),
+        (f"Card processing assumes about {_pct_str(a.card_share)} of sales are paid by "
+         f"card, at a rate of {_pct_str(a.card_rate)} of the sale plus "
+         f"{_cents_str(a.card_per_tx_fee)} per transaction."),
+    ]
+
+    row = 3
+    for sentence in sentences:
+        cell = ws[f"A{row}"]
+        cell.value = sentence
+        cell.font = BLACK
+        cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        row += 1
+
+    row += 1
+    disclaimer_cell = ws[f"A{row}"]
+    disclaimer_cell.value = CLIENT_COPY_DISCLAIMER
+    disclaimer_cell.font = BLACK
+    disclaimer_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+
+    ws.column_dimensions["A"].width = 100
 
 
 def _build_disclaimer_block(ws, terms_version, terms_accepted_at):
