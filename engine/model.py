@@ -205,7 +205,7 @@ AM_COUNT = 2                         # assistant manager headcount
 
 # --- occupancy
 # --- revenue (optional additions)
-CONTRIBUTIONS_ANNUAL = "0"            # Model v3 — optional flat annual contributions revenue (default 0)
+CONTRIBUTIONS_ANNUAL = "0"            # Model v3 — optional flat annual contributions
 
 RENT_ESCALATOR = "0.03"              # §7.3 — compound, Y2–Y3 (resolved §1)
 

@@ -566,6 +566,7 @@ def test_build_monthly_signature_takes_inputs_not_opening_month_number(canonical
 def test_workers_comp_expense_in_annual():
     """Workers' comp expense (2% of payroll) is included in annual calculations."""
     from decimal import Decimal
+
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     from engine.money import D
 

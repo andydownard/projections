@@ -401,11 +401,15 @@ def build_flags(result, assumptions, demand):
     # cover every open hour, given the store's open_hours_per_week.
     if assumptions.labor_mode == "coverage":
         open_hours_per_week = D(assumptions.open_hours_per_week)
-        implied_am = max(0, -(-(int(open_hours_per_week) - 40) // 40))  # ceil((hours-40)/40), floored at 0
+        # ceil((hours-40)/40), floored at 0
+        implied_am = max(0, -(-(int(open_hours_per_week) - 40) // 40))
         flags["leadership_coverage_advisory"] = {
             "open_hours_per_week": float(open_hours_per_week),
-            "note": (f"At {open_hours_per_week} open hrs/week, plan for 1 store manager + "
-                     f"~{implied_am} assistant manager(s) so a manager or AM is on duty all open hours."),
+            "note": (
+                f"At {open_hours_per_week} open hrs/week, plan for 1 store manager + "
+                f"~{implied_am} assistant manager(s) so a manager or AM is "
+                f"on duty all open hours."
+            ),
             "requires_note": False,
         }
 
