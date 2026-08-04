@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.store import get_store
 from app.store.sqlite import SqliteStore
-from engine.model import default_cost_schedule, default_cost_schedule_v3
+from engine.model import default_cost_schedule_v3
 
 
 # --------------------------------------------------------------------- fixtures

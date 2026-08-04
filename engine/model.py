@@ -219,7 +219,7 @@ AM_COUNT = 2                         # assistant manager headcount
 
 # --- occupancy
 # --- revenue (optional additions)
-CONTRIBUTIONS_ANNUAL = "0"            # Model v3 — optional flat annual contributions revenue (default 0)
+CONTRIBUTIONS_ANNUAL = "0"            # optional annual contributions (Model v3)
 
 RENT_ESCALATOR = "0.03"              # §7.3 — compound, Y2–Y3 (resolved §1)
 
@@ -311,7 +311,9 @@ PRE_OPENING_HIRING_TRAINING_PAYROLL = 20000  # pre-opening labor costs
 UTILITIES_SECURITY_DEPOSITS_SETUP = 3000    # utility deposits + security system setup
 
 
-def default_cost_schedule_v3(building_sqft=EXAMPLE_BUILDING_SQFT, stations_installed=0) -> list[dict]:
+def default_cost_schedule_v3(
+    building_sqft=EXAMPLE_BUILDING_SQFT, stations_installed=0
+) -> list[dict]:
     """The NEW-PROJECTION-ONLY default cost schedule (Model v3, Phase 2).
 
     Distinct from `default_cost_schedule()` (the untouched legacy/migration anchor —
@@ -326,7 +328,10 @@ def default_cost_schedule_v3(building_sqft=EXAMPLE_BUILDING_SQFT, stations_insta
             "month": DEFAULT_OPENING_MONTH_NUMBER,
             "amount": STARTUP["Thrift Store Consultant"],
             "treatment": "separate",
-            "note": "Handled under a separate consulting agreement — attach the signed proposal for the actual figure once available.",
+            "note": (
+                "Handled under a separate consulting agreement — attach the signed "
+                "proposal for the actual figure once available."
+            ),
         },
         {
             "category": "Equipment & Fixtures",

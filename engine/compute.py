@@ -65,7 +65,8 @@ class Inputs:
     rent_per_sqft: str | None = None        # OR sqft x rate
     lease_type: str = "gross"                  # "gross" | "nnn"
     nnn_opex_annual: str = "0"                 # added to occupancy if nnn
-    contributions_annual: str = model.CONTRIBUTIONS_ANNUAL  # Model v3 — optional flat contributions revenue
+    # Model v3 — optional flat contributions revenue
+    contributions_annual: str = model.CONTRIBUTIONS_ANNUAL
     # Optional within-year Year-1 revenue-share ramp (Task 1.3): a linear alternative
     # to the default S-curve (`_REVENUE_WEIGHTS`). Both must be set to activate it;
     # either left `None` (the default) reproduces today's S-curve, byte-identical.
@@ -277,11 +278,21 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
                 if D(assumptions.cashier_tx_per_hour) != 0 else Decimal("0"),
                 D(assumptions.min_staffed_lanes) * open_hours_per_month,
             )
-            door_hours = (D(assumptions.door_dedicated) + D(assumptions.door_peak)) * open_hours_per_month
+            door_hours = (
+                (D(assumptions.door_dedicated) + D(assumptions.door_peak))
+                * open_hours_per_month
+            )
             runner_hours = D(assumptions.runners) * open_hours_per_month
-            hourly_hours_month = production_hours_month + cashier_hours + door_hours + runner_hours
-            salaries = D(assumptions.mgr_salary) + D(str(assumptions.am_count)) * D(assumptions.am_salary)
-            payroll_calculated = hourly_hours_month * D(assumptions.wage) * 12 + salaries
+            hourly_hours_month = (
+                production_hours_month + cashier_hours + door_hours + runner_hours
+            )
+            salaries = (
+                D(assumptions.mgr_salary)
+                + D(str(assumptions.am_count)) * D(assumptions.am_salary)
+            )
+            payroll_calculated = (
+                hourly_hours_month * D(assumptions.wage) * 12 + salaries
+            )
         else:
             payroll_calculated = total_rev * D(assumptions.labor_pct)
         payroll = _resolve_get(overrides, "Payroll", y, payroll_calculated)
@@ -313,7 +324,8 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
 
         years[y] = AnnualYear(
             year=y, share=share, donating_hh=donating_hh, donations=donations,
-            retail=retail, customers=customers, salvage=salvage, contributions=contributions, total_rev=total_rev,
+            retail=retail, customers=customers, salvage=salvage,
+            contributions=contributions, total_rev=total_rev,
             expenses=ordered, total_exp=total_exp, net=net, margin=margin,
             items_sold=items_sold, items_produced=items_produced,
             production_hours=production_hours,
