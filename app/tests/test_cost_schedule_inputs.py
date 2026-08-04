@@ -26,6 +26,7 @@ from engine.model import (
     DEFAULT_OPENING_MONTH_NUMBER,
     STARTUP,
     default_cost_schedule,
+    default_cost_schedule_v3,
 )
 
 
@@ -168,13 +169,18 @@ def test_create_round_trips_schedule_and_anchor(client, store):
 
 
 def test_create_without_schedule_backfills_default_columns(client, store):
+    # Model v3 (Task 2.1b): a genuine create with no schedule now backfills the NEW
+    # default_cost_schedule_v3() (sized to this projection's own stationsInstalled)
+    # -- into BOTH the denormalized column AND the canonical inputs_json copy, not
+    # just the mirror column. default_cost_schedule() (this pillar's original
+    # subject) stays the untouched fallback for duplicate/PATCH/restore/Penny-edit
+    # on an EXISTING projection (covered by test_projections_api.py).
     created = _create(client)
     row = store.get_projection_by_slug(created["view_slug"])
-    assert json.loads(row["cost_schedule_json"]) == default_cost_schedule()
+    expected = default_cost_schedule_v3("10000", created["stationsInstalled"])
+    assert json.loads(row["cost_schedule_json"]) == expected
     assert row["opening_month_number"] == 1
-    # absent from inputs_json -> the engine/migration default applies downstream
-    assert "cost_schedule" not in json.loads(row["inputs_json"]) or \
-        json.loads(row["inputs_json"])["cost_schedule"] is None
+    assert json.loads(row["inputs_json"])["cost_schedule"] == expected
 
 
 @pytest.mark.parametrize(

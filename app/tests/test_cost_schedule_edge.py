@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.store import get_store
 from app.store.sqlite import SqliteStore
-from engine.model import default_cost_schedule
+from engine.model import default_cost_schedule_v3
 
 BASE_INPUTS = {
     "org_name": "House of Hope",
@@ -146,9 +146,12 @@ def test_unicode_category_label(client, store):
 
 # ------------------------------------------------------ default-state behaviour
 def test_default_state_matches_helper(client, store):
+    # Model v3 (Task 2.1b): a genuine create with no schedule backfills the NEW
+    # default_cost_schedule_v3(), sized to this projection's own stationsInstalled.
     created = _create(client)
     row = store.get_projection_by_slug(created["view_slug"])
-    assert json.loads(row["cost_schedule_json"]) == default_cost_schedule()
+    expected = default_cost_schedule_v3("10000", created["stationsInstalled"])
+    assert json.loads(row["cost_schedule_json"]) == expected
     assert row["opening_month_number"] == 1
 
 
@@ -166,12 +169,13 @@ def test_patch_then_default_does_not_resurrect_old_schedule(client, store):
 
 
 def test_anchor_independent_of_schedule(client, store):
-    # setting only the anchor on create leaves schedule unset in inputs_json
+    # setting only the anchor on create still Model-v3-seeds the schedule
+    # (Task 2.1b) -- the anchor and the schedule are independently defaulted.
     created = _create(client, opening_month_number=8, target_opening_date="2027-03")
     stored = _stored(store, created["view_slug"])
     assert stored["opening_month_number"] == 8
     assert stored["target_opening_date"] == "2027-03"
-    assert stored.get("cost_schedule") is None
+    assert len(stored["cost_schedule"]) == 8
 
 
 def test_single_row_schedule_round_trips(client, store):

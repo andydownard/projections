@@ -73,6 +73,10 @@ def test_schedule_patch_requires_if_match(client):
 def test_schedule_patch_stale_if_match_returns_409(client, store):
     created = _create(client)
     slug = created["view_slug"]
+    # create seeds the Model-v3 default schedule (Task 2.1b); capture it so the
+    # "never persisted" assertion below proves the stale write really no-oped,
+    # rather than the projection having no schedule to begin with.
+    before_schedule = _stored(store, slug)["cost_schedule"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"cost_schedule": SCHEDULE}},
@@ -80,19 +84,20 @@ def test_schedule_patch_stale_if_match_returns_409(client, store):
     )
     assert r.status_code == 409, r.text
     # the stale write never persisted the schedule
-    assert _stored(store, slug).get("cost_schedule") is None
+    assert _stored(store, slug)["cost_schedule"] == before_schedule
 
 
 def test_schedule_patch_view_only_forbidden(client, store):
     created = _create(client)
     slug = created["view_slug"]
+    before_schedule = _stored(store, slug)["cost_schedule"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"cost_schedule": SCHEDULE}},
         headers={"If-Match": "1"},
     )
     assert r.status_code == 403, r.text
-    assert _stored(store, slug).get("cost_schedule") is None
+    assert _stored(store, slug)["cost_schedule"] == before_schedule
 
 
 def test_schedule_patch_wrong_token_forbidden(client, store):

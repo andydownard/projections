@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.store import get_store
 from app.store.sqlite import SqliteStore
-from engine.model import default_cost_schedule
+from engine.model import default_cost_schedule, default_cost_schedule_v3
 
 
 # --------------------------------------------------------------------- fixtures
@@ -118,16 +118,24 @@ def test_create_without_schedule_defaults_opening_month(client, store):
     assert _row(store, created["view_slug"])["opening_month_number"] == 1
 
 
-def test_create_without_schedule_backfills_default_schedule_column(client, store):
+def test_create_without_schedule_backfills_v3_default_schedule_column(client, store):
+    # Model v3 (Task 2.1b): a genuinely-new create backfills the NEW 8-line
+    # default_cost_schedule_v3(), sized to this projection's own stationsInstalled
+    # -- not the old 4-line default_cost_schedule() (still the fallback for
+    # duplicate/PATCH/restore/Penny-edit on an EXISTING projection, unaffected here).
     created = _create(client)
     row = _row(store, created["view_slug"])
-    assert json.loads(row["cost_schedule_json"]) == default_cost_schedule()
+    expected = default_cost_schedule_v3(
+        "10000", created["stationsInstalled"])  # BASE_INPUTS' building_sqft
+    assert json.loads(row["cost_schedule_json"]) == expected
 
 
-def test_create_without_schedule_leaves_inputs_schedule_unset(client, store):
+def test_create_without_schedule_seeds_v3_schedule_into_inputs_json(client, store):
     created = _create(client)
     stored = _stored_inputs(store, created["view_slug"])
-    assert stored.get("cost_schedule") is None
+    assert len(stored["cost_schedule"]) == 8
+    assert stored["cost_schedule"][0]["category"] == "Thrift Store Consultant"
+    assert stored["cost_schedule"][0]["treatment"] == "separate"
 
 
 def test_create_still_computes_decision_metrics_with_schedule(client):
@@ -156,11 +164,17 @@ def test_create_accepts_large_schedule(client, store):
 
 
 def test_create_accepts_empty_schedule_list(client, store):
+    # Empty list is valid input and -- same as no schedule at all, matching
+    # _schedule_columns' own `if not schedule:` convention -- is Model-v3-seeded on
+    # a genuine create (Task 2.1b): an empty array means "no timed costs defined",
+    # not "opt out of the default".
     created = _create(client, cost_schedule=[])
-    # Empty list is valid; the engine/migration default applies to the mirror column.
-    assert _stored_inputs(store, created["view_slug"])["cost_schedule"] == []
+    stored = _stored_inputs(store, created["view_slug"])["cost_schedule"]
     row = _row(store, created["view_slug"])
-    assert json.loads(row["cost_schedule_json"]) == default_cost_schedule()
+    mirrored = json.loads(row["cost_schedule_json"])
+    assert stored == mirrored
+    assert len(stored) == 8
+    assert stored[0]["category"] == "Thrift Store Consultant"
 
 
 def test_create_accepts_float_amount(client, store):
@@ -420,6 +434,10 @@ def test_patch_rejects_schedule_over_row_cap(client, store):
 def test_preview_with_schedule_is_read_only(client, store):
     created = _create(client)
     slug = created["view_slug"]
+    # create seeds the v3 default (Task 2.1b); capture it before the preview so the
+    # "nothing persisted" assertion below proves the /preview write truly no-oped,
+    # not that the projection happened to have no schedule to begin with.
+    before_schedule = _stored_inputs(store, slug)["cost_schedule"]
     r = client.post(
         f"/api/projections/{slug}/preview",
         json={"inputs": {"cost_schedule": SAMPLE_SCHEDULE, "opening_month_number": 3}},
@@ -429,7 +447,7 @@ def test_preview_with_schedule_is_read_only(client, store):
     # nothing persisted: version unchanged and the schedule not written
     row = _row(store, slug)
     assert row["version"] == 1
-    assert _stored_inputs(store, slug).get("cost_schedule") is None
+    assert _stored_inputs(store, slug)["cost_schedule"] == before_schedule
 
 
 def test_preview_computes_after_view_model(client):

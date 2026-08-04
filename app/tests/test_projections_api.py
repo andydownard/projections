@@ -244,3 +244,134 @@ def test_invalid_inputs_return_422(client):
 
 # PATCH / autosave / If-Match / 409 are covered comprehensively in
 # test_projections_patch.py (the canonical mutation-quad contract).
+
+
+# ------------------------------------------------ Model v3 Phase 2 (Task 2.1b):
+# a genuinely-new create is seeded with default_cost_schedule_v3(); every OTHER
+# path (duplicate/PATCH/restore/Penny-edit) stays on the untouched legacy
+# default_cost_schedule() so an existing projection's numbers never silently move.
+from app.deps import hash_token  # noqa: E402
+from engine.model import PRODUCTION_STATION_COST, default_cost_schedule  # noqa: E402
+
+_V3_INCLUDED_CATEGORIES = {
+    "Equipment & Fixtures",
+    "Build-out / Renovations / Tenant Improvements",
+    "Legal, Permits, Insurance Setup, Signage",
+    "POS checkout lanes",
+    "Production stations",
+    "Pre-opening hiring & training payroll",
+    "Utilities/security deposits & setup",
+}
+
+
+def test_create_without_schedule_seeds_v3_default_cost_schedule(client_store):
+    """POST /projections with NO cost_schedule -> the STORED schedule (the canonical
+    copy in inputs_json, mirrored into the cost_schedule_json column) is the new
+    8-line Model-v3 default, sized to this projection's OWN peak staffing, with the
+    Consultant line marked "separate" -- not the old 4-line legacy default."""
+    client, store = client_store
+    created = _create(client).json()
+    stations_installed = created["stationsInstalled"]
+    assert stations_installed > 0  # House of Hope has real revenue -> real staffing
+
+    row = store.get_projection_by_slug(created["view_slug"])
+    stored_inputs = json.loads(row["inputs_json"])
+    schedule = stored_inputs["cost_schedule"]
+    mirrored = json.loads(row["cost_schedule_json"])
+    assert schedule == mirrored  # denormalized column agrees with the canonical copy
+
+    assert len(schedule) == 8
+    by_category = {item["category"]: item for item in schedule}
+    assert set(by_category) == _V3_INCLUDED_CATEGORIES | {"Thrift Store Consultant"}
+
+    consultant = by_category["Thrift Store Consultant"]
+    assert consultant["treatment"] == "separate"
+    assert consultant["note"] == (
+        "Handled under a separate consulting agreement — attach the signed "
+        "proposal for the actual figure once available."
+    )
+    for category in _V3_INCLUDED_CATEGORIES:
+        assert by_category[category]["treatment"] == "included"
+
+    # "Production stations" is sized off THIS projection's real stationsInstalled,
+    # not a fixed default count.
+    assert by_category["Production stations"]["amount"] == (
+        PRODUCTION_STATION_COST * stations_installed)
+
+
+def test_new_v3_seeded_projection_survives_an_unrelated_patch(client_store):
+    """Regression guard: a brand-new (v3-seeded) projection's OWN stored schedule
+    must re-validate cleanly on the very next autosave. apply_projection_patch calls
+    _validate_schedule_inputs() on every PATCH (even one that never touches
+    cost_schedule), so a schedule row carrying "treatment"/"note" must round-trip
+    through CostScheduleItemIn without 422ing on its own seed data."""
+    client, store = client_store
+    created = _create(client).json()
+    slug, owner = created["view_slug"], created["owner_token"]
+    r = client.patch(
+        f"/api/projections/{slug}",
+        json={"assumptions": {"labor_pct": "0.55"}},
+        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+    )
+    assert r.status_code == 200, r.text
+    # the schedule is untouched by the unrelated patch
+    stored = json.loads(store.get_projection_by_slug(slug)["inputs_json"])
+    assert len(stored["cost_schedule"]) == 8
+
+
+def _plant_legacy_projection(store, *, slug, edit_token):
+    """Simulate a projection created BEFORE Task 2.1b shipped: a full valid
+    ``inputs_json`` with NO ``cost_schedule`` key at all (exactly what every
+    pre-existing row looks like -- the v3 seed only ever writes into a NEW create)."""
+    now = "2020-01-01T00:00:00Z"
+    inputs = {**VALID_BODY["inputs"]}
+    assert "cost_schedule" not in inputs
+    row = {
+        "id": f"id-{slug}",
+        "view_slug": slug,
+        "owner_token_hash": hash_token("legacy-owner-token"),
+        "edit_token_hash": hash_token(edit_token),
+        "name": "Legacy Projection",
+        "model_version": MODEL_VERSION,
+        "compute_schema_version": "1.8.0",
+        "inputs_json": json.dumps(inputs),
+        "assumptions_json": json.dumps({"labor_pct": "0.60"}),
+        "trade_area_json": json.dumps(VALID_BODY["trade_area"]),
+        "computed_json": json.dumps({}),
+        "created_at": now,
+        "updated_at": now,
+    }
+    store.create_projection(row)
+    return row
+
+
+def test_patch_on_pre_existing_projection_does_not_gain_v3_schedule_lines(client_store):
+    """A projection created BEFORE this change (no cost_schedule in its stored
+    inputs_json) that gets PATCHed on an unrelated field must NOT gain any new
+    cost-schedule lines -- apply_projection_patch/_schedule_columns are untouched
+    by Task 2.1b, so it still falls back to the OLD 4-line default_cost_schedule(),
+    never default_cost_schedule_v3()."""
+    client, store = client_store
+    edit_token = "legacy-edit-token"
+    _plant_legacy_projection(store, slug="legacy-slug-1", edit_token=edit_token)
+
+    r = client.patch(
+        "/api/projections/legacy-slug-1",
+        json={"assumptions": {"labor_pct": "0.62"}},
+        headers={"Authorization": f"Bearer {edit_token}", "If-Match": "1"},
+    )
+    assert r.status_code == 200, r.text
+
+    row = store.get_projection_by_slug("legacy-slug-1")
+    stored_inputs = json.loads(row["inputs_json"])
+    mirrored_schedule = json.loads(row["cost_schedule_json"])
+    assert mirrored_schedule == default_cost_schedule()
+    assert len(mirrored_schedule) == 4  # still the legacy row count, not 8
+    categories = {item["category"] for item in mirrored_schedule}
+    assert "POS checkout lanes" not in categories
+    assert "Production stations" not in categories
+    # legacy rows carry no "treatment" key at all (byte-identical to pre-v3)
+    assert all("treatment" not in item for item in mirrored_schedule)
+    # the unrelated PATCH did land (proves the schedule check above isn't vacuous)
+    assert stored_inputs.get("cost_schedule") is None
+    assert row["version"] == 2

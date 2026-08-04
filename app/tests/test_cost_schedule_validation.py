@@ -121,10 +121,17 @@ def test_inputs_model_dump_round_trips_schedule():
     schedule = [{"category": "X", "month": 2, "amount": 100}]
     inp = InputsIn(**ENGINE_INPUTS, cost_schedule=schedule, opening_month_number=3)
     dumped = inp.model_dump()
-    assert dumped["cost_schedule"] == schedule
+    # Model v3 (Task 2.1b): CostScheduleItemIn also declares optional treatment/note
+    # fields (default None) so a v3-seeded row round-trips through validation; a
+    # bare model_dump() therefore emits them explicitly on every row, even one that
+    # never set them. (create_projection strips the None-valued pair back out
+    # before persisting a caller-supplied schedule -- covered by
+    # app/tests/test_cost_schedule_api.py -- this test is the raw Pydantic layer.)
+    assert dumped["cost_schedule"] == [{**schedule[0], "treatment": None, "note": None}]
     assert dumped["opening_month_number"] == 3
     # JSON-serializable (this is what gets persisted to inputs_json)
-    assert json.loads(json.dumps(dumped))["cost_schedule"] == schedule
+    assert json.loads(json.dumps(dumped))["cost_schedule"] == [
+        {**schedule[0], "treatment": None, "note": None}]
 
 
 # ----------------------------------------------- _validate_schedule_inputs guard

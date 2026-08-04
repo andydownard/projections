@@ -73,6 +73,7 @@ from engine.model import (
     FIXED_ANNUAL,
     MODEL_VERSION,
     default_cost_schedule,
+    default_cost_schedule_v3,
 )
 from engine.money import D, number_view
 from engine.viewmodel import to_view_model
@@ -378,10 +379,22 @@ class CostScheduleItemIn(BaseModel):
     stamps ``{"source": "ai", ...}`` on rows she creates (Spec B §6.2/§9). Provenance
     is validated/stored by ``_validate_schedule_inputs`` (not modelled here so the
     create round-trip stays ``{category, month, amount}`` exactly); it never feeds
-    the engine (cost_schedule is filtered out of the engine args)."""
+    the engine (cost_schedule is filtered out of the engine args).
+
+    ``treatment``/``note`` are OPTIONAL (Model v3 Phase 2, Task 2.1b): a
+    genuinely-new projection is seeded by ``default_cost_schedule_v3()`` (e.g. the
+    "Thrift Store Consultant" row ships ``treatment="separate"`` + a note), and that
+    STORED schedule is re-validated through this exact model on every later PATCH
+    (``apply_projection_patch`` calls ``_validate_schedule_inputs`` unconditionally,
+    even when the patch never touches ``cost_schedule``) — without these two fields
+    declared, ``extra="forbid"`` would 422 the very next autosave of a brand-new
+    projection. Value-set enforcement (``included``/``separate``/``contingent``) and
+    math filtering land with Phase 2 Task 2.2; this only guarantees the keys parse."""
     category: str
     month: int = Field(ge=1)
     amount: float = Field(ge=0)
+    treatment: Optional[str] = None
+    note: Optional[str] = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1111,6 +1124,40 @@ def create_projection(
     name = body.name or body.inputs.org_name or "Untitled projection"
 
     inputs_dump = body.inputs.model_dump()
+    # CostScheduleItemIn's new optional treatment/note fields (Task 2.1b, below)
+    # would otherwise re-serialize as explicit ``None`` on EVERY user-supplied row
+    # (``model_dump()`` emits every declared field, unset or not) -- strip them so
+    # an explicit create with its own schedule stores byte-identical to
+    # pre-Task-2.1b (no spurious ``treatment: null, note: null`` keys). The
+    # v3-seeded schedule below is built as plain dicts by
+    # ``default_cost_schedule_v3()`` and never carries a None to begin with.
+    if inputs_dump.get("cost_schedule"):
+        inputs_dump["cost_schedule"] = [
+            {k: v for k, v in item.items() if v is not None}
+            for item in inputs_dump["cost_schedule"]
+        ]
+    # Model v3 (Phase 2, Task 2.1b): a genuinely-new projection that did NOT supply
+    # its own cost_schedule is seeded with the v3 default (POS checkout lanes,
+    # production stations sized to this projection's own peak staffing, pre-opening
+    # hiring & training, utilities/security setup — plus the 4 legacy lines with the
+    # Consultant reclassified "separate") instead of the old 4-line
+    # ``default_cost_schedule()``. ``stations_installed`` depends only on
+    # revenue/labor drivers (retail -> items_sold -> ... -> stations_staffed), never
+    # on cost_schedule/startup costs, so the ``compute()`` pass above already
+    # resolved it -- reuse ``vm["stationsInstalled"]`` rather than paying for a
+    # second compute(). ``duplicate_projection`` / ``apply_projection_patch`` /
+    # ``restore_revision`` are UNTOUCHED and keep calling ``_schedule_columns``
+    # exactly as before (which falls back to the old ``default_cost_schedule()``
+    # legacy anchor) -- ONLY a genuine create gets the v3 seed, so an existing
+    # projection's numbers never silently drift (#120 backward-compat guard).
+    if not inputs_dump.get("cost_schedule"):
+        building_sqft = inputs_dump.get("building_sqft")
+        stations_installed = vm.get("stationsInstalled") or 0
+        inputs_dump["cost_schedule"] = (
+            default_cost_schedule_v3(building_sqft, stations_installed)
+            if building_sqft is not None
+            else default_cost_schedule_v3(stations_installed=stations_installed)
+        )
     row = {
         "id": pid,
         "view_slug": view_slug,
