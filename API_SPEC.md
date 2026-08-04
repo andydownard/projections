@@ -166,7 +166,8 @@ Every read or mutation of a projection returns the **same** view-model — the e
   },
   "kpis": [
     { "label": "Sales / sq ft", "value": {"raw":61,"display":"$61"}, "sub":"...", "color":"neutral" },
-    { "label": "Payback period", "value": {"raw":null,"display":"N/A"}, "sub":"to recover startup", "color":"text" }
+    { "label": "Payback period", "value": {"raw":null,"display":"N/A"}, "sub":"to recover startup", "color":"text" },
+    { "label": "Production stations (peak)", "value": {"raw":3,"display":"3"}, "sub":"peak month", "color":"text" }
   ],
 
   "monthly": [
@@ -180,11 +181,21 @@ Every read or mutation of a projection returns the **same** view-model — the e
   "startupCosts": [ {"category":"Thrift Store Consultant","amount":{"raw":100000,"display":"$100,000"}},
                     {"category":"Lease Deposit + First Month Rent","amount":{"raw":30000,"display":"$30,000"}} ],
   "startupTotal": {"raw":238500,"display":"$238,500"},
+  "stationsInstalled": 3,
 
   "rows": [
     { "label":"Donor market share", "group":"drivers",
       "y1":{"raw":0.06,"display":"6.0%"}, "y2":{...}, "y3":{...}, "y4":{"raw":0.11,"display":"11.0%"}, "y5":{"raw":0.12,"display":"12.0%"},
-      "class":"input", "editable":true, "node":"market_share" }
+      "class":"input", "editable":true, "node":"market_share" },
+    { "label":"Contributions", "group":"revenue",
+      "y1":{"raw":0,"display":"$0"}, "y2":{...}, "y3":{...}, "y4":{...}, "y5":{...},
+      "class":"input", "editable":true },
+    { "label":"Items sold", "group":"production",
+      "y1":{"raw":84710,"display":"84,710"}, "y2":{...}, "y3":{...}, "y4":{...}, "y5":{...},
+      "class":"computed", "editable":false },
+    { "label":"Production hours", "group":"production",
+      "y1":{"raw":2259,"display":"2,259"}, "y2":{...}, "y3":{...}, "y4":{...}, "y5":{...},
+      "class":"computed", "editable":false }
   ],
 
   "overrides": [
@@ -200,13 +211,15 @@ Every read or mutation of a projection returns the **same** view-model — the e
   ],
 
   "settings": {
-    "laborPct":0.40, "marketingPct":0.0375, "suppliesPct":0.05, "cardPct":0.02,
+    "laborPct":0.40, "marketingPct":0.0375, "suppliesPct":0.05,
+    "cardShare":0.65, "cardRate":0.026, "cardPerTxFee":0.10,
     "payrollTaxPct":0.075, "salvagePct":0.008, "escalator":0.03, "basket":17.08,
     "donationsPerHh":3, "donationValue":74.0, "donationsPerHouseholdPerYear":3,
     "shareY1":0.06, "shareY2":0.08, "shareY3":0.10, "shareY4":0.11, "shareY5":0.12,
     "leaseType":"nnn", "salesfloorSqft":7000, "reserveBuffer":25000,
     "sensitivityDelta":0.25,
     "fixedAnnual":{"Insurance liability":2000,"Internet, Phones":3000,"Pest control":300,
+                   "POS platform":4800,"Production software":1200,
                    "Repairs/maintenance":1600,"Security system":900},
     "nnnOpexAnnual":0.0, "buildingSqft":10000.0, "salesfloorPct":0.70
   },
@@ -224,6 +237,7 @@ Notes:
 - **`reco.tag`** is a **semantic enum**, not a hex color: `proceed | revise | find_cheaper_rent | raise_cash | delay | do_not_proceed` (§12.3). The client maps enum → design token (brand vs semantic separation). The API never emits hex.
 - **`row.class`** ∈ `input | computed | overridden | estimated`; `row.node` is the DAG node key used by overrides. Derived rows and KPIs have `editable:false` and are **non-pinnable** (server rejects pin attempts — §6.1). A **pinnable component row stays `editable:true` even when pinned** (#322): the cell is the override entry point, so the owner can re-edit the pin in place; the `overridden` class drives the orange highlight independently of editability (this is a `editable` *value* change, the field shape is unchanged).
 - **Override keys** are `"{node}#{year}"` in storage (`overrides_json`, [DATA_MODEL.md](./DATA_MODEL.md)); the `overrides[]` array splits them into `node`+`year` for the inspector.
+- **Model v3** (`model_version` 3.0.0, `compute_schema_version ≥ 1.8.0`) adds: a top-level **`stationsInstalled`** int (a plain count, not `{raw,display}`); a **"Production stations (peak)"** `kpis[]` entry; three read-only `rows[]` in a new `group:"production"` (Items sold / Items produced / Production hours); a **"Contributions"** `rows[]` entry (`group:"revenue"`, editable, before "Total Revenue"); and `settings.cardShare`/`cardRate`/`cardPerTxFee` **replacing** `settings.cardPct` (the two-term card-fee formula). `flags` may also carry `leadership_coverage_advisory` (`{ open_hours_per_week, note, requires_note: false }`, informational only — never blocks) when the projection's `labor_mode` is `"coverage"`. **None of these are yet settable via `PATCH`** — `AssumptionsIn`/`InputsIn` don't expose `labor_mode`, the production-station knobs, `workers_comp_pct`, `contributions_annual`, or `share_m1`/`share_m12` (§4.4, ENGINE_CONTRACT §2.1); every live projection today computes these fields at their engine defaults. Full shape in [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) §4.2/§9.1.
 - **`model_version`** + **`compute_schema_version`** are tracked separately: the former changes when the math changes; the latter when the view-model shape changes. The **deployed engine is `model_version 2.8.0` / `compute_schema_version 1.7.0`** (the fusion of the cash-display `2.7.0-A` and the params/gaps `2.7.0-B` engines; see [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) / [DECISIONS.md](./DECISIONS.md)). The `≥ 1.x.0` field-introduction markers below still hold — 1.7.0 is a superset. `upgrade_available` is true when the stored `model_version` is older than the deployed engine — but the body is still the **stored snapshot** (no silent recompute, §13).
 - For a **read-only** request `role` reflects the share-link role (`board`/`funder`/`advisor`); `settings` editability and CTAs are tailored, and write-only fields may be elided.
 - **`donationsPerHh`** is a legacy alias for `donationsPerHouseholdPerYear`; both are emitted for compatibility, and their values are identical.
@@ -522,15 +536,15 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 - **Auth:** owner/edit/view. **Capability:** owner/edit/view (read-only users may download — they see nothing beyond the page; whether export is gated is a **business-model toggle**, §3/§20, not an access bug). **Terms acceptance required before export** (§21): if `terms_accepted` is not set, `403 { "error":"terms_required" }`.
 - **Behavior:** the engine renders the workbook from the **same resolved node values** as `computed_json` (one math surface). Cell contract (PRD §18, [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md)): inputs = blue hard-coded; computed = live formula; overridden components = orange hard-coded + comment `"Manual override — calc was =<formula> → $X; set to $Y on <date>"`; totals/net/margin/KPIs = **always formulas** over components (foots even with overrides); monthly cash flow on its own tab with the Year-1 P&L tab referencing the monthly roll-up; N/A cells = blank + comment, **never `#DIV/0!`** (`IF(denom=0,"",num/denom)` guards). The current `generate_projection.py` builder violates this (unguarded `=net/totrev`, `=startup/Y1net`, and `=AVERAGE` for Y2 share) and is rewritten in M1 — see [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md).
 - **Release gate (CI-blocking, §18):** the exported workbook is recalculated with a pinned LibreOffice via `recalc.py`; every cell must equal saved `computed_json` (<$0.50 / 0.1 pp) with **zero** formula errors, **with and without** overrides. This is a build gate, not a request-time check.
-- **Response `200`:** `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `Content-Disposition: attachment; filename="<name> 3-Year Projection.xlsx"`. Generated to a per-request temp dir (server-controlled path — never user-supplied) and streamed, then cleaned up (no path traversal via `org_name`).
+- **Response `200`:** `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `Content-Disposition: attachment; filename="<name> 5-Year Projection.xlsx"`. Generated to a per-request temp dir (server-controlled path — never user-supplied) and streamed, then cleaned up (no path traversal via `org_name`).
 - **Errors:** `403 terms_required` / `read_only` (if gated by business model); `404`; `429`.
 
 ### 6.4 `GET /api/projections/{view_slug}/packet` — Board/Funder Packet
 
 - **Auth:** owner/edit/view. **Capability:** owner/edit/view (role flag tailors emphasis/CTAs — board/funder/advisor, §6.2/§17). **Terms acceptance required** (`403 terms_required` otherwise).
-- **Query:** `?format=pdf|docx` (default `pdf`); `?role=board|funder|advisor` (defaults to the share-link role, else `board`).
+- **Query:** `?format=md|docx` (default `md`); `?role=board|funder|advisor` (defaults to the share-link role, else `board`). There is no `pdf` path.
 - **Behavior:** the packet **leads with evidence** (§15), then decision recommendation, assumptions (verified vs estimated), citations w/ dates+confidence, sensitivity table, **§12.2 guardrails** (any out-of-band driver + the justification note it requires — sourced from the engine `flags` that carry `requires_note: true`; empty/silent when every driver is in band), risks, cash need + break-even, monthly cash-flow summary, 5-year P&L, KPIs. Prose is the grounded narrative (§6.1); if AI is disabled, the packet omits generated prose but still includes the structured/evidence sections (guardrails included — they are flag-derived, never AI-derived).
-- **Response `200`:** `application/pdf` or the `.docx` content type; `Content-Disposition: attachment`.
+- **Response `200`:** `text/markdown; charset=utf-8` (`filename="<name> Board Packet.md"`) or the `.docx` content type (`filename="<name> Board Packet.docx"`); `Content-Disposition: attachment`.
 - **Errors:** `403 terms_required`; `404`; `429`.
 
 ### 6.4a `GET /api/projections/{view_slug}/cashflow.csv` — monthly cash-flow CSV

@@ -19,9 +19,10 @@ from __future__ import annotations
 # measurably changes computed output, so the API never accepts-and-persists a no-op
 # pin (#183). The per-year revenue driver ``share`` plus the component expense lines
 # are the pinnable cells. The rate/driver inputs (labor_pct, marketing_pct,
-# supplies_pct, card_pct, payroll_tax_pct, salvage_pct, escalator, basket,
-# donation_value, donations_per_hh, sqft, rent_per_sqft, occupancy) are NOT pinned
-# per-year — they are edited as GLOBAL assumptions (app SettingsTab) and compute()
+# supplies_pct, card_share, card_rate, card_per_tx_fee, payroll_tax_pct,
+# salvage_pct, escalator, basket, donation_value, donations_per_hh, sqft,
+# rent_per_sqft, occupancy) are NOT pinned per-year — they are edited as
+# GLOBAL assumptions (app SettingsTab) and compute()
 # reads them directly, never via a pin; advertising them pinnable was a silent lie
 # (a pin on them was accepted yet did nothing). To change one of those, edit the
 # assumption; to fix a year's resulting expense, pin the component line (e.g. pin
@@ -31,8 +32,8 @@ PINNABLE_NODES = frozenset({
     "share",
     # component expense lines (resolved by compute_annual)
     "Payroll", "Marketing & outreach", "Supplies & processing", "Credit card fees",
-    "Payroll taxes", "Rent", "Insurance liability", "Internet, Phones",
-    "Pest control", "Repairs/maintenance", "Security system",
+    "Payroll taxes", "Workers' comp expense", "Rent", "Insurance liability", "Internet, Phones",
+    "Pest control", "POS platform", "Production software", "Repairs/maintenance", "Security system",
     "Utilities/trash service",
 })
 
@@ -42,6 +43,10 @@ NON_PINNABLE_NODES = frozenset({
     "customers", "salvage_sales", "donating_households", "donations",
     "break_even_month", "startup_capital_required", "first_year_cash_gap",
     "cash_runway_months", "simple_payback_years", "revenue_cagr",
+    # Production-station module (Task 1.2, Model v3) — derived read-only metrics,
+    # implicitly rejected already (not in PINNABLE_NODES), documented explicitly
+    # here per the existing pattern for error-message/test clarity.
+    "items_sold", "items_produced", "production_hours", "stations_installed",
 })
 
 
@@ -98,7 +103,7 @@ _UPSTREAM_OF = {
     "Payroll taxes": ("share", "labor_pct", "payroll_tax_pct"),
     "Marketing & outreach": ("share", "marketing_pct"),
     "Supplies & processing": ("share", "supplies_pct"),
-    "Credit card fees": ("share", "card_pct"),
+    "Credit card fees": ("share", "card_share", "card_rate", "card_per_tx_fee"),
     "Rent": ("occupancy", "escalator"),
 }
 

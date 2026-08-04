@@ -12,6 +12,7 @@ them into a single `ComputeResult`.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -33,7 +34,10 @@ EXPENSE_ORDER = (
     "Marketing & outreach",
     "Payroll",
     "Payroll taxes",
+    "Workers' comp expense",
     "Pest control",
+    "POS platform",
+    "Production software",
     "Rent",
     "Repairs/maintenance",
     "Security system",
@@ -61,6 +65,13 @@ class Inputs:
     rent_per_sqft: str | None = None        # OR sqft x rate
     lease_type: str = "gross"                  # "gross" | "nnn"
     nnn_opex_annual: str = "0"                 # added to occupancy if nnn
+    # Model v3 — optional flat contributions revenue
+    contributions_annual: str = model.CONTRIBUTIONS_ANNUAL
+    # Optional within-year Year-1 revenue-share ramp (Task 1.3): a linear alternative
+    # to the default S-curve (`_REVENUE_WEIGHTS`). Both must be set to activate it;
+    # either left `None` (the default) reproduces today's S-curve, byte-identical.
+    share_m1: str | None = None
+    share_m12: str | None = None
     # Opening anchor + timed cost schedule (Spec §5/§6). `opening_month_number` (G)
     # is the project month grand opening lands on (a milestone marker, >= 1).
     # `cost_schedule` is an iterable of {category, month, amount} rows; when empty
@@ -74,8 +85,11 @@ class Assumptions:
     labor_pct: str = model.LABOR_PCT_OF_REVENUE
     marketing_pct: str = model.MARKETING_PCT_OF_REVENUE
     supplies_pct: str = model.SUPPLIES_PCT_OF_REVENUE
-    card_pct: str = model.CARD_FEES_PCT_OF_REVENUE
+    card_share: str = model.CARD_SHARE
+    card_rate: str = model.CARD_RATE
+    card_per_tx_fee: str = model.CARD_PER_TX_FEE
     payroll_tax_pct: str = model.PAYROLL_TAX_PCT_OF_PAYROLL
+    workers_comp_pct: str = model.WORKERS_COMP_PCT_OF_PAYROLL
     salvage_pct: str = model.SALVAGE_PCT_OF_RETAIL
     escalator: str = model.RENT_ESCALATOR
     utilities_per_sqft: str = model.UTILITIES_PER_SQFT
@@ -88,6 +102,23 @@ class Assumptions:
     sensitivity_delta: str = model.SENSITIVITY_DELTA
     fixed_annual: dict = field(default_factory=lambda: dict(model.FIXED_ANNUAL))
     startup: dict = field(default_factory=lambda: dict(model.STARTUP))
+    # --- production-station module (Model v3)
+    avg_item_price: str = model.AVG_ITEM_PRICE
+    sell_through: str = model.SELL_THROUGH
+    items_per_hour: int = model.ITEMS_PER_HOUR
+    productive_hours_per_station: int = model.PRODUCTIVE_HOURS_PER_STATION
+    # --- labor_mode: pct | coverage (Model v3)
+    labor_mode: str = model.LABOR_MODE
+    open_hours_per_week: str = model.OPEN_HOURS_PER_WEEK
+    cashier_tx_per_hour: str = model.CASHIER_TX_PER_HOUR
+    min_staffed_lanes: str = model.MIN_STAFFED_LANES
+    door_dedicated: str = model.DOOR_DEDICATED
+    door_peak: str = model.DOOR_PEAK
+    runners: str = model.RUNNERS
+    wage: str = model.WAGE
+    mgr_salary: str = model.MGR_SALARY
+    am_salary: str = model.AM_SALARY
+    am_count: int = model.AM_COUNT
 
 
 @dataclass(frozen=True)
@@ -113,11 +144,16 @@ class AnnualYear:
     retail: Decimal
     customers: Decimal
     salvage: Decimal
+    contributions: Decimal
     total_rev: Decimal
     expenses: dict           # label -> Decimal
     total_exp: Decimal
     net: Decimal
     margin: Decimal | None  # None when total_rev == 0 (§8)
+    # --- production-station module (Model v3) — read-only derived metrics
+    items_sold: Decimal
+    items_produced: Decimal
+    production_hours: Decimal
 
 
 @dataclass
@@ -138,6 +174,7 @@ class ComputeResult:
     view_model: dict = field(default_factory=dict)
     model_version: str = model.MODEL_VERSION
     compute_schema_version: str = model.COMPUTE_SCHEMA_VERSION
+    stations_installed: int = 0     # ceil of the peak monthly stations_staffed
 
 
 # --------------------------------------------------------------------- helpers
@@ -194,18 +231,58 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
         retail = donations * dv
         customers = retail / basket if basket != 0 else Decimal("0")
         salvage = retail * salv_pct
-        total_rev = retail + salvage
+        contributions = D(inputs.contributions_annual)
+        total_rev = retail + salvage + contributions
+
+        # --- production-station module (Model v3): read-only physical throughput
+        # metrics, each explicitly zero-guarded (never a ZeroDivisionError).
+        items_sold = (retail / D(assumptions.avg_item_price)
+                      if D(assumptions.avg_item_price) != 0 else Decimal("0"))
+        items_produced = (items_sold / D(assumptions.sell_through)
+                          if D(assumptions.sell_through) != 0 else Decimal("0"))
+        production_hours = (items_produced / D(assumptions.items_per_hour)
+                            if D(assumptions.items_per_hour) != 0 else Decimal("0"))
 
         exp = {}
         exp["Credit card fees"] = _resolve_get(
-            overrides, "Credit card fees", y, total_rev * D(assumptions.card_pct))
+            overrides, "Credit card fees", y,
+            D(assumptions.card_share) * (
+                D(assumptions.card_rate) * retail + D(assumptions.card_per_tx_fee) * customers))
         exp["Marketing & outreach"] = _resolve_get(
             overrides, "Marketing & outreach", y, total_rev * D(assumptions.marketing_pct))
-        payroll = _resolve_get(
-            overrides, "Payroll", y, total_rev * D(assumptions.labor_pct))
+        # labor_mode: pct (default, byte-unchanged) | coverage (headcount/wage-driven).
+        # Coverage mode uses the YEAR'S AVERAGE MONTH (production_hours/12,
+        # customers/12) — not the actual monthly-weighted ramp, since compute_annual
+        # runs before build_monthly and depending on the real monthly ramp would be
+        # circular (docs/plans/2026-08-03-model-v3-session-learnings.md Design Review).
+        if assumptions.labor_mode == "coverage":
+            open_hours_per_month = D(assumptions.open_hours_per_week) * 52 / 12
+            production_hours_month = production_hours / 12
+            transactions_month = customers / 12
+            cashier_hours = max(
+                transactions_month / D(assumptions.cashier_tx_per_hour)
+                if D(assumptions.cashier_tx_per_hour) != 0 else Decimal("0"),
+                D(assumptions.min_staffed_lanes) * open_hours_per_month,
+            )
+            door_hours = (
+                (D(assumptions.door_dedicated) + D(assumptions.door_peak))
+                * open_hours_per_month
+            )
+            runner_hours = D(assumptions.runners) * open_hours_per_month
+            hourly_hours_month = production_hours_month + cashier_hours + door_hours + runner_hours
+            salaries = (
+                D(assumptions.mgr_salary)
+                + D(str(assumptions.am_count)) * D(assumptions.am_salary)
+            )
+            payroll_calculated = hourly_hours_month * D(assumptions.wage) * 12 + salaries
+        else:
+            payroll_calculated = total_rev * D(assumptions.labor_pct)
+        payroll = _resolve_get(overrides, "Payroll", y, payroll_calculated)
         exp["Payroll"] = payroll
         exp["Payroll taxes"] = _resolve_get(
             overrides, "Payroll taxes", y, payroll * D(assumptions.payroll_tax_pct))
+        exp["Workers' comp expense"] = _resolve_get(
+            overrides, "Workers' comp expense", y, payroll * D(assumptions.workers_comp_pct))
         exp["Supplies & processing"] = _resolve_get(
             overrides, "Supplies & processing", y, total_rev * D(assumptions.supplies_pct))
         exp["Rent"] = _resolve_get(overrides, "Rent", y, occupancy[y])
@@ -228,9 +305,22 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
         margin = (net / total_rev) if total_rev != 0 else None
 
         years[y] = AnnualYear(
-            year=y, share=share, donating_hh=donating_hh, donations=donations,
-            retail=retail, customers=customers, salvage=salvage, total_rev=total_rev,
-            expenses=ordered, total_exp=total_exp, net=net, margin=margin,
+            year=y,
+            share=share,
+            donating_hh=donating_hh,
+            donations=donations,
+            retail=retail,
+            customers=customers,
+            salvage=salvage,
+            contributions=contributions,
+            total_rev=total_rev,
+            expenses=ordered,
+            total_exp=total_exp,
+            net=net,
+            margin=margin,
+            items_sold=items_sold,
+            items_produced=items_produced,
+            production_hours=production_hours,
         )
 
     # one-time startup. A user cost_schedule (Spec §5) supersedes the legacy STARTUP
@@ -381,14 +471,20 @@ def compute(inputs, assumptions=None, demand_drivers=None, trade_area=None, over
 
     startup_by_month = startup_outflows_by_month(inputs, assumptions, occupancy[1])
     monthly_rows, breakeven = build_monthly(
-        years, assumptions, inputs.opening_month_number, startup_by_month)
+        years, assumptions, inputs, startup_by_month)
+
+    # Peak production-station headcount across the WHOLE horizon (pre-open and
+    # beyond-60-month extension rows are already stations_staffed=0, so they never
+    # affect the max) — the ceiling of the peak monthly stations_staffed (Task 1.2).
+    peak_staffed = max((row.stations_staffed for row in monthly_rows), default=Decimal("0"))
+    stations_installed = math.ceil(peak_staffed) if peak_staffed > 0 else 0
 
     result = ComputeResult(
         annual=years, startup=startup, startup_total=startup_total,
         occupancy=occupancy, inputs=inputs, assumptions=assumptions,
         trade_area=trade_area, overrides_applied=dict(overrides),
         monthly=monthly_rows, monthly_breakeven=breakeven,
-        stale_nodes=stale_nodes,
+        stale_nodes=stale_nodes, stations_installed=stations_installed,
     )
 
     from engine.decision import build_decision, build_flags

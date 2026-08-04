@@ -487,7 +487,8 @@ def _draft_figure_guard(*values: object) -> Optional[dict]:
 # to pin, so set_override/clear_override are a detail-page-only affordance (Spec §6.2).
 _DRAFT_INPUT_FIELDS = {"city", "org_name", "target_opening_date", "opening_month_number"}
 _DRAFT_ASSUMPTION_KEYS = {
-    "labor_pct", "marketing_pct", "supplies_pct", "card_pct", "payroll_tax_pct",
+    "labor_pct", "marketing_pct", "supplies_pct", "card_share", "card_rate",
+    "card_per_tx_fee", "payroll_tax_pct",
     "salvage_pct", "escalator", "basket", "donations_per_hh",
     # Scalar capital/stress knobs (task 1.3). fixed_annual is deliberately absent: it
     # is dict-valued and Penny only routes a single scalar value, so she stays

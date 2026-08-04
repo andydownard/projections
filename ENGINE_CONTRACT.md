@@ -88,8 +88,44 @@ SALVAGE_PCT_OF_RETAIL     = 0.008    # §7.3 (0.8%)
 LABOR_PCT_OF_REVENUE      = 0.60     # §7.3 (owner decision, DECISIONS.md) — band 0.25–0.60
 MARKETING_PCT_OF_REVENUE  = 0.0375   # §7.3 — NEW line
 SUPPLIES_PCT_OF_REVENUE   = 0.05     # §7.3 — REPLACES fixed "Store/office supplies"
-CARD_FEES_PCT_OF_REVENUE  = 0.02     # §7.3
 PAYROLL_TAX_PCT_OF_PAYROLL= 0.075    # §7.3
+
+# --- card-processor formula (Model v3, model_version 3.0.0) — REPLACES the flat
+# CARD_FEES_PCT_OF_REVENUE = 0.02 line. fees = CARD_SHARE × (CARD_RATE × retail +
+# CARD_PER_TX_FEE × transactions); see §4.2.
+CARD_SHARE                 = "0.65"  # % of retail sales processed via card (vs. cash)
+CARD_RATE                  = "0.026" # effective rate on card volume (2.6%)
+CARD_PER_TX_FEE            = "0.10"  # per-transaction fee ($0.10)
+
+# --- workers' comp + optional contributions revenue (Model v3, 3.0.0)
+WORKERS_COMP_PCT_OF_PAYROLL = "0.02" # 2% of payroll; rides the payroll ramp monthly,
+                                      # not the flat fixed residual — §4.2/§5
+CONTRIBUTIONS_ANNUAL        = "0"    # optional flat annual add to total_rev; default
+                                      # 0 => byte-unchanged unless explicitly set — §4.2
+
+# --- production-station module (Model v3, 3.0.0) — read-only derived metrics
+# bridging retail $ to a staffing/space count: items_sold -> items_produced ->
+# production_hours -> stations_staffed (monthly) -> stations_installed (peak monthly
+# value, ceil'd). Never feed total_rev/total_exp; see §4.2 and §7.3 (non-pinnable).
+AVG_ITEM_PRICE                = "5.00" # $ per item sold at retail
+SELL_THROUGH                  = "0.50" # fraction of produced/processed items that sell
+ITEMS_PER_HOUR                 = 75    # items processed per production labor-hour
+PRODUCTIVE_HOURS_PER_STATION   = 160   # productive hours one production station covers/mo
+
+# --- labor_mode: pct | coverage (Model v3, 3.0.0). "pct" (default, below) is today's
+# total_rev × LABOR_PCT_OF_REVENUE formula, byte-unchanged. "coverage" is a headcount/
+# wage-driven alternative computed on the year's average month — see §4.2.
+LABOR_MODE                 = "pct"
+OPEN_HOURS_PER_WEEK        = "60"    # store open hours/week (coverage mode)
+CASHIER_TX_PER_HOUR        = "22"    # transactions one cashier can process/hour
+MIN_STAFFED_LANES          = "1.5"   # minimum staffed checkout lanes at all times
+DOOR_DEDICATED              = "1.0"  # dedicated donation-door staff (FTE-equivalent)
+DOOR_PEAK                   = "0.25" # additional peak-hours donation-door coverage
+RUNNERS                     = "1.5"  # floor/backroom runners (FTE-equivalent)
+WAGE                        = "15.00"  # hourly wage, coverage mode
+MGR_SALARY                  = "55000"  # store manager annual salary
+AM_SALARY                   = "42000"  # assistant manager annual salary
+AM_COUNT                    = 2        # assistant manager headcount
 
 # --- occupancy
 RENT_ESCALATOR            = 0.03     # §7.3 — compound, Y2–Y5 (resolved §1; 5-year horizon)
@@ -108,6 +144,8 @@ FIXED_ANNUAL = {
     "Insurance liability":      2000,   # methodology line 24
     "Internet, Phones":         3000,
     "Pest control":              300,
+    "POS platform":             4800,   # $400/mo (Model v3, 3.0.0)
+    "Production software":      1200,   # $100/mo (Model v3, 3.0.0)
     "Repairs/maintenance":      1600,
     "Security system":           900,
 }   # NOTE: "Store/office supplies" $3,700 REMOVED (now SUPPLIES_PCT);
@@ -154,9 +192,18 @@ Every constant above is overridable per projection, but not every override is un
 | `DONATIONS_PER_HH_PER_YEAR` | `donations_per_hh` | `int`, `>= 0` | |
 | `AVG_BASKET_VALUE` | `basket` | decimal string, `>= 0` (no upper bound) | |
 | `UTILITIES_PER_SQFT` | `utilities_per_sqft` | decimal string, `>= 0` (no upper bound) | |
-| `LABOR_PCT_OF_REVENUE` / `MARKETING_PCT_OF_REVENUE` / `SUPPLIES_PCT_OF_REVENUE` / `CARD_FEES_PCT_OF_REVENUE` / `PAYROLL_TAX_PCT_OF_PAYROLL` / `SALVAGE_PCT_OF_RETAIL` / `RENT_ESCALATOR` | `labor_pct` / `marketing_pct` / `supplies_pct` / `card_pct` / `payroll_tax_pct` / `salvage_pct` / `escalator` | decimal string, `[0, 1]` | Pre-existing bound (task 1.1); `labor_pct == 1` is intentionally in-band (the §12.2 advisory band flag warns, the hard cap only rejects a nonsensical > 100% share). |
+| `LABOR_PCT_OF_REVENUE` / `MARKETING_PCT_OF_REVENUE` / `SUPPLIES_PCT_OF_REVENUE` / `CARD_SHARE` / `CARD_RATE` / `PAYROLL_TAX_PCT_OF_PAYROLL` / `SALVAGE_PCT_OF_RETAIL` / `RENT_ESCALATOR` | `labor_pct` / `marketing_pct` / `supplies_pct` / `card_share` / `card_rate` / `payroll_tax_pct` / `salvage_pct` / `escalator` | decimal string, `[0, 1]` | Pre-existing bound (task 1.1); `labor_pct == 1` is intentionally in-band (the §12.2 advisory band flag warns, the hard cap only rejects a nonsensical > 100% share). `card_share`/`card_rate` are Model v3's rename of the retired `card_pct` (§4.2) — same bound, new field names. |
+| `CARD_PER_TX_FEE` | `card_per_tx_fee` | decimal string, `>= 0` (no upper bound) | Model v3 — a per-transaction $ fee, not a `[0,1]` fraction, so it takes the lower-bound-only treatment (like `basket`/`utilities_per_sqft`) rather than the `[0,1]` row above. |
 
 **Fail-closed on legacy stored values:** because re-validation runs over the merged dict, a row that already carries an out-of-range value from *before* one of these bounds existed will 422 on its **next** `PATCH` — even one touching an unrelated field — until that value is re-sent in-range. This is intentional hardening, not a regression (DATA_MODEL.md §4.8 contract notes).
+
+**Model v3 (3.0.0) scope: engine-only, no new PATCH exposure in this PR.** Of everything Model v3 added (§4.2/§5/§6.2), only the card-fee fields above (`card_share`/`card_rate`/`card_per_tx_fee`) are reachable via `AssumptionsIn` — and that is a **rename** of the already-exposed `card_pct`, not new exposure. `labor_mode` and its coverage-mode fields (`open_hours_per_week`, `cashier_tx_per_hour`, `min_staffed_lanes`, `door_dedicated`, `door_peak`, `runners`, `wage`, `mgr_salary`, `am_salary`, `am_count`), the production-station knobs (`avg_item_price`, `sell_through`, `items_per_hour`, `productive_hours_per_station`), `workers_comp_pct`, `contributions_annual`, and the share-ramp fields (`share_m1`/`share_m12` on `InputsIn`) are **not** on `AssumptionsIn`/`InputsIn` at all — they can only be set by constructing `engine.compute.Assumptions`/`Inputs` directly (i.e. from a test), never from a live PATCH. Every projection today computes with the engine defaults for all of them.
+>
+> This is a deliberate scope fence, not an oversight: a future "expose Model v3 knobs via PATCH" task must land two engine fixes in the **same** change that adds any of these fields to `AssumptionsIn`/`InputsIn`, or a live `labor_mode="coverage"` projection would silently diverge between its `computed_json` and its exported `.xlsx` (breaking the golden-gate invariant, §13):
+> - `engine/xlsx.py`'s `_expense_formula`'s `"Payroll"` branch always emits `=<revenue>*<labor_pct>` — it does not branch on `labor_mode`, so an exported workbook would show the pct-mode formula even when the server computed coverage-mode payroll.
+> - `engine/dag.py`'s `_UPSTREAM_OF["Payroll"]` lists only `("share", "labor_pct")` — it does not include the coverage-mode inputs, so the stale-pin hint would be incomplete (informational only; it never back-solves, but it would under-report staleness).
+>
+> Both are currently **unreachable in production** (no live projection can set `labor_mode="coverage"` without direct Python construction), so this is a documented gap, not a live bug.
 
 ---
 
@@ -188,7 +235,8 @@ For each year `y ∈ {1, 2, 3}`:
 | `retail[y]` | `donations[y] × donation_value` | methodology 12 |
 | `customers[y]` | `retail[y] / basket` *(N/A-guarded, §12.4)* | methodology 13 |
 | `salvage[y]` | `retail[y] × SALVAGE_PCT_OF_RETAIL` | methodology 14 |
-| `total_rev[y]` | `retail[y] + salvage[y]` | methodology 15 |
+| `contributions[y]` *(Model v3, 3.0.0)* | **optional flat input** `contributions_annual` (`Inputs`, not per-year) — default `CONTRIBUTIONS_ANNUAL = "0"`, so `total_rev` is byte-unchanged unless explicitly set | §4.2 |
+| `total_rev[y]` | `retail[y] + salvage[y] + contributions[y]` | methodology 15 (Model v3 adds the `contributions` term) |
 
 ### 4.1 Year-2 is an explicit input — the midpoint is dead (and the horizon is 5 years)
 
@@ -206,15 +254,18 @@ If `lease_type == "nnn"`, add researched/entered NNN opex to occupancy (§7.3, �
 
 | Expense line | Formula | Default constant |
 |---|---|---|
-| Credit card fees | `total_rev[y] × CARD_FEES_PCT_OF_REVENUE` | 2.0% |
-| Payroll | `total_rev[y] × LABOR_PCT_OF_REVENUE` | 60% (owner) |
+| **Credit card fees** *(Model v3, 3.0.0 — two-term formula, replaces the flat `CARD_FEES_PCT_OF_REVENUE`)* | `CARD_SHARE × (CARD_RATE × retail[y] + CARD_PER_TX_FEE × customers[y])` | `card_share` 65% of retail sales processed by card, `card_rate` 2.6% effective rate on that card volume, `card_per_tx_fee` $0.10/transaction (`customers[y]` is the transaction count, already computed above) |
+| Payroll | `total_rev[y] × LABOR_PCT_OF_REVENUE` (mode `pct`, default) — **or** the `labor_mode: "coverage"` headcount/wage formula below | 60% (owner) |
 | Payroll taxes | `Payroll[y] × PAYROLL_TAX_PCT_OF_PAYROLL` | 7.5% |
+| **Workers' comp expense** *(NEW, Model v3, 3.0.0)* | `Payroll[y] × WORKERS_COMP_PCT_OF_PAYROLL` — a %-of-**payroll** line (like Payroll taxes), so it rides the monthly payroll ramp (`_PAYROLL_WEIGHTS`, §5), never the flat fixed-annual residual | 2.0% of payroll |
 | **Marketing & outreach** *(NEW)* | `total_rev[y] × MARKETING_PCT_OF_REVENUE` | 3.75% |
 | **Supplies & processing** *(reclassified)* | `total_rev[y] × SUPPLIES_PCT_OF_REVENUE` | 5.0% |
 | Rent / occupancy | `occupancy_y[y]` (+ NNN opex if applicable) | sqft×rate or annual $ |
 | Insurance liability | `FIXED_ANNUAL[...]` | $2,000 |
 | Internet, Phones | fixed | $3,000 |
 | Pest control | fixed | $300 |
+| **POS platform** *(NEW, Model v3, 3.0.0)* | flat, `FIXED_ANNUAL[...]` — a store-level cost, NOT scaled by `stations_installed` | $4,800/yr ($400/mo) |
+| **Production software** *(NEW, Model v3, 3.0.0)* | flat, `FIXED_ANNUAL[...]` — same store-level (not per-station) treatment | $1,200/yr ($100/mo) |
 | Repairs/maintenance | fixed | $1,600 |
 | Security system | fixed | $900 |
 | **Utilities/trash service** *(sq-ft-derived, #245)* | `building_sqft × UTILITIES_PER_SQFT` (flat across years — sq ft drives it, not the rent escalator) | $2.23/sqft → $22,300 at 10k |
@@ -226,6 +277,32 @@ margin[y]    = net[y] / total_rev[y]        # N/A if total_rev[y] == 0 (§12.4)
 ```
 
 **Year-1 reconciliation rule:** the annual Year-1 column is **the roll-up of the 12 monthly P&L rows** (§10), not an independent annual computation. A golden test asserts `annual_Y1 == sum(monthly M1..M12)` **to the penny** (§13.4). Years 2–3 are annual (§10.3).
+
+**`labor_mode: "coverage"` (Model v3, 3.0.0) — headcount/wage-driven Payroll, an alternative to the `pct` default.** Selected per-projection via `Assumptions.labor_mode` (not yet PATCH-exposed, §2.1). Uses the year's **average month** (`production_hours[y] / 12`, `customers[y] / 12`) rather than the actual monthly-weighted ramp, because `compute_annual` (which produces the annual Payroll figure) runs **before** `build_monthly` — depending on the real monthly ramp would be circular:
+
+```
+open_hours_per_month = OPEN_HOURS_PER_WEEK × 52 / 12
+cashier_hours   = max(customers[y]/12 / CASHIER_TX_PER_HOUR, MIN_STAFFED_LANES × open_hours_per_month)
+door_hours      = (DOOR_DEDICATED + DOOR_PEAK) × open_hours_per_month
+runner_hours    = RUNNERS × open_hours_per_month
+hourly_hours    = (production_hours[y]/12) + cashier_hours + door_hours + runner_hours
+salaries        = MGR_SALARY + AM_COUNT × AM_SALARY
+Payroll[y]      = hourly_hours × WAGE × 12 + salaries      # coverage mode
+```
+
+Every division above is zero-guarded (§12.4). The monthly Payroll split is unchanged either way — the resulting **annual** Payroll dollar figure rides the existing `_PAYROLL_WEIGHTS` hire-ramp in `engine/monthly.py` regardless of `labor_mode`. `break_even_revenue`'s fixed/variable split (§6.1) correctly **drops** the labor term from `var_rate` under coverage mode (Payroll is a `max()`-and-sum of driver terms, not a clean revenue percentage — including it would produce a confidently-wrong break-even revenue); the actual Payroll dollars still land in `total_exp`, so they fall into the `fixed` residual instead of being double-modeled. `pct` mode is byte-unchanged.
+
+**Production-station module (Model v3, 3.0.0) — read-only derived metrics, never feed `total_rev`/`total_exp`.** A physical throughput chain bridging retail dollars to a staffing/space count, computed alongside the driver chain above and surfaced in the view-model (§9.1) and `.xlsx`, but not in this task's cost stack:
+
+```
+items_sold[y]        = retail[y] / AVG_ITEM_PRICE                          # N/A-guarded
+items_produced[y]     = items_sold[y] / SELL_THROUGH                        # N/A-guarded
+production_hours[y]   = items_produced[y] / ITEMS_PER_HOUR                  # N/A-guarded
+stations_staffed[m]   = production_hours_month[m] / PRODUCTIVE_HOURS_PER_STATION   # monthly, N/A-guarded
+stations_installed    = ceil(max(stations_staffed[m] for all months))       # peak monthly value, 0 if never positive
+```
+
+`items_sold`/`items_produced`/`production_hours` are annual (`AnnualYear` fields); `stations_staffed` is monthly (rides a linear rescale of the existing footing-exact revenue split, §5); `stations_installed` is a single top-level integer on `ComputeResult` (not per-year). All four are **non-pinnable** (§7.3).
 
 ### 4.3 One-time startup costs (Year 0)
 
@@ -284,6 +361,18 @@ For each month:
 
 > **Year-1 cash window (Regression #15, cash basis).** The displayed **Year-1 cash net** (`operating_net[1] − startup_total`) equals the sum of **all monthly cash nets** that fall in the Year-1 window — **project months `1..G+11`** (every pre-opening startup month plus the 12 Year-1 operating months) — **including the startup outflows**. When all startup costs fall within Year 1 (the default and all primary fixtures) this is exact; a cost scheduled beyond the Year-1 window is the only case where the displayed `cash_net[1]` (which always subtracts the full `startup_total`) and the Year-1 monthly-window sum diverge.
 
+### 5.4 Optional linear Year-1 revenue-share ramp (Model v3, 3.0.0)
+
+Year-1 monthly revenue defaults to the fixed `_REVENUE_WEIGHTS` S-curve (§5.2). `Inputs` gains two optional fields, `share_m1`/`share_m12` (both `str | None`, default `None`) — when **both** are set, Year-1 revenue instead rides a **linear** interpolation from `share_m1` to `share_m12` across the 12 operating months, in place of the S-curve:
+
+```
+weight[m] = share_m1 + (share_m12 − share_m1) × (m − 1) / 11      # m ∈ {1..12}; not required to sum to 1 — _distribute renormalizes internally, exactly as the fixed S-curve weights are today
+```
+
+Both `retail[m]` **and** every %-of-revenue expense line (card fees' revenue-proportional term, marketing, supplies) switch to the linear weights together, so the "expenses are a fixed % of revenue" invariant holds intra-year regardless of which curve is active. `_PAYROLL_WEIGHTS` (Payroll, Payroll taxes, Workers' comp expense) is untouched — payroll rides its own hire-ramp independent of this setting. Years 2–5 are unaffected (they never read `_REVENUE_WEIGHTS`; the Years 2–5 glide, §5.1, anchors on the prior year's own last month).
+
+**Byte-identical when unset (the anchor invariant).** `share_m1`/`share_m12` default to `None`; when either is unset, Year-1 revenue is the existing `_REVENUE_WEIGHTS` S-curve, byte-for-byte — a golden-pinned property (`test_share_ramp_unset_is_byte_identical`). None of the five Model v3 golden fixtures set this field, so none of their numbers move because of it. Regression #15 (annual == Σ monthly, to the penny) holds on the ramped path exactly as on the S-curve path. Not yet exposed via `InputsIn` PATCH (§2.1).
+
 ---
 
 ## 6. Decision metrics, guardrails & recommendation (PRD §12)
@@ -326,8 +415,9 @@ Each driver has an advisory benchmark band. Exceeding it sets a `flags` entry **
 | Labor ratio | ~25–60% of revenue (`LABOR_RATIO_BAND_MIN`/`MAX`) → flag key `labor_ratio_out_of_band` (Task 6.3; resolved `Payroll[1] / total_rev[1]` — **override-aware**: a pinned Payroll cell moves the ratio the flag checks). **Operating-layer.** |
 | Occupancy ratio | ≤ ~20% of revenue (`OCCUPANCY_RATIO_BAND_MAX`) → flag key `occupancy_ratio_out_of_band` (Task 6.3; resolved `Rent[1] / total_rev[1]` — **override-aware**). **Operating-layer.** |
 | Net margin (Y1, **Y4, Y5**) | flag > ~30% as unusual (`net_margin_out_of_band` for Y1; `net_margin_y4`/`net_margin_y5_out_of_band` for the late years). **Runs on the displayed (cash) margin (model 2.8.0):** Year-1 cash margin = `(operating_net[1] − startup_total) / total_rev[1]`; Years 4/5 cash margin == operating margin (no startup). The Year-1 startup hit depresses the cash margin, so an implausibly-high margin now surfaces on the late steady-state years — the honest signal for a new store. |
+| **Leadership coverage advisory** *(NEW, Model v3, 3.0.0 — `labor_mode == "coverage"` only)* | flag key `leadership_coverage_advisory`, `{ open_hours_per_week, note, requires_note: false }` — **informational only**, never blocks and never forces a justification note (unlike every other guardrail in this table). Surfaces the implied manager/assistant-manager headcount needed to cover every open hour: `implied_am = ceil(max(0, open_hours_per_week − 40) / 40)`, rendered as "At `N` open hrs/week, plan for 1 store manager + ~`implied_am` assistant manager(s) so a manager or AM is on duty all open hours." Absent entirely when `labor_mode == "pct"`. |
 
-All three 6.3 flags carry `{ value, band, requires_note: true }` and read the SAME resolved Year-1 values the KPI strip shows (override-aware, N/A-guarded). **`break_even_revenue` guard:** when the variable-cost rate (card + marketing + payroll×(1+payroll_tax) + supplies) is **≥ 100% of revenue**, break-even revenue is mathematically undefined — no revenue level ever recovers fixed costs — so `decision.break_even_revenue_annual` guards to `null` and `flags["break_even_revenue"] = "N/A — variable-cost rate ≥ 100% of revenue"` (never a `#DIV/0!` or a nonsense figure).
+All three 6.3 flags carry `{ value, band, requires_note: true }` and read the SAME resolved Year-1 values the KPI strip shows (override-aware, N/A-guarded); `leadership_coverage_advisory` above is the exception — `requires_note: false` by design. **`break_even_revenue` guard:** when the variable-cost rate (card fees' revenue-proportional term + marketing + payroll×(1+payroll_tax) *(pct mode only — see below)* + supplies) is **≥ 100% of revenue**, break-even revenue is mathematically undefined — no revenue level ever recovers fixed costs — so `decision.break_even_revenue_annual` guards to `null` and `flags["break_even_revenue"] = "N/A — variable-cost rate ≥ 100% of revenue"` (never a `#DIV/0!` or a nonsense figure). **Under `labor_mode == "coverage"` (Model v3, 3.0.0), the labor term drops out of `var_rate` entirely** — coverage-mode Payroll is a `max()`-and-sum of headcount/wage terms, not a clean percentage of revenue, so folding it into `var_rate` would produce a confidently-wrong break-even figure; the actual Payroll dollars still land in `total_exp` and correctly fall into the `fixed` residual instead. `pct` mode's `var_rate` is byte-unchanged (aside from the Model v3 card-fee field rename, §4.2). The per-transaction card-fee term (`CARD_PER_TX_FEE × transactions`) is likewise folded into `fixed`, not `var_rate` — it isn't a clean percentage of revenue either.
 
 **Sensitivity:** base / downside / upside at `±SENSITIVITY_DELTA` (25%) on **rent** and **donations**, showing the effect on net profit, break-even month, and capital required. Each scenario is a full re-run of the core. Downside scenarios are **fixtured** (§13.6) so a sign/compounding error cannot ship behind a passing happy path.
 
@@ -430,8 +520,8 @@ Rules:
 - **Pinned nodes use their value.** Unpinned nodes compute from (possibly pinned) inputs.
 - **No upstream back-solve.** Pinning a downstream node does **not** mutate any upstream input. An upstream row that no longer drives any pinned downstream value gets a **`stale` flag** (rendered as the "no longer drives a pinned value" hint; §14).
 - **Derived rows + totals + margins + KPIs are NEVER pinnable** so the statement always foots. Pin writes to a non-pinnable node are **rejected at the API boundary** (HTTP 4xx), not merely hidden in the UI. The non-pinnable node list:
-  `total_revenue, total_expenses, net_profit, net_margin, customers (derived), salvage_sales, donating_households, donations`, plus **every KPI and every decision metric** (`break_even_month, startup_capital_required, first_year_cash_gap, cash_runway_months, simple_payback_years, revenue_cagr`).
-  **Pinnable** nodes — and this set is **honest**: every member, when pinned, measurably changes computed output, so the API never accepts-and-persists a no-op pin (#183) — are the per-year revenue driver `share[y]` and the **component expense lines** (`Payroll, Marketing & outreach, Supplies & processing, Credit card fees, Payroll taxes, Rent, Insurance, Internet, Pest control, Repairs, Security, Utilities`). The rate/driver inputs (`labor_pct, marketing_pct, supplies_pct, card_pct, payroll_tax_pct, salvage_pct, escalator, basket, donation_value, donations_per_hh, sqft, rent_per_sqft, occupancy`) are **NOT** per-year pins — they are edited as **global assumptions** (`compute()` reads them directly, never via a pin), so a pin on them is **rejected** (HTTP 4xx), not silently ignored. To change one, edit the assumption; to fix a year's resulting expense, pin the component line (e.g. pin `Payroll`, not `labor_pct`).
+  `total_revenue, total_expenses, net_profit, net_margin, customers (derived), salvage_sales, donating_households, donations`, plus **every KPI and every decision metric** (`break_even_month, startup_capital_required, first_year_cash_gap, cash_runway_months, simple_payback_years, revenue_cagr`), plus the **production-station module** (Model v3, 3.0.0 — read-only derived metrics, §4.2): `items_sold, items_produced, production_hours, stations_installed`. These four are implicitly rejected already (they are simply absent from `PINNABLE_NODES`), documented here explicitly per the existing pattern for error-message/test clarity.
+  **Pinnable** nodes — and this set is **honest**: every member, when pinned, measurably changes computed output, so the API never accepts-and-persists a no-op pin (#183) — are the per-year revenue driver `share[y]` and the **component expense lines** (`Payroll, Marketing & outreach, Supplies & processing, Credit card fees, Payroll taxes, Workers' comp expense, Rent, Insurance, Internet, Pest control, POS platform, Production software, Repairs, Security, Utilities`) — the last two, **Workers' comp expense** and **POS platform / Production software**, are Model v3 (3.0.0) additions (§4.2). The rate/driver inputs (`labor_pct, marketing_pct, supplies_pct, card_share, card_rate, card_per_tx_fee, payroll_tax_pct, salvage_pct, escalator, basket, donation_value, donations_per_hh, sqft, rent_per_sqft, occupancy`) are **NOT** per-year pins — they are edited as **global assumptions** (`compute()` reads them directly, never via a pin), so a pin on them is **rejected** (HTTP 4xx), not silently ignored. To change one, edit the assumption; to fix a year's resulting expense, pin the component line (e.g. pin `Payroll`, not `labor_pct`). `contributions` (Model v3) is likewise **not** a per-year pin — it is a flat `Inputs.contributions_annual` assumption, like `donation_value`, not a driver-chain cell.
 - **Reset:** per-pin reset deletes that key; global reset clears all keys.
 - **Totals always derive from resolved component values** so the in-sheet `=SUM(...)` and the server's resolved total are computed from **the same** numbers (this is the case most likely to break the <$0.50 gate — see §11.4).
 
@@ -489,15 +579,16 @@ It returns the **App-D view-model** as its native output — the **same** struct
 | `reco` | `{ tag, headline, sub, color, bg, icon }` — `tag` is the §6.3 enum; `color/bg/icon` are **client-derived** (see §9.3) |
 | `metrics` | `{ capital, cashGap, breakeven }` + reasons `{ reasonCapital, reasonGap, reasonBreakeven }` |
 | `milestones` | `{ grandOpening, breakEven, payback }` — each `{ raw, display }`; unreached ⇒ `{ raw: null, display: "N/A", reason }`; `payback` adds `duration` ("25 months") when reached (§6.6) |
-| `kpis[]` | `{ label, value, sub, color }` — includes the **Payback period** KPI (sourced from `milestones.payback`); the `simple_payback_years` KPI is retired (§6.4) |
+| `kpis[]` | `{ label, value, sub, color }` — includes the **Payback period** KPI (sourced from `milestones.payback`); the `simple_payback_years` KPI is retired (§6.4). Model v3 (3.0.0, schema 1.8.0) adds **"Production stations (peak)"** — `value` is `number_view(stations_installed)` (a bare count, `{raw,display}` like every other KPI, not a money view). |
 | `monthly[]` | per **project month 1..N** (now the full **60-month** horizon, model 2.7.0) `{ revenue, expenses, scheduledCosts, net, cumulativeCash }` (the same columns as the `.xlsx` Monthly tab; `net = revenue − expenses − scheduledCosts`, so a pre-opening month reads as a real loss) + top-level `breakevenMonth` |
-| `rows[]` | per 5-year line `{ label, group, y1, y2, y3, y4, y5, class: input\|computed\|overridden\|estimated, editable }` (every annual row carries all five year cells; the "Net income" and "Net margin" rows are **cash-based** — Year-1 includes the one-time startup hit, model 2.7.0 — but keep their labels) |
+| `rows[]` | per 5-year line `{ label, group, y1, y2, y3, y4, y5, class: input\|computed\|overridden\|estimated, editable }` (every annual row carries all five year cells; the "Net income" and "Net margin" rows are **cash-based** — Year-1 includes the one-time startup hit, model 2.7.0 — but keep their labels). Model v3 (3.0.0, schema 1.8.0) adds: a **"Contributions"** row (`group: "revenue"`, `computed: false`/editable — a direct settable input like `share`, not a derived quantity) placed directly before "Total Revenue"; and three **read-only** rows in a new `group: "production"` — **"Items sold"**, **"Items produced"**, **"Production hours"** — placed after "Salvage Sales"/before the expense rows, each `computed: true` (non-editable, non-pinnable per §7.3). |
 | `incomeSeries[]` · `year5Income` | annual **net income** Y1..Y5 as `{raw,display}` (the list/detail sparkline) + the Year-5 figure; server is the one format authority |
 | `startupCosts[]` · `startupTotal` | the one-time startup line items `[{ category, amount{raw,display} }]` (from `result.startup`, includes the computed "Lease Deposit + First Month Rent") + their total `{raw,display}`; feeds the Board Packet `.docx` startup-costs table (schema ≥ 1.5.0) |
+| `stationsInstalled` *(NEW, Model v3, 3.0.0, schema 1.8.0)* | a plain top-level **int** (not `{raw,display}` — a count, matching the `breakevenMonth` precedent) — `result.stations_installed`, the ceiling of the peak monthly `stations_staffed` (§4.2). Also rendered on the `.xlsx` MILESTONES block as "Production stations needed (peak month)". |
 | `overrides[]` | per pin `{ node, year, calculated, value, note, pinnedDate, affected[] }` |
 | `evidence[]` | `{ label, value, method, badge, change, meta }` |
-| `settings` | `{ laborPct, marketingPct, suppliesPct, cardPct, payrollTaxPct, salvagePct, escalator, basket, donationsPerHh, donationValue, donationsPerHouseholdPerYear, shareY1, shareY2, shareY3, shareY4, shareY5, occupancyAnnual, leaseType, salesfloorSqft, reserveBuffer }` (E2: `donationValue` + `donationsPerHouseholdPerYear` join `basket` as editable donation drivers; `donationsPerHh` retained as an alias) |
-| `version`, `model_version`, `compute_schema_version`, `flags` | version stamps (§3) + the N/A flags map (§8) |
+| `settings` | `{ laborPct, marketingPct, suppliesPct, cardShare, cardRate, cardPerTxFee, payrollTaxPct, salvagePct, escalator, basket, donationsPerHh, donationValue, donationsPerHouseholdPerYear, shareY1, shareY2, shareY3, shareY4, shareY5, occupancyAnnual, leaseType, salesfloorSqft, reserveBuffer }` (E2: `donationValue` + `donationsPerHouseholdPerYear` join `basket` as editable donation drivers; `donationsPerHh` retained as an alias). **Model v3 (3.0.0):** `cardPct` is renamed to `cardShare`/`cardRate`/`cardPerTxFee` (the two-term card-fee formula, §4.2) — this is the **only** settings-key change Model v3 makes; `labor_mode`, the coverage-mode fields, the production-station knobs, `workers_comp_pct`, `contributions_annual`, and `share_m1`/`share_m12` are **not** surfaced in `settings` (engine-only for now, §2.1). |
+| `version`, `model_version`, `compute_schema_version`, `flags` | version stamps (§3) + the N/A flags map (§8) — `flags` gains `leadership_coverage_advisory` under `labor_mode == "coverage"` (§6.2) |
 
 ### 9.2 Dual-value convention
 Every money/percent value is emitted as `{ raw, display }` — `raw` is the numeric (Decimal-derived) value used for the golden compare; `display` is the server-formatted string (whole dollars / 0.1pp). The client renders `display` and never re-formats (§6.5).
@@ -515,10 +606,10 @@ Three named projections drive design, the §8 edge-case math, and the golden/Lib
 
 | Fixture | Inputs (deltas from defaults) | Expected headline | Tests |
 |---|---|---|---|
-| **House of Hope (canonical, 60% labor)** | shares **6/8/10/11/12%** (Y4/Y5 = the `0.11`/`0.12` decelerating plateau), basket $17.08, **labor 60% (owner default)**, marketing 3.75%, supplies 5%, escalator 3% (compounds through Y5), reserve $25k, `H`=31,798, donation_value $74, 10,000 sqft, 70% salesfloor, NNN, source_of_funds $300k | Y1 rev ≈ **$426,911** (labor-independent, unchanged); **operating** Y1 net **($53,714)** (operating margin **(12.6%)**), **DISPLAYED (cash) Y1 net ($292,214)** (margin **(68.4%)**, operating − the $238,500 startup), payback **N/A**; at 2.8.0 (the fusion — 990-grounded payroll tax 8% + Insurance $10k, on the 6.2 monthly split, cash display): capital ≈ **$347,854**, cash-gap ≈ **($322,854)** (trough at M7), break-even **month 8**; `reco.tag = raise_cash` (the downside breaks even at **month 12**, so the binding constraint is capital > the $300k funds; pre-6.2 this was `do_not_proceed`, break-even M9, capital ≈ $321,940; the 6.2 flip to raise_cash feeds owner decision #345 and HELD through 6.4); advisory `share_y4`/`share_y5` + `occupancy_ratio_out_of_band` flags fire | happy path; annual==Σmonthly; 5-column three-way golden reconcile; no overrides |
-| **House of Hope (design-parity, 40% labor)** | as above but **labor 40%**, source_of_funds $300k | **operating** Y1 net **$38,505** (operating margin ≈ **9.0%**, was ~11% pre-990); **DISPLAYED (cash) Y1 net ($199,995)** (margin **(46.8%)**, operating − the $238,500 startup), **payback Month 32**; capital required ≈ **$302,238** (pre-990 basis: ~$277,990 prototype → ~$299,168 at the 6.2 split); break-even **month 6**; **`reco.tag = raise_cash`** — *** OWNER-VISIBLE 6.4 FLIP: *** capital now crosses the $300k funds by $2,238, flipping proceed→raise_cash (Year-1 net still positive, margins in band — capital>funds gate, not a health problem); the prototype "Proceed" headline assumed the pre-990 cost basis | **design-QA only** — the labor-driven prototype SHAPE (numbers superseded by 990-grounding) |
-| **Aggressive (flagged)** | shares **15/20/25%** (+ Y4/Y5 `0.26`/`0.27`), **labor 40%** (load-bearing — at the 60% default the %-of-revenue cost stack is ~75.25% of revenue so net margin can never exceed ~24.75% and the >30% net-margin guardrail is mathematically UNREACHABLE; 40% is the only labor at which this fixture serves its purpose), source_of_funds $300k | net margin ≈ **31.2%** → **triggers** the §12.2 net-margin (>30%) AND share (>8%) guardrails; `requires_note = true`; `reco.tag = revise`; capital ≈ **$292,645** | guardrail flags fire; not a math error; 3-way reconcile w/ + w/o a Marketing pin |
-| **Grace Mission (loss case)** | shares 4/5/6/7/8%, **8,000 sqft**, rent **$14/sqft low-confidence** (gross), source_of_funds $250k, **one overridden Payroll cell** (`Payroll#1` = $110,000 vs calc ~$134,266) | **Y1 net ≈ ($32,260)** (margin **(14.4%)**); capital ≈ **$300,357**; break-even **month 8** (base) but `reco.tag = do_not_proceed` (the DOWNSIDE never breaks even); `simple_payback_years = null` ("N/A — no Year 1 profit"); negatives in parentheses; low-confidence rent badge | N/A sentinels; override + N/A path both recalc clean (w/ + w/o the pin) |
+| **House of Hope (canonical, 60% labor)** | shares **6/8/10/11/12%** (Y4/Y5 = the `0.11`/`0.12` decelerating plateau), basket $17.08, **labor 60% (owner default)**, marketing 3.75%, supplies 5%, escalator 3% (compounds through Y5), reserve $25k, `H`=31,798, donation_value $74, 10,000 sqft, 70% salesfloor, NNN, source_of_funds $300k | Y1 rev ≈ **$426,911** (labor-independent, unchanged); **operating** Y1 net **($65,068)** (operating margin **(15.2%)**), **DISPLAYED (cash) Y1 net ($303,568)** (margin **(71.1%)**, operating − the $238,500 startup), payback **N/A**; at **model_version 3.0.0 (Model v3** — the always-on card-fee two-term formula + Workers' comp + POS platform/Production software, §4.2): capital ≈ **$354,597**, cash-gap ≈ **($329,597)** (trough at M7), break-even **month 8**; `reco.tag = raise_cash` (the downside still breaks even at **month 12**, so the binding constraint is capital > the $300k funds); advisory `share_y4`/`share_y5` + `occupancy_ratio_out_of_band` flags fire. (At 2.9.0, pre-Model-v3: capital ≈ $347,854, cash Y1 net ($292,214) — Model v3's always-on lines add +$6,743 capital; pre-6.2 the fixture was `do_not_proceed`, break-even M9, capital ≈ $321,940; the 6.2 flip to raise_cash feeds owner decision #345 and HELD through 6.4/3.0.0.) | happy path; annual==Σmonthly; 5-column three-way golden reconcile; no overrides |
+| **House of Hope (design-parity, 40% labor)** | as above but **labor 40%**, source_of_funds $300k | **operating** Y1 net **$28,858** (operating margin ≈ **6.8%**, was ~9.0% at 2.9.0 / ~11% pre-990); **DISPLAYED (cash) Y1 net ($209,642)** (margin **(49.1%)**, operating − the $238,500 startup), **payback Month 34** (was Month 32 at 2.9.0 — Model v3's added cost lines push cash recovery two months later); capital required ≈ **$306,349** (was $302,238 at 2.9.0; pre-990 basis: ~$277,990 prototype); break-even **month 6**; **`reco.tag = raise_cash`** (unchanged — capital still crosses the $300k funds, now by $6,349) — *** OWNER-VISIBLE 6.4 FLIP HOLDS through 3.0.0 ***: Year-1 operating net still positive, margins in band — capital>funds gate, not a health problem; the prototype "Proceed" headline assumed the pre-990, pre-Model-v3 cost basis | **design-QA only** — the labor-driven prototype SHAPE (numbers superseded by 990-grounding, then Model v3) |
+| **Aggressive (flagged)** | shares **15/20/25%** (+ Y4/Y5 `0.26`/`0.27`), **labor 40%** (load-bearing — at the 60% default the %-of-revenue cost stack is ~75.25% of revenue so net margin can never exceed ~24.75% and the >30% net-margin guardrail is mathematically UNREACHABLE; 40% is the only labor at which this fixture serves its purpose), source_of_funds $300k | Year-1 **cash** net income **$79,796** (was $94,912 at 2.9.0 — Model v3's added cost lines eat into the surplus), Y1 cash net margin **7.5%** (was ~8.9%); **triggers** the §12.2 net-margin (>30%) guardrail on the **late steady-state years** (Y4 **35.7%** / Y5 **35.9%**, was ~36.9%/~37.0% at 2.9.0 — cash==operating in Y4/Y5, no startup drag) AND the share (>8%) guardrail on Y1/Y4/Y5 (15%/26%/27%, unchanged by Model v3); `requires_note = true`; `reco.tag = revise` (unchanged); capital ≈ **$295,337** (was $292,645 at 2.9.0); break-even **month 3** (unchanged); payback **month 11** (unchanged) | guardrail flags fire; not a math error; 3-way reconcile w/ + w/o a Marketing pin |
+| **Grace Mission (loss case)** | shares 4/5/6/7/8%, **8,000 sqft**, rent **$14/sqft low-confidence** (gross), source_of_funds $250k, **one overridden Payroll cell** (`Payroll#1` = $110,000 vs calc ~$134,266) | **Y1 net (cash) ≈ ($270,081)** (margin **(120.7%)**; was ($261,760) at 2.9.0 — Model v3's added cost lines deepen the loss); capital ≈ **$305,789** (was $300,357 at 2.9.0); break-even **month 9** (base; moved one month later from month 8 at 2.9.0) but `reco.tag = do_not_proceed` (unchanged — the DOWNSIDE never breaks even); `simple_payback_years = null` ("N/A — no Year 1 profit"); negatives in parentheses; low-confidence rent badge; still recalcs clean with the override present | N/A sentinels; override + N/A path both recalc clean (w/ + w/o the pin) |
 
 The **60% canonical** House of Hope fixture is the reconciliation target for the resolved defaults (§1); the **40% design-parity** fixture reproduces the prototype headline for design-QA only ([DECISIONS.md](./DECISIONS.md)). The Aggressive case mirrors `house_of_hope.json` (which carries the old 15/25% shares) and is the guardrail fixture. The Grace Mission case is the edge-case fixture that the legacy engine's unguarded `=net/totrev` / `=startup/Y1net` would have failed (§0, lines 257/284).
 

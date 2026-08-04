@@ -61,7 +61,13 @@ def test_y1_revenue_is_labor_independent(canonical_result, design_parity_result)
 def test_pct_cost_lines_year1(canonical_result):
     y1 = canonical_result.annual[1]
     tr = D(str(y1.total_rev))
-    assert D(str(y1.expenses["Credit card fees"])) == tr * Decimal("0.02")
+    # Model v3: card fees = card_share x (card_rate x retail + per_tx_fee x transactions),
+    # not a flat %-of-revenue line.
+    retail = D(str(y1.retail))
+    customers = D(str(y1.customers))
+    expected_card_fees = Decimal(model.CARD_SHARE) * (
+        Decimal(model.CARD_RATE) * retail + Decimal(model.CARD_PER_TX_FEE) * customers)
+    assert D(str(y1.expenses["Credit card fees"])) == expected_card_fees
     assert D(str(y1.expenses["Payroll"])) == tr * Decimal("0.60")
     assert D(str(y1.expenses["Payroll taxes"])) == tr * Decimal("0.60") * Decimal("0.08")
     assert D(str(y1.expenses["Marketing & outreach"])) == tr * Decimal("0.0375")
@@ -173,15 +179,15 @@ def test_migration_default_backfill_reproduces_legacy_view_model_byte_for_byte()
 def test_legacy_default_key_numbers_are_pinned():
     # Literal regression anchor for the migration default (#120): the legacy lump
     # numbers are frozen so a future engine change cannot silently move them.
-    # Re-pinned at the 2.7.0 single regen (Task 6.4): the 990-grounded constants
-    # (payroll tax 7.5%->8%, Insurance liability $2k->$10k) deepen the Y1 loss and the
-    # cash trough, so Y1 net = -$53,713.72 (was -$44,432.91) and capital = $347,853.76
-    # (was $342,403.21 at the 6.2 split / $321,939.73 pre-wave-6). Break-even stays
-    # month 8. startup_total (one-time) is unchanged — insurance is an operating line.
+    # Re-pinned at Model v3 (3.0.0): the card-fee two-term formula + Workers' comp +
+    # POS platform/Production software deepen the Y1 loss and the cash trough, so Y1
+    # net = -$65,068.07 (was -$53,713.72 at 2.9.0) and capital = $354,596.65 (was
+    # $347,853.76 at 2.9.0). Break-even stays month 8. startup_total (one-time) is
+    # unchanged — these are all operating lines, not startup lines.
     res = _hoh()  # canonical 60% labor, no schedule (the seeded legacy default)
     assert D(str(res.startup_total)) == Decimal("238500")
-    assert D(str(res.annual[1].net)) == Decimal("-53713.718931840")
-    assert D(str(res.decision.startup_capital_required)) == Decimal("347853.762082154880")
+    assert D(str(res.annual[1].net)) == Decimal("-65068.0692501021077283372365")
+    assert D(str(res.decision.startup_capital_required)) == Decimal("354596.6531797550800936768150")
     assert res.decision.break_even_month == 8
     assert res.decision.payback_month is None  # never recovered in the horizon
 
@@ -216,3 +222,183 @@ def test_occupancy_requires_annual_or_per_sqft():
     with pytest.raises(ValueError, match="occupancy requires"):
         compute(inputs, Assumptions(), DemandDrivers(),
                 TradeArea(basis="city", households="31798"))
+
+
+def test_card_fees_two_term_formula(canonical_result):
+    # Card fees = card_share × (card_rate × retail + per_tx_fee × transactions).
+    # Recompute expected from the same retail/customers values read off annual[1].
+    y1 = canonical_result.annual[1]
+    retail = D(str(y1.retail))
+    customers = D(str(y1.customers))
+    expected_fees = D("0.65") * (D("0.026") * retail + D("0.10") * customers)
+    actual_fees = D(str(y1.expenses["Credit card fees"]))
+    assert actual_fees == expected_fees
+
+
+def test_card_fees_zero_at_zero_share():
+    # When card_share = 0, credit card fees should be 0.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(card_share="0"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    assert D(str(res.annual[1].expenses["Credit card fees"])) == Decimal("0")
+
+
+# ------------------------------------------------- Task 1.2: production-station module
+def test_items_sold_items_produced_production_hours(canonical_result):
+    # items_sold = retail / avg_item_price; items_produced = items_sold / sell_through;
+    # production_hours = items_produced / items_per_hour (all default-Assumptions).
+    y1 = canonical_result.annual[1]
+    retail = D(str(y1.retail))
+    items_sold = D(str(y1.items_sold))
+    items_produced = D(str(y1.items_produced))
+    production_hours = D(str(y1.production_hours))
+    assert items_sold == retail / D("5.00")
+    assert items_produced == items_sold / D("0.50")
+    assert production_hours == items_produced / D(75)
+
+
+def test_production_metrics_zero_guarded():
+    # avg_item_price = 0 must never raise ZeroDivisionError — items_sold (and
+    # everything downstream of it) is explicitly 0, not a crash.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(inputs, Assumptions(avg_item_price="0"), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    assert D(str(res.annual[1].items_sold)) == Decimal("0")
+    assert D(str(res.annual[1].items_produced)) == Decimal("0")
+    assert D(str(res.annual[1].production_hours)) == Decimal("0")
+
+
+# ------------------------------------------------- Task 1.4: labor_mode: pct | coverage
+def test_labor_mode_pct_is_default_and_byte_unchanged(canonical_result):
+    # Default Assumptions() -> labor_mode == "pct"; Payroll == total_rev * labor_pct,
+    # today's formula, byte-unchanged.
+    y1 = canonical_result.annual[1]
+    assert canonical_result.assumptions.labor_mode == "pct"
+    expected = D(str(y1.total_rev)) * D(canonical_result.assumptions.labor_pct)
+    assert D(str(y1.expenses["Payroll"])) == expected
+
+
+def test_labor_mode_coverage_formula():
+    # Coverage mode: headcount/wage-driven Payroll, using the YEAR'S AVERAGE MONTH
+    # (production_hours/12, customers/12) — not the actual monthly ramp (see Design
+    # Review: compute_annual runs before build_monthly, so depending on the real
+    # monthly ramp would be circular). Recompute expected from the SAME resolved
+    # production_hours/customers the test reads off annual[1], not hand-typed dollars.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    a = Assumptions(labor_pct="0.60", labor_mode="coverage")
+    res = compute(inputs, a, DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    y1 = res.annual[1]
+    production_hours = D(str(y1.production_hours))
+    customers = D(str(y1.customers))
+
+    open_hours_per_month = D(a.open_hours_per_week) * 52 / 12
+    production_hours_month = production_hours / 12
+    transactions_month = customers / 12
+    cashier_hours = max(
+        transactions_month / D(a.cashier_tx_per_hour),
+        D(a.min_staffed_lanes) * open_hours_per_month,
+    )
+    door_hours = (D(a.door_dedicated) + D(a.door_peak)) * open_hours_per_month
+    runner_hours = D(a.runners) * open_hours_per_month
+    hourly_hours_month = production_hours_month + cashier_hours + door_hours + runner_hours
+    salaries = D(a.mgr_salary) + D(str(a.am_count)) * D(a.am_salary)
+    expected = hourly_hours_month * D(a.wage) * 12 + salaries
+
+    assert D(str(y1.expenses["Payroll"])) == expected
+
+
+def test_labor_mode_coverage_zero_guarded():
+    # cashier_tx_per_hour = 0 must never raise ZeroDivisionError.
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    inputs = Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10",
+        share_y4="0.11", share_y5="0.12", donation_value="74",
+        building_sqft="10000", salesfloor_pct="0.70", occupancy_annual="120000",
+        lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(
+        inputs, Assumptions(labor_mode="coverage", cashier_tx_per_hour="0"),
+        DemandDrivers(), TradeArea(basis="city", households="31798"), overrides={})
+    # No exception raised; Payroll resolves via the min_staffed_lanes floor term.
+    assert D(str(res.annual[1].expenses["Payroll"])) > Decimal("0")
+
+
+def test_pos_and_production_software_fixed_lines_default_nonzero(canonical_result):
+    """POS platform ($4800/yr) and Production software ($1200/yr) flow through."""
+    y1 = canonical_result.annual[1]
+    assert "POS platform" in y1.expenses
+    assert D(str(y1.expenses["POS platform"])) == Decimal("4800")
+    assert "Production software" in y1.expenses
+    assert D(str(y1.expenses["Production software"])) == Decimal("1200")
+
+
+def test_workers_comp_is_pct_of_payroll(canonical_result):
+    """Workers' comp expense = Payroll × 2% (default WORKERS_COMP_PCT_OF_PAYROLL)."""
+    y1 = canonical_result.annual[1]
+    payroll = D(str(y1.expenses["Payroll"]))
+    workers_comp = D(str(y1.expenses["Workers' comp expense"]))
+    assert workers_comp == payroll * Decimal("0.02")
+
+
+def test_contributions_revenue_default_zero_byte_unchanged():
+    """Default contributions_annual="0" is byte-identical; total_rev == retail + salvage."""
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+
+    inputs = Inputs(
+        org_name="x", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(
+        inputs, Assumptions(), DemandDrivers(),
+        TradeArea(basis="city", households="31798"), overrides={},
+    )
+    y1 = res.annual[1]
+    # With default contributions_annual="0", total_rev == retail + salvage
+    assert D(str(y1.total_rev)) == D(str(y1.retail)) + D(str(y1.salvage)) + D(str(y1.contributions))
+    assert D(str(y1.contributions)) == Decimal("0")
+
+
+def test_contributions_revenue_adds_to_total():
+    """Contributions revenue adds to total_rev when contributions_annual is set."""
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+
+    inputs = Inputs(
+        org_name="x", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+        contributions_annual="10000",
+    )
+    res = compute(
+        inputs, Assumptions(), DemandDrivers(),
+        TradeArea(basis="city", households="31798"), overrides={},
+    )
+    y1 = res.annual[1]
+    # contributions_annual="10000" adds to total_rev
+    assert D(str(y1.contributions)) == Decimal("10000")
+    assert D(str(y1.total_rev)) == D(str(y1.retail)) + D(str(y1.salvage)) + Decimal("10000")

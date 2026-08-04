@@ -75,6 +75,7 @@ class MonthRow:
     startup_outflow: Decimal   # one-time cash outflow timed to this month
     cash_net: Decimal          # net - startup_outflow (the cash delta)
     cumulative_cash: Decimal
+    stations_staffed: Decimal  # production-station headcount this month (Task 1.2)
 
 
 def _normalized(weights):
@@ -88,6 +89,17 @@ def _distribute(total: Decimal, weights):
     parts = [total * w for w in norm[:-1]]
     parts.append(total - sum(parts, Decimal("0")))
     return parts
+
+
+def _linear_share_weights(share_m1: Decimal, share_m12: Decimal):
+    """12 relative monthly weights linearly interpolated share_m1 -> share_m12.
+
+    An optional alternative to the S-curve (`_REVENUE_WEIGHTS`) for Year-1 revenue
+    (Task 1.3). Not required to sum to 1 — `_distribute`/`_normalized` renormalize
+    internally, exactly as the fixed `_REVENUE_WEIGHTS` literal is normalized today.
+    """
+    return [share_m1 + (share_m12 - share_m1) * Decimal(m - 1) / Decimal(11)
+            for m in range(1, 13)]
 
 
 def _flat_monthly(total: Decimal, months: int = 12):
@@ -160,7 +172,8 @@ def _blend_then_flat(total: Decimal, prev_last: Decimal, months: int = 12,
     return parts
 
 
-def _year_slices(annual_year, year, *, prev_rev_last=None, prev_exp_last=None):
+def _year_slices(annual_year, year, *, prev_rev_last=None, prev_exp_last=None,
+                  revenue_weights=None):
     """The 12 monthly (revenue, operating-expense, net) slices for one annual year.
 
     Every line's slices sum to that year's annual line to the penny (residual in the last
@@ -172,7 +185,10 @@ def _year_slices(annual_year, year, *, prev_rev_last=None, prev_exp_last=None):
     stream distributed by its OWN weights so the launch cash-flow shape is honest and the
     Year-1 trough (→ capital / break-even) reflects it:
       - %-of-revenue lines (card fees, marketing, supplies) ride the revenue S-curve
-        (``_REVENUE_WEIGHTS``);
+        (``_REVENUE_WEIGHTS``) by default, or the caller-supplied ``revenue_weights``
+        (Task 1.3's optional linear ``share_m1``->``share_m12`` ramp) when given — the
+        %-of-revenue lines and revenue itself always ride the SAME curve, whichever it
+        is, so the "expenses are a fixed % of revenue" invariant holds intra-year;
       - Payroll AND Payroll taxes ride the payroll hire-ramp (``_PAYROLL_WEIGHTS``) —
         payroll taxes are a fixed % OF payroll, so they track payroll, not revenue;
       - every other (fixed annual) line — Rent, Utilities/trash, FIXED_ANNUAL — is a
@@ -201,11 +217,13 @@ def _year_slices(annual_year, year, *, prev_rev_last=None, prev_exp_last=None):
         exp_by_label = annual_year.expenses
         pct_annual = sum((D(str(v)) for k, v in exp_by_label.items()
                           if k in _PCT_OF_REVENUE_LABELS), Decimal("0"))
+        payroll_keys = ("Payroll", "Payroll taxes", "Workers' comp expense")
         payroll_annual = sum((D(str(exp_by_label.get(k, Decimal("0"))))
-                              for k in ("Payroll", "Payroll taxes")), Decimal("0"))
+                              for k in payroll_keys), Decimal("0"))
         fixed_annual = total_exp - pct_annual - payroll_annual
-        rev_parts = _distribute(total_rev, _REVENUE_WEIGHTS)
-        pct_parts = _distribute(pct_annual, _REVENUE_WEIGHTS)
+        weights = revenue_weights if revenue_weights is not None else _REVENUE_WEIGHTS
+        rev_parts = _distribute(total_rev, weights)
+        pct_parts = _distribute(pct_annual, weights)
         payroll_parts = _distribute(payroll_annual, _PAYROLL_WEIGHTS)
         fixed_parts = _flat_monthly(fixed_annual)
         exp_parts = [pct_parts[i] + payroll_parts[i] + fixed_parts[i] for i in range(12)]
@@ -220,14 +238,17 @@ def _year_slices(annual_year, year, *, prev_rev_last=None, prev_exp_last=None):
     return rev_parts, exp_parts, net_parts
 
 
-def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
+def build_monthly(annual, assumptions, inputs, startup_by_month):
     """Return (rows, breakeven_month) over the project-month timeline 1..N.
 
     `annual` is the full ``{1..5}`` AnnualYear dict; the 60 operating months re-express
     each year's P&L (Year 1 = the launch S-curve, unchanged; Years 2-5 = a short glide
     from the prior year's own last month into the new flat steady-state, replacing an
-    instant flat-jump at the seam — owner defect fix, 2026-07-05). `opening_month_number`
-    (G) is the grand-opening milestone; ``N = G + 59``.
+    instant flat-jump at the seam — owner defect fix, 2026-07-05). `inputs.
+    opening_month_number` (G) is the grand-opening milestone; ``N = G + 59``. `inputs`
+    (not just the bare int, since Task 1.3) also carries the optional Year-1 linear
+    revenue-share ramp (`share_m1`/`share_m12`) — both `None` (the default) reproduces
+    today's S-curve byte-identically.
     `startup_by_month` maps a project-month int -> one-time outflow Decimal; the sum of
     its values is the total startup (placed by the schedule, never double-counted).
 
@@ -241,7 +262,7 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
     startup total reconcile); those extra months carry the scheduled cost only — the
     operating ramp covers exactly the 60 months ``G..G+59``.
     """
-    g = int(opening_month_number)
+    g = int(inputs.opening_month_number)
     # Grand opening is a project-month milestone >= 1 (Spec §5). A g <= 0 timeline has
     # no well-defined operating window and previously crashed the break-even loop with
     # an IndexError (-> HTTP 500); reject it cleanly as a ValueError (-> 422) so no
@@ -251,10 +272,26 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
     last_scheduled = max(startup_by_month.keys(), default=0)
     n = max(g + 59, int(last_scheduled))
 
+    # Hoisted once (not per-month) — the production-station module (Task 1.2) rescales
+    # monthly revenue back to monthly retail via the SAME constant salvage_pct that
+    # holds for every year (total_rev = retail*(1+salv_pct) always), so
+    # retail_month = revenue_month / (1+salv_pct) is an exact linear rescale of the
+    # already footing-exact revenue split — no new distribution function needed.
+    salv_pct = D(assumptions.salvage_pct)
+
+    # Task 1.3: an optional linear alternative to the S-curve for Year-1 revenue (and
+    # the %-of-revenue expense lines that ride the same curve). Both share_m1/share_m12
+    # must be set to activate it; either None (the default) leaves revenue_weights=None,
+    # so `_year_slices` falls back to `_REVENUE_WEIGHTS` unchanged.
+    revenue_weights = (
+        _linear_share_weights(D(inputs.share_m1), D(inputs.share_m12))
+        if inputs.share_m1 is not None and inputs.share_m12 is not None else None
+    )
+
     # Per-year monthly slices, computed SEQUENTIALLY so each of Years 2-5 can anchor
     # its glide on the prior year's own last month (Year 1 = the unchanged 6.2
     # three-stream split).
-    slices = {1: _year_slices(annual[1], 1)}
+    slices = {1: _year_slices(annual[1], 1, revenue_weights=revenue_weights)}
     for y in (2, 3, 4, 5):
         prev_rev_last, prev_exp_last = slices[y - 1][0][-1], slices[y - 1][1][-1]
         slices[y] = _year_slices(
@@ -274,6 +311,7 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
             exp = Decimal("0")
             net = Decimal("0")
             kind = "pre_open"
+            stations_staffed = Decimal("0")
         elif month <= g + 59:
             oi = month - g          # 0..59
             y = oi // 12 + 1        # 1..5
@@ -285,6 +323,20 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
             kind = "operating"
             if y == 1:
                 y1_op_nets.append(net)
+            # Production-station module (Task 1.2): rescale this month's revenue
+            # back to retail, then down the items-sold -> items-produced ->
+            # production-hours -> stations-staffed chain, each zero-guarded.
+            retail_m = (rev / (Decimal("1") + salv_pct)
+                       if (Decimal("1") + salv_pct) != 0 else Decimal("0"))
+            items_sold_m = (retail_m / D(assumptions.avg_item_price)
+                            if D(assumptions.avg_item_price) != 0 else Decimal("0"))
+            items_produced_m = (items_sold_m / D(assumptions.sell_through)
+                                if D(assumptions.sell_through) != 0 else Decimal("0"))
+            production_hours_m = (items_produced_m / D(assumptions.items_per_hour)
+                                  if D(assumptions.items_per_hour) != 0 else Decimal("0"))
+            stations_staffed = (
+                production_hours_m / D(assumptions.productive_hours_per_station)
+                if D(assumptions.productive_hours_per_station) != 0 else Decimal("0"))
         else:
             # Beyond the 60-month operating ramp: the store is open but this month
             # carries only its scheduled cost (no modeled operating activity).
@@ -292,11 +344,13 @@ def build_monthly(annual, assumptions, opening_month_number, startup_by_month):
             exp = Decimal("0")
             net = Decimal("0")
             kind = "operating"
+            stations_staffed = Decimal("0")
         cash_net = net - outflow
         cumulative += cash_net
         rows.append(MonthRow(
             index=month, kind=kind, revenue=rev, expenses=exp, net=net,
             startup_outflow=outflow, cash_net=cash_net, cumulative_cash=cumulative,
+            stations_staffed=stations_staffed,
         ))
 
     # break-even month: first Year-1 operating month with net>=0 that stays non-negative

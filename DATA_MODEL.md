@@ -413,6 +413,8 @@ These are the contracts for the opaque `TEXT` JSON columns. The DB treats them a
 ```
 **`share_y1`…`share_y5` are explicit per-year inputs (PRD §7.1; 5-year horizon).** The legacy engine's Year-2 = midpoint rule (`generate_projection.py:65`, `methodology.md` lines 17–18) is **superseded** — there is no derived midpoint anywhere in v1. The annual P&L spans five years; `share_y4`/`share_y5` default to the decelerating-plateau `0.11`/`0.12` (so a 3-year wizard POST still produces a full 5-year projection). The wizard's "even ramp" helper may *pre-fill* intermediate years but each persists as an explicit value. `mode` may also be `donations_per_week` (the app converts to share).
 
+**Model v3 (3.0.0) — `contributions_annual` and the `share_m1`/`share_m12` revenue ramp are NOT in `inputs_json`.** The engine's `Inputs` dataclass gained these fields, but `InputsIn` doesn't accept them yet, so they never reach a persisted `inputs_json` and every projection computes with their engine defaults (`contributions_annual = "0"`, `share_m1`/`share_m12 = None`, i.e. the default S-curve). See the engine-only-knobs note under §4.5 and [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) §2.1.
+
 **Timed cost schedule + opening anchor (Spec A §5; added in migration `0005`).** `opening_month_number` (`≥ 1`) is the project month grand opening lands on; `cost_schedule` is the list of timed startup rows `{category, month (≥ 1), amount (≥ 0)}`. The canonical copy lives here in `inputs_json`; first-class columns (`cost_schedule_json`, `opening_month_number`, `target_opening_date`) mirror it for queryability. A row MAY carry an optional **`provenance`** object attributing how it was created: Penny stamps `{ "source": "ai", "turn_id", "created_at" }` on each row she builds from a consultant proposal (Spec B §6.2/§9 `edit_cost_schedule`). `provenance` is **opaque audit/UI metadata** — it never feeds the engine (`cost_schedule` is filtered out of the engine args) and is validated as `{ source, … }` (an object) alongside the `{category, month, amount}` shape; manually-created rows simply omit it. Server validation (`month ≥ 1`, `amount ≥ 0`, `opening_month_number ≥ 1`) is enforced on every create/PATCH so the client never relies on client math. The array is also **COUNT-capped at `MAX_COST_SCHEDULE_ROWS = 200`** rows (generous vs. the ~10-30 rows a real launch carries) — because the schedule is serialized into `inputs_json`/`cost_schedule_json` **and** snapshotted into a fresh revision on every save, an unbounded array is a blob / revision-bloat DoS (issue #166). The cap is enforced server-side on the manual PATCH (`_validate_schedule_inputs`) **and** after Penny's `edit_cost_schedule` ops; an over-cap array is rejected with **422 `invalid_inputs`** ([`SECURITY.md`](./SECURITY.md) §9).
 
 ### 4.4 `demand_drivers_json`
@@ -426,10 +428,12 @@ Drivers adjust **confidence** (and seasonality feeds the monthly ramp), not the 
 ### 4.5 `assumptions_json` (cost structure — Settings tab; PRD §7.3)
 ```json
 {
-  "labor_pct": 0.40,
+  "labor_pct": 0.60,
   "marketing_pct": 0.0375,
   "supplies_pct": 0.05,
-  "card_pct": 0.02,
+  "card_share": 0.65,
+  "card_rate": 0.026,
+  "card_per_tx_fee": 0.10,
   "payroll_tax_pct": 0.08,
   "salvage_pct": 0.008,
   "escalator": 0.03,
@@ -441,6 +445,7 @@ Drivers adjust **confidence** (and seasonality feeds the monthly ramp), not the 
   "ramp": { "shape": "scurve", "months": 5 },
   "fixed": {
     "Insurance liability": 10000, "Internet, Phones": 3000, "Pest control": 300,
+    "POS platform": 4800, "Production software": 1200,
     "Repairs/maintenance": 1600, "Security system": 900, "Utilities/trash service": 22300
   },
   "startup": {
@@ -457,16 +462,20 @@ Drivers adjust **confidence** (and seasonality feeds the monthly ramp), not the 
 |---|---|---|
 | Donations / household / yr | `3` | demand engine (`methodology.md` line 11). |
 | Average basket value | `$17.08` | chosen to reproduce the Appendix D prototype (`~$426,911` Y1 / break-even ~month 5). |
-| **Labor (payroll) % of revenue** | `0.40` | **Resolved to 40%** to match the design's headline numbers; slider editable. Replaces the legacy `DEFAULTS["labor_pct"]=0.60` and `methodology.md` line 27. |
+| **Labor (payroll) % of revenue** | `0.60` | **Owner decision** (DECISIONS.md) — the canonical golden runs at 60%; slider editable, band 0.25–0.60. A 40% design-parity twin reproduces the Appendix-D headline for design-QA only ([ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) §10). |
 | **Marketing & outreach % of revenue** | `0.0375` | **New line** introduced by the design (`marketing = total_rev × 0.0375`). |
 | **Supplies & processing % of revenue** | `0.05` | **Reclassifies** the legacy fixed `Store/office supplies $3,700` into a % of revenue. The fixed supplies line is removed from `fixed`. |
-| Credit-card fees % of revenue | `0.02` | unchanged. |
+| **Credit-card fees** | `card_share 0.65` / `card_rate 0.026` / `card_per_tx_fee $0.10` | **Model v3 (engine `model_version` 3.0.0)** — replaces the flat `card_pct` 2.0%-of-revenue line with a two-term formula, `card_share × (card_rate × retail + card_per_tx_fee × transactions)` ([ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) §4.2). |
 | Payroll tax % of payroll | `0.08` | raised from 7.5% in engine 2.7.0 (990-grounded; see DECISIONS.md). |
+| **Workers' comp % of payroll** | `0.02` | **New line, Model v3** — `Payroll × 0.02`, rides the payroll ramp monthly (like Payroll taxes), not a flat `fixed` line. |
 | Salvage % of retail | `0.008` | unchanged. |
 | **Annual rent escalator** | `0.03` | **New** — compounding: `rent[y] = rent_y1 × (1 + escalator)^(y-1)` for `y ∈ {1,2,3}`. Applies Y2–Y3. |
 | Cash reserve buffer | `$25,000` | feeds startup-capital-required (PRD §12.1). |
+| **POS platform / Production software** | `$4,800`/yr / `$1,200`/yr | **New fixed lines, Model v3** — flat store-level costs (not scaled by station count), added to `fixed`. |
 
 Occupancy may be entered as an annual dollar amount (`occupancy_annual`, prototype ~$90,000) **or** derived from `building_sqft × rent_per_sqft` (set `occupancy_annual: null` and supply `rent_per_sqft`). The `lease_type` (gross/nnn) toggle and the escalator both apply. Remaining fixed lines and startup lines persist in `fixed`/`startup`. Note `Store/office supplies` is **absent** from `fixed` in v1 (it became a % line).
+
+> **Model v3 (3.0.0) engine-only knobs — NOT in this blob.** `assumptions_json`/`inputs_json` are populated strictly from the fields `AssumptionsIn`/`InputsIn` (`app/routers/projections.py`) accept on `create`/`PATCH`. Model v3 added several engine-side `Assumptions`/`Inputs` fields that are **not** on either schema yet, so they never appear in a persisted `assumptions_json`/`inputs_json` and cannot be set per-projection: `labor_mode` and its coverage-mode fields (`open_hours_per_week`, `cashier_tx_per_hour`, `min_staffed_lanes`, `door_dedicated`, `door_peak`, `runners`, `wage`, `mgr_salary`, `am_salary`, `am_count`), the production-station knobs (`avg_item_price`, `sell_through`, `items_per_hour`, `productive_hours_per_station`), and — on `inputs_json` — `contributions_annual` and the share-ramp fields `share_m1`/`share_m12`. Every stored projection computes with the engine defaults for all of these until a fast-follow PATCH-exposure change lands ([ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md) §2.1).
 
 ### 4.6 `overrides_json` (pins on the DAG; PRD §14, §24)
 
@@ -560,7 +569,8 @@ This is the **native view-model output** of the engine, consumed verbatim by bot
       "pinnedDate": "2026-06-24T17:03:11Z", "affected": ["Payroll taxes", "Total Expenses", "Net income", "Net margin"] }
   ],
   "settings": {
-    "laborPct": 0.40, "marketingPct": 0.0375, "suppliesPct": 0.05, "cardPct": 0.02,
+    "laborPct": 0.60, "marketingPct": 0.0375, "suppliesPct": 0.05,
+    "cardShare": 0.65, "cardRate": 0.026, "cardPerTxFee": 0.10,
     "payrollTaxPct": 0.08, "salvagePct": 0.008, "escalator": 0.03,
     "utilitiesPerSqft": 2.23, "rentPerSqft": null, "basket": 17.08,
     "donationsPerHh": 3, "donationValue": 74.0, "donationsPerHouseholdPerYear": 3,

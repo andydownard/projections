@@ -5,17 +5,15 @@ from engine import model
 
 
 def test_model_versions_stamped():
-    # 2.9.0 fixes an owner defect (2026-07-05): Years 2-5 of monthly[] used to jump
-    # INSTANTLY to the new year's flat annual average at each seam (an artificial
-    # one-month Net cliff); they now glide from the prior year's own last month over
-    # `engine.monthly._BLEND_MONTHS` months first. Annual totals, capital, break-even,
-    # and Year 1 itself are byte-unchanged — only the Years 2-5 intra-year shape moved,
-    # which is still an OUTPUT change, so MODEL_VERSION bumps.
-    assert model.MODEL_VERSION == "2.9.0"
-    # 1.7.0 = the union of both 1.6.0 lineages: cash income/margin surfaces + monthly[] 60 rows
-    # + Month-N milestone (A) and +sensitivity{base,downside,upside}+delta +confidence{ramp} +
-    # the full editable settings knob set (B). Unchanged by the 2.9.0 monthly-shape fix.
-    assert model.COMPUTE_SCHEMA_VERSION == "1.7.0"
+    # 3.0.0 = Model v3 (owner session 2026-08-03): card fees' two-term formula, the
+    # production-station module, the optional linear share ramp, labor_mode coverage,
+    # and three new lines (POS platform, Production software, Workers' comp,
+    # Contributions revenue) — bundled under one bump. See model.py's history comment
+    # and DECISIONS.md's 3.0.0 entry.
+    assert model.MODEL_VERSION == "3.0.0"
+    # 1.8.0: new settings keys + new view-model rows/fields for Model v3 (see
+    # model.py's COMPUTE_SCHEMA_VERSION history comment for the full list).
+    assert model.COMPUTE_SCHEMA_VERSION == "1.8.0"
 
 
 def test_demand_constants():
@@ -29,7 +27,11 @@ def test_cost_structure_constants_canonical_labor_60():
     assert Decimal(str(model.LABOR_PCT_OF_REVENUE)) == Decimal("0.60")
     assert Decimal(str(model.MARKETING_PCT_OF_REVENUE)) == Decimal("0.0375")
     assert Decimal(str(model.SUPPLIES_PCT_OF_REVENUE)) == Decimal("0.05")
-    assert Decimal(str(model.CARD_FEES_PCT_OF_REVENUE)) == Decimal("0.02")
+    # Model v3: CARD_FEES_PCT_OF_REVENUE (flat 2%-of-revenue) is deleted, replaced by
+    # the two-term card-processor formula (CARD_SHARE/CARD_RATE/CARD_PER_TX_FEE).
+    assert Decimal(str(model.CARD_SHARE)) == Decimal("0.65")
+    assert Decimal(str(model.CARD_RATE)) == Decimal("0.026")
+    assert Decimal(str(model.CARD_PER_TX_FEE)) == Decimal("0.10")
     # 6.4: 990-grounded — the six-EIN sample's employer payroll-tax load is ~8%.
     assert Decimal(str(model.PAYROLL_TAX_PCT_OF_PAYROLL)) == Decimal("0.08")
 
@@ -66,7 +68,9 @@ def test_fixed_annual_excludes_supplies_and_utilities():
     assert "Utilities/trash service" not in model.FIXED_ANNUAL
     # 6.4: Insurance liability re-based to the 990-grounded $10k (was $2k).
     assert model.FIXED_ANNUAL["Insurance liability"] == 10000
-    assert sum(model.FIXED_ANNUAL.values()) == 10000 + 3000 + 300 + 1600 + 900
+    # Model v3: POS platform ($400/mo = $4,800/yr) + Production software ($100/mo =
+    # $1,200/yr) join FIXED_ANNUAL as flat store-level fixed costs.
+    assert sum(model.FIXED_ANNUAL.values()) == 10000 + 3000 + 300 + 4800 + 1200 + 1600 + 900
 
 
 def test_per_sqft_constants_present_and_anchored():

@@ -82,9 +82,13 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
         ("donation_value", _f(inputs.donation_value), USD),
         ("basket", _f(a.basket), USD),
         ("salvage_pct", _f(a.salvage_pct), PCT),
-        ("card_pct", _f(a.card_pct), PCT),
+        ("contributions_annual", _f(inputs.contributions_annual), USD),
+        ("card_share", _f(a.card_share), PCT),
+        ("card_rate", _f(a.card_rate), PCT),
+        ("card_per_tx_fee", _f(a.card_per_tx_fee), USD),
         ("labor_pct", _f(a.labor_pct), PCT),
         ("payroll_tax_pct", _f(a.payroll_tax_pct), PCT),
+        ("workers_comp_pct", _f(a.workers_comp_pct), PCT),
         ("marketing_pct", _f(a.marketing_pct), PCT),
         ("supplies_pct", _f(a.supplies_pct), PCT),
         ("occupancy_y1", _f(result.occupancy[1]), USD),
@@ -93,6 +97,11 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
         # (feature #245); both are blue inputs so the utilities row is a live formula.
         ("building_sqft", _f(inputs.building_sqft), NUM),
         ("utilities_per_sqft", _f(a.utilities_per_sqft), USD),
+        # --- production-station module (Model v3, Task 1.2)
+        ("avg_item_price", _f(a.avg_item_price), USD),
+        ("sell_through", _f(a.sell_through), PCT),
+        ("items_per_hour", a.items_per_hour, NUM),
+        ("productive_hours_per_station", a.productive_hours_per_station, NUM),
     ]
     for name, value, fmt in input_specs:
         ws[f"A{row}"] = name
@@ -158,11 +167,27 @@ def build_xlsx(result, path, *, terms_version=None, terms_accepted_at=None):
     rt = rowmap["Retail Sales"]
     line("Salvage Sales", [f"={c}{rt}*{sh['salvage_pct']}" for c in cols], USD)
     sv = rowmap["Salvage Sales"]
-    line("Total Revenue", [f"={c}{rt}+{c}{sv}" for c in cols], USD, bold=True)
+    line("Contributions", [f"={sh['contributions_annual']}" for _ in cols], USD)
+    con = rowmap["Contributions"]
+    line("Total Revenue", [f"={c}{rt}+{c}{sv}+{c}{con}" for c in cols], USD, bold=True)
     tr = rowmap["Total Revenue"]
     # customers = retail / basket  (guarded)
     line("Customers",
          [f'=IF({sh["basket"]}=0,"",{c}{rt}/{sh["basket"]})' for c in cols], NUM)
+
+    # ---- production-station module (Model v3, Task 1.2): physical throughput
+    # bridging revenue to the expense lines — each division guarded.
+    line("Items sold",
+         [f'=IF({sh["avg_item_price"]}=0,"",{c}{rt}/{sh["avg_item_price"]})'
+          for c in cols], NUM)
+    isr = rowmap["Items sold"]
+    line("Items produced",
+         [f'=IF({sh["sell_through"]}=0,"",{c}{isr}/{sh["sell_through"]})'
+          for c in cols], NUM)
+    ipr = rowmap["Items produced"]
+    line("Production hours",
+         [f'=IF({sh["items_per_hour"]}=0,"",{c}{ipr}/{sh["items_per_hour"]})'
+          for c in cols], NUM)
 
     # ---- expense lines (live formulas, or orange override) ----
     exp_rows = []
@@ -296,7 +321,12 @@ def _build_disclaimer_block(ws, terms_version, terms_accepted_at):
 def _expense_formula(label, col, tr, sh, rowmap):
     """The live Excel formula for an expense component (sans leading '=')."""
     if label == "Credit card fees":
-        return f"{col}{tr}*{sh['card_pct']}"
+        rt_row = rowmap["Retail Sales"]
+        cust_row = rowmap["Customers"]
+        return (
+            f"{sh['card_share']}*({sh['card_rate']}*{col}{rt_row}"
+            f"+{sh['card_per_tx_fee']}*IF({col}{cust_row}=\"\",0,{col}{cust_row}))"
+        )
     if label == "Marketing & outreach":
         return f"{col}{tr}*{sh['marketing_pct']}"
     if label == "Payroll":
@@ -304,6 +334,9 @@ def _expense_formula(label, col, tr, sh, rowmap):
     if label == "Payroll taxes":
         pr = rowmap.get("Payroll")
         return f"{col}{pr}*{sh['payroll_tax_pct']}"
+    if label == "Workers' comp expense":
+        pr = rowmap.get("Payroll")
+        return f"{col}{pr}*{sh['workers_comp_pct']}"
     if label == "Supplies & processing":
         return f"{col}{tr}*{sh['supplies_pct']}"
     if label == "Rent":
@@ -354,6 +387,14 @@ def _build_milestones_block(ws, result, row):
         ws[f"A{row}"].font = BLACK
         ws[f"B{row}"] = milestone["display"]
         row += 1
+    # Production-station module (Model v3, Task 1.2): a server-resolved plain
+    # number (not a formula), consistent with the milestone strings above being
+    # server snapshots rather than live divisions — nothing to guard here.
+    ws[f"A{row}"] = "Production stations needed (peak month)"
+    ws[f"A{row}"].font = BLACK
+    stations_cell = ws[f"B{row}"]
+    stations_cell.value = result.stations_installed
+    stations_cell.number_format = NUM
 
 
 def _build_monthly_tab(ws, result):

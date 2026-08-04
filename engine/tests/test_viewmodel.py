@@ -111,7 +111,8 @@ def test_monthly_rows_shape(canonical_result):
 def test_settings_block(canonical_result):
     vm = to_view_model(canonical_result)
     s = vm["settings"]
-    for k in ("laborPct", "marketingPct", "suppliesPct", "cardPct",
+    for k in ("laborPct", "marketingPct", "suppliesPct", "cardShare",
+              "cardRate", "cardPerTxFee",
               "payrollTaxPct", "salvagePct", "escalator", "basket",
               "donationsPerHh", "shareY1", "shareY2", "shareY3",
               "shareY4", "shareY5", "donationValue",
@@ -171,10 +172,12 @@ def test_view_model_is_json_serializable(canonical_result):
 
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
-    assert vm["model_version"] == "2.9.0"     # FUSION: cash display (A) × params/gaps operating (B)
-    # 1.7.0: cash income/margin surfaces + monthly[] 60 rows + Month-N payback (A) UNION
-    # +sensitivity+delta +confidence{ramp} + editable settings knobs (B).
-    assert vm["compute_schema_version"] == "1.7.0"
+    # Model v3 (3.0.0): card fees' two-term formula, production-station module,
+    # optional linear share ramp, labor_mode coverage, and three new lines (POS
+    # platform, Production software, Workers' comp, Contributions revenue).
+    assert vm["model_version"] == "3.0.0"
+    # 1.8.0: new settings keys + new view-model rows/fields for Model v3.
+    assert vm["compute_schema_version"] == "1.8.0"
     assert "utilitiesPerSqft" in vm["settings"]
     assert "rentPerSqft" in vm["settings"]
 
@@ -527,6 +530,34 @@ def test_derived_driver_chain_rows_are_computed_not_input(canonical_result):
         assert by_label[label]["editable"] is False, label
     assert by_label["Donor market share"]["class"] == "input"
     assert by_label["Donor market share"]["editable"] is True
+
+
+def test_production_station_rows_present(canonical_result):
+    """Task 1.2: Items sold / Items produced / Production hours are read-only
+    computed rows (a new 'production' group), bridging the revenue chain to the
+    expense lines — never editable (they are derived, non-pinnable, per dag.py)."""
+    vm = to_view_model(canonical_result)
+    by_label = {r["label"]: r for r in vm["rows"]}
+    for label in ("Items sold", "Items produced", "Production hours"):
+        assert label in by_label, label
+        assert by_label[label]["class"] == "computed", label
+        assert by_label[label]["editable"] is False, label
+        assert by_label[label]["group"] == "production", label
+
+
+def test_stations_installed_top_level_and_kpi(canonical_result):
+    """Task 1.2: stationsInstalled is a plain top-level int (matches breakevenMonth's
+    precedent — a count, not money/percent), and a KPI tile surfaces the same figure
+    in the {raw,display} shape every OTHER kpis[] entry uses (KpiStrip.tsx renders
+    `k.value.display` unconditionally, so this cannot be a bare int like the
+    top-level field)."""
+    vm = to_view_model(canonical_result)
+    assert vm["stationsInstalled"] == canonical_result.stations_installed
+    assert isinstance(vm["stationsInstalled"], int)
+    kpi = [k for k in vm["kpis"] if k["label"] == "Production stations (peak)"]
+    assert len(kpi) == 1
+    assert kpi[0]["value"]["raw"] == float(canonical_result.stations_installed)
+    assert kpi[0]["value"]["display"] == f"{canonical_result.stations_installed:,.0f}"
 
 
 def test_customers_row_dropped_from_five_year_table(canonical_result):

@@ -13,6 +13,23 @@ from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, comput
 from engine.money import D
 from engine.monthly import _BLEND_MONTHS, _blend_then_flat, _year_slices
 
+_PENNY = Decimal("0.01")
+
+
+def _penny(value):
+    """Round a Decimal to the penny — the footing contract this module's docstring
+
+    states ("to the penny", Regression #15), not infinite-Decimal-precision equality.
+    Model v3's new chained divisions (customers, items_sold/produced, production
+    hours) push some intermediate sums past Python decimal's default 28-significant-
+    digit context precision, so two mathematically-identical totals reached via a
+    different operation order can differ in the ~22nd decimal place (millionths of a
+    trillionth of a cent) — real, but far below a penny, and the wrong thing for an
+    exact ``==`` to catch (same class of test-fragility the exported .xlsx's exact
+    ``float ==`` comparison hit; see test_xlsx.py).
+    """
+    return D(value).quantize(_PENNY)
+
 
 def _opening_at(opening_month_number, cost_schedule=()):
     inputs = Inputs(
@@ -95,8 +112,8 @@ def test_operating_rollup_holds_when_opening_is_late():
     exp = sum((D(str(m.expenses)) for m in ops), Decimal("0"))
     net = sum((D(str(m.net)) for m in ops), Decimal("0"))
     assert rev == D(str(res.annual[1].total_rev))
-    assert exp == D(str(res.annual[1].total_exp))
-    assert net == D(str(res.annual[1].net))
+    assert _penny(exp) == _penny(res.annual[1].total_exp)
+    assert _penny(net) == _penny(res.annual[1].net)
 
 
 def test_every_year_rolls_up_from_its_twelve_operating_months():
@@ -110,10 +127,10 @@ def test_every_year_rolls_up_from_its_twelve_operating_months():
         assert len(ops) == 12, y
         assert sum((D(str(m.revenue)) for m in ops), Decimal("0")) == \
             D(str(res.annual[y].total_rev)), y
-        assert sum((D(str(m.expenses)) for m in ops), Decimal("0")) == \
-            D(str(res.annual[y].total_exp)), y
-        assert sum((D(str(m.net)) for m in ops), Decimal("0")) == \
-            D(str(res.annual[y].net)), y
+        assert _penny(sum((D(str(m.expenses)) for m in ops), Decimal("0"))) == \
+            _penny(res.annual[y].total_exp), y
+        assert _penny(sum((D(str(m.net)) for m in ops), Decimal("0"))) == \
+            _penny(res.annual[y].net), y
 
 
 def test_cumulative_is_running_sum_across_pre_open_and_operating():
@@ -175,13 +192,13 @@ def test_expenses_roll_up_to_annual_to_the_penny(canonical_result):
     exp = sum((D(str(m.expenses)) for m in ops), Decimal("0"))
     # operating-month expenses exclude one-time startup outflows; they equal the
     # annual operating total_exp to the penny.
-    assert exp == D(str(canonical_result.annual[1].total_exp))
+    assert _penny(exp) == _penny(canonical_result.annual[1].total_exp)
 
 
 def test_net_rolls_up_to_annual_to_the_penny(canonical_result):
     ops = [m for m in canonical_result.monthly if m.kind == "operating" and m.index <= 12]
     net = sum((D(str(m.net)) for m in ops), Decimal("0"))
-    assert net == D(str(canonical_result.annual[1].net))
+    assert _penny(net) == _penny(canonical_result.annual[1].net)
 
 
 def test_cumulative_cash_is_running_sum_including_startup(canonical_result):
@@ -247,11 +264,12 @@ def test_fixed_costs_are_spread_flat_not_revenue_weighted():
 
 
 def test_expense_streams_split_fixed_payroll_and_pct_of_revenue(canonical_result):
-    # ENGINE_CONTRACT §5.2 three-stream split: Payroll AND Payroll taxes ride the
-    # payroll hire-ramp (_PAYROLL_WEIGHTS, NOT the revenue S-curve); card fees /
-    # marketing / supplies ride the revenue S-curve (_REVENUE_WEIGHTS); every other
-    # (fixed) line spreads flat (_flat_monthly). Reconstruct the three streams with the
-    # engine's own helpers and assert the per-month expense equals their sum, exactly.
+    # ENGINE_CONTRACT §5.2 three-stream split: Payroll, Payroll taxes, AND (Model v3)
+    # Workers' comp expense ride the payroll hire-ramp (_PAYROLL_WEIGHTS, NOT the
+    # revenue S-curve); card fees / marketing / supplies ride the revenue S-curve
+    # (_REVENUE_WEIGHTS); every other (fixed) line spreads flat (_flat_monthly).
+    # Reconstruct the three streams with the engine's own helpers and assert the
+    # per-month expense equals their sum, exactly.
     from engine.monthly import (
         _PAYROLL_WEIGHTS,
         _PCT_OF_REVENUE_LABELS,
@@ -262,8 +280,10 @@ def test_expense_streams_split_fixed_payroll_and_pct_of_revenue(canonical_result
     y1 = canonical_result.annual[1]
     pct = sum((D(str(v)) for k, v in y1.expenses.items() if k in _PCT_OF_REVENUE_LABELS),
               Decimal("0"))
+    # Model v3: Workers' comp expense (2% of payroll) rides the payroll ramp, same
+    # stream as Payroll/Payroll taxes, not the flat fixed residual (Task 1.5).
     pay = sum((D(str(y1.expenses.get(k, Decimal("0"))))
-               for k in ("Payroll", "Payroll taxes")), Decimal("0"))
+               for k in ("Payroll", "Payroll taxes", "Workers' comp expense")), Decimal("0"))
     fix = D(str(y1.total_exp)) - pct - pay
     # Payroll taxes must be part of the payroll stream, not %-of-revenue.
     assert "Payroll taxes" not in _PCT_OF_REVENUE_LABELS
@@ -278,22 +298,29 @@ def test_expense_streams_split_fixed_payroll_and_pct_of_revenue(canonical_result
     ops = [m for m in canonical_result.monthly if m.kind == "operating"][:12]
     for i in range(12):  # every operating month matches component-by-component
         assert D(str(ops[i].expenses)) == expected[i], i
-    assert sum((D(str(m.expenses)) for m in ops), Decimal("0")) == D(str(y1.total_exp))
+    assert _penny(sum((D(str(m.expenses)) for m in ops), Decimal("0"))) == _penny(y1.total_exp)
 
 
 def test_canonical_trough_capital_and_breakeven_shift_with_flat_fixed_costs(canonical_result):
     # Charging fixed costs flat (front-loaded vs the back-loaded revenue S-curve) and
-    # payroll taxes on the payroll ramp deepens the early cash trough. Re-pinned at the
-    # 2.7.0 regen (Task 6.4 — 990-grounded payroll tax 8% + Insurance $10k deepen it
-    # further): the canonical trough is ≈ -$322,854 at project month 7, capital ≈
-    # $347,854, operating break-even month 8. (6.2: -$317,403 / $342,403 / month 8.)
+    # payroll taxes on the payroll ramp deepens the early cash trough. Re-pinned at
+    # Model v3 (3.0.0 — card fees' two-term formula + Workers' comp + POS
+    # platform/Production software deepen it further): the canonical LAUNCH-WINDOW
+    # trough (months <= g+11, decision.py's actual capital basis) is ≈ -$329,597 at
+    # project month 7, capital ≈ $354,597, operating break-even month 8. (2.9.0:
+    # -$322,854 / $347,854 / month 8.) Scope the trough search to the launch window,
+    # same as decision.py — Model v3's added cost lines now push the GLOBAL 60-month
+    # minimum into a later-year dip (Year 2, around month 27), which must NOT leak
+    # into this launch-capital headline (#182).
     from engine.money import round_dollars
-    troughs = [(m.index, D(str(m.cumulative_cash))) for m in canonical_result.monthly]
+    g = canonical_result.decision.grand_opening_month
+    troughs = [(m.index, D(str(m.cumulative_cash))) for m in canonical_result.monthly
+               if m.index <= g + 11]
     trough_month, trough = min(troughs, key=lambda t: t[1])
     assert trough_month == 7
-    assert round_dollars(trough) == Decimal("-322854")
+    assert round_dollars(trough) == Decimal("-329597")
     cap = D(str(canonical_result.decision.startup_capital_required))
-    assert round_dollars(cap) == Decimal("347854")
+    assert round_dollars(cap) == Decimal("354597")
     assert canonical_result.decision.break_even_month == 8
 
 
@@ -408,6 +435,44 @@ def test_blend_then_flat_glides_upward_smoothly_when_growth_outpaces_the_exit_ra
         assert parts[i] == parts[_BLEND_MONTHS]
 
 
+# ------------------------------------------------- Task 1.2: production-station module
+def test_stations_staffed_footing(canonical_result):
+    # stations_staffed is a pure rescale of monthly revenue (not itself footing-exact
+    # additive to a fixed annual total); assert consistency — every operating month's
+    # stations_staffed equals the same formula recomputed independently off that
+    # month's own revenue, proving the wiring rather than a footing identity.
+    a = canonical_result.assumptions
+    salv_pct = D(str(a.salvage_pct))
+    ops = [m for m in canonical_result.monthly if m.kind == "operating"]
+    assert ops
+    for m in ops:
+        retail_m = D(str(m.revenue)) / (Decimal("1") + salv_pct)
+        items_sold_m = retail_m / D(str(a.avg_item_price))
+        items_produced_m = items_sold_m / D(str(a.sell_through))
+        production_hours_m = items_produced_m / D(str(a.items_per_hour))
+        expected = production_hours_m / D(str(a.productive_hours_per_station))
+        assert D(str(m.stations_staffed)) == expected, m.index
+
+
+def test_pre_open_months_have_zero_stations_staffed():
+    res = _opening_at(4, ({"category": "Consultant", "month": 1, "amount": 10000},))
+    pre_open = [m for m in res.monthly if m.kind == "pre_open"]
+    assert pre_open
+    for m in pre_open:
+        assert D(str(m.stations_staffed)) == Decimal("0")
+
+
+def test_stations_installed_is_ceil_of_peak(canonical_result):
+    # compute()'s stations_installed is the CEILING of the peak monthly
+    # stations_staffed across the whole horizon — never floor/round, and never a
+    # crash when the peak is 0 (guarded implicitly: ceil(0) == 0).
+    peak = max(D(str(m.stations_staffed)) for m in canonical_result.monthly)
+    installed = canonical_result.stations_installed
+    assert isinstance(installed, int)
+    assert installed >= peak
+    assert Decimal(installed) - 1 < peak
+
+
 def test_build_monthly_chains_years_2_5_off_each_other_not_just_year_1(aggressive_result):
     # Regression: Year 3 must anchor its glide on Year 2's OWN computed exit value
     # (not, say, Year 1's), so a multi-year run of glides stays internally
@@ -424,3 +489,101 @@ def test_build_monthly_chains_years_2_5_off_each_other_not_just_year_1(aggressiv
     month25 = next(m for m in aggressive_result.monthly if m.index == 25)
     assert D(str(month25.revenue)) == rev3[0]
     assert D(str(month25.expenses)) == exp3[0]
+
+
+# ------------------------------------------- Task 1.3: within-year share ramp (linear)
+def test_share_ramp_unset_is_byte_identical(canonical_result):
+    # canonical_result's Inputs leave share_m1/share_m12 at their None default, so
+    # Year-1 revenue must still ride the S-curve (_REVENUE_WEIGHTS) byte-for-byte —
+    # the new optional linear ramp must not perturb existing behavior when unset.
+    from engine.monthly import _REVENUE_WEIGHTS, _distribute
+
+    y1 = canonical_result.annual[1]
+    expected_rev_parts = _distribute(D(str(y1.total_rev)), _REVENUE_WEIGHTS)
+    ops = [m for m in canonical_result.monthly if m.kind == "operating"][:12]
+    for i in range(12):
+        assert D(str(ops[i].revenue)) == expected_rev_parts[i], i
+
+
+def test_share_ramp_linear_when_set(canonical_inputs):
+    # Setting share_m1/share_m12 switches Year-1 revenue onto a straight linear
+    # interpolation instead of the S-curve. Recompute the expected split via the
+    # SAME _linear_share_weights + _distribute call the engine itself uses (not a
+    # hand-typed dollar literal), for both month 1 and month 12.
+    from dataclasses import replace
+
+    from engine.monthly import _distribute, _linear_share_weights
+
+    inputs, assumptions, demand, trade = canonical_inputs
+    ramped = replace(inputs, share_m1="0.04", share_m12="0.16")
+    result = compute(ramped, assumptions, demand, trade, overrides={})
+
+    y1 = result.annual[1]
+    weights = _linear_share_weights(D("0.04"), D("0.16"))
+    expected_rev_parts = _distribute(D(str(y1.total_rev)), weights)
+    ops = [m for m in result.monthly if m.kind == "operating"][:12]
+    for i in range(12):
+        assert D(str(ops[i].revenue)) == expected_rev_parts[i], i
+    # share_m1 (0.04) < share_m12 (0.16) => month 1 revenue must be the smallest
+    # share and month 12 the largest — the ramp is monotonically increasing.
+    assert ops[0].revenue < ops[-1].revenue
+
+
+def test_share_ramp_annual_roundtrip_holds(canonical_inputs):
+    # Regression #15 on the new path: with the linear ramp active, Year-1's 12
+    # operating months must still sum to the annual total_rev to the penny.
+    from dataclasses import replace
+
+    inputs, assumptions, demand, trade = canonical_inputs
+    ramped = replace(inputs, share_m1="0.04", share_m12="0.16")
+    result = compute(ramped, assumptions, demand, trade, overrides={})
+
+    g = result.decision.grand_opening_month
+    ops = [m for m in result.monthly
+           if m.kind == "operating" and g <= m.index <= g + 11]
+    total_rev = sum((D(str(m.revenue)) for m in ops), Decimal("0"))
+    assert total_rev == D(str(result.annual[1].total_rev))
+
+
+def test_build_monthly_signature_takes_inputs_not_opening_month_number(canonical_inputs):
+    # build_monthly's signature is (annual, assumptions, inputs, startup_by_month) —
+    # NOT (annual, assumptions, opening_month_number, startup_by_month). Exercise it
+    # directly (not just through compute()) to pin the new call shape.
+    from engine.compute import compute_annual, startup_outflows_by_month
+    from engine.monthly import build_monthly
+
+    inputs, assumptions, demand, trade = canonical_inputs
+    years, startup, startup_total, occupancy = compute_annual(
+        inputs, assumptions, demand, trade, overrides={})
+    startup_by_month = startup_outflows_by_month(inputs, assumptions, occupancy[1])
+    rows, breakeven = build_monthly(years, assumptions, inputs, startup_by_month)
+    assert rows
+    assert breakeven is not None
+
+
+
+
+def test_workers_comp_expense_in_annual():
+    """Workers' comp expense (2% of payroll) is included in annual calculations."""
+    from decimal import Decimal
+
+    from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
+    from engine.money import D
+
+    inputs = Inputs(
+        org_name="x", city="x", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+    )
+    res = compute(
+        inputs, Assumptions(), DemandDrivers(),
+        TradeArea(basis="city", households="31798"), overrides={},
+    )
+    y1 = res.annual[1]
+    
+    # Workers' comp should be 2% of payroll
+    payroll = D(str(y1.expenses["Payroll"]))
+    workers_comp = D(str(y1.expenses["Workers' comp expense"]))
+    expected = payroll * Decimal("0.02")
+    assert workers_comp == expected
