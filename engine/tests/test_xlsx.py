@@ -7,6 +7,7 @@ orange overridden-component cell + exact comment string.
 """
 
 import openpyxl
+import pytest
 
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.xlsx import build_xlsx
@@ -364,8 +365,15 @@ def test_operating_months_carry_revenue_and_expenses(tmp_path):
     assert operating  # there are operating months
     for month in operating:
         r = rowmap[month]
-        assert float(ws.cell(row=r, column=rev_col).value) == float(by_month[month].revenue)
-        assert float(ws.cell(row=r, column=exp_col).value) == float(by_month[month].expenses)
+        # Model v3 (3.0.0): the production-station/payroll-grouping math produces
+        # longer Decimal expansions, so an openpyxl-round-tripped cell value and a
+        # freshly-converted float can differ in the 11th+ decimal place (real, but
+        # far below a millionth of a cent) — exact float `==` is the wrong tool here
+        # (the golden gate itself uses a $0.50 tolerance for exactly this reason).
+        assert float(ws.cell(row=r, column=rev_col).value) == pytest.approx(
+            float(by_month[month].revenue))
+        assert float(ws.cell(row=r, column=exp_col).value) == pytest.approx(
+            float(by_month[month].expenses))
     # at least one operating month has positive revenue (the ramp is non-trivial)
     assert any(float(by_month[m].revenue) > 0 for m in operating)
 

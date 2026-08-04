@@ -172,10 +172,12 @@ def test_view_model_is_json_serializable(canonical_result):
 
 def test_version_stamps(canonical_result):
     vm = to_view_model(canonical_result)
-    assert vm["model_version"] == "2.9.0"     # FUSION: cash display (A) × params/gaps operating (B)
-    # 1.7.0: cash income/margin surfaces + monthly[] 60 rows + Month-N payback (A) UNION
-    # +sensitivity+delta +confidence{ramp} + editable settings knobs (B).
-    assert vm["compute_schema_version"] == "1.7.0"
+    # Model v3 (3.0.0): card fees' two-term formula, production-station module,
+    # optional linear share ramp, labor_mode coverage, and three new lines (POS
+    # platform, Production software, Workers' comp, Contributions revenue).
+    assert vm["model_version"] == "3.0.0"
+    # 1.8.0: new settings keys + new view-model rows/fields for Model v3.
+    assert vm["compute_schema_version"] == "1.8.0"
     assert "utilitiesPerSqft" in vm["settings"]
     assert "rentPerSqft" in vm["settings"]
 

@@ -6,7 +6,32 @@ the point of use; these module constants name the *default* assumption values.
 """
 from __future__ import annotations
 
-MODEL_VERSION = "2.9.0"          # math change => bump. 2.9.0 fixes an owner defect
+MODEL_VERSION = "3.0.0"          # math change => bump. 3.0.0 = MODEL V3 (owner
+# session 2026-08-03): four Year-1-affecting cost/revenue formula replacements plus
+# three new lines, bundled under one bump. (1) Credit card fees moves from a flat
+# 2%-of-revenue line to a two-term formula: card_share x (card_rate x retail +
+# card_per_tx_fee x transactions) — CARD_SHARE/CARD_RATE/CARD_PER_TX_FEE replace the
+# deleted CARD_FEES_PCT_OF_REVENUE constant. (2) A new production-station module adds
+# read-only derived metrics (items_sold -> items_produced -> production_hours ->
+# stations_staffed (monthly) -> stations_installed) bridging retail $ to a
+# staffing/space count; non-pinnable, do not feed total_rev/total_exp. (3) Year-1
+# monthly revenue can optionally ride a linear share_m1->share_m12 ramp instead of the
+# default S-curve (Inputs.share_m1/share_m12, both None by default => byte-identical).
+# (4) labor_mode: "pct" (default, today's total_rev x labor_pct formula, byte-
+# unchanged) or "coverage" (headcount/wage-driven: hourly production+cashier+door+
+# runner hours x wage, plus flat manager/assistant-manager salaries; uses the year's
+# average month since compute_annual runs before build_monthly); break_even_revenue's
+# var_rate drops the labor term under coverage mode so it isn't double-modeled. Three
+# new lines, always on: POS platform ($400/mo) + Production software ($100/mo) join
+# FIXED_ANNUAL; Workers' comp expense (2% of payroll) rides the payroll ramp
+# (_PAYROLL_WEIGHTS), not the flat fixed residual; Contributions revenue is an
+# optional flat annual add to total_rev (default 0 => byte-unchanged). All five golden
+# fixtures move because card fees, POS platform, Production software, and Workers'
+# comp are always-on; production-station/share-ramp/labor_mode are additive-with-
+# defaults and do not move any fixture on their own. See
+# docs/plans/2026-08-03-model-v3-session-learnings.md and DECISIONS.md 3.0.0 entry.
+#
+# 2.9.0 fixes an owner defect
 # (2026-07-05): Years 2-5 of monthly[] used to jump INSTANTLY from the prior year's
 # S-curve/ramp exit rate to the new year's flat annual average — an artificial
 # one-month "cliff" in the Net line with no cost event behind it. Years 2-5 now GLIDE
@@ -97,7 +122,13 @@ MODEL_VERSION = "2.9.0"          # math change => bump. 2.9.0 fixes an owner def
 #     startup total); monthly[] grows from 12 to 60 rows (full horizon) so the cash-flow series
 #     spans the payback crossing; payback is the Month-N cash-recovery milestone.
 # The NUMBERS move with model 2.8.0, so this rides the single fusion regeneration.)
-COMPUTE_SCHEMA_VERSION = "1.7.0"
+# 1.8.0: Model v3 (see MODEL_VERSION 3.0.0 above) — new settings keys (card_share/
+# card_rate/card_per_tx_fee, avg_item_price/sell_through/items_per_hour/
+# productive_hours_per_station, share_m1/share_m12, labor_mode + coverage-mode
+# fields, workers_comp_pct, contributions_annual) and new view-model rows/fields
+# (Items sold/Items produced/Production hours rows, stationsInstalled, Contributions
+# row, leadership_coverage_advisory flag).
+COMPUTE_SCHEMA_VERSION = "1.8.0"
 
 # --- export trust copy (#192). Single source for the "planning estimates, not
 # advice" disclaimer + AI-narrative disclosure that the terms gate exists to

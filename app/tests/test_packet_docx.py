@@ -262,7 +262,7 @@ def test_no_raw_float_ever_appears_in_the_document():
     leaks = [f for f in _raw_floats(vm) if f in text]
     assert not leaks, f"raw float(s) leaked into the .docx: {leaks}"
     # spot-check the headline raw values explicitly.
-    assert "347853.76208215486" not in text     # capital raw
+    assert "354596.6531797551" not in text      # capital raw
     assert "426937.75488" not in text       # total revenue raw
     assert "238500.0" not in text           # startupTotal raw
 
@@ -409,7 +409,7 @@ def test_kpi_disp_and_banner_fact_read_display_strings():
     pkt = build_packet(_vm5())
     assert _kpi_disp(pkt, "Total revenue") == "$426,938"
     assert _kpi_disp(pkt, "Missing KPI") == ""
-    assert _banner_fact(pkt, "Capital required") == "$347,854"
+    assert _banner_fact(pkt, "Capital required") == "$354,597"
     assert _banner_fact(pkt, "Missing fact") == ""
 
 
@@ -427,7 +427,7 @@ def test_exec_summary_fallback_is_grounded_and_floatless():
     for f in extract_figures(text):
         assert _norm(f) in grounded_figures(vm), f
     assert "House of Hope" in text
-    assert "347853.76208215486" not in text          # never the raw float
+    assert "354596.6531797551" not in text           # never the raw float
 
 
 def test_exec_summary_fallback_omits_breakeven_when_na():
@@ -439,13 +439,14 @@ def test_exec_summary_fallback_omits_breakeven_when_na():
 
 
 def test_performance_sentence_grounded_year_one():
-    # CASH basis (epic #321) on the FUSION operating layer: the grounded Year-1 net income
-    # includes the one-time startup hit (operating −$53,714 with the 990 constants − $238,500
-    # startup = −$292,214), sourced from the cash-based "Net income" surface — so the packet
-    # sentence reads the board's cash reality.
+    # CASH basis (epic #321) on the Model v3 (3.0.0) operating layer: the grounded
+    # Year-1 net income includes the one-time startup hit (operating −$65,068 with
+    # the card-fee/Workers'-comp/POS-platform/Production-software costs − $238,500
+    # startup = −$303,568), sourced from the cash-based "Net income" surface — so
+    # the packet sentence reads the board's cash reality.
     vm = _vm5()
     text = _performance_sentence(build_packet(vm))
-    assert "$426,938" in text and "($292,214)" in text  # FUSION cash Y1 net
+    assert "$426,938" in text and "($303,568)" in text  # Model v3 cash Y1 net
     for f in extract_figures(text):
         assert _norm(f) in grounded_figures(vm), f
 
@@ -454,7 +455,7 @@ def test_growth_sentence_uses_final_year_net_income():
     vm = _vm5()
     text = _growth_sentence(build_packet(vm))
     assert "Year 5" in text
-    assert "$35,612" in text          # the Year-5 net income (bottom-line last cell)
+    assert "$18,903" in text          # the Year-5 net income (bottom-line last cell)
     assert "18.9%" in text            # the Revenue CAGR (revenue-only -> unchanged)
 
 
@@ -470,7 +471,7 @@ def test_interpretation_para_payback_not_reached_branch():
     # VM5's payback is N/A (loss case) -> the "not reached" wording, capital only.
     vm = _vm5()
     text = _interpretation_para(build_packet(vm))
-    assert "$347,854" in text
+    assert "$354,597" in text
     assert "not reached" in text.lower()
     for f in extract_figures(text):
         assert _norm(f) in grounded_figures(vm), f
@@ -585,6 +586,6 @@ def test_ai_on_path_is_fully_grounded_too():
     # When a grounded stored narrative is used, the WHOLE document (narrative +
     # deterministic sentences + tables) still validates against computed_json.
     vm = _vm5()
-    body = "House of Hope needs $347,854 in capital and earns $426,938 in revenue."
+    body = "House of Hope needs $354,597 in capital and earns $426,938 in revenue."
     text = _all_text(render_packet_docx(build_packet(vm, narrative_md=body)))
     validate_grounding(text, vm)

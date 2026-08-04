@@ -14,9 +14,18 @@ from engine.tests.conftest import build_canonical_inputs
 
 
 def test_first_year_cash_gap_is_most_negative_cumulative(canonical_result):
+    # first_year_cash_gap is deliberately SCOPED to the operating Year-1 window
+    # (g..g+11, #182/model.py 2.4.0) — a later-year cost dipping deeper than Year 1
+    # must NOT leak into this headline. Model v3's added cost lines (card fees,
+    # Workers' comp, POS platform/Production software) now push the canonical
+    # fixture's Year-2 trough below its Year-1 trough (payback never resolves in
+    # this loss case), so the correct invariant compares against the Y1-window
+    # troughs only, not the global min across the full 60-month series.
     dec = canonical_result.decision
-    troughs = [D(str(m.cumulative_cash)) for m in canonical_result.monthly]
-    assert D(str(dec.first_year_cash_gap)) == min(troughs)
+    g = dec.grand_opening_month
+    y1_troughs = [D(str(m.cumulative_cash)) for m in canonical_result.monthly
+                  if g <= m.index <= g + 11]
+    assert D(str(dec.first_year_cash_gap)) == min(y1_troughs)
     assert D(str(dec.first_year_cash_gap)) <= 0
 
 
@@ -36,15 +45,15 @@ def test_design_parity_capital_matches_appendix_d_headline(design_parity_result)
     # Contract anchor (ENGINE_CONTRACT §6.1 / DESIGN_PROMPT): the 40% design-parity
     # case is the prototype headline. Capital trajectory across waves: prototype
     # screenshots ~$277,990 -> ~$299,168 (6.2 monthly split) -> $302,238.41 (6.4
-    # 990-grounded payroll tax 8% + Insurance $10k). *** OWNER-VISIBLE FLIP (6.4): ***
-    # capital ($302,238) now crosses the design-parity/seed source_of_funds ($300,000)
-    # by $2,238, so the rules-as-written reco flips proceed -> raise_cash (Year-1 net
-    # is still +$38,505 and margins stay in band — it is the capital>funds gate, not a
-    # health problem). The prototype's "Proceed" headline assumed the pre-990 cost
-    # basis; restoring it would require funding the demo above its now-higher capital
-    # need. Flagged for the whole-branch reviewer / owner.
+    # 990-grounded payroll tax 8% + Insurance $10k) -> $306,349.23 (Model v3 3.0.0:
+    # card fees' two-term formula + Workers' comp + POS platform/Production software
+    # deepen the trough further). capital keeps crossing the design-parity/seed
+    # source_of_funds ($300,000), now by ~$6,349 (was $2,238 at 2.9.0), so the
+    # rules-as-written reco stays raise_cash (Year-1 net is still positive, +$28,858
+    # operating, and margins stay in band — it is the capital>funds gate, not a
+    # health problem). Flagged for the whole-branch reviewer / owner.
     cap = D(str(design_parity_result.decision.startup_capital_required))
-    assert Decimal("300000") < cap <= Decimal("305000")
+    assert Decimal("305000") < cap <= Decimal("310000")
     assert design_parity_result.decision.reco_tag == "raise_cash"
 
 
@@ -445,8 +454,12 @@ def test_capital_accumulates_from_pre_opening_costs():
     )
     res = _opening_at(6, cost_schedule=schedule)
     # Trough is at least the sum of the five pre-opening outflows plus the opening
-    # lease deposit (all spent before any operating revenue offsets them).
-    trough = min(D(str(m.cumulative_cash)) for m in res.monthly)
+    # lease deposit (all spent before any operating revenue offsets them). capital is
+    # scoped to the LAUNCH window (months <= g+11, decision.py) so a later-year
+    # operating dip (Model v3's added cost lines can push Year 2 below Year 1 in a
+    # loss case) never leaks into it — scope the comparison trough the same way.
+    g = res.decision.grand_opening_month
+    trough = min(D(str(m.cumulative_cash)) for m in res.monthly if m.index <= g + 11)
     assert trough <= Decimal("-200000")
     peak = abs(min(Decimal("0"), trough))
     assert D(str(res.decision.startup_capital_required)) == peak + Decimal("25000")
@@ -625,9 +638,21 @@ def test_pct_of_revenue_classification_is_consistent_across_the_three_homes(
     two would otherwise silently flat-spread in the monthly model (mis-classified as
     a fixed lease obligation instead of riding the revenue ramp) AND drop out of the
     break-even-revenue math, with no test failing — this is that test.
+
+    Model v3: "Credit card fees" is no longer a CLEAN %-of-revenue line — it is the
+    two-term formula card_share x (card_rate x retail + per_tx_fee x transactions).
+    decision.py's var_rate deliberately captures ONLY a card_share*card_rate*total_rev
+    approximation of that line (decision.py's own comment: the per-transaction term is
+    "not a clean % of revenue", Design Review fix #2 precedent — same simplification
+    labor_mode coverage uses for Payroll); the uncovered remainder — the per-tx term
+    PLUS the small gap from card_rate actually applying to `retail`, not `total_rev`
+    (retail = total_rev / (1+salvage_pct), so the two are not identical) — is folded
+    into `fixed`. So home 3's coverage is home 1's dollar total MINUS whatever of the
+    card-fees line var_rate does NOT model, not the full line.
     """
     import engine.compute as compute_mod
     import engine.monthly as monthly_mod
+    from engine import model
 
     canonical_lines = set(compute_mod.PCT_OF_REVENUE_LINES)
 
@@ -645,16 +670,27 @@ def test_pct_of_revenue_classification_is_consistent_across_the_three_homes(
     assert ber is not None  # canonical's var_rate < 1 -- a real break-even revenue exists
     implied_var_rate = (ber - exp1) / (ber - rev1)
 
-    # The dollar total of every canonical %-of-revenue line, PLUS its one DERIVED
-    # %-of-Payroll line ("Payroll taxes" is not itself in PCT_OF_REVENUE_LINES —
-    # it is derived from Payroll, exactly like Rent is derived from occupancy —
-    # but decision.py's var_rate folds it into the Payroll term via
+    # decision.py's var_rate models "Credit card fees" coverage as EXACTLY
+    # card_share * card_rate * total_rev (see decision.py's var_rate formula) — not
+    # the line's actual dollar total. Swap the raw line for that modeled amount so
+    # the comparison below tests home 3's ACTUAL coverage, not a hand-derived
+    # re-implementation of the card-fee formula.
+    card_fees_var_rate_covered = D(model.CARD_SHARE) * D(model.CARD_RATE) * rev1
+
+    # The dollar total of every canonical %-of-revenue line (Credit card fees
+    # replaced by the amount var_rate actually models for it), PLUS its one DERIVED
+    # %-of-Payroll line ("Payroll taxes" is not itself in PCT_OF_REVENUE_LINES — it
+    # is derived from Payroll, exactly like Rent is derived from occupancy — but
+    # decision.py's var_rate folds it into the Payroll term via
     # ``labor_pct * (1 + payroll_tax_pct)``), must equal var_rate's entire dollar
-    # coverage. A future line added to home 1 without a matching var_rate term
-    # would push this dollar total above implied_var_rate * rev1 and fail loudly.
-    pct_dollar_total = sum(
-        (D(str(y1.expenses[label])) for label in canonical_lines), Decimal("0")
-    ) + D(str(y1.expenses["Payroll taxes"]))
+    # coverage. A future line added to home 1 without a matching var_rate term would
+    # push this dollar total above implied_var_rate * rev1 and fail loudly.
+    other_lines = canonical_lines - {"Credit card fees"}
+    pct_dollar_total = (
+        sum((D(str(y1.expenses[label])) for label in other_lines), Decimal("0"))
+        + card_fees_var_rate_covered
+        + D(str(y1.expenses["Payroll taxes"]))
+    )
     assert abs(pct_dollar_total - implied_var_rate * rev1) < Decimal("0.01")
 
 
@@ -697,29 +733,31 @@ def assert_breakeven_text_consistent(vm) -> None:
 
 
 def test_reco_text_and_breakeven_metric_cannot_disagree_grace(grace_result):
-    # #142: Grace Mission reaches operating break-even at month 8 in the BASE case
-    # (metrics.breakeven = Month 8), yet is do_not_proceed because the DOWNSIDE never
+    # #142: Grace Mission reaches operating break-even at month 9 in the BASE case
+    # (metrics.breakeven = Month 9 — Model v3's added cost lines push this one month
+    # later than 2.9.0's Month 8), yet is do_not_proceed because the DOWNSIDE never
     # breaks even. The reco text must say *that*, not flatly claim "break-even is
-    # not reached" — which contradicts the Month-8 metric on screen.
+    # not reached" — which contradicts the Month-9 metric on screen.
     # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
     vm = to_view_model(grace_result)
     assert vm["reco"]["tag"] == "do_not_proceed"
-    assert vm["metrics"]["breakeven"]["raw"] == 8
+    assert vm["metrics"]["breakeven"]["raw"] == 9
     assert_breakeven_text_consistent(vm)
 
 
 def test_reco_text_names_base_and_downside_when_base_breaks_even(grace_result):
     # #142/#145: the honest, consistent message surfaces WHY the verdict is
-    # do_not_proceed — the base case reaches break-even (Month 8) but the downside
-    # scenario (rent +25% / donations -25%) does not, so the plan is not robust.
+    # do_not_proceed — the base case reaches break-even (Month 9 at Model v3, was
+    # Month 8 at 2.9.0) but the downside scenario (rent +25% / donations -25%) does
+    # not, so the plan is not robust.
     # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
     vm = to_view_model(grace_result)
     for text in (vm["reco"]["sub"].lower(), vm["metrics"]["reasonBreakeven"].lower()):
         assert "base case" in text, text
         assert "downside" in text, text
-        assert "month 8" in text, text
+        assert "month 9" in text, text
 
 
 def test_reco_text_consistent_for_deep_loss_base_unreached():

@@ -37,12 +37,13 @@ def test_canonical_is_a_loss_case():
     # Cash-based Net margin display negative (parentheses) and reco is not proceed.
     assert vm["rows"][-1]["y1"]["display"].startswith("(")
     assert vm["reco"]["tag"] != "proceed"
-    assert vm["model_version"] == "2.9.0"
-    # FUSION cash display (2.7.0-A): the displayed Year-1 Net income subtracts the one-time
-    # startup. Fused = operating net (−$53,713.72, with the 990 constants) − startup_total
-    # ($238,500) = −$292,213.72 → −$292,214 (was pre-990 −$282,933).
+    assert vm["model_version"] == "3.0.0"
+    # Model v3 (3.0.0): the displayed Year-1 Net income subtracts the one-time
+    # startup. Card fees' two-term formula + Workers' comp + POS platform/Production
+    # software push the operating loss deeper, so the cash Y1 net moves from
+    # −$292,214 (2.9.0) to −$303,568.
     net = next(r for r in vm["rows"] if r["label"] == "Net income")
-    assert round(net["y1"]["raw"]) == -292214
+    assert round(net["y1"]["raw"]) == -303568
 
 
 def test_canonical_reco_text_consistent_with_breakeven_metric():
@@ -72,15 +73,17 @@ def test_design_parity_reproduces_headline(design_parity_result):
     # constants lowered it from the pre-990 ~11% prototype headline). The DISPLAYED cash net and
     # the Month-N payback are re-pinned to fused values in step 3.
     assert vm["rows"][-1]["y1"]["raw"] < 0                       # displayed (cash) Net margin
-    # Fused cash Y1 net = operating +$38,504.84 − startup $238,500 = −$199,995.16 → −$199,995.
-    assert round(next(r for r in vm["rows"] if r["label"] == "Net income")["y1"]["raw"]) == -199995
+    # Model v3 (3.0.0): cash Y1 net moves from −$199,995 (2.9.0) to −$209,642 — the
+    # card-fee two-term formula + Workers' comp + POS platform/Production software
+    # deepen the operating loss before the startup subtraction.
+    assert round(next(r for r in vm["rows"] if r["label"] == "Net income")["y1"]["raw"]) == -209642
     assert vm["breakevenMonth"] == 6                            # OPERATING (6.2 Y1 distribution)
     assert vm["reco"]["tag"] == "raise_cash"                    # OPERATING-driven (capital > funds)
-    # Month-N payback recomputes over the 60-month series on the 6.2 Y1 window → Month 32
-    # (their pre-fusion goldens read Month 30; the shift is expected — fusion spec §3).
-    assert vm["milestones"]["payback"]["raw"] == 32
+    # Month-N payback recomputes over the 60-month series on the 6.2 Y1 window. Model v3's
+    # extra cost lines push the crossing from Month 32 (2.9.0) to Month 34.
+    assert vm["milestones"]["payback"]["raw"] == 34
     op_margin = float(design_parity_result.annual[1].margin)
-    assert 0.08 < op_margin < 0.10                              # ~9.0% operating (990 constants)
+    assert 0.06 < op_margin < 0.08                              # ~6.8% operating (Model v3)
 
 
 def test_y1_revenue_identical_across_both_fixtures():
@@ -113,7 +116,7 @@ def test_aggressive_triggers_the_two_named_guardrail_flags():
     # The late-year (steady-state) margin is above the ~30% band; verdict is "revise".
     assert vm["rows"][-1]["y4"]["raw"] > 0.30
     assert vm["reco"]["tag"] == "revise"
-    assert vm["model_version"] == "2.9.0"
+    assert vm["model_version"] == "3.0.0"
 
 
 # ------------------------------------------------------------- Grace Mission
@@ -139,7 +142,7 @@ def test_grace_is_a_loss_case_with_payback_na_and_one_pinned_payroll():
     assert ov["node"] == "Payroll" and ov["year"] == 1
     assert ov["value"]["raw"] == 110000.0
     assert ov["calculated"]["raw"] != ov["value"]["raw"]  # calc-vs-override, no back-solve
-    assert vm["model_version"] == "2.9.0"
+    assert vm["model_version"] == "3.0.0"
 
 
 # --------------------------------------------------------- NNN gross-check
@@ -162,4 +165,4 @@ def test_nnn_resolution_escalates_and_deposits_on_resolved_occupancy():
                    if c["category"].startswith("Lease Deposit"))
     assert deposit["amount"]["raw"] == 37500.0
     assert deposit["amount"]["display"] == "$37,500"
-    assert vm["model_version"] == "2.9.0"
+    assert vm["model_version"] == "3.0.0"

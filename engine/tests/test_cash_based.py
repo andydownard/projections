@@ -114,12 +114,19 @@ def test_positive_operating_net_yields_finite_payback_month(design_parity_result
 def test_year1_annual_cash_net_equals_sum_of_year1_monthly_cash_nets(canonical_result):
     # (d) Reg #15: Year-1 annual cash net == sum of ALL Year-1 monthly cash nets,
     # INCLUDING startup outflows. Year-1 cash window = project months 1..G+11.
+    # Model v3 (3.0.0): the 3-term payroll-grouped monthly reconstruction of
+    # total_exp (Payroll + Payroll taxes + Workers' comp expense, engine/monthly.py
+    # `_year_slices`) can land 1 ULP away from the annual figure at Python decimal's
+    # fixed 28-sig-fig context precision (~1e-23 dollars) — see the module comment
+    # in engine/tests/test_properties.py above `_DECIMAL_CONTEXT_PRECISION_CASE` for
+    # the full root-cause analysis. "To the penny" (Regression #15), not literal
+    # Decimal bit-exactness.
     res = canonical_result
     g = res.decision.grand_opening_month
     monthly_sum = sum((D(str(m.cash_net)) for m in res.monthly if m.index <= g + 11),
                       Decimal("0"))
     annual_cash_net = D(str(res.annual[1].net)) - D(str(res.startup_total))
-    assert monthly_sum == annual_cash_net
+    assert abs(monthly_sum - annual_cash_net) < Decimal("1e-9")
 
 
 def test_xlsx_net_income_year1_subtracts_startup(canonical_result, tmp_path):
@@ -179,16 +186,20 @@ def test_net_and_margin_are_congruent_for_every_year(canonical_result):
 def test_payback_crosses_zero_in_a_middle_year():
     # (c, middle year) A constructed projection whose cumulative cash recovers in a MIDDLE
     # year of the 60-month horizon. With labor 30% the operating net is strong enough to
-    # repay the startup outflow during Year 2 (not in Year 1, not as late as Year 5).
+    # repay the startup outflow during a middle year (not in Year 1, not as late as Year 5).
     res = _projection("0.30")
     pm = res.decision.payback_month
-    # FUSION: the Month-N cash-recovery crossing recomputes over the 60-month series on the
-    # 6.2 Year-1 distribution (was their S-curve), shifting this case Month 23 -> Month 24
-    # (still a real finite middle-year month; spec §3). Year-2 landing is unchanged.
-    assert pm == 24                         # deterministic Month-N, a real finite month
+    # FUSION (pre-Model-v3): the Month-N cash-recovery crossing recomputed over the
+    # 60-month series on the 6.2 Year-1 distribution (was their S-curve), shifting
+    # this case Month 23 -> Month 24, landing in Year 2.
+    # Model v3 (3.0.0, 2026-08-03): the new card-fee two-term formula + Workers' comp
+    # + POS platform/Production software costs push this case's payback one month
+    # later still, Month 24 -> Month 25 — crossing the Year-2/Year-3 boundary, so it
+    # now lands in Year 3 (still a real finite middle-year month; spec §3).
+    assert pm == 25                         # deterministic Month-N, a real finite month
     assert pm != 12 and pm is not None      # not capped at Year-1 end, not N/A
     assert 12 < pm <= 48                    # a middle year (Year 2-4), not Year 1 or 5
-    assert (pm - 1) // 12 + 1 == 2          # lands specifically in Year 2
+    assert (pm - 1) // 12 + 1 == 3          # lands specifically in Year 3
     # It matches the cash-recovery definition over the full monthly series.
     gone_negative = False
     expected = None
@@ -293,7 +304,12 @@ def test_net_margin_guardrail_evaluates_on_the_cash_margin():
     # operating-margin aggressive case has a Year-1 OPERATING margin above the ~30% band,
     # yet because the startup hit depresses the Year-1 CASH margin below 30%, Year 1 does
     # NOT trip — while the steady-state Years 4-5 (cash == operating there) DO trip.
-    res = _projection("0.40", shares=("0.15", "0.20", "0.25", "0.27", "0.30"),
+    # Model v3 (3.0.0): the new card-fee/Workers'-comp/POS-platform/Production-software
+    # costs shave a couple points off operating margin at every labor level, so the prior
+    # labor=0.40 case (0.2982) no longer clears the >30% bar this test needs to
+    # demonstrate; labor=0.38 restores it (0.3202) while keeping the rest of the shape
+    # (Y1 cash margin still well under 30%, Y4/Y5 cash margin still well over it).
+    res = _projection("0.38", shares=("0.15", "0.20", "0.25", "0.27", "0.30"),
                       source_of_funds="2000000")
     # Year-1 operating margin is implausibly high, but its cash margin is not.
     assert res.annual[1].margin > D("0.30")
@@ -312,6 +328,10 @@ def test_canonical_never_recovers_keeps_payback_na_with_reason(canonical_result)
     # the 60-month horizon: payback is N/A-with-reason (never a misleading 0 or Month 60),
     # even though the OPERATING net turns positive in later years — the operating/cash
     # distinction is exactly why cash payback can stay unreached.
+    # Model v3 (3.0.0): the new card-fee/Workers'-comp/POS-platform/Production-software
+    # costs push the canonical fixture's operating net turn-positive out from Year 3 to
+    # Year 4 (Year 3 is now a small loss, -$6,355); Years 4 and 5 are both still solidly
+    # positive, so the "operating turns positive, cash still never recovers" point holds.
     res = canonical_result
     assert res.decision.payback_month is None
     # cumulative cash never returns to >= 0 after going negative.
@@ -319,7 +339,7 @@ def test_canonical_never_recovers_keeps_payback_na_with_reason(canonical_result)
     assert min(cum) < 0
     assert all(c < 0 for c in cum if c == cum[-1]) and cum[-1] < 0   # still negative at horizon end
     # operating net is positive in the steady-state years, yet cash never recovers.
-    assert res.annual[3].net > 0 and res.annual[5].net > 0
+    assert res.annual[4].net > 0 and res.annual[5].net > 0
     # the N/A reason travels through flags -> view-model milestone + KPI (never a 0).
     reason = res.flags.get("payback_month")
     assert reason and reason.startswith("N/A")

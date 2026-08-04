@@ -61,7 +61,13 @@ def test_y1_revenue_is_labor_independent(canonical_result, design_parity_result)
 def test_pct_cost_lines_year1(canonical_result):
     y1 = canonical_result.annual[1]
     tr = D(str(y1.total_rev))
-    assert D(str(y1.expenses["Credit card fees"])) == tr * Decimal("0.02")
+    # Model v3: card fees = card_share x (card_rate x retail + per_tx_fee x transactions),
+    # not a flat %-of-revenue line.
+    retail = D(str(y1.retail))
+    customers = D(str(y1.customers))
+    expected_card_fees = Decimal(model.CARD_SHARE) * (
+        Decimal(model.CARD_RATE) * retail + Decimal(model.CARD_PER_TX_FEE) * customers)
+    assert D(str(y1.expenses["Credit card fees"])) == expected_card_fees
     assert D(str(y1.expenses["Payroll"])) == tr * Decimal("0.60")
     assert D(str(y1.expenses["Payroll taxes"])) == tr * Decimal("0.60") * Decimal("0.08")
     assert D(str(y1.expenses["Marketing & outreach"])) == tr * Decimal("0.0375")
@@ -173,15 +179,15 @@ def test_migration_default_backfill_reproduces_legacy_view_model_byte_for_byte()
 def test_legacy_default_key_numbers_are_pinned():
     # Literal regression anchor for the migration default (#120): the legacy lump
     # numbers are frozen so a future engine change cannot silently move them.
-    # Re-pinned at the 2.7.0 single regen (Task 6.4): the 990-grounded constants
-    # (payroll tax 7.5%->8%, Insurance liability $2k->$10k) deepen the Y1 loss and the
-    # cash trough, so Y1 net = -$53,713.72 (was -$44,432.91) and capital = $347,853.76
-    # (was $342,403.21 at the 6.2 split / $321,939.73 pre-wave-6). Break-even stays
-    # month 8. startup_total (one-time) is unchanged — insurance is an operating line.
+    # Re-pinned at Model v3 (3.0.0): the card-fee two-term formula + Workers' comp +
+    # POS platform/Production software deepen the Y1 loss and the cash trough, so Y1
+    # net = -$65,068.07 (was -$53,713.72 at 2.9.0) and capital = $354,596.65 (was
+    # $347,853.76 at 2.9.0). Break-even stays month 8. startup_total (one-time) is
+    # unchanged — these are all operating lines, not startup lines.
     res = _hoh()  # canonical 60% labor, no schedule (the seeded legacy default)
     assert D(str(res.startup_total)) == Decimal("238500")
-    assert D(str(res.annual[1].net)) == Decimal("-53713.718931840")
-    assert D(str(res.decision.startup_capital_required)) == Decimal("347853.762082154880")
+    assert D(str(res.annual[1].net)) == Decimal("-65068.0692501021077283372365")
+    assert D(str(res.decision.startup_capital_required)) == Decimal("354596.6531797550800936768150")
     assert res.decision.break_even_month == 8
     assert res.decision.payback_month is None  # never recovered in the horizon
 
