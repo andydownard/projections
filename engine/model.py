@@ -251,6 +251,13 @@ STARTUP = {
 # today's numbers exactly (NOT a special engine mode, just where the rows land).
 DEFAULT_OPENING_MONTH_NUMBER = 1
 
+# --- Model v3 — cost-schedule lines (Phase 2, startup-cost generator)
+POS_LANE_COST = 3000                    # per-lane POS hardware/setup
+POS_LANE_COUNT_DEFAULT = 4              # default lane count for startup
+PRODUCTION_STATION_COST = 2500          # per-station production-area equipment
+PRE_OPENING_HIRING_TRAINING_PAYROLL = 20000  # pre-opening labor costs
+UTILITIES_SECURITY_DEPOSITS_SETUP = 3000    # utility deposits + security system setup
+
 
 def _scaled_dollars(per_sqft: str, building_sqft) -> int | float:
     """``per_sqft × building_sqft`` as a whole-dollar int when integral, else float.
@@ -265,7 +272,7 @@ def _scaled_dollars(per_sqft: str, building_sqft) -> int | float:
     return int(amt) if amt == amt.to_integral_value() else float(amt)
 
 
-def default_cost_schedule(building_sqft=EXAMPLE_BUILDING_SQFT) -> list[dict]:
+def default_cost_schedule(building_sqft=EXAMPLE_BUILDING_SQFT, stations_installed=0) -> list[dict]:
     """The legacy/migration-default timed cost schedule (feature #245).
 
     Places every line at month 1 — a single lump at opening — the backfill for
@@ -274,18 +281,60 @@ def default_cost_schedule(building_sqft=EXAMPLE_BUILDING_SQFT) -> list[dict]:
     ``BUILDOUT_PER_SQFT`` × sqft); the Consultant + Legal lines stay flat. The
     default ``building_sqft`` is the example's 10,000 sq ft so a no-arg call (the
     legacy/migration backfill) reproduces today's literals EXACTLY and never drifts.
+
+    ``stations_installed`` (default 0, from Task 1.2 compute) scales the
+    "Production stations" line; if not provided, that line is $0.
     """
-    amounts = {
-        "Thrift Store Consultant": STARTUP["Thrift Store Consultant"],
-        "Equipment & Fixtures": _scaled_dollars(FIXTURES_PER_SQFT, building_sqft),
-        "Build-out / Renovations / Tenant Improvements": _scaled_dollars(
-            BUILDOUT_PER_SQFT, building_sqft),
-        "Legal, Permits, Insurance Setup, Signage": STARTUP[
-            "Legal, Permits, Insurance Setup, Signage"],
-    }
     return [
-        {"category": category, "month": DEFAULT_OPENING_MONTH_NUMBER, "amount": amount}
-        for category, amount in amounts.items()
+        {
+            "category": "Thrift Store Consultant",
+            "month": DEFAULT_OPENING_MONTH_NUMBER,
+            "amount": STARTUP["Thrift Store Consultant"],
+            "treatment": "separate",
+            "note": "Handled under a separate consulting agreement — attach the signed proposal for the actual figure once available.",
+        },
+        {
+            "category": "Equipment & Fixtures",
+            "month": DEFAULT_OPENING_MONTH_NUMBER,
+            "amount": _scaled_dollars(FIXTURES_PER_SQFT, building_sqft),
+            "treatment": "included",
+        },
+        {
+            "category": "Build-out / Renovations / Tenant Improvements",
+            "month": DEFAULT_OPENING_MONTH_NUMBER,
+            "amount": _scaled_dollars(BUILDOUT_PER_SQFT, building_sqft),
+            "treatment": "included",
+        },
+        {
+            "category": "Legal, Permits, Insurance Setup, Signage",
+            "month": DEFAULT_OPENING_MONTH_NUMBER,
+            "amount": STARTUP["Legal, Permits, Insurance Setup, Signage"],
+            "treatment": "included",
+        },
+        {
+            "category": "POS checkout lanes",
+            "month": DEFAULT_OPENING_MONTH_NUMBER,
+            "amount": POS_LANE_COST * POS_LANE_COUNT_DEFAULT,
+            "treatment": "included",
+        },
+        {
+            "category": "Production stations",
+            "month": DEFAULT_OPENING_MONTH_NUMBER,
+            "amount": PRODUCTION_STATION_COST * stations_installed,
+            "treatment": "included",
+        },
+        {
+            "category": "Pre-opening hiring & training payroll",
+            "month": DEFAULT_OPENING_MONTH_NUMBER,
+            "amount": PRE_OPENING_HIRING_TRAINING_PAYROLL,
+            "treatment": "included",
+        },
+        {
+            "category": "Utilities/security deposits & setup",
+            "month": DEFAULT_OPENING_MONTH_NUMBER,
+            "amount": UTILITIES_SECURITY_DEPOSITS_SETUP,
+            "treatment": "included",
+        },
     ]
 
 
