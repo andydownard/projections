@@ -11,9 +11,10 @@ def test_model_versions_stamped():
     # Contributions revenue) — bundled under one bump. See model.py's history comment
     # and DECISIONS.md's 3.0.0 entry.
     assert model.MODEL_VERSION == "3.0.0"
-    # 1.8.0: new settings keys + new view-model rows/fields for Model v3 (see
-    # model.py's COMPUTE_SCHEMA_VERSION history comment for the full list).
-    assert model.COMPUTE_SCHEMA_VERSION == "1.8.0"
+    # 1.9.0: cost-schedule rows gain a treatment (included|separate|contingent)
+    # enum + note (Model v3 Phase 2, Task 2.2) — see model.py's
+    # COMPUTE_SCHEMA_VERSION history comment for the full list.
+    assert model.COMPUTE_SCHEMA_VERSION == "1.9.0"
 
 
 def test_demand_constants():
@@ -86,3 +87,63 @@ def test_startup_lines():
     assert model.STARTUP["Thrift Store Consultant"] == 100000
     assert model.STARTUP["Equipment & Fixtures"] == 45000
     assert "Lease Deposit + First Month Rent" not in model.STARTUP  # computed, not literal
+
+
+def test_default_cost_schedule_v3_new_lines_legacy_untouched():
+    # Task 2.1 (redone): default_cost_schedule() is a live byte-identical
+    # legacy/migration anchor (called at request time by duplicate/PATCH/restore/Penny
+    # paths) and must NEVER gain a "treatment" key or new rows. default_cost_schedule_v3()
+    # is the separate, new-projection-only function that carries the Model-v3 lines.
+    v3 = model.default_cost_schedule_v3()
+    assert len(v3) == 8
+    by_category = {row["category"]: row for row in v3}
+
+    consultant = by_category["Thrift Store Consultant"]
+    assert consultant["amount"] == model.STARTUP["Thrift Store Consultant"]
+    assert consultant["treatment"] == "separate"
+    assert consultant["note"] == (
+        "Handled under a separate consulting agreement — attach the signed "
+        "proposal for the actual figure once available."
+    )
+
+    new_lines = {
+        "Equipment & Fixtures",
+        "Build-out / Renovations / Tenant Improvements",
+        "Legal, Permits, Insurance Setup, Signage",
+        "POS checkout lanes",
+        "Production stations",
+        "Pre-opening hiring & training payroll",
+        "Utilities/security deposits & setup",
+    }
+    assert set(by_category) == new_lines | {"Thrift Store Consultant"}
+    for category in new_lines:
+        assert by_category[category]["treatment"] == "included"
+        assert "note" not in by_category[category]
+
+    assert by_category["POS checkout lanes"]["amount"] == (
+        model.POS_LANE_COST * model.POS_LANE_COUNT_DEFAULT)
+    assert by_category["Pre-opening hiring & training payroll"]["amount"] == (
+        model.PRE_OPENING_HIRING_TRAINING_PAYROLL)
+    assert by_category["Utilities/security deposits & setup"]["amount"] == (
+        model.UTILITIES_SECURITY_DEPOSITS_SETUP)
+    # Production stations scales with stations_installed; default arg is 0 → $0.
+    assert by_category["Production stations"]["amount"] == 0
+    v3_staffed = {row["category"]: row for row in model.default_cost_schedule_v3(
+        stations_installed=3)}
+    assert v3_staffed["Production stations"]["amount"] == model.PRODUCTION_STATION_COST * 3
+
+    # The OLD function is completely unaffected: still exactly its original 4 rows,
+    # no "treatment" key anywhere.
+    legacy = model.default_cost_schedule()
+    assert len(legacy) == 4
+    legacy_categories = {row["category"] for row in legacy}
+    assert legacy_categories == {
+        "Thrift Store Consultant",
+        "Equipment & Fixtures",
+        "Build-out / Renovations / Tenant Improvements",
+        "Legal, Permits, Insurance Setup, Signage",
+    }
+    for row in legacy:
+        assert "treatment" not in row
+        assert "note" not in row
+        assert set(row) == {"category", "month", "amount"}

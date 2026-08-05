@@ -197,6 +197,76 @@ def test_milestones_block_shows_payback_month_when_recovered(tmp_path):
     assert ws.cell(row=labels["Payback"], column=2).value == f"Month {res.decision.payback_month}"
 
 
+def _inputs_with_cost_schedule(schedule):
+    return Inputs(
+        org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
+        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
+        occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
+        cost_schedule=schedule, opening_month_number=1,
+    )
+
+
+def test_startup_separate_and_contingent_sections_render_none_when_empty(tmp_path):
+    # Model v3 Phase 2 (Task 2.2): the canonical fixture has no cost_schedule, so
+    # both new sub-sections are ALWAYS rendered but empty -- "None", never omitted,
+    # so a reader never wonders whether the section was silently dropped.
+    res, path = _build(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+    sep_row = labels["Funded separately (not included in capital required)"]
+    cont_row = labels["Contingent (not included in capital required)"]
+    assert ws.cell(row=sep_row + 1, column=1).value == "None"
+    assert ws.cell(row=cont_row + 1, column=1).value == "None"
+    # placed after the (included-only) Total Startup Costs line, before MILESTONES.
+    assert labels["Total Startup Costs"] < sep_row < cont_row < labels["MILESTONES"]
+
+
+def test_startup_separate_and_contingent_sections_list_rows_and_subtotal(tmp_path):
+    schedule = (
+        {"category": "Included line", "month": 1, "amount": 10000,
+         "treatment": "included"},
+        {"category": "Consultant", "month": 1, "amount": 100000,
+         "treatment": "separate"},
+        {"category": "Contingency reserve", "month": 1, "amount": 20000,
+         "treatment": "contingent"},
+    )
+    res = compute(_inputs_with_cost_schedule(schedule), Assumptions(), DemandDrivers(),
+                  TradeArea(basis="city", households="31798"), overrides={})
+    path = tmp_path / "sep_cont.xlsx"
+    build_xlsx(res, str(path))
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Projection"]
+    labels = _projection_label_map(ws)
+
+    total_row = labels["Total Startup Costs"]
+    sep_row = labels["Funded separately (not included in capital required)"]
+    cont_row = labels["Contingent (not included in capital required)"]
+    consultant_row = labels["Consultant"]
+    contingency_row = labels["Contingency reserve"]
+
+    # both new sections -- and the rows inside them -- sit AFTER the (included
+    # -only) Total Startup Costs line, so neither can be inside its =SUM(...) range.
+    assert total_row < sep_row < cont_row
+    assert consultant_row > total_row
+    assert contingency_row > total_row
+
+    assert ws.cell(row=consultant_row, column=2).value == 100000.0
+    assert ws.cell(row=consultant_row + 1, column=1).value == "Subtotal"
+    assert (ws.cell(row=consultant_row + 1, column=2).value
+            == f"=SUM(B{consultant_row}:B{consultant_row})")
+
+    assert ws.cell(row=contingency_row, column=2).value == 20000.0
+    assert ws.cell(row=contingency_row + 1, column=1).value == "Subtotal"
+    assert (ws.cell(row=contingency_row + 1, column=2).value
+            == f"=SUM(B{contingency_row}:B{contingency_row})")
+
+    # the (included-only) Total Startup Costs total is still a SUM formula over
+    # its own component rows (proven numerically by the golden-gate recalc).
+    assert ws.cell(row=total_row, column=2).value.startswith("=SUM(")
+
+
 def test_monthly_tab_has_twelve_month_rows(tmp_path):
     _res, path = _build(tmp_path)
     wb = openpyxl.load_workbook(path)

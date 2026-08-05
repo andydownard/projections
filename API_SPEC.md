@@ -624,18 +624,20 @@ Decision #15: keep the **summing and formatting authority server-side** for the 
 ```json
 { "cost_schedule": [
     { "category": "Equipment", "month": 1, "amount": 45000 },
-    { "category": "Build-out", "month": 2, "amount": "50000" }
+    { "category": "Build-out", "month": 2, "amount": "50000" },
+    { "category": "Consultant", "month": 1, "amount": 100000,
+      "treatment": "separate", "note": "Attach the signed proposal once available." }
   ],
   "building_sqft": "10000" }
 ```
-`amount` accepts a JSON number **or** a numeric string (the engine coerces via `D(str(...))`, no float poisoning). `building_sqft` is **optional** and **only** scales the seeded default fallback (below) — it never alters caller-supplied rows. Unknown fields are ignored.
+`amount` accepts a JSON number **or** a numeric string (the engine coerces via `D(str(...))`, no float poisoning). `building_sqft` is **optional** and **only** scales the seeded default fallback (below) — it never alters caller-supplied rows. Each row also accepts optional `treatment` (`"included"` default | `"separate"` | `"contingent"`) and `note` (Model v3 Phase 2, Task 2.2) — **unvalidated here** (this endpoint is read-only/dormant; an unrecognized `treatment` value falls back to `"included"` the same as a missing key, matching the engine's own fail-safe default). Unknown fields are ignored.
 
 - **Behavior:**
-  1. **Per-category row totals** (`rowTotals`) — amounts grouped by `category`, **insertion order preserved** (the grid's right-edge row totals).
-  2. **Per-month column totals** (`columnTotals`) — amounts grouped by `month`, **ascending** (the grid's bottom-row column totals).
-  3. **Grand total** (`grandTotal`) — the sum of every amount (the grid's bottom-right corner).
-  4. **Empty rows → seeded default.** When `cost_schedule` is empty the legacy default schedule (`model.default_cost_schedule(building_sqft)`) is totalled instead, so a no-rows preview shows the seeded startup grid; the default basis is the example's 10,000 sq ft.
-- **Response `200`:** every total is a `{raw, display}` dual value with thousands/millions comma formatting (`$1,234,567`):
+  1. **Per-category row totals** (`rowTotals`) — amounts grouped by `category`, **insertion order preserved** (the grid's right-edge row totals). **`"included"`-only** — a `separate`/`contingent` row is excluded (Task 2.2).
+  2. **Per-month column totals** (`columnTotals`) — amounts grouped by `month`, **ascending** (the grid's bottom-row column totals). Included-only, same filter.
+  3. **Grand total** (`grandTotal`) — the sum of every **included** amount (the grid's bottom-right corner).
+  4. **Empty rows → seeded default.** When `cost_schedule` is empty the legacy default schedule (`model.default_cost_schedule(building_sqft)`) is totalled instead, so a no-rows preview shows the seeded startup grid; the default basis is the example's 10,000 sq ft. That legacy schedule carries no `treatment` key on any row, so every fallback row is included.
+- **Response `200`:** every total is a `{raw, display}` dual value with thousands/millions comma formatting (`$1,234,567`). `rowTotals`/`columnTotals`/`grandTotal` reflect **included-only** rows — the `separate`/`contingent` rows from the request above are aggregated server-side too (`engine.compute.cost_schedule_totals`'s `separate`/`contingent` keys) but this dormant endpoint does not yet surface them in the response body (no client consumer wired):
 
 ```json
 {
@@ -648,10 +650,11 @@ Decision #15: keep the **summing and formatting authority server-side** for the 
     { "month": 2, "total": { "raw": 50000.0, "display": "$50,000" } }
   ],
   "grandTotal": { "raw": 95000.0, "display": "$95,000" },
-  "modelVersion": "2.6.0",
-  "computeSchemaVersion": "1.6.0"
+  "modelVersion": "3.0.0",
+  "computeSchemaVersion": "1.9.0"
 }
 ```
+(the `"Consultant"` row from the request above does **not** appear — its `treatment: "separate"` excludes it from every total in this response.)
 - **Errors:** `429 rate_limited` (`{ "error":"rate_limited", "retry_after_seconds": N, "scope":"ip" }` + `Retry-After`); `422` validation (a malformed row).
 
 ---

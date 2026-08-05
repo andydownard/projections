@@ -15,7 +15,7 @@ from app.deps import hash_token
 from app.main import create_app
 from app.store import get_store
 from app.store.sqlite import SqliteStore
-from engine.model import default_cost_schedule
+from engine.model import default_cost_schedule_v3
 
 
 # --------------------------------------------------------------------- fixtures
@@ -240,11 +240,14 @@ def test_mirror_column_matches_inputs_after_create(client, store):
 
 
 def test_mirror_column_defaults_when_inputs_have_no_schedule(client, store):
+    # Model v3 (Task 2.1b): a genuine create with no schedule seeds
+    # default_cost_schedule_v3() into BOTH inputs_json and the mirror column (sized
+    # to this projection's own stationsInstalled), so the two never disagree.
     created = _create(client, opening_month_number=3)
     row = _row(store, created["view_slug"])
-    # inputs_json has no schedule; the mirror column falls back to the month-1 lump
-    assert json.loads(row["inputs_json"]).get("cost_schedule") is None
-    assert json.loads(row["cost_schedule_json"]) == default_cost_schedule()
+    expected = default_cost_schedule_v3("10000", created["stationsInstalled"])
+    assert json.loads(row["inputs_json"])["cost_schedule"] == expected
+    assert json.loads(row["cost_schedule_json"]) == expected
     # the explicitly-set anchor is still mirrored
     assert row["opening_month_number"] == 3
 

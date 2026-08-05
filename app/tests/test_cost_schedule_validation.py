@@ -79,6 +79,31 @@ def test_item_requires_category():
         CostScheduleItemIn(month=1, amount=10)
 
 
+# ------------------------------------- treatment enum (Model v3 Phase 2, Task 2.2)
+def test_item_defaults_treatment_to_none():
+    # None means "use the engine default" (included) -- not an explicit value.
+    item = CostScheduleItemIn(category="X", month=1, amount=10)
+    assert item.treatment is None
+
+
+@pytest.mark.parametrize("treatment", ["included", "separate", "contingent"])
+def test_item_accepts_each_valid_treatment(treatment):
+    item = CostScheduleItemIn(category="X", month=1, amount=10, treatment=treatment)
+    assert item.treatment == treatment
+
+
+def test_item_rejects_bogus_treatment():
+    with pytest.raises(ValidationError):
+        CostScheduleItemIn(category="X", month=1, amount=10, treatment="bogus")
+
+
+def test_item_accepts_and_stores_note():
+    item = CostScheduleItemIn(
+        category="Consultant", month=1, amount=100000, treatment="separate",
+        note="Attach the signed proposal once available.")
+    assert item.note == "Attach the signed proposal once available."
+
+
 # ------------------------------------------------------------- InputsIn model
 def test_inputs_defaults_opening_month_to_constant():
     inp = InputsIn(**ENGINE_INPUTS)
@@ -121,10 +146,17 @@ def test_inputs_model_dump_round_trips_schedule():
     schedule = [{"category": "X", "month": 2, "amount": 100}]
     inp = InputsIn(**ENGINE_INPUTS, cost_schedule=schedule, opening_month_number=3)
     dumped = inp.model_dump()
-    assert dumped["cost_schedule"] == schedule
+    # Model v3 (Task 2.1b): CostScheduleItemIn also declares optional treatment/note
+    # fields (default None) so a v3-seeded row round-trips through validation; a
+    # bare model_dump() therefore emits them explicitly on every row, even one that
+    # never set them. (create_projection strips the None-valued pair back out
+    # before persisting a caller-supplied schedule -- covered by
+    # app/tests/test_cost_schedule_api.py -- this test is the raw Pydantic layer.)
+    assert dumped["cost_schedule"] == [{**schedule[0], "treatment": None, "note": None}]
     assert dumped["opening_month_number"] == 3
     # JSON-serializable (this is what gets persisted to inputs_json)
-    assert json.loads(json.dumps(dumped))["cost_schedule"] == schedule
+    assert json.loads(json.dumps(dumped))["cost_schedule"] == [
+        {**schedule[0], "treatment": None, "note": None}]
 
 
 # ----------------------------------------------- _validate_schedule_inputs guard
@@ -154,6 +186,7 @@ def test_validate_passes_with_none_schedule():
         {"cost_schedule": [{"category": "X", "month": 0, "amount": 1}]},
         {"cost_schedule": [{"category": "X", "month": 1, "amount": -1}]},
         {"cost_schedule": [{"category": "X", "month": -5, "amount": 1}]},
+        {"cost_schedule": [{"category": "X", "month": 1, "amount": 1, "treatment": "bogus"}]},
         {"opening_month_number": 0},
         {"opening_month_number": -3},
     ],

@@ -88,3 +88,51 @@ def test_no_arg_building_sqft_matches_example_basis_constant():
         cost_schedule_totals([], building_sqft=model.EXAMPLE_BUILDING_SQFT)
         == cost_schedule_totals([])
     )
+
+
+# ------------------------------------ treatment filtering (Model v3, Task 2.2)
+def test_separate_and_contingent_aggregates_returned():
+    # "separate"/"contingent" rows are aggregated SEPARATELY from the
+    # included-only by_category/by_month/grand_total, so the always-visible
+    # sections have something to render, independent of the capital math.
+    schedule = [
+        {"category": "Equipment", "month": 1, "amount": 45000, "treatment": "included"},
+        {"category": "Consultant", "month": 1, "amount": 100000, "treatment": "separate"},
+        {"category": "Contingency reserve", "month": 1, "amount": 20000,
+         "treatment": "contingent"},
+        # a second "separate" row in the SAME category -> folds into one total.
+        {"category": "Consultant", "month": 2, "amount": 5000, "treatment": "separate"},
+    ]
+    totals = cost_schedule_totals(schedule)
+
+    # included-only aggregates are unaffected by the non-included rows.
+    assert totals["by_category"] == {"Equipment": Decimal("45000")}
+    assert totals["by_month"] == {1: Decimal("45000")}
+    assert totals["grand_total"] == Decimal("45000")
+
+    assert totals["separate"]["by_category"] == {"Consultant": Decimal("105000")}
+    assert totals["separate"]["grand_total"] == Decimal("105000")
+    assert totals["contingent"]["by_category"] == {"Contingency reserve": Decimal("20000")}
+    assert totals["contingent"]["grand_total"] == Decimal("20000")
+
+
+def test_missing_or_unrecognized_treatment_defaults_included_in_totals():
+    # No "treatment" key at all -> included (backward-compat). An unrecognized
+    # value never silently drops a cost out of capital math either -- it also
+    # falls into "included" (the conservative side for a live financial engine).
+    schedule = [
+        {"category": "Legacy", "month": 1, "amount": 1000},
+        {"category": "Typo'd", "month": 1, "amount": 500, "treatment": "seperate"},
+    ]
+    totals = cost_schedule_totals(schedule)
+    assert totals["grand_total"] == Decimal("1500")
+    assert totals["separate"]["grand_total"] == Decimal("0")
+    assert totals["contingent"]["grand_total"] == Decimal("0")
+
+
+def test_empty_rows_fallback_has_empty_separate_and_contingent():
+    # The seeded default (no cost_schedule at all) has no treatment keys -> every
+    # row is included -> separate/contingent are empty, never omitted keys.
+    totals = cost_schedule_totals([])
+    assert totals["separate"] == {"by_category": {}, "grand_total": Decimal("0")}
+    assert totals["contingent"] == {"by_category": {}, "grand_total": Decimal("0")}

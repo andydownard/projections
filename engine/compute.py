@@ -204,6 +204,20 @@ def _resolve_get(overrides, node, year, computed: Decimal) -> Decimal:
     return computed
 
 
+def _row_treatment(item) -> str:
+    """Normalized cost-schedule row treatment (Model v3 Phase 2, Task 2.2).
+
+    Absent/None/unrecognized -> ``"included"`` — the backward-compat anchor
+    (every legacy row + every ``default_cost_schedule()`` row has no "treatment"
+    key at all, so they keep counting toward capital exactly as today) that also
+    fails SAFE for a live financial engine: a garbage value never silently drops
+    a cost out of the capital-required total the way misclassifying it as
+    "separate"/"contingent" would.
+    """
+    t = item.get("treatment")
+    return t if t in model.COST_SCHEDULE_TREATMENTS else model.COST_SCHEDULE_DEFAULT_TREATMENT
+
+
 # ---------------------------------------------------------------------- public
 def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
     H = D(trade_area.households)
@@ -269,12 +283,16 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
                 * open_hours_per_month
             )
             runner_hours = D(assumptions.runners) * open_hours_per_month
-            hourly_hours_month = production_hours_month + cashier_hours + door_hours + runner_hours
+            hourly_hours_month = (
+                production_hours_month + cashier_hours + door_hours + runner_hours
+            )
             salaries = (
                 D(assumptions.mgr_salary)
                 + D(str(assumptions.am_count)) * D(assumptions.am_salary)
             )
-            payroll_calculated = hourly_hours_month * D(assumptions.wage) * 12 + salaries
+            payroll_calculated = (
+                hourly_hours_month * D(assumptions.wage) * 12 + salaries
+            )
         else:
             payroll_calculated = total_rev * D(assumptions.labor_pct)
         payroll = _resolve_get(overrides, "Payroll", y, payroll_calculated)
@@ -305,21 +323,11 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
         margin = (net / total_rev) if total_rev != 0 else None
 
         years[y] = AnnualYear(
-            year=y,
-            share=share,
-            donating_hh=donating_hh,
-            donations=donations,
-            retail=retail,
-            customers=customers,
-            salvage=salvage,
-            contributions=contributions,
-            total_rev=total_rev,
-            expenses=ordered,
-            total_exp=total_exp,
-            net=net,
-            margin=margin,
-            items_sold=items_sold,
-            items_produced=items_produced,
+            year=y, share=share, donating_hh=donating_hh, donations=donations,
+            retail=retail, customers=customers, salvage=salvage,
+            contributions=contributions, total_rev=total_rev,
+            expenses=ordered, total_exp=total_exp, net=net, margin=margin,
+            items_sold=items_sold, items_produced=items_produced,
             production_hours=production_hours,
         )
 
@@ -329,6 +337,13 @@ def compute_annual(inputs, assumptions, demand_drivers, trade_area, overrides):
     if inputs.cost_schedule:
         startup: dict = {}
         for item in inputs.cost_schedule:
+            # Model v3 Phase 2 (Task 2.2): only "included" rows count toward the
+            # capital-required total — "separate"/"contingent" rows are funded
+            # outside it (see engine.viewmodel's startupCostsSeparate/Contingent
+            # and engine.xlsx's always-visible labeled sections for where they DO
+            # surface).
+            if _row_treatment(item) != "included":
+                continue
             cat = item["category"]
             startup[cat] = startup.get(cat, Decimal("0")) + D(str(item["amount"]))
     else:
@@ -399,6 +414,12 @@ def startup_outflows_by_month(inputs, assumptions, occupancy_y1) -> dict:
     by_month: dict = {}
     if inputs.cost_schedule:
         for item in inputs.cost_schedule:
+            # Model v3 Phase 2 (Task 2.2): same included-only filter as
+            # compute_annual's startup dict — a "separate"/"contingent" row never
+            # lands in the monthly cash-flow trough either, so capital/cashGap
+            # (which are derived from this map) stay excluded consistently.
+            if _row_treatment(item) != "included":
+                continue
             m = int(item["month"])
             by_month[m] = by_month.get(m, Decimal("0")) + D(str(item["amount"]))
     else:
@@ -424,12 +445,26 @@ def cost_schedule_totals(cost_schedule, *, building_sqft=None) -> dict:
     - ``by_category``: per-category row totals, insertion order preserved (grid rows).
     - ``by_month``: per-month column totals, ascending by month (grid columns).
     - ``grand_total``: sum of every amount.
+    - ``separate`` / ``contingent`` (Model v3 Phase 2, Task 2.2): the SAME shape
+      (``{by_category, grand_total}``, no ``by_month`` — these rows fund nothing
+      in the monthly cash-flow grid) but aggregated from the rows EXCLUDED from
+      the three keys above, so the always-visible "funded separately"/"contingent"
+      sections have something to render. ``by_category``/``by_month``/
+      ``grand_total`` above are "included"-only — this is the SAME filter
+      ``compute_annual``/``startup_outflows_by_month`` apply, so this helper's
+      idea of "capital-required" never drifts from the engine's.
+
+    A row's ``treatment`` (absent/None/unrecognized -> "included") is read via
+    ``_row_treatment`` — the ONE normalization every treatment-aware function in
+    this module shares.
 
     When ``cost_schedule`` is empty the seeded default schedule
     (``model.default_cost_schedule(building_sqft)``) is used so a no-rows preview
     shows the seeded startup grid; ``building_sqft`` ONLY scales that default
     fallback (it never alters caller-supplied rows) and defaults to the example's
-    10,000 sq ft basis.
+    10,000 sq ft basis. That legacy fallback schedule carries no "treatment" key
+    on any row, so it is entirely "included" and the separate/contingent
+    aggregates are empty in the no-rows case.
     """
     rows = list(cost_schedule)
     if not rows:
@@ -439,10 +474,25 @@ def cost_schedule_totals(cost_schedule, *, building_sqft=None) -> dict:
     by_category: dict = {}
     by_month: dict = {}
     grand = Decimal("0")
+    separate_by_category: dict = {}
+    separate_grand = Decimal("0")
+    contingent_by_category: dict = {}
+    contingent_grand = Decimal("0")
     for item in rows:
         amount = D(str(item["amount"]))
         category = item["category"]
         month = int(item["month"])
+        treatment = _row_treatment(item)
+        if treatment == "separate":
+            separate_by_category[category] = (
+                separate_by_category.get(category, Decimal("0")) + amount)
+            separate_grand += amount
+            continue
+        if treatment == "contingent":
+            contingent_by_category[category] = (
+                contingent_by_category.get(category, Decimal("0")) + amount)
+            contingent_grand += amount
+            continue
         by_category[category] = by_category.get(category, Decimal("0")) + amount
         by_month[month] = by_month.get(month, Decimal("0")) + amount
         grand += amount
@@ -450,6 +500,8 @@ def cost_schedule_totals(cost_schedule, *, building_sqft=None) -> dict:
         "by_category": by_category,
         "by_month": dict(sorted(by_month.items())),
         "grand_total": grand,
+        "separate": {"by_category": separate_by_category, "grand_total": separate_grand},
+        "contingent": {"by_category": contingent_by_category, "grand_total": contingent_grand},
     }
 
 

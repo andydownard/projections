@@ -1,6 +1,6 @@
 {
   "breakevenMonth": 8,
-  "compute_schema_version": "1.8.0",
+  "compute_schema_version": "1.9.0",
   "confidence": {
     "ramp": "low"
   },
@@ -2413,6 +2413,8 @@
       "category": "Lease Deposit + First Month Rent"
     }
   ],
+  "startupCostsContingent": [],
+  "startupCostsSeparate": [],
   "startupTotal": {
     "display": "$238,500",
     "raw": 238500.0

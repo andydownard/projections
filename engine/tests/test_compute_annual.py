@@ -206,6 +206,53 @@ def test_schedule_total_equals_sum_of_outflow_map():
     assert sum(by_month.values(), Decimal("0")) == D(str(res.startup_total))
 
 
+def test_separate_treatment_excluded_from_startup_total():
+    # Model v3 Phase 2 (Task 2.2): a "separate" row is funded outside the modeled
+    # capital-required total (e.g. the Consultant line, per a signed agreement the
+    # owner tracks separately) -- it must NOT count toward startup_total.
+    schedule = (
+        {"category": "Included line", "month": 1, "amount": 10000,
+         "treatment": "included"},
+        {"category": "Consultant", "month": 1, "amount": 100000,
+         "treatment": "separate"},
+    )
+    res = _hoh(cost_schedule=schedule, opening_month_number=1)
+    lease = Decimal("120000") / 12 * 3
+    assert D(str(res.startup_total)) == Decimal("10000") + lease
+    assert "Consultant" not in res.startup
+
+
+def test_contingent_treatment_excluded_from_capital():
+    # Same exclusion proven via the monthly trough (startup_outflows_by_month) and
+    # decision.startup_capital_required, not just the annual startup_total: adding
+    # a huge "contingent" row must not move capital at all.
+    included_schedule = (
+        {"category": "Included line", "month": 1, "amount": 10000,
+         "treatment": "included"},
+    )
+    with_contingent_schedule = included_schedule + (
+        {"category": "Contingency reserve", "month": 1, "amount": 500000,
+         "treatment": "contingent"},
+    )
+    baseline = _hoh(cost_schedule=included_schedule, opening_month_number=1)
+    with_contingent = _hoh(cost_schedule=with_contingent_schedule, opening_month_number=1)
+    assert (D(str(with_contingent.decision.startup_capital_required))
+            == D(str(baseline.decision.startup_capital_required)))
+
+
+def test_missing_treatment_key_defaults_included():
+    # A legacy row dict with NO "treatment" key at all (every existing projection's
+    # stored schedule, and every default_cost_schedule() row) still counts as
+    # included -- the backward-compat anchor that keeps existing numbers unchanged.
+    schedule = (
+        {"category": "Legacy line", "month": 1, "amount": 10000},
+    )
+    res = _hoh(cost_schedule=schedule, opening_month_number=1)
+    lease = Decimal("120000") / 12 * 3
+    assert D(str(res.startup_total)) == Decimal("10000") + lease
+    assert D(str(res.startup["Legacy line"])) == Decimal("10000")
+
+
 def test_occupancy_requires_annual_or_per_sqft():
     # Neither occupancy_annual nor rent_per_sqft -> a clean ValueError (the §4
     # occupancy resolver has no rent to resolve), never an unguarded crash later.

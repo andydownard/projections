@@ -407,8 +407,8 @@ def build_flags(result, assumptions, demand):
             "open_hours_per_week": float(open_hours_per_week),
             "note": (
                 f"At {open_hours_per_week} open hrs/week, plan for 1 store manager + "
-                f"~{implied_am} assistant manager(s) so a manager or AM is "
-                f"on duty all open hours."
+                f"~{implied_am} assistant manager(s) so a manager or AM is on duty "
+                f"all open hours."
             ),
             "requires_note": False,
         }

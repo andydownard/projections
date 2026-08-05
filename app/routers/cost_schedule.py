@@ -45,6 +45,15 @@ class CostRow(BaseModel):
     # Accept a JSON number or a numeric string; the engine coerces via D(str(...))
     # so exact Decimal text is preserved (no float poisoning).
     amount: Union[str, float, int] = 0
+    # Mirrors CostScheduleItemIn's optional treatment/note (Model v3 Phase 2, Task
+    # 2.2) — treatment is what cost_schedule_totals() filters on, so without it
+    # a previewed v3-shaped schedule would lose its included/separate/contingent
+    # classification to extra="ignore" and every row would preview as included.
+    # Unvalidated here (this endpoint is read-only/dormant, decision #15); an
+    # unrecognized value just falls back to "included" via the engine's own
+    # fail-safe default, same as a missing key.
+    treatment: Optional[str] = None
+    note: Optional[str] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -78,7 +87,8 @@ def preview_cost_schedule(body: CostSchedulePreviewIn, request: Request):
         )
 
     rows = [
-        {"category": r.category, "month": r.month, "amount": r.amount}
+        {"category": r.category, "month": r.month, "amount": r.amount,
+         "treatment": r.treatment}
         for r in body.cost_schedule
     ]
     totals = compute.cost_schedule_totals(rows, building_sqft=body.building_sqft)
