@@ -78,7 +78,7 @@ from engine.model import (
 )
 from engine.money import D, number_view
 from engine.viewmodel import to_view_model
-from engine.xlsx import build_xlsx
+from engine.xlsx import build_client_copy_xlsx, build_xlsx
 
 # Auto-clear-on-equal tolerance (API_SPEC §4.4): a pin within $0.50 of the
 # calculated value deletes the pin (matches the design's commit semantics).
@@ -1659,6 +1659,7 @@ def static_map(
 def export_xlsx(
     view_slug: str,
     request: Request,
+    variant: Optional[str] = None,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
 ):
@@ -1669,6 +1670,11 @@ def export_xlsx(
     the SAME resolved node values as computed_json (one math surface): blue inputs,
     live formulas, orange overrides + audit comment, guarded IF divisions, monthly
     tab. Written to a server-controlled temp file, streamed, then deleted.
+
+    ``variant`` (Model v3 Phase 3, Task 3.1): ``None``/``"internal"`` (default) is
+    this UNCHANGED formula-driven workbook. ``"client"`` renders the terse,
+    jargon-free client-copy workbook instead (``build_client_copy_xlsx``) — no
+    engine math differs between the two, only the rendering.
     """
     # §10/#168: an uncached workbook rebuild on every call, reachable with just the
     # public slug -> cap per IP (and per token when a bearer is presented) FIRST.
@@ -1699,12 +1705,15 @@ def export_xlsx(
 
     fd, path = tempfile.mkstemp(suffix=".xlsx", prefix="projection-")
     os.close(fd)
-    # Stamp the export with the terms version + acceptance date (#192): the
-    # "planning estimates, not advice" caveat travels into the workbook itself.
-    build_xlsx(result, path, terms_accepted_at=row.get("terms_accepted_at"))
-
     stem = _safe_filename_stem(row.get("name") or "")
-    filename = f"{stem} 5-Year Projection.xlsx"
+    if (variant or "internal") == "client":
+        build_client_copy_xlsx(result, path)
+        filename = f"{stem} Client Copy.xlsx"
+    else:
+        # Stamp the export with the terms version + acceptance date (#192): the
+        # "planning estimates, not advice" caveat travels into the workbook itself.
+        build_xlsx(result, path, terms_accepted_at=row.get("terms_accepted_at"))
+        filename = f"{stem} 5-Year Projection.xlsx"
     return FileResponse(
         path,
         media_type=XLSX_CONTENT_TYPE,
@@ -2070,6 +2079,7 @@ def export_packet(
     request: Request,
     role: Optional[str] = None,
     format: str = "md",
+    variant: Optional[str] = None,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     authorization: Optional[str] = Header(default=None),
 ):
@@ -2080,6 +2090,11 @@ def export_packet(
     narrative is included only when AI is enabled (§21 opt-out keeps every
     structured/evidence section). Terms acceptance required (§21) -> 403 otherwise.
     The role flag tailors emphasis/CTAs only — never the numbers.
+
+    ``variant`` (Model v3 Phase 3, Task 3.1): ``None``/``"internal"`` (default) is
+    today's UNCHANGED packet. ``"client"`` drops the §12.2 guardrails section
+    entirely and swaps in the neutral client-copy disclaimer (``build_packet``'s
+    ``variant`` param) — no engine math differs, only the rendering.
     """
     # §10/#168: an uncached packet render on every call, reachable with just the
     # public slug -> cap per IP (and per token when a bearer is presented) FIRST.
@@ -2113,13 +2128,15 @@ def export_packet(
         nar = store.get_narrative(row["id"]) or {}
         narrative_md = (nar.get("body_md") or "") or None
 
+    pkt_variant = "client" if (variant or "internal") == "client" else "internal"
     pkt = build_packet(live_vm, role=role or "board", narrative_md=narrative_md,
-                       terms_accepted_at=row.get("terms_accepted_at"))
+                       terms_accepted_at=row.get("terms_accepted_at"), variant=pkt_variant)
 
     stem = _safe_filename_stem(row.get("name") or "")
+    name_suffix = " Client Copy" if pkt_variant == "client" else " Board Packet"
     if (format or "md").lower() == "docx":
         data = render_packet_docx(pkt)
-        filename = f"{stem} Board Packet.docx"
+        filename = f"{stem}{name_suffix}.docx"
         return Response(
             content=data,
             media_type=(
@@ -2129,7 +2146,7 @@ def export_packet(
         )
 
     md = render_packet_md(pkt)
-    filename = f"{stem} Board Packet.md"
+    filename = f"{stem}{name_suffix}.md"
     return Response(
         content=md,
         media_type="text/markdown; charset=utf-8",

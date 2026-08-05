@@ -158,6 +158,16 @@ EXPORT_DISCLAIMER = (
 AI_NARRATIVE_DISCLOSURE = (
     "Narrative drafted with AI assistance; every figure is grounded in the model."
 )
+# Model v3 Phase 3 (Task 3.1): the client-copy export variant's disclaimer — plain,
+# neutral, and DELIBERATELY not EXPORT_DISCLAIMER's wording (that string reads as an
+# internal legal caveat; this one reads as an ordinary planning note a board/funder
+# reads without a second thought). Single source for BOTH the client-copy `.xlsx`
+# (engine/xlsx.py) and the client-copy packet (app/packet.py) so the two artifacts
+# never drift on the exact wording.
+CLIENT_COPY_DISCLAIMER = (
+    "Planning estimates based on currently available information and operating "
+    "benchmarks; amounts will be refined as actual costs are confirmed."
+)
 
 # --- demand engine
 DONATIONS_PER_HH_PER_YEAR = 3        # §7.3
