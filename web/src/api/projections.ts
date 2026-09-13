@@ -1,71 +1,11 @@
-// web/src/api/projections.ts — owner-scoped list + owner-token storage (API_SPEC §4.1).
+// web/src/api/projections.ts — the global projections list (API_SPEC §4.1).
 //
-// The list is OWNER-SCOPED: every request carries Authorization: Bearer
-// <owner_token> and the server filters by owner_token_hash — there is no global
-// index (PRD §20). The owner token lives in localStorage (CLAUDE.md access model);
-// it is never put in a URL path/query and never logged. No client-side math: list
-// rows arrive as { raw, display } and are rendered verbatim. getOwnerToken/
-// setOwnerToken are the single accessor for the localStorage owner-token key — the
-// create flow (CreateProjectionPage) persists the minted token through
-// setOwnerToken, and ProjectionDetail reads it via getOwnerToken.
+// This project has no authentication of any kind (owner decision, 2026-09-13): the
+// list is GLOBAL — every projection in the database, unfiltered. No client-side
+// math: list rows arrive as { raw, display } and are rendered verbatim.
 
-import { authHeader } from "./authHeader";
 import type { ServerValue } from "./client";
 import type { PatchBody } from "./patch";
-
-export const OWNER_TOKEN_KEY = "projections.owner_token";
-
-export function getOwnerToken(): string | null {
-  return localStorage.getItem(OWNER_TOKEN_KEY);
-}
-
-export function setOwnerToken(token: string): void {
-  localStorage.setItem(OWNER_TOKEN_KEY, token);
-}
-
-// ─── Per-projection edit token (EPIC SHARE) ─────────────────────────────────────
-// The edit token is the one-time edit capability POST /projections returns (hashed
-// at rest on the server, re-derivable nowhere). It carries the SAME secrecy posture
-// as the owner token, so it lives in the SAME store — localStorage on the owner's
-// device — never in a URL path/query and never logged. The Share affordance reads it
-// back to build the editable deep link, where the token rides the URL FRAGMENT only
-// (/p/<slug>/edit#<edit-token>). Keyed per view_slug so each projection keeps its own
-// capability. Absent (a different device / cleared storage) ⇒ the Share panel offers
-// the read-only link only and never fabricates a token.
-
-const EDIT_TOKEN_PREFIX = "projections.edit_token.";
-
-/** The localStorage key holding the edit token for one projection. */
-export function editTokenKey(viewSlug: string): string {
-  return `${EDIT_TOKEN_PREFIX}${viewSlug}`;
-}
-
-export function getEditToken(viewSlug: string): string | null {
-  return localStorage.getItem(editTokenKey(viewSlug));
-}
-
-export function setEditToken(viewSlug: string, token: string): void {
-  localStorage.setItem(editTokenKey(viewSlug), token);
-}
-
-/**
- * Every locally-stored per-projection edit token as [{ viewSlug, token }] (EPIC
- * #323). The ClaimSharedToken bridge walks these on the first sign-in and POSTs each
- * (slug + token) to /claim-share so the recipient's editable shares FOLLOW their
- * Clerk account. The token never leaves the body — it is read here from localStorage,
- * the same store the share-link fragment scrub wrote it into.
- */
-export function listEditTokenEntries(): { viewSlug: string; token: string }[] {
-  const out: { viewSlug: string; token: string }[] = [];
-  for (let i = 0; i < localStorage.length; i += 1) {
-    const key = localStorage.key(i);
-    if (!key || !key.startsWith(EDIT_TOKEN_PREFIX)) continue;
-    const token = localStorage.getItem(key);
-    if (!token) continue;
-    out.push({ viewSlug: key.slice(EDIT_TOKEN_PREFIX.length), token });
-  }
-  return out;
-}
 
 export type RecoTag =
   | "proceed"
@@ -108,14 +48,6 @@ export interface ProjectionListItem {
   status: string;
   version: number;
   updated_at: string;
-  /** True when the caller OWNS this row (owner-only affordances apply). Absent on
-   *  older server responses ⇒ treated as owner (today's behavior). EPIC #323. */
-  owner?: boolean;
-  /** True for a "Shared with me" row — another owner granted the caller editable
-   *  access (no owner-only affordances). EPIC #323. */
-  shared?: boolean;
-  /** Whether the caller may edit this row (owner or grantee). EPIC #323. */
-  editable?: boolean;
 }
 
 export interface ProjectionListResponse {
@@ -135,47 +67,33 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await resp.json()) as T;
 }
 
-/**
- * Owner-scoped list. The owner identity comes from authHeader(): a Clerk session
- * JWT when the satellite is active + signed in, else the localStorage owner token.
- * Without any owner identity there is nothing to list (owner-scoped, no global
- * index, PRD §20) — so we short-circuit to an empty list without hitting the API.
- */
+/** The global list — every projection in the database. */
 export async function listProjections(): Promise<ProjectionListResponse> {
-  const headers = await authHeader();
-  if (!headers.Authorization) {
-    return { projections: [] };
-  }
-  return request<ProjectionListResponse>("/projections", { headers });
+  return request<ProjectionListResponse>("/projections");
 }
 
-/** The create-shaped response of POST …/{slug}/duplicate. `owner_token` is present
- *  only for a Clerk/anonymous owner (a capability owner joins their existing
- *  workspace, so none is minted). */
+/** The create-shaped response of POST …/{slug}/duplicate. */
 export interface DuplicateResult {
   view_slug: string;
   version: number;
   name: string;
-  edit_token?: string;
-  owner_token?: string;
 }
 
 /**
  * The real "Save as copy" (API_SPEC §4.5): POST …/{slug}/duplicate copies the
- * projection into a FRESH server row (new id / view_slug / edit token, one revision)
- * and applies the optional `patch` (the conflicted edit) to the copy before compute,
- * so the user's unsaved change lands on the fork instead of being dropped. Owner-only
- * — the Bearer travels in the header, never the URL (PRD §20). No client math: the
- * copy's view-model is computed server-side and rendered verbatim after navigation.
+ * projection into a FRESH server row (new id / view_slug, one revision) and
+ * applies the optional `patch` (the conflicted edit) to the copy before compute,
+ * so the user's unsaved change lands on the fork instead of being dropped. No
+ * client math: the copy's view-model is computed server-side and rendered
+ * verbatim after navigation.
  */
 export async function duplicateProjection(
   viewSlug: string,
-  token: string,
   patch?: PatchBody,
 ): Promise<DuplicateResult> {
   const resp = await fetch(`${BASE}/projections/${viewSlug}/duplicate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch ? { patch } : {}),
   });
   if (!resp.ok) {
@@ -184,23 +102,15 @@ export async function duplicateProjection(
   return (await resp.json()) as DuplicateResult;
 }
 
-/**
- * The Trash view's list — owner-scoped, trashed projections only (API_SPEC §4.8).
- * Same owner-identity rule as listProjections: no owner identity ⇒ nothing to list.
- */
+/** The Trash view's list — trashed projections only (API_SPEC §4.8). */
 export async function listTrashed(): Promise<ProjectionListResponse> {
-  const headers = await authHeader();
-  if (!headers.Authorization) {
-    return { projections: [] };
-  }
-  return request<ProjectionListResponse>("/projections?trashed=true", { headers });
+  return request<ProjectionListResponse>("/projections?trashed=true");
 }
 
 // ─── Lifecycle mutations: trash / restore / purge (API_SPEC §4.8) ───────────────
-// All three are OWNER-ONLY and carry If-Match (optimistic concurrency). The token
-// rides the Authorization header only (never the URL/path/query/log — Regression
-// #10). A stale version ⇒ HTTP 409, surfaced as a typed LifecycleConflictError so
-// the UI can tell the owner to refresh rather than silently lose the change.
+// All three carry If-Match (optimistic concurrency, unrelated to auth). A stale
+// version ⇒ HTTP 409, surfaced as a typed LifecycleConflictError so the UI can
+// tell the caller to refresh rather than silently lose the change.
 
 export interface LifecycleArgs {
   viewSlug: string;
@@ -234,14 +144,9 @@ async function lifecycleFetch(
   path: string,
   version: number,
 ): Promise<Response> {
-  const headers = await authHeader();
-  if (!headers.Authorization) {
-    // No owner identity on this device → the server would 403 owner_required.
-    throw new Error("owner_required");
-  }
   const resp = await fetch(`${BASE}${path}`, {
     method,
-    headers: { "Content-Type": "application/json", ...headers, "If-Match": String(version) },
+    headers: { "Content-Type": "application/json", "If-Match": String(version) },
   });
   if (resp.status === 409) {
     const body = (await resp.json().catch(() => ({}))) as {

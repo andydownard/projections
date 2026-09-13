@@ -1,10 +1,11 @@
 // web/src/api/patch.test.ts — SLICE 4: the autosave PATCH client.
 //
-// Every mutation carries Authorization: Bearer <token> + If-Match: <version>
-// (API_SPEC §1.3, CLAUDE.md hard rule). The client reads the new version from the
-// ETag header and parses the 409 conflict body (API_SPEC §1.4) into a typed
-// result the autosave reducer can act on. No client-side math (PRD §13): the body
-// is a partial of the editable surface; the response view-model is rendered as-is.
+// This project has no authentication (owner decision, 2026-09-13). Every mutation
+// still carries If-Match: <version> (API_SPEC §1.3) — optimistic concurrency,
+// unrelated to auth. The client reads the new version from the ETag header and
+// parses the 409 conflict body (API_SPEC §1.4) into a typed result the autosave
+// reducer can act on. No client-side math (PRD §13): the body is a partial of the
+// editable surface; the response view-model is rendered as-is.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { patchProjection, PatchConflictError } from "./patch";
@@ -27,13 +28,12 @@ afterEach(() => {
 });
 
 describe("patchProjection — mutation headers (API_SPEC §1.3)", () => {
-  it("sends Authorization: Bearer and If-Match: <version> with the partial body", async () => {
+  it("sends If-Match: <version> with the partial body", async () => {
     const fetchMock = mockFetch(() =>
       jsonResponse({ version: 8, settings: {} }, { status: 200, headers: { ETag: '"8"' } }),
     );
     await patchProjection({
       viewSlug: "p_abc",
-      token: "owner-tok",
       version: 7,
       body: { assumptions: { labor_pct: 0.45 } },
     });
@@ -41,18 +41,8 @@ describe("patchProjection — mutation headers (API_SPEC §1.3)", () => {
     expect(url).toBe("/api/projections/p_abc");
     expect(init.method).toBe("PATCH");
     const headers = new Headers(init.headers);
-    expect(headers.get("Authorization")).toBe("Bearer owner-tok");
     expect(headers.get("If-Match")).toBe("7");
     expect(JSON.parse(init.body as string)).toEqual({ assumptions: { labor_pct: 0.45 } });
-  });
-
-  it("never puts the token in the URL (path/query) — fragment/header only (PRD §20)", async () => {
-    const fetchMock = mockFetch(() =>
-      jsonResponse({ version: 8 }, { status: 200, headers: { ETag: '"8"' } }),
-    );
-    await patchProjection({ viewSlug: "p_abc", token: "secret", version: 7, body: {} });
-    const [url] = fetchMock.mock.calls[0];
-    expect(url).not.toContain("secret");
   });
 
   it("returns the new version from the ETag header on success", async () => {
@@ -61,7 +51,6 @@ describe("patchProjection — mutation headers (API_SPEC §1.3)", () => {
     );
     const result = await patchProjection({
       viewSlug: "p_abc",
-      token: "t",
       version: 7,
       body: {},
     });
@@ -82,11 +71,11 @@ describe("patchProjection — 409 conflict (API_SPEC §1.4)", () => {
     };
     mockFetch(() => jsonResponse(conflict, { status: 409 }));
     await expect(
-      patchProjection({ viewSlug: "p_abc", token: "t", version: 7, body: {} }),
+      patchProjection({ viewSlug: "p_abc", version: 7, body: {} }),
     ).rejects.toBeInstanceOf(PatchConflictError);
 
     try {
-      await patchProjection({ viewSlug: "p_abc", token: "t", version: 7, body: {} });
+      await patchProjection({ viewSlug: "p_abc", version: 7, body: {} });
     } catch (e) {
       const err = e as PatchConflictError;
       expect(err.conflict.current_version).toBe(9);
@@ -98,7 +87,7 @@ describe("patchProjection — 409 conflict (API_SPEC §1.4)", () => {
   it("throws a plain Error (not a conflict) on other failures so the reducer shows retry", async () => {
     mockFetch(() => jsonResponse({ error: "server" }, { status: 500 }));
     await expect(
-      patchProjection({ viewSlug: "p_abc", token: "t", version: 7, body: {} }),
+      patchProjection({ viewSlug: "p_abc", version: 7, body: {} }),
     ).rejects.not.toBeInstanceOf(PatchConflictError);
   });
 
@@ -114,7 +103,7 @@ describe("patchProjection — 409 conflict (API_SPEC §1.4)", () => {
     );
     const body = { assumptions: { labor_pct: 0.45 } };
     try {
-      await patchProjection({ viewSlug: "p_abc", token: "t", version: 7, body });
+      await patchProjection({ viewSlug: "p_abc", version: 7, body });
       throw new Error("should have thrown");
     } catch (e) {
       expect(e).toBeInstanceOf(PatchConflictError);
@@ -139,7 +128,7 @@ describe("patchProjection — 409 conflict (API_SPEC §1.4)", () => {
     };
     mockFetch(() => jsonResponse(envelope, { status: 409 }));
     try {
-      await patchProjection({ viewSlug: "p_abc", token: "t", version: 7, body: { name: "x" } });
+      await patchProjection({ viewSlug: "p_abc", version: 7, body: { name: "x" } });
       throw new Error("should have thrown a PatchConflictError");
     } catch (e) {
       expect(e).toBeInstanceOf(PatchConflictError);

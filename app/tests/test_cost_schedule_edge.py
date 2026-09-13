@@ -62,7 +62,7 @@ def _stored(store, slug):
 
 
 def _headers(created, if_match):
-    return {"Authorization": f"Bearer {created['owner_token']}", "If-Match": str(if_match)}
+    return {"If-Match": str(if_match)}
 
 
 # ----------------------------------------- rows before/after the opening month

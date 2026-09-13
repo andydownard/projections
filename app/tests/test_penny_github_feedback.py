@@ -11,8 +11,9 @@ client (an injected ``MockTransport`` — no real issue is ever created):
     tagged ``filed-by-penny``, and persists the row (with creator_* identity);
   * redaction ⇒ $/%/links/slugs/tokens/emails never reach the outbound payload;
   * dedup     ⇒ the same redacted body (per identity/window) files at most once;
-  * rate-limit⇒ per-user cap returns a friendly no-op with no GitHub/DB write;
-  * creator   ⇒ the server-only creator_* identity rides the ROW, never the issue;
+  * rate-limit⇒ per-IP cap returns a friendly no-op with no GitHub/DB write (this
+    project has no authentication, owner decision 2026-09-13, so IP is the only
+    identity available — there is no creator_* identity anymore);
   * in-thread ⇒ the loop relays Penny's acknowledgement to the user.
 """
 from __future__ import annotations
@@ -83,9 +84,9 @@ def captured(monkeypatch):
     return reqs
 
 
-def _ctx(*, token=None, slug=None, ip="203.0.113.7"):
+def _ctx(*, slug=None, ip="203.0.113.7"):
     return ToolContext(
-        view_slug=slug, bearer_token=token, can_mutate=False, version=None,
+        view_slug=slug, can_mutate=False, version=None,
         extra={"client_ip": ip, "turn_id": "turn_x"},
     )
 
@@ -206,7 +207,7 @@ def test_empty_description_is_not_filed(store, flag_on, gh_creds, captured):
 
 # ---------------------------------------------------------------------- dedup
 def test_dedup_same_redacted_body_files_once(store, flag_on, gh_creds, captured):
-    ctx = _ctx(token="owner_tok_abc")
+    ctx = _ctx()
     first = _file(store, ctx, description="The PDF export is missing the cover page.")
     assert first["filed"] is True
     second = _file(store, ctx, description="The PDF export is missing the cover page.")
@@ -218,20 +219,21 @@ def test_dedup_same_redacted_body_files_once(store, flag_on, gh_creds, captured)
 
 
 def test_dedup_is_per_identity(store, flag_on, gh_creds, captured):
+    # This project has no authentication (owner decision, 2026-09-13) — identity is
+    # the caller's IP. A DIFFERENT IP filing the same body is not a duplicate.
     body = "The sidebar overlaps the table on mobile."
-    assert _file(store, _ctx(token="tok_user_a"), description=body)["filed"] is True
-    # a DIFFERENT identity filing the same body is not a duplicate.
-    assert _file(store, _ctx(token="tok_user_b"), description=body)["filed"] is True
+    assert _file(store, _ctx(ip="203.0.113.10"), description=body)["filed"] is True
+    assert _file(store, _ctx(ip="203.0.113.20"), description=body)["filed"] is True
     assert len(captured) == 2
     assert len(_rows(store)) == 2
 
 
 # ------------------------------------------------------------------- rate limit
-def test_per_user_rate_limit_blocks_after_cap(store, flag_on, gh_creds, captured):
-    ctx = _ctx(token="busy_owner")
+def test_per_ip_rate_limit_blocks_after_cap(store, flag_on, gh_creds, captured):
+    ctx = _ctx()
     filed = 0
     limited = None
-    for i in range(T._PENNY_FEEDBACK_USER_LIMIT + 2):
+    for i in range(T._PENNY_FEEDBACK_IP_LIMIT + 2):
         # distinct bodies so dedup never interferes — we are testing the rate cap.
         res = _file(store, ctx, description=f"Distinct issue number {i} to report.")
         if res.get("filed"):
@@ -239,52 +241,13 @@ def test_per_user_rate_limit_blocks_after_cap(store, flag_on, gh_creds, captured
         elif res.get("rate_limited"):
             limited = res
             break
-    assert filed == T._PENNY_FEEDBACK_USER_LIMIT
+    assert filed == T._PENNY_FEEDBACK_IP_LIMIT
     assert limited is not None
     assert limited["status"] == 429
     assert limited["retry_after_seconds"] >= 1
     # GitHub was called only for the accepted ones; the blocked one wrote nothing.
-    assert len(captured) == T._PENNY_FEEDBACK_USER_LIMIT
-    assert len(_rows(store)) == T._PENNY_FEEDBACK_USER_LIMIT
-
-
-# --------------------------------------------- creator identity (row, not issue)
-def test_creator_identity_on_row_never_in_issue(store, flag_on, gh_creds, captured,
-                                                monkeypatch):
-    import app.clerk.verify as clerkverify
-    from app.tests.clerk_testkit import (
-        TEST_AZP,
-        TEST_ISSUER,
-        make_keypair,
-        mint,
-        stub_for,
-    )
-
-    priv, pub = make_keypair()
-    monkeypatch.setattr(clerkverify, "_get_jwks_client", lambda issuer: stub_for(pub))
-    monkeypatch.setenv("CLERK_ENABLED", "1")
-    monkeypatch.setenv("CLERK_JWT_ISSUER", TEST_ISSUER)
-    monkeypatch.setenv("CLERK_AUTHORIZED_PARTIES", TEST_AZP)
-
-    pii_email, pii_name, pii_sub = "ed@hopethrift.org", "Dana Operator", "user_2clerk99"
-    token = mint(priv, sub=pii_sub, extra={"email": pii_email, "name": pii_name})
-
-    res = _file(store, _ctx(token=token),
-                title="Banner bug", description="The banner is off by one.", type="bug")
-    assert res["filed"] is True
-
-    # creator_* persisted SERVER-SIDE on the row.
-    row = dict(_rows(store)[0])
-    assert row["creator_email"] == pii_email
-    assert row["creator_name"] == pii_name
-    assert row["creator_clerk_user_id"] == pii_sub
-
-    # …but NONE of it (and no creator_* key) reaches the outbound GitHub payload.
-    out = captured[0].content.decode()
-    for leak in (pii_email, pii_name, pii_sub):
-        assert leak not in out
-    for col in ("creator_email", "creator_name", "creator_phone", "creator_clerk_user_id"):
-        assert col not in out
+    assert len(captured) == T._PENNY_FEEDBACK_IP_LIMIT
+    assert len(_rows(store)) == T._PENNY_FEEDBACK_IP_LIMIT
 
 
 # ------------------------------------------------- in-thread ack via the PE3 loop
@@ -466,7 +429,7 @@ def test_view_only_caller_can_still_file_feedback(store, flag_on, gh_creds, capt
     # (can_mutate False) may still have Penny log a bug. The tool is kind "action".
     tool = T.build_registry(store).get("file_product_feedback")
     assert tool.kind == "action"
-    ctx = ToolContext(view_slug="p_x", bearer_token=None, can_mutate=False,
+    ctx = ToolContext(view_slug="p_x", can_mutate=False,
                       version=None, extra={"client_ip": "203.0.113.9"})
     res = tool.handler({"description": "Tooltip text is cut off on the KPI cards."}, ctx)
     assert res["filed"] is True

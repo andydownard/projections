@@ -6,7 +6,8 @@
 //     shows a panel with the server's random support_id (SUP-…).
 //   • kind="idea" — the App suggestion (topbar lightbulb). One unlabeled
 //     textarea with placeholder "Make the app better by…". No email field —
-//     the server derives the submitter's identity from the Clerk JWT (AS2).
+//     this project has no authentication (owner decision, 2026-09-13), so
+//     there is no submitter identity to attach server-side either.
 //     On success: close immediately + showToast (AS4); support_id never shown.
 //
 // The outbound payload carries NO view_slug / token / financial field —
@@ -29,9 +30,8 @@ export interface FeedbackModalProps {
   kind?: "bug" | "idea";
   /**
    * Submit handler → returns the server support_id (SUP-…).
-   * For "idea": receives only { description }. email is server-derived from the
-   * Clerk JWT and never collected from the client (AS2). email? is kept in the
-   * type signature for backward compatibility with callers that introspect it.
+   * For "idea": receives only { description }. email? is kept in the type
+   * signature for backward compatibility with callers that introspect it.
    */
   onSubmit: (input: {
     title?: string;
@@ -165,7 +165,9 @@ export function FeedbackModal({ kind = "bug", onSubmit, onClose }: FeedbackModal
                 />
               </label>
             )}
-            {/* AS2: email input removed from idea path — server derives from Clerk JWT */}
+            {/* AS2: email input removed from idea path — this project has no
+                authentication (owner decision, 2026-09-13), so there is no signed-in
+                identity to derive an email from; the idea path just has no email. */}
             {sendError && (
               <p className="feedback-modal__error" role="alert" data-testid="feedback-error">
                 {sendError}

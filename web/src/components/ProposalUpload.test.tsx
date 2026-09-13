@@ -40,13 +40,12 @@ describe("ProposalUpload — composer affordance", () => {
     const onUploaded = vi.fn();
     const user = userEvent.setup();
 
-    render(<ProposalUpload token="edit-tok" onUploaded={onUploaded} />);
+    render(<ProposalUpload onUploaded={onUploaded} />);
     await user.upload(screen.getByTestId("proposal-file-input"), pdfFile());
 
     await waitFor(() => expect(onUploaded).toHaveBeenCalledWith("prop_abc", "consultant-plan.pdf"));
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toContain("/api/penny/proposal");
-    expect(new Headers((init as RequestInit).headers).get("Authorization")).toBe("Bearer edit-tok");
     expect(new Headers((init as RequestInit).headers).get("Content-Type")).toBe("application/pdf");
   });
 
@@ -55,7 +54,6 @@ describe("ProposalUpload — composer affordance", () => {
     const user = userEvent.setup();
     render(
       <ProposalUpload
-        token="t"
         attachedName="consultant-plan.pdf"
         onUploaded={vi.fn()}
         onClear={onClear}
@@ -73,7 +71,7 @@ describe("ProposalUpload — composer affordance", () => {
     );
     const onError = vi.fn();
     const user = userEvent.setup();
-    render(<ProposalUpload token="t" onUploaded={vi.fn()} onError={onError} />);
+    render(<ProposalUpload onUploaded={vi.fn()} onError={onError} />);
     await user.upload(screen.getByTestId("proposal-file-input"), pdfFile());
     await waitFor(() => expect(onError).toHaveBeenCalled());
     expect(String(onError.mock.calls[0][0])).toMatch(/pdf/i);

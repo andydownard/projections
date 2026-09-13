@@ -20,8 +20,8 @@ import pytest
 from app.tests.conftest import create_projection
 
 
-def _hdr(token, version):
-    return {"Authorization": f"Bearer {token}", "If-Match": str(version)}
+def _hdr(version):
+    return {"If-Match": str(version)}
 
 
 def _row_y1_raw(vm, label):
@@ -31,12 +31,12 @@ def _row_y1_raw(vm, label):
 
 # ---- (a) reserve_buffer moves capital by exactly its delta ---------------------
 def test_patch_reserve_buffer_shifts_capital_by_delta(client):
-    slug, owner, version, body = create_projection(client)
+    slug, version, body = create_projection(client)
     before = body["metrics"]["capital"]["raw"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"reserve_buffer": 40000}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
     vm = r.json()
@@ -48,12 +48,12 @@ def test_patch_reserve_buffer_shifts_capital_by_delta(client):
 
 # ---- (b) a PARTIAL fixed_annual MERGES over defaults; only the named line moves --
 def test_patch_fixed_annual_merges_and_shifts_expenses(client):
-    slug, owner, version, body = create_projection(client)
+    slug, version, body = create_projection(client)
     before_exp = _row_y1_raw(body, "Total Expenses")
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"fixed_annual": {"Pest control": 600}}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
     vm = r.json()
@@ -70,13 +70,13 @@ def test_patch_fixed_annual_merges_and_shifts_expenses(client):
 # engine default. The fix deep-merges fixed_annual: incoming keys layer over the
 # STORED map (which itself may already carry prior accumulated edits).
 def test_patch_fixed_annual_accumulates_across_sequential_patches(client):
-    slug, owner, version, body = create_projection(client)
+    slug, version, body = create_projection(client)
     before_exp = _row_y1_raw(body, "Total Expenses")
 
     r1 = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"fixed_annual": {"Pest control": 600}}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r1.status_code == 200, r1.text
     vm1 = r1.json()
@@ -85,7 +85,7 @@ def test_patch_fixed_annual_accumulates_across_sequential_patches(client):
     r2 = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"fixed_annual": {"Insurance liability": 3000}}},
-        headers=_hdr(owner, vm1["version"]),
+        headers=_hdr(vm1["version"]),
     )
     assert r2.status_code == 200, r2.text
     vm2 = r2.json()
@@ -101,63 +101,63 @@ def test_patch_fixed_annual_accumulates_across_sequential_patches(client):
 
 # ---- (c) an off-allowlist fixed_annual key is rejected (422, not an engine crash)
 def test_patch_fixed_annual_unknown_key_422(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"fixed_annual": {"Rocket fuel": 1}}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 422, r.text
 
 
 def test_patch_fixed_annual_negative_value_422(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"fixed_annual": {"Pest control": -5}}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 422, r.text
 
 
 # ---- review 1.3f (f3): ge=0 bounds on donations_per_hh / basket / utilities_per_sqft
 def test_patch_donations_per_hh_negative_422(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"donations_per_hh": -1}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 422, r.text
 
 
 def test_patch_basket_negative_422(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"basket": "-5"}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 422, r.text
 
 
 def test_patch_utilities_per_sqft_negative_422(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"utilities_per_sqft": "-1"}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 422, r.text
 
 
 # ---- (d) an out-of-range percent is rejected at the boundary --------------------
 def test_patch_labor_pct_out_of_range_422(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "5.0"}},  # 500% > 1
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 422, r.text
 
@@ -165,24 +165,24 @@ def test_patch_labor_pct_out_of_range_422(client):
 def test_patch_labor_pct_upper_bound_one_is_allowed(client):
     # labor_pct == 1 is intentionally in-band (the advisory band flag warns; the hard
     # cap only rejects a nonsensical > 100% share).
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "1.0"}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
 
 
 # ---- (e) sensitivity_delta narrows/widens the ± stress; delta echoes ------------
 def test_patch_sensitivity_delta_changes_downside(client):
-    slug, owner, version, body = create_projection(client)
+    slug, version, body = create_projection(client)
     before_down = body["sensitivity"]["downside"]["net"]["raw"]
     assert body["sensitivity"]["delta"] == pytest.approx(0.25)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"sensitivity_delta": "0.10"}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
     vm = r.json()
@@ -193,20 +193,20 @@ def test_patch_sensitivity_delta_changes_downside(client):
 
 
 def test_patch_sensitivity_delta_above_bound_422(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"sensitivity_delta": "1.5"}},  # > 0.9 -> negative mult
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 422, r.text
 
 
 # ---- (f) create-time reserve_buffer flows into the decision math ----------------
 def test_create_time_reserve_buffer(client):
-    _, _, _, base = create_projection(client)
+    _, _, base = create_projection(client)
     base_cap = base["metrics"]["capital"]["raw"]
-    _, _, _, body = create_projection(
+    _, _, body = create_projection(
         client, assumptions={"labor_pct": "0.60", "reserve_buffer": 40000})
     assert body["settings"]["reserveBuffer"] == 40000
     assert body["metrics"]["capital"]["raw"] == pytest.approx(base_cap + 15000)
@@ -231,12 +231,12 @@ def test_create_rejects_out_of_range_assumption_422(client):
 # they fall back to the frozen-dataclass defaults, never a KeyError/422. -----------
 def test_legacy_minimal_assumptions_recompute_on_unrelated_patch(client):
     # create with ONLY labor_pct — mirrors a pre-1.3 snapshot lacking the new keys.
-    slug, owner, version, _ = create_projection(
+    slug, version, _ = create_projection(
         client, assumptions={"labor_pct": "0.55"})
     r = client.patch(
         f"/api/projections/{slug}",
         json={"name": "Renamed"},  # an unrelated field forces a full recompute
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
     assert r.json()["settings"]["reserveBuffer"] == 25000  # engine default fills the gap
@@ -247,7 +247,7 @@ def test_legacy_minimal_assumptions_recompute_on_unrelated_patch(client):
 # merge re-validation — never rejected — and still flows to the engine intact. ------
 def test_stored_engine_only_key_survives_revalidation(client_store):
     client, store = client_store
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     row = store.get_projection_by_slug(slug)
     a = json.loads(row["assumptions_json"])
     a["startup"] = {"Thrift Store Consultant": 100000,
@@ -262,6 +262,6 @@ def test_stored_engine_only_key_survives_revalidation(client_store):
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.55"}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text

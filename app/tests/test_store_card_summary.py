@@ -111,7 +111,7 @@ def test_create_populates_summary_json_from_computed_json(store):
 
 def test_list_card_summaries_returns_card_fields_without_heavy_blobs(store):
     _make(store, slug="aaa", owner="ownerA")
-    rows = store.list_card_summaries("ownerA")
+    rows = store.list_card_summaries()
     assert len(rows) == 1
     r = rows[0]
     # identity columns present
@@ -125,18 +125,19 @@ def test_list_card_summaries_returns_card_fields_without_heavy_blobs(store):
     assert summary["reco_tag"] == "proceed"
 
 
-def test_list_card_summaries_is_owner_scoped(store):
+def test_list_card_summaries_is_global(store):
+    # No authentication (owner decision, 2026-09-13): the list is global.
     _make(store, slug="aaa", owner="ownerA")
     _make(store, slug="bbb", owner="ownerB")
-    a = store.list_card_summaries("ownerA")
-    assert [r["view_slug"] for r in a] == ["aaa"]
+    a = store.list_card_summaries()
+    assert {r["view_slug"] for r in a} == {"aaa", "bbb"}
 
 
 def test_list_card_summaries_excludes_trashed_by_default(store):
     _make(store, slug="aaa", owner="ownerA")
     store.set_status("01Jaaa", "trashed", 1)
-    assert store.list_card_summaries("ownerA") == []
-    assert len(store.list_card_summaries("ownerA", include_trashed=True)) == 1
+    assert store.list_card_summaries() == []
+    assert len(store.list_card_summaries(include_trashed=True)) == 1
 
 
 def test_update_refreshes_summary_when_computed_json_changes(store):
@@ -175,7 +176,7 @@ def test_list_card_summaries_orders_by_updated_at_desc(store):
             "computed_json": json.dumps(_VM),
             "created_at": ts, "updated_at": ts,
         })
-    rows = store.list_card_summaries("ownerA")
+    rows = store.list_card_summaries()
     assert [r["view_slug"] for r in rows] == ["new", "old"]  # most-recent first
 
 
@@ -195,5 +196,5 @@ def test_backfill_populates_summary_for_legacy_rows(tmp_path):
 
     s2 = SqliteStore(str(db))
     s2.migrate()  # re-applies 0008 -> backfill runs
-    rows = s2.list_card_summaries("ownerA")
+    rows = s2.list_card_summaries()
     assert json.loads(rows[0]["summary_json"])["reco_tag"] == "proceed"

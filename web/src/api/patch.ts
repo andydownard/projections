@@ -1,8 +1,8 @@
 // web/src/api/patch.ts — SLICE 4: the autosave PATCH client (API_SPEC §4.4).
 //
-// Every mutation carries Authorization: Bearer <token> + If-Match: <version>
-// (API_SPEC §1.3). The token travels only in the header — never the URL
-// path/query/log (PRD §20, CLAUDE.md hard rule). The new version comes back as
+// This project has no authentication (owner decision, 2026-09-13). Every
+// mutation still carries If-Match: <version> (API_SPEC §1.3) — that's
+// optimistic concurrency, unrelated to auth. The new version comes back as
 // the ETag header; a stale write returns 409 with the server's current state
 // (API_SPEC §1.4), which we surface as a typed PatchConflictError for the
 // autosave reducer's reload / overwrite / save-as-copy flow.
@@ -24,7 +24,6 @@ export interface PatchBody {
 
 export interface PatchArgs {
   viewSlug: string;
-  token: string;
   version: number;
   body: PatchBody;
 }
@@ -65,7 +64,6 @@ function versionFromEtag(resp: Response, body: unknown): number {
 
 export async function patchProjection({
   viewSlug,
-  token,
   version,
   body,
 }: PatchArgs): Promise<PatchResult> {
@@ -73,7 +71,6 @@ export async function patchProjection({
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
       "If-Match": String(version),
     },
     body: JSON.stringify(body),

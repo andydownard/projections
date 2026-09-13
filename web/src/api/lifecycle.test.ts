@@ -1,18 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   LifecycleConflictError,
   listTrashed,
   purgeProjection,
   restoreProjection,
-  setOwnerToken,
   trashProjection,
 } from "./projections";
 
 // Lifecycle mutations (trash / restore / purge) + the Trash list (API_SPEC §4.8).
-// Owner-only: every call carries Authorization: Bearer <owner_token> + If-Match.
-// A 409 surfaces as a typed LifecycleConflictError. The token never appears in the
-// URL path/query — only the Authorization header (Regression #10).
+// This project has no authentication (owner decision, 2026-09-13): every call
+// carries only If-Match (optimistic concurrency). A 409 surfaces as a typed
+// LifecycleConflictError.
 
 function etagResponse(version: number) {
   return {
@@ -25,12 +24,10 @@ function etagResponse(version: number) {
 
 describe("trashProjection", () => {
   afterEach(() => vi.restoreAllMocks());
-  beforeEach(() => localStorage.clear());
 
-  it("POSTs /trash with the owner bearer + If-Match and returns the new version", async () => {
+  it("POSTs /trash with If-Match and returns the new version", async () => {
     const fetchMock = vi.fn().mockResolvedValue(etagResponse(8));
     vi.stubGlobal("fetch", fetchMock);
-    setOwnerToken("owner_abc");
 
     const version = await trashProjection({ viewSlug: "p_8x", version: 7 });
     expect(version).toBe(8);
@@ -38,14 +35,9 @@ describe("trashProjection", () => {
       "/api/projections/p_8x/trash",
       expect.objectContaining({
         method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer owner_abc",
-          "If-Match": "7",
-        }),
+        headers: expect.objectContaining({ "If-Match": "7" }),
       }),
     );
-    // The secret never rides the URL.
-    expect(fetchMock.mock.calls[0][0]).not.toContain("owner_abc");
   });
 
   it("throws LifecycleConflictError carrying current_version on 409", async () => {
@@ -55,31 +47,19 @@ describe("trashProjection", () => {
       json: async () => ({ detail: { error: "version_conflict", current_version: 9 } }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    setOwnerToken("owner_abc");
 
     await expect(trashProjection({ viewSlug: "p_8x", version: 7 })).rejects.toBeInstanceOf(
       LifecycleConflictError,
     );
   });
-
-  it("throws owner_required when no owner identity is on this device", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    await expect(trashProjection({ viewSlug: "p_8x", version: 1 })).rejects.toThrow(
-      "owner_required",
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("restoreProjection", () => {
   afterEach(() => vi.restoreAllMocks());
-  beforeEach(() => localStorage.clear());
 
   it("POSTs /restore with If-Match and returns the new version", async () => {
     const fetchMock = vi.fn().mockResolvedValue(etagResponse(3));
     vi.stubGlobal("fetch", fetchMock);
-    setOwnerToken("owner_abc");
 
     const version = await restoreProjection({ viewSlug: "p_8x", version: 2 });
     expect(version).toBe(3);
@@ -97,7 +77,6 @@ describe("restoreProjection", () => {
       json: async () => ({ version: 6 }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    setOwnerToken("owner_abc");
     expect(await restoreProjection({ viewSlug: "p_8x", version: 5 })).toBe(6);
   });
 
@@ -108,7 +87,6 @@ describe("restoreProjection", () => {
       json: async () => ({ detail: { error: "version_conflict", current_version: 4 } }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    setOwnerToken("owner_abc");
     await expect(restoreProjection({ viewSlug: "p_8x", version: 2 })).rejects.toBeInstanceOf(
       LifecycleConflictError,
     );
@@ -121,14 +99,12 @@ describe("restoreProjection", () => {
       json: async () => ({}),
     });
     vi.stubGlobal("fetch", fetchMock);
-    setOwnerToken("owner_abc");
     await expect(restoreProjection({ viewSlug: "p_8x", version: 2 })).rejects.toThrow("API 500");
   });
 });
 
 describe("purgeProjection", () => {
   afterEach(() => vi.restoreAllMocks());
-  beforeEach(() => localStorage.clear());
 
   it("DELETEs the projection with If-Match (204, no body)", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
@@ -138,7 +114,6 @@ describe("purgeProjection", () => {
       json: async () => ({}),
     });
     vi.stubGlobal("fetch", fetchMock);
-    setOwnerToken("owner_abc");
 
     await expect(purgeProjection({ viewSlug: "p_8x", version: 2 })).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledWith(
@@ -157,7 +132,6 @@ describe("purgeProjection", () => {
       json: async () => ({ detail: { error: "version_conflict" } }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    setOwnerToken("owner_abc");
     await expect(purgeProjection({ viewSlug: "p_8x", version: 1 })).rejects.toBeInstanceOf(
       LifecycleConflictError,
     );
@@ -166,29 +140,17 @@ describe("purgeProjection", () => {
 
 describe("listTrashed", () => {
   afterEach(() => vi.restoreAllMocks());
-  beforeEach(() => localStorage.clear());
 
-  it("GETs /api/projections?trashed=true with the owner bearer", async () => {
+  it("GETs /api/projections?trashed=true", async () => {
     const body = { projections: [{ view_slug: "p_x", status: "trashed" }] };
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => body });
     vi.stubGlobal("fetch", fetchMock);
-    setOwnerToken("owner_abc");
 
     const result = await listTrashed();
     expect(result.projections).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/projections?trashed=true",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer owner_abc" }),
-      }),
+      expect.anything(),
     );
-  });
-
-  it("returns an empty list without calling the server when there is no owner", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const result = await listTrashed();
-    expect(result.projections).toEqual([]);
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

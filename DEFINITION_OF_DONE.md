@@ -35,9 +35,9 @@ Golden reconciliation compares three artifacts that must agree (PRD §13/§18): 
 
 - [ ] `pytest -q` and `npm test -- --run` pass, **zero failures**.
 - [ ] On a feature branch, not `main` (`GIT`; docs-only `.md` may go direct).
-- [ ] **No secrets** in code, logs, responses, or test fixtures (`SECRETS`). Project env keys: `GOOGLE_PLACES_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CENSUS_API_KEY`, `GITHUB_TOKEN`, `CRM_API_KEY`, `LITESTREAM_*`. `Authorization` headers and URL fragments are **never** logged (PRD §20).
+- [ ] **No secrets** in code, logs, responses, or test fixtures (`SECRETS`). Project env keys: `GOOGLE_PLACES_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CENSUS_API_KEY`, `GITHUB_TOKEN`, `CRM_API_KEY`, `LITESTREAM_*`. `METRICS_TOKEN` — the one remaining secret this app checks against a request — is never logged (PRD §20; SECURITY.md §4.5).
 - [ ] **Server is the only math authority** (`SERVER`/PRD §13). No client-side computation of any projection figure; no `calc*`/`scenario` ported from `support.js`. New numbers come from the server's `computed_json` only.
-- [ ] **Every mutation** carries the [Mutation Safety Quad](#mutation-safety-quad-every-patchpost-endpoint).
+- [ ] **Every mutation** carries the [Mutation Safety Quad](#mutation-safety-quad-every-patchpost-endpoint--now-two-legs).
 - [ ] If the **engine or `.xlsx` builder** was touched: golden tests + LibreOffice recalc pass **with and without** overrides, zero formula errors.
 - [ ] TDD honored — a red test was committed and watched-fail before production code; bugfixes ship a reproducing regression test (`TDD`).
 
@@ -54,16 +54,14 @@ Golden reconciliation compares three artifacts that must agree (PRD §13/§18): 
 
 ---
 
-## Mutation Safety Quad (every PATCH/POST endpoint)
+## Mutation Safety Quad (every PATCH/POST endpoint) — now two legs
 
-Project instantiation of `MUTATION` + `TENANT` in the capability-token model. Every state-mutating handler (`PATCH /api/projections/{slug}`, `POST …/duplicate|upgrade-model|rotate-tokens|trash|restore|evidence|revisions/{id}/restore`, `POST /api/research|feedback|intent|actuals`, projection create — PRD §25) MUST have all four, **each with a test**:
+Project instantiation of `MUTATION` (the `TENANT`-derived legs are gone: this app has no authentication or authorization of any kind, owner decision 2026-09-13 — SECURITY.md §2). Every state-mutating handler (`PATCH /api/projections/{slug}`, `POST …/duplicate|upgrade-model|trash|restore|evidence|revisions/{id}/restore`, `POST /api/research|feedback|intent|actuals`, projection create — PRD §25) MUST have both, **each with a test**:
 
-1. **Bearer auth required.** `Authorization: Bearer <token>` → owner/edit/role via **SHA-256 hash + `hmac.compare_digest`** (constant-time). Unauthenticated → 401. No cookies (no CSRF).
-2. **Owner-scope isolation.** Lists/reads owner-scoped, **never global**; test asserts owner A cannot touch owner B's projection.
-3. **Optimistic concurrency.** Requires `If-Match: <version>`; `UPDATE … SET version=version+1 … WHERE id=? AND version=?`; a 0-row result returns **HTTP 409** with `{error, current_version, current_state}` (Reload / Overwrite / Save-as-copy — PRD §19.4/§24/§25). New version returned in body + `ETag`. Real, tested, not cosmetic.
-4. **Negative / abuse path.** Per-IP **and** per-token rate limit + a test of the rejection path. Cost-amplifying endpoints capped.
+1. **Optimistic concurrency.** Requires `If-Match: <version>`; `UPDATE … SET version=version+1 … WHERE id=? AND version=?`; a 0-row result returns **HTTP 409** with `{error, current_version, current_state}` (Reload / Overwrite / Save-as-copy — PRD §19.4/§24/§25). New version returned in body + `ETag`. Real, tested, not cosmetic.
+2. **Negative / abuse path.** Per-IP rate limit + a test of the rejection path. Cost-amplifying endpoints capped.
 
-Mutations also have a **transaction boundary** and write **one revision snapshot per autosave settle** (PRD §19.3/§24) with `actor_token_hash` recorded. Derived rows / totals / KPIs are **non-pinnable** — rejected at the API boundary, not just hidden in the UI (PRD §14).
+Mutations also have a **transaction boundary** and write **one revision snapshot per autosave settle** (PRD §19.3/§24). `actor_token_hash` is always `NULL` now — there is no actor identity to record. Derived rows / totals / KPIs are **non-pinnable** — rejected at the API boundary, not just hidden in the UI (PRD §14).
 
 ## Engine & Excel Contract (when engine or `.xlsx` touched)
 
@@ -85,7 +83,7 @@ Authoritative formula spec in [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md); this i
 
 WCAG-AA baseline (contrast, tap targets, keyboard-reachable, reduced-motion, VoiceOver order, mobile-first) per global `UI` — not restated. Project mechanics:
 
-- [ ] **No client math authority.** Edit loop: cell edit → debounce (~300–400ms) → optimistic **pending** render → `PATCH` (`Bearer` + `If-Match`) → reconcile to server `computed_json`. The optimistic preview is a visual pending state only, never a second math surface (PRD §13).
+- [ ] **No client math authority.** Edit loop: cell edit → debounce (~300–400ms) → optimistic **pending** render → `PATCH` (`If-Match`) → reconcile to server `computed_json`. The optimistic preview is a visual pending state only, never a second math surface (PRD §13).
 - [ ] **Stale responses dropped by version**; request cancellation so dense-table editing doesn't flicker. `saveLabel` state machine: "All changes saved" / "Saving…" / "Save failed — retry."
 - [ ] **409 conflict UX** wired to the save-conflict modal (Reload latest / Overwrite / Save as copy); client tracks the server `version`, never silently overwrites (PRD §19.4).
 - [ ] **Override cell state machine** (calculated → editing → overridden, auto-clears the pin within $0.50 of calc) + tap popover (calc vs override + note) + Override Inspector drawer (node·year, calculated strikethrough, override, note, `pinnedDate`, `affected[]`, per-pin Reset + Reset-all, "prefer driver-level edits" banner). `affected[]`/orphaned-upstream hints come from the server, not faked client-side (PRD §14).
@@ -106,18 +104,18 @@ Umbrella principles per `AI` + `INJECTION` (untrusted input is data; redact PII;
 - [ ] **SSRF hardening** of the fetcher: block private/link-local/loopback/metadata ranges (`10/8`, `127/8`, `169.254/16`, `*.railway.internal`, `169.254.169.254`) and disallow redirects into them. Test asserts a private-target URL is refused.
 - [ ] **Stale-narrative handling.** `computed_hash` stored at generation; on figure change show "Out of date" + diff + Regenerate; **never** auto-overwrite user-edited prose (`edited` flag respected).
 - [ ] **AI opt-out works end-to-end.** A test runs the full create → compute → save → `.xlsx` flow with **all AI keys unset** and succeeds (manual rent, no narrative) (PRD §21).
-- [ ] **Provider routing & cost control** (`AI`). Anthropic primary → OpenAI fallback; research/narrative cached; regenerations capped per IP+token. Compute (`< 50 ms` p95, excluding research/LLM) works fully with AI disabled.
+- [ ] **Provider routing & cost control** (`AI`). Anthropic primary → OpenAI fallback; research/narrative cached; regenerations capped per IP. Compute (`< 50 ms` p95, excluding research/LLM) works fully with AI disabled.
 
 ## Security Checks (every change)
 
 Authoritative detail in [SECURITY.md](./SECURITY.md) (canonical on its topic). Generic `SECRETS` / `SESSION` / `PII` baselines are not restated. Project done-gate:
 
-- [ ] **No secrets client-side** (`SECRETS`). Owner bearer in `localStorage`; edit/recovery secrets in the URL **fragment** only (never path/query/log), scrubbed after read (`searchParams.delete()` + `replaceState()`).
-- [ ] **Capability tokens** (`Override SESSION`): CSPRNG (`secrets.token_urlsafe`), owner ≥ 256-bit, `view_slug` ≥ 128-bit; stored **hashed** (SHA-256), compared `hmac.compare_digest`; `view_slug` plaintext lookup key only. `rotate-tokens` regenerates owner/edit/view/role atomically + writes an audit event.
-- [ ] **Stored-XSS closed** (`INJECTION`). Narrative `body_md` and any user rich text / evidence fields server-side **allowlist-sanitized** (e.g. `bleach`) before storage and render. (Stored XSS = bearer-token theft = full takeover.)
+- [ ] **No secrets client-side** (`SECRETS`). This app has no authentication (owner decision, 2026-09-13 — SECURITY.md §2), so there is no bearer token or fragment secret to check for anymore; the one remaining secret, `METRICS_TOKEN`, never reaches the client at all.
+- [ ] **~~Capability tokens~~ (removed, `Override SESSION`).** The owner/edit-token model and `rotate-tokens` are deleted entirely — there is nothing left to generate, hash, or rotate.
+- [ ] **Stored-XSS closed** (`INJECTION`). Narrative `body_md` and any user rich text / evidence fields server-side **allowlist-sanitized** (e.g. `bleach`) before storage and render. (A stored XSS still runs arbitrary script in another visitor's browser, even with no token left to steal.)
 - [ ] **CSP from day one** (greenfield SPA): `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; connect-src 'self' api.anthropic.com api.openai.com`. The browser never talks to Places/Census/GitHub/CRM directly. **CORS** locked to the app origin. `X-Robots-Tag: noindex` + robots disallow on every response.
-- [ ] **Rate limits per IP and per token** on abuse-prone endpoints: `POST /api/research`, `…/narrative:regenerate`, `/api/feedback`, `/api/intent`, projection create.
-- [ ] **Feedback redaction (top data-leak risk).** CI test asserts the GitHub-issue payload contains **no** `view_slug`, edit token, resolvable link, or financial field — only a random `support_id` + non-sensitive context. See [IDEA_FAB.md](./IDEA_FAB.md).
+- [ ] **Rate limits per IP** on abuse-prone endpoints: `POST /api/research`, `…/narrative:regenerate`, `/api/feedback`, `/api/intent`, projection create.
+- [ ] **Feedback redaction (top data-leak risk).** CI test asserts the GitHub-issue payload contains **no** `view_slug`, resolvable link, or financial field — only a random `support_id` + non-sensitive context. See [IDEA_FAB.md](./IDEA_FAB.md).
 - [ ] **Engine IO is server-controlled.** `.xlsx`/`.docx` generated to a per-request temp dir from a **server-controlled** output path (never user-supplied), streamed, then cleaned up. No path traversal via `org_name`/output dir; raw user JSON never round-tripped through the filesystem.
 - [ ] **Attached-evidence upload hardening:** type/size limits; no executable or script-bearing SVG stored; served with `Content-Disposition` + a non-executable content-type (ideally off-origin).
 - [ ] **Boot-refuse config validation in production** (`SECRETS`; the `timpager` regression #21), single-source-of-truth requirements module, **no fallback chains**. Required in prod: `DB_PATH=/data/projections.db`, `GOOGLE_PLACES_API_KEY`, `CENSUS_API_KEY`, at-least-one AI provider (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`), `LITESTREAM_*`. Optional/graceful-degrade: `GITHUB_TOKEN`+`GITHUB_REPO`, `CRM_API_KEY`.

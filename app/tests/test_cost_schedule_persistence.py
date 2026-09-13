@@ -11,7 +11,6 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from app.deps import hash_token
 from app.main import create_app
 from app.store import get_store
 from app.store.sqlite import SqliteStore
@@ -65,7 +64,7 @@ def _create(client, **input_overrides):
 
 
 def _headers(created, if_match):
-    return {"Authorization": f"Bearer {created['owner_token']}", "If-Match": str(if_match)}
+    return {"If-Match": str(if_match)}
 
 
 def _row(store, slug):
@@ -102,13 +101,10 @@ def test_get_unknown_slug_404(client):
     assert r.status_code == 404
 
 
-# ----------------------------------------------------------------- owner list
-def test_owner_list_includes_projection_with_schedule(client, store):
+# -------------------------------------------------------------- global list
+def test_list_includes_projection_with_schedule(client, store):
     created = _create(client, cost_schedule=SCHEDULE)
-    r = client.get(
-        "/api/projections",
-        headers={"Authorization": f"Bearer {created['owner_token']}"},
-    )
+    r = client.get("/api/projections")
     assert r.status_code == 200
     slugs = [item["view_slug"] for item in r.json()["projections"]]
     assert created["view_slug"] in slugs
@@ -160,7 +156,7 @@ def test_patch_writes_revision_carrying_schedule(client, store):
 
 def test_restore_brings_back_schedule_into_inputs_and_columns(client, store):
     created = _create(client, cost_schedule=SCHEDULE, opening_month_number=2)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     # v1 -> v2: replace the schedule
     replacement = [{"category": "Signage", "month": 9, "amount": 13500}]
     client.patch(
@@ -175,10 +171,7 @@ def test_restore_brings_back_schedule_into_inputs_and_columns(client, store):
         json={"inputs": {"opening_month_number": 5}},
         headers=_headers(created, 2),
     )
-    revs = client.get(
-        f"/api/projections/{slug}/revisions",
-        headers={"Authorization": f"Bearer {owner}"},
-    ).json()["revisions"]
+    revs = client.get(f"/api/projections/{slug}/revisions").json()["revisions"]
     target = [rv for rv in revs if rv["version"] == 2][0]
     r = client.post(
         f"/api/projections/{slug}/revisions/{target['id']}/restore",
@@ -250,18 +243,3 @@ def test_mirror_column_defaults_when_inputs_have_no_schedule(client, store):
     assert json.loads(row["cost_schedule_json"]) == expected
     # the explicitly-set anchor is still mirrored
     assert row["opening_month_number"] == 3
-
-
-def test_cross_owner_cannot_read_schedule_via_list(client, store):
-    # owner A creates with a schedule; owner B's list never sees it (owner-scoped).
-    created = _create(client, cost_schedule=SCHEDULE)
-    other_owner = "someone-elses-token"
-    r = client.get(
-        "/api/projections",
-        headers={"Authorization": f"Bearer {other_owner}"},
-    )
-    assert r.status_code == 200
-    assert r.json()["projections"] == []
-    # sanity: the row really is owned by A, not B
-    row = _row(store, created["view_slug"])
-    assert row["owner_token_hash"] != hash_token(other_owner)

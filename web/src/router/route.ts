@@ -1,11 +1,9 @@
-// web/src/router/route.ts — a tiny dependency-free path router + fragment scrub.
+// web/src/router/route.ts — a tiny dependency-free path router.
 //
 // The SPA renders by pathname (Vite dev / FastAPI both fall back to index.html).
-// We avoid a router dependency: parseRoute maps a pathname to a typed Route.
-//
-// SECURITY (SECURITY.md §2.5 / CLAUDE.md): the edit/role secret arrives ONLY in
-// the URL fragment (#edit-secret). readFragmentSecret reads it once and the
-// caller scrubs it from the address bar so it never lands in history/logs.
+// We avoid a router dependency: parseRoute maps a pathname to a typed Route. This
+// project has no authentication (owner decision, 2026-09-13) — no secret ever
+// rides a URL fragment.
 
 import { isStepKey, type StepKey } from "../wizard/steps";
 
@@ -47,10 +45,4 @@ export function parseRoute(pathname: string, search = ""): Route {
   if (r) return { kind: "role", slug: decodeURIComponent(r[1]) };
 
   return { kind: "notfound" };
-}
-
-/** The capability secret in the URL fragment (e.g. "#edit-secret" -> "edit-secret"). */
-export function readFragmentSecret(hash: string): string | null {
-  const raw = (hash || "").replace(/^#/, "").trim();
-  return raw.length > 0 ? raw : null;
 }

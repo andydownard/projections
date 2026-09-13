@@ -75,16 +75,17 @@ CANONICAL_BODY = {
 
 
 def create_projection(client, **overrides):
-    """POST the canonical House-of-Hope body; return (slug, owner_token, version, body).
+    """POST the canonical House-of-Hope body; return (slug, version, body).
 
     ``overrides`` replace top-level keys of the body (e.g. ``name=...``,
     ``inputs={...}``); the canonical template itself is never mutated. ``body``
-    is the parsed create response (includes view_slug, owner/edit tokens,
-    version and the full view-model).
+    is the parsed create response (view_slug, version, the full view-model).
+    This project has no authentication (owner decision, 2026-09-13) — there is
+    no owner/edit token in the response anymore.
     """
     payload = copy.deepcopy(CANONICAL_BODY)
     payload.update(overrides)
     r = client.post("/api/projections", json=payload)
     assert r.status_code == 201, r.text
     body = r.json()
-    return body["view_slug"], body["owner_token"], body["version"], body
+    return body["view_slug"], body["version"], body

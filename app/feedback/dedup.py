@@ -8,8 +8,9 @@ the REDACTED body, scoped to the filing identity, within a fixed lookback window
 It mirrors :mod:`app.ratelimit`: an in-memory fixed-window map keyed by
 ``(identity, body_hash)`` on a single-process Railway service. The hash is taken
 over the ALREADY-REDACTED body (no raw figures/links/slugs ever enter the key), and
-the identity is the server-only filer identity (hashed token / Clerk sub / IP) — so
-the dedup state itself leaks nothing.
+the identity is the server-only filer identity (this project has no authentication,
+owner decision 2026-09-13, so identity is the caller's IP) — so the dedup state
+itself leaks nothing.
 
 API:
   * ``is_duplicate(identity, redacted_body)`` — read-only check (records nothing).

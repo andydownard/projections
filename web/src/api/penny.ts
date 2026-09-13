@@ -1,11 +1,12 @@
 // web/src/api/penny.ts — PE6: the POST …/penny client (API_SPEC §12, Spec B §6/§12).
 //
 // Penny is another INPUT DEVICE for the same server-authoritative mutation path —
-// not a parallel writer and not a second math authority. The client sends only the
-// user's message + the caller's Bearer; the bounded tool-use loop runs SERVER-SIDE
-// and any edit is applied through the normal PATCH/If-Match path (version++ + an
-// actor:penny revision) as a side effect. The client computes NOTHING and formats
-// NOTHING: it relays the message and renders the server's
+// not a parallel writer and not a second math authority. This project has no
+// authentication (owner decision, 2026-09-13): the client sends only the user's
+// message; the bounded tool-use loop runs SERVER-SIDE and any edit is applied
+// through the normal PATCH/If-Match path (version++ + an actor:penny revision) as
+// a side effect. The client computes NOTHING and formats NOTHING: it relays the
+// message and renders the server's
 // { turns_appended, provider, applied_revisions, narration } verbatim.
 //
 // There is no top-level If-Match here (§12): the loop's internal PATCHes carry it.
@@ -44,8 +45,6 @@ export interface PennyResponse {
 
 export interface SendPennyArgs {
   viewSlug: string;
-  /** The caller's owner/edit Bearer token (header only — never the URL/log). */
-  token: string;
   message: string;
   /** Optional uploaded-proposal handle for parse_proposal (§9). */
   proposalRef?: string;
@@ -82,8 +81,6 @@ export interface PennyDraftResponse {
 }
 
 export interface SendPennyDraftArgs {
-  /** An ephemeral session Bearer (rate-limit id only; no projection exists yet). */
-  token: string;
   message: string;
   /** The current in-memory wizard draft Penny acts on; returned mutated, persisted nowhere. */
   draftState: PennyDraftState;
@@ -173,7 +170,6 @@ function retryAfterSecondsOf(resp: Response, detail: Record<string, unknown>): n
  */
 export async function sendPennyMessage({
   viewSlug,
-  token,
   message,
   proposalRef,
   signal,
@@ -183,10 +179,7 @@ export async function sendPennyMessage({
 
   const resp = await fetch(`${BASE}/projections/${encodeURIComponent(viewSlug)}/penny`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal,
   });
@@ -214,7 +207,6 @@ export async function sendPennyMessage({
  * stays fully intact (CLAUDE.md "AI opt-out must work end-to-end").
  */
 export async function sendPennyDraftMessage({
-  token,
   message,
   draftState,
   proposalRef,
@@ -225,10 +217,7 @@ export async function sendPennyDraftMessage({
 
   const resp = await fetch(`${BASE}/penny/draft`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal,
   });
@@ -246,8 +235,6 @@ export async function sendPennyDraftMessage({
 }
 
 export interface UploadProposalArgs {
-  /** The caller's owner/edit Bearer token (header only — never the URL/log). */
-  token: string;
   /** The chosen PDF (the bytes are sent verbatim; the server is the type authority). */
   file: File | Blob;
   /** Optional display name (defaults to the File's name). */
@@ -274,7 +261,6 @@ export interface ProposalUploadResult {
  * {@link PennyError} taxonomy so the composer shows plain copy, never a crash.
  */
 export async function uploadProposal({
-  token,
   file,
   filename,
   signal,
@@ -283,10 +269,7 @@ export async function uploadProposal({
   const qs = name ? `?filename=${encodeURIComponent(name)}` : "";
   const resp = await fetch(`${BASE}/penny/proposal${qs}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/pdf",
-      Authorization: `Bearer ${token}`,
-    },
+    headers: { "Content-Type": "application/pdf" },
     body: file,
     signal,
   });

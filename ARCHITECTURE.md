@@ -72,15 +72,15 @@ Therefore M1 is an **engine rewrite that preserves the bottom-up driver chain an
 │  • NO MATH. Renders server view-model. Optimistic "pending" only (§10).     │
 └───────────────┬────────────────────────────────────────────────────────────┘
                 │  HTTPS · REST/JSON · CORS-locked · X-Robots-Tag: noindex
-                │  Authorization: Bearer <owner|edit token>  (secrets via URL fragment)
+                │  No Authorization header — no authentication (owner decision, 2026-09-13)
                 │  Mutations: + If-Match: <version>
                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  APP API  —  Python / FastAPI  (single long-lived Railway service)         │
 │  app/main.py  boot-time config validation (refuse to boot if required env  │
 │               unset, no fallback chains) · CSP/CORS/noindex middleware      │
-│  app/deps.py  Bearer→owner/edit/role resolution (constant-time hash cmp),  │
-│               If-Match parsing, rate-limit (per IP + per token)            │
+│  app/deps.py  If-Match parsing only — no auth of any kind lives here       │
+│               anymore; rate-limit is per IP only                          │
 │                                                                            │
 │  app/routers/ ──────────┐                                                  │
 │   projections  research  │                                                 │
@@ -245,7 +245,7 @@ All persistence is behind a `Store` Protocol (`app/store/base.py`). `SqliteStore
 ```python
 class Store(Protocol):
     def get_projection_by_slug(self, slug: str) -> Projection | None: ...
-    def get_by_owner_token_hash(self, owner_hash: str) -> list[Projection]: ...   # owner-scoped, never global
+    def list_card_summaries(self, *, include_trashed: bool = False) -> list[Projection]: ...   # global, no auth (owner decision 2026-09-13)
     def create(self, p: Projection) -> Projection: ...
     def update_with_version_check(self, id: str, expected_version: int, patch: dict) -> int: ...  # rows-affected; 0 ⇒ 409
     def insert_revision(self, rev: Revision) -> str: ...

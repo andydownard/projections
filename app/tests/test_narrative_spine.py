@@ -106,13 +106,13 @@ def test_get_narrative_exposes_server_grounded_figure_list(client):
 # ===================================================================== N4
 def test_put_narrative_classifies_edit_origin_human(client):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     vm = client.get(f"/api/projections/{slug}").json()
     cap = vm["metrics"]["capital"]["display"]
     r = client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": f"<p>The plan needs {cap}.</p>"},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -126,20 +126,20 @@ def test_put_narrative_fails_closed_on_ungrounded_figure(client):
     """An ungrounded figure in a HUMAN edit rejects the save and leaves the prior
     narrative untouched (fail-closed, SECURITY §6.3)."""
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     # seed a valid prior narrative (a successful narrative write bumps the version 1->2)
     vm = client.get(f"/api/projections/{slug}").json()
     cap = vm["metrics"]["capital"]["display"]
     client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": f"<p>original {cap}</p>"},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     # now PUT prose with a hallucinated figure (at the current version 2)
     r = client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": "<p>The plan needs $9,999,999.</p>"},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r.status_code == 409, r.text
     assert r.json()["detail"]["error"] == "grounding_failed"
@@ -151,11 +151,10 @@ def test_put_narrative_fails_closed_on_ungrounded_figure(client):
 
 def test_put_narrative_requires_if_match(client):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     r = client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": "<p>ok</p>"},
-        headers={"Authorization": f"Bearer {edit}"},
     )
     assert r.status_code == 428
     assert r.json()["detail"]["error"] == "if_match_required"
@@ -164,7 +163,7 @@ def test_put_narrative_requires_if_match(client):
 # ===================================================================== N6
 def test_regenerate_reports_provider_anthropic_when_primary_succeeds(client, monkeypatch):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     import app.narrative_provider as prov
 
     def fake_anthropic(vm, role=None):
@@ -175,7 +174,7 @@ def test_regenerate_reports_provider_anthropic_when_primary_succeeds(client, mon
     monkeypatch.setattr(prov, "_anthropic_available", lambda: True)
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["provider"] == "anthropic"
@@ -183,7 +182,7 @@ def test_regenerate_reports_provider_anthropic_when_primary_succeeds(client, mon
 
 def test_regenerate_flips_to_openai_when_anthropic_fails(client, monkeypatch):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     import app.narrative_provider as prov
 
     def boom(vm, role=None):
@@ -199,7 +198,7 @@ def test_regenerate_flips_to_openai_when_anthropic_fails(client, monkeypatch):
     monkeypatch.setattr(prov, "_call_openai", fake_openai)
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["provider"] == "openai"
@@ -207,7 +206,7 @@ def test_regenerate_flips_to_openai_when_anthropic_fails(client, monkeypatch):
 
 def test_regenerate_503_when_both_providers_fail(client, monkeypatch):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     import app.narrative_provider as prov
 
     def boom(vm, role=None):
@@ -219,7 +218,7 @@ def test_regenerate_503_when_both_providers_fail(client, monkeypatch):
     monkeypatch.setattr(prov, "_call_openai", boom)
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 503, r.text
     assert r.json()["detail"]["error"] == "ai_unavailable"
@@ -229,20 +228,20 @@ def test_regenerate_over_edited_requires_confirm(client):
     """Confirm-before-discard gate: regenerating over a user-edited narrative
     without ?confirm=true is rejected so user prose is never silently discarded."""
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     vm = client.get(f"/api/projections/{slug}").json()
     cap = vm["metrics"]["capital"]["display"]
     # user hand-edits the narrative (a successful narrative write bumps the version 1->2)
     client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": f"<p>hand written {cap}</p>"},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     # regenerate without confirm -> blocked, prose intact. The confirm-required 409 is
     # rejected before the write, so the version stays 2 for the confirmed retry below.
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r.status_code == 409, r.text
     assert r.json()["detail"]["error"] == "edited_confirm_required"
@@ -252,7 +251,7 @@ def test_regenerate_over_edited_requires_confirm(client):
     # regenerate WITH confirm -> proceeds and replaces, edited resets to false
     r2 = client.post(
         f"/api/projections/{slug}/narrative:regenerate?confirm=true",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r2.status_code == 200, r2.text
     assert r2.json()["edited"] is False
@@ -262,14 +261,14 @@ def test_regenerate_over_edited_requires_confirm(client):
 
 def test_regenerate_opt_out_blocks_with_ai_disabled(client, store):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     row = store.get_projection_by_slug(slug)
     store._conn.execute(
         "UPDATE projections SET ai_opt_out = 1 WHERE id = ?", (row["id"],))
     store._conn.commit()
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 409
     assert r.json()["detail"]["error"] == "ai_disabled"

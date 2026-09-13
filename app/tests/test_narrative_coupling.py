@@ -75,7 +75,7 @@ def _accept_terms(store, slug):
     store._conn.commit()
 
 
-def _save_grounded(client, slug, edit, version=1):
+def _save_grounded(client, slug, version=1):
     """Save a grounded, edited narrative referencing the live capital figure."""
     vm = client.get(f"/api/projections/{slug}").json()
     cap = vm["metrics"]["capital"]["display"]
@@ -83,7 +83,7 @@ def _save_grounded(client, slug, edit, version=1):
     r = client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": body},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": str(version)},
+        headers={"If-Match": str(version)},
     )
     assert r.status_code == 200, r.text
     return cap
@@ -92,8 +92,8 @@ def _save_grounded(client, slug, edit, version=1):
 # ------------------------------------------------ N11.1: PATCH flips to stale
 def test_patch_flips_narrative_stale(client):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
-    cap = _save_grounded(client, slug, edit)
+    slug = created["view_slug"]
+    cap = _save_grounded(client, slug)
 
     assert client.get(f"/api/projections/{slug}/narrative").json()["stale"] is False
 
@@ -101,7 +101,7 @@ def test_patch_flips_narrative_stale(client):
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"share_y1": "0.12"}},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r.status_code == 200, r.text
 
@@ -123,8 +123,8 @@ def test_any_computed_json_change_diverges_hash(client, store):
     stale. We exercise the store-level write that every such path funnels through.
     """
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
-    _save_grounded(client, slug, edit)
+    slug = created["view_slug"]
+    _save_grounded(client, slug)
     assert client.get(f"/api/projections/{slug}/narrative").json()["stale"] is False
 
     # Simulate an evidence/upgrade mutation: rewrite computed_json with a moved
@@ -147,8 +147,8 @@ def test_any_computed_json_change_diverges_hash(client, store):
 # --------------------- N11.2: packet uses the CURRENT stored (edited) body_md
 def test_packet_uses_current_stored_edited_body(client, store):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
-    _save_grounded(client, slug, edit)
+    slug = created["view_slug"]
+    _save_grounded(client, slug)
     _accept_terms(store, slug)
 
     # Edit the prose with a distinctive, GROUNDED sentence the engine never wrote.
@@ -160,7 +160,7 @@ def test_packet_uses_current_stored_edited_body(client, store):
     r = client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": edited},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r.status_code == 200, r.text
 
@@ -173,7 +173,7 @@ def test_packet_uses_current_stored_edited_body(client, store):
 def test_packet_uses_edited_body_even_when_stale(client, store):
     """A stale (but edited) narrative is NOT dropped — the board's last prose ships."""
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     _accept_terms(store, slug)
 
     vm = client.get(f"/api/projections/{slug}").json()
@@ -183,14 +183,14 @@ def test_packet_uses_edited_body_even_when_stale(client, store):
     client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": edited},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
 
     # mutate so the narrative goes stale (the save above bumped the version 1->2)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"share_y1": "0.12"}},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r.status_code == 200, r.text
     assert client.get(f"/api/projections/{slug}/narrative").json()["stale"] is True
@@ -204,8 +204,8 @@ def test_packet_uses_edited_body_even_when_stale(client, store):
 # ---------------------------------------------------------- N11.3: .docx export
 def test_packet_docx_format(client, store):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
-    _save_grounded(client, slug, edit)
+    slug = created["view_slug"]
+    _save_grounded(client, slug)
     _accept_terms(store, slug)
 
     r = client.get(f"/api/projections/{slug}/packet?format=docx")
@@ -219,7 +219,7 @@ def test_packet_docx_format(client, store):
 
 def test_packet_docx_carries_edited_body(client, store):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     _accept_terms(store, slug)
 
     vm = client.get(f"/api/projections/{slug}").json()
@@ -228,7 +228,7 @@ def test_packet_docx_carries_edited_body(client, store):
     client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": f"<p>{marker} Capital {cap}.</p>"},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
 
     r = client.get(f"/api/projections/{slug}/packet?format=docx")
@@ -258,13 +258,13 @@ def test_shared_was_now_formatter():
 def test_was_now_formatter_used_by_stale_diff_and_preview(client):
     """stale_diff and preview changed[] both expose was+now keys (shared shape)."""
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
-    _save_grounded(client, slug, edit)
+    slug = created["view_slug"]
+    _save_grounded(client, slug)
     # the narrative save above bumped the version 1->2, so the PATCH uses If-Match 2
     client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"share_y1": "0.12"}},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     diff = client.get(f"/api/projections/{slug}/narrative").json()["stale_diff"]
     assert diff
@@ -274,7 +274,6 @@ def test_was_now_formatter_used_by_stale_diff_and_preview(client):
     pv = client.post(
         f"/api/projections/{slug}/preview",
         json={"inputs": {"share_y1": "0.20"}},
-        headers={"Authorization": f"Bearer {edit}"},
     )
     assert pv.status_code == 200, pv.text
     for c in pv.json()["changed"]:

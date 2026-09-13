@@ -1,14 +1,14 @@
-"""Store / migration / token / terms-gate tests (M0.4 / M0.6).
+"""Store / migration / terms-gate tests (M0.4 / M0.6).
 
 Verifies: 0001_init creates every DATA_MODEL.md table incl. the EMPTY actuals table
-and cohort_json; owner-scoped list isolation; version-checked update (409 path);
-constant-time token compare; the terms gate. No SQLite-isms leak above the Store.
+and cohort_json; global list (no auth, owner decision 2026-09-13); version-checked
+update (409 path); the terms gate. No SQLite-isms leak above the Store.
 """
 from datetime import datetime, timezone
 
 import pytest
 
-from app.deps import hash_token, parse_if_match, token_matches
+from app.deps import new_internal_owner_hash, parse_if_match
 from app.store.sqlite import SqliteStore
 from app.terms import require_terms_accepted
 from engine.model import COMPUTE_SCHEMA_VERSION, MODEL_VERSION
@@ -85,16 +85,16 @@ def test_wal_mode_enabled(store):
     # in-memory dbs report 'memory'; a file db reports 'wal'.
 
 
-def test_owner_scoped_list_isolation(store):
+def test_list_card_summaries_is_global(store):
+    # No authentication (owner decision, 2026-09-13): the list is global, not
+    # scoped to any owner/token.
     _make_projection(store, slug="aaa", owner_hash="ownerA")
     _make_projection(store, slug="bbb", owner_hash="ownerB")
-    a = store.list_by_owner("ownerA")
-    assert len(a) == 1 and a[0]["view_slug"] == "aaa"
-    b = store.list_by_owner("ownerB")
-    assert len(b) == 1 and b[0]["view_slug"] == "bbb"
+    slugs = {r["view_slug"] for r in store.list_card_summaries()}
+    assert slugs == {"aaa", "bbb"}
 
 
-def test_get_by_slug_excludes_other_owner_via_slug_only(store):
+def test_get_by_slug(store):
     _make_projection(store, slug="ccc", owner_hash="ownerA")
     assert store.get_projection_by_slug("ccc")["view_slug"] == "ccc"
     assert store.get_projection_by_slug("nonexistent") is None
@@ -127,19 +127,13 @@ def test_ping(store):
     assert store.ping() is True
 
 
-# --- token primitives (SECURITY.md §2.3) ---
+# --- internal owner-hash primitive (vestigial NOT NULL column, never returned) ---
 
-def test_hash_token_is_sha256_hex():
-    h = hash_token("supersecret")
+def test_new_internal_owner_hash_is_sha256_hex_and_random():
+    h = new_internal_owner_hash()
     assert len(h) == 64
     int(h, 16)  # valid hex
-    assert hash_token("supersecret") == hash_token("supersecret")  # deterministic
-
-
-def test_token_matches_constant_time():
-    stored = hash_token("right-token")
-    assert token_matches("right-token", stored) is True
-    assert token_matches("wrong-token", stored) is False
+    assert new_internal_owner_hash() != h  # random each call, never deterministic
 
 
 # --- If-Match parsing (SECURITY.md §6.1) ---

@@ -113,19 +113,6 @@ def test_deleted_projection_role_slug_does_not_resolve(store):
     assert store.get_projection_by_role_slug("board-slug") is None
 
 
-def test_rotate_resyncs_role_links(store):
-    _make(store, pid="p1", slug="s1", roles={"old-slug": "board"})
-    assert store.get_projection_by_role_slug("old-slug") is not None
-    # rotate re-mints the role slug (keeping the role name)
-    store.rotate_tokens("p1", 1, {
-        "view_slug": "s1b",
-        "role_tokens_json": json.dumps({"new-slug": "board"}),
-    })
-    assert store.get_projection_by_role_slug("old-slug") is None  # old link dead
-    new = store.get_projection_by_role_slug("new-slug")
-    assert new is not None and new["_role_name"] == "board"
-
-
 def test_role_link_stores_hashed_companion(store):
     _make(store, pid="p1", slug="s1", roles={"board-slug": "board"})
     row = store._conn.execute(
@@ -140,16 +127,6 @@ def test_multiple_roles_each_resolve(store):
     assert store.get_projection_by_role_slug("b-slug")["_role_name"] == "board"
     assert store.get_projection_by_role_slug("f-slug")["_role_name"] == "funder"
     assert store.get_projection_by_role_slug("a-slug")["_role_name"] == "advisor"
-
-
-def test_rotate_drops_a_removed_role(store):
-    # Rotation is the role-link write path. Re-minting with only the board link must
-    # leave the funder slug unresolvable (its role_links row is rebuilt away).
-    _make(store, pid="p1", slug="s1", roles={"keep": "board", "drop": "funder"})
-    assert store.get_projection_by_role_slug("drop") is not None
-    store.rotate_tokens("p1", 1, {"role_tokens_json": json.dumps({"keep": "board"})})
-    assert store.get_projection_by_role_slug("drop") is None
-    assert store.get_projection_by_role_slug("keep") is not None
 
 
 def test_documented_shape_resolves_through_store(store):

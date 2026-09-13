@@ -76,7 +76,7 @@ function deferredFetch() {
 
 function mountAndOpen() {
   return render(
-    <PennyAssistant viewSlug="p_abc" token="edit-tok" provider="anthropic" />,
+    <PennyAssistant viewSlug="p_abc" provider="anthropic" />,
   );
 }
 
@@ -131,7 +131,7 @@ describe("PennyAssistant — proposal upload (PE9 §9)", () => {
 });
 
 describe("PennyAssistant — apply-immediately + narrate", () => {
-  it("sends the message to POST …/penny with Bearer and echoes the user turn", async () => {
+  it("sends the message to POST …/penny and echoes the user turn", async () => {
     const fetchMock = vi.fn((_url: string, _init: RequestInit) =>
       Promise.resolve(jsonResponse(okPayload())),
     );
@@ -140,9 +140,8 @@ describe("PennyAssistant — apply-immediately + narrate", () => {
     mountAndOpen();
     await send(user, "Set Year-1 share to 8%");
 
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/projections/p_abc/penny");
-    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer edit-tok");
 
     // The user's message is echoed as a user turn (optimistic, instant feedback).
     await waitFor(() => {
@@ -180,7 +179,7 @@ describe("PennyAssistant — apply-immediately + narrate", () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(jsonResponse(okPayload()))));
     const onApplied = vi.fn();
     const user = userEvent.setup();
-    render(<PennyAssistant viewSlug="p_abc" token="t" provider="anthropic" onApplied={onApplied} />);
+    render(<PennyAssistant viewSlug="p_abc" provider="anthropic" onApplied={onApplied} />);
     await send(user, "Set Year-1 share to 8%");
     await waitFor(() => expect(onApplied).toHaveBeenCalledWith(["rev_2"]));
   });
@@ -205,7 +204,7 @@ describe("PennyAssistant — apply-immediately + narrate", () => {
     );
     const onApplied = vi.fn();
     const user = userEvent.setup();
-    render(<PennyAssistant viewSlug="p_abc" token="t" provider="anthropic" onApplied={onApplied} />);
+    render(<PennyAssistant viewSlug="p_abc" provider="anthropic" onApplied={onApplied} />);
     await send(user, "explain break-even");
     await screen.findByText(/break-even is when cumulative cash/i);
     expect(onApplied).not.toHaveBeenCalled();
@@ -302,7 +301,6 @@ describe("PennyAssistant — graceful failure (chat is never the only path)", ()
     render(
       <PennyAssistant
         viewSlug="p_abc"
-        token="t"
         provider="anthropic"
         settingsHref="/p/abc/edit?settings=ai"
       />,
@@ -322,7 +320,6 @@ describe("PennyAssistant — AI-disabled up front", () => {
     render(
       <PennyAssistant
         viewSlug="p_abc"
-        token="t"
         aiEnabled={false}
         settingsHref="/p/abc/edit?settings=ai"
       />,
@@ -348,7 +345,7 @@ describe("PennyAssistant — override audit + comment capture (#42)", () => {
 
   it("renders the overrides audit inside the open drawer", async () => {
     const user = userEvent.setup();
-    render(<PennyAssistant viewSlug="p_abc" token="t" overrides={OV} onResetPin={vi.fn()} onComment={vi.fn()} />);
+    render(<PennyAssistant viewSlug="p_abc" overrides={OV} onResetPin={vi.fn()} onComment={vi.fn()} />);
     await user.click(screen.getByTestId("penny-fab"));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByTestId("override-audit")).toBeInTheDocument();
@@ -358,7 +355,7 @@ describe("PennyAssistant — override audit + comment capture (#42)", () => {
 
   it("does NOT grow an overrides section when there is nothing pinned", async () => {
     const user = userEvent.setup();
-    render(<PennyAssistant viewSlug="p_abc" token="t" />);
+    render(<PennyAssistant viewSlug="p_abc" />);
     await user.click(screen.getByTestId("penny-fab"));
     await screen.findByRole("dialog");
     expect(screen.queryByTestId("override-audit")).not.toBeInTheDocument();
@@ -368,7 +365,7 @@ describe("PennyAssistant — override audit + comment capture (#42)", () => {
     const onResetPin = vi.fn();
     const onComment = vi.fn();
     const user = userEvent.setup();
-    render(<PennyAssistant viewSlug="p_abc" token="t" overrides={OV} onResetPin={onResetPin} onComment={onComment} />);
+    render(<PennyAssistant viewSlug="p_abc" overrides={OV} onResetPin={onResetPin} onComment={onComment} />);
     await user.click(screen.getByTestId("penny-fab"));
     await screen.findByRole("dialog");
     await user.click(screen.getByTestId("override-comment-payroll-y1"));
@@ -383,7 +380,6 @@ describe("PennyAssistant — override audit + comment capture (#42)", () => {
     render(
       <PennyAssistant
         viewSlug="p_abc"
-        token="t"
         overrides={OV}
         open
         commentTarget={{ node: "payroll", year: 1, label: "Payroll, Year 1" }}
@@ -402,7 +398,7 @@ describe("PennyAssistant — override audit + comment capture (#42)", () => {
   it("forwards onOpenChange so the FAB toggle is host-controlled", async () => {
     const onOpenChange = vi.fn();
     const user = userEvent.setup();
-    render(<PennyAssistant viewSlug="p_abc" token="t" open={false} onOpenChange={onOpenChange} />);
+    render(<PennyAssistant viewSlug="p_abc" open={false} onOpenChange={onOpenChange} />);
     await user.click(screen.getByTestId("penny-fab"));
     expect(onOpenChange).toHaveBeenCalledWith(true);
   });

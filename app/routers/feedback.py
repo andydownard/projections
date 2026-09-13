@@ -28,13 +28,11 @@ from collections.abc import Callable
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from app import config, ratelimit
-from app.deps import resolve_clerk_identity
-from app.feedback.creator import creator_fields_from_claims
 from app.feedback.redact import (
     DESCRIPTION_CAP,
     TITLE_CAP,
@@ -101,7 +99,6 @@ def submit_feedback(
     body: FeedbackIn,
     request: Request,
     response: Response,
-    authorization: Optional[str] = Header(default=None),
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
 ):
     # `type` is untrusted client free-text — normalize to the closed enum ONCE
@@ -168,18 +165,9 @@ def submit_feedback(
     }
     github_issue_url = _maybe_file_github_issue(gh_payload)
 
-    # 6) Server-only creator identity (decisions #6/#13): when a signed-in Clerk
-    #    owner files feedback, record WHO from the verified session-JWT CLAIMS (NO
-    #    Clerk Backend API, NO secret). All fields optional/nullable. These PII
-    #    columns are persisted SERVER-SIDE ONLY and are deliberately NOT part of
-    #    `gh_payload` above — they never reach the redacted GitHub issue (PRD §22).
-    #    Anonymous / kill-switch-off feedback adds NO creator keys (row unchanged).
+    # 6) This project has no authentication (owner decision, 2026-09-13) — there is
+    #    no signed-in identity to record against the feedback row.
     creator: dict = {}
-    clerk_ident = resolve_clerk_identity(authorization)
-    if clerk_ident is not None:
-        creator = creator_fields_from_claims(
-            clerk_ident.claims, clerk_user_id=clerk_ident.clerk_user_id
-        )
 
     # 7) Persist the SAME redacted artifact (no email in GitHub, but email is
     #    stored server-only for an optional reply), plus any creator_* identity.

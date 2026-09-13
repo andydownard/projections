@@ -268,7 +268,7 @@ def test_create_rejects_missing_category(client):
 
 # ------------------------------------------------------------- PATCH round-trip
 def _owner_headers(created, if_match):
-    return {"Authorization": f"Bearer {created['owner_token']}", "If-Match": str(if_match)}
+    return {"If-Match": str(if_match)}
 
 
 def test_patch_sets_schedule_into_inputs_json(client, store):
@@ -441,8 +441,7 @@ def test_preview_with_schedule_is_read_only(client, store):
     r = client.post(
         f"/api/projections/{slug}/preview",
         json={"inputs": {"cost_schedule": SAMPLE_SCHEDULE, "opening_month_number": 3}},
-        headers={"Authorization": f"Bearer {created['owner_token']}"},
-    )
+            )
     assert r.status_code == 200, r.text
     # nothing persisted: version unchanged and the schedule not written
     row = _row(store, slug)
@@ -456,8 +455,7 @@ def test_preview_computes_after_view_model(client):
     r = client.post(
         f"/api/projections/{slug}/preview",
         json={"inputs": {"cost_schedule": SAMPLE_SCHEDULE}},
-        headers={"Authorization": f"Bearer {created['owner_token']}"},
-    )
+            )
     body = r.json()
     assert "after" in body
     assert "before" in body

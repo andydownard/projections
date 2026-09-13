@@ -98,15 +98,16 @@ class LoopCaps:
 # ----------------------------------------------------------------- tool seam
 @dataclass
 class ToolContext:
-    """Caller capability + target threaded to every tool handler (PE4 fills in).
+    """Target projection + state threaded to every tool handler (PE4 fills in).
 
-    ``can_mutate`` mirrors the caller's token capability — a view-only caller's
-    Penny degrades to answer-only (spec §4); the mutate tools enforce it in PE4.
+    This project has no authentication (owner decision, 2026-09-13): every caller
+    can mutate, so ``can_mutate`` is always True. The field stays (rather than
+    ripping out every call site that checks it) so the mutate tools' existing
+    structure is unchanged.
     """
 
     view_slug: str | None = None
-    bearer_token: str | None = None
-    can_mutate: bool = False
+    can_mutate: bool = True
     version: int | None = None
     extra: dict = field(default_factory=dict)
 

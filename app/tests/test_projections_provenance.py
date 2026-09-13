@@ -87,11 +87,8 @@ def test_read_returns_provenance_verbatim(client):
 
 
 def test_list_item_carries_location_for_minimap(client):
-    created = client.post("/api/projections", json=_body(LOCATION, **CENSUS_TA)).json()
-    owner = created["owner_token"]
-    items = client.get(
-        "/api/projections", headers={"Authorization": f"Bearer {owner}"}
-    ).json()["projections"]
+    client.post("/api/projections", json=_body(LOCATION, **CENSUS_TA)).json()
+    items = client.get("/api/projections").json()["projections"]
     assert len(items) == 1
     assert items[0]["coords"]["lat"] == pytest.approx(32.5007)
 

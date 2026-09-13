@@ -8,137 +8,49 @@ Sibling docs: [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`BUILD_PLAN.md`](BUILD_PL
 
 ## 0. Threat model in one paragraph
 
-This is a **no-login** web app. Access is governed entirely by **capability tokens** (unguessable bearer secrets). There are no accounts, no passwords, no sessions, no cookies. The consequences, which drive every decision below:
+**This app has no authentication or authorization of any kind** (owner decision, 2026-09-13). There are no accounts, no passwords, no sessions, no cookies, and — as of this decision — no capability tokens either. Every projection is fully public: `GET /api/projections` lists every projection in the database to every visitor, and every per-projection route (read, edit, export, trash, delete, Penny) works from the bare `view_slug` in the URL with no credential of any kind. This is a deliberate, informed choice, not an oversight — the owner was shown the exact consequence ("a public directory of every nonprofit's financial data") and chose it anyway. The consequences, which drive every decision below:
 
-- **A leaked token = full access at its scope.** A leaked owner token is total takeover of one projection; a leaked edit token is full write; a leaked `view_slug` is read-only. There is no second factor and no server-side "is this really the owner" check beyond holding the secret.
-- **The bearer token lives in `localStorage`.** Therefore **any stored XSS = token theft = projection takeover**, and the token also authorizes `.xlsx`/packet export. Sanitization and an enforcing CSP are load-bearing, not nice-to-have.
-- **Cookie-blind API ⇒ no CSRF for mutations.** Our FastAPI authenticates from the `Authorization: Bearer` header **only** and **never reads a cookie** — so the browser attaches no ambient credential our API trusts, and a cross-site request cannot forge an authenticated mutation. This is a deliberate design win (PRD §20). **Override SESSION (Clerk satellite, §2.8):** when `CLERK_ENABLED` is on, the optional Clerk owner login means the Clerk `__session` cookie may exist *in the browser* for clerk-js's own session sync, but our API still never reads it — the no-CSRF property is preserved by the **cookie-blind** invariant, not by the absence of cookies. With `CLERK_ENABLED` off (the default), there are no cookies at all, exactly as today.
-- **Anyone can mint tokens for free** (create a projection), so every expensive/abusable endpoint (research, narrative, feedback, intent, create) must be rate-limited per IP **and** per token, or we get cost-amplification and GitHub-issue spam.
+- **There is nothing to leak, because there is nothing secret.** No token, no session, no login — so token theft, cross-owner access, and CSRF are not applicable threat classes here anymore. What's left is ordinary web-app hygiene: don't let stored XSS run arbitrary script in a visitor's browser, don't let a mutation silently clobber a concurrent edit, don't let an attacker DoS the compute/export endpoints or the GitHub feedback sink.
+- **Every write is unauthenticated**, so every expensive/abusable endpoint (research, narrative, feedback, intent, create) must be rate-limited per IP, or we get cost-amplification and GitHub-issue spam.
 - **The app fetches attacker-influenceable web pages server-side** for rent research → SSRF risk against Railway's private network.
 - **The app sends user data to LLM providers** and renders LLM output into a board packet → prompt-injection and hallucinated-figure risk.
-- **Key loss = data loss.** No login means a lost owner token / lost recovery code permanently orphans a projection. Staff cannot recover access (§29). This must be surfaced honestly to users.
+- **`GET /api/metrics` is the one remaining auth gate in this app** — an internal ops endpoint (per-provider cost/latency counters), gated by a separate `METRICS_TOKEN` bearer secret unrelated to the product's data model. It is out of scope for this decision; see §4.5.
+- **Data loss is now the opposite failure mode of what it used to be.** There is no "lost owner token orphans a projection" risk anymore, because there was never a lock to begin with — anyone can always reach and edit any projection. The honest risk to surface to users is the reverse one: nothing here is private.
 
-If you are adding or reviewing an endpoint, read §3 (tokens), §6 (mutations/concurrency), §7 (rate limits), and the threat-model checklist in [`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md).
+If you are adding or reviewing an endpoint, read §6 (mutations/concurrency), §7 (rate limits), and the checklist in [`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md).
 
 ---
 
-## 1. Top 5 damage risks (memorize these)
+## 1. Top damage risks (memorize these)
 
 | # | Risk | The rule that prevents it | Test that proves it |
 |---|---|---|---|
-| 1 | A resolvable projection link or financial field leaks into a public GitHub feedback issue (§22) | Feedback payload carries only a random `support_id` + non-sensitive context. **Never** `view_slug`, tokens, URLs, or financial fields. | CI test asserts the GitHub payload contains no `view_slug`/token/URL/financial key (§9) |
-| 2 | Stored XSS via narrative or evidence steals the `localStorage` bearer token | Server-side allowlist sanitization of all user rich text before storage **and** enforcing CSP with no inline script (§5, §8) | Sanitizer unit tests on adversarial payloads; CSP header assertion test |
-| 3 | Cross-owner data access (list or read another owner's projection) | Every query is owner-scoped or slug-scoped; list is **never** global; constant-time hash compare (§3, §4) | Per-mutation isolation test: owner A cannot read/write/list owner B |
-| 4 | A mutation without optimistic concurrency silently overwrites a concurrent edit | Every mutation requires `Authorization: Bearer` + `If-Match: <version>`; stale → 409 with current state (§6) | 409-on-stale test on every PATCH/POST |
-| 5 | A secret reaches a URL path, query string, or server log | Secrets only in `localStorage` + URL **fragment** + `Authorization` header. Never path/query. Fragment scrubbed after read. Never log `Authorization` or fragments (§3) | Log-redaction test; route table forbids `:token` path params |
+| 1 | A resolvable projection link or financial field leaks into a public GitHub feedback issue (§22) | Feedback payload carries only a random `support_id` + non-sensitive context. **Never** `view_slug`, URLs, or financial fields. | CI test asserts the GitHub payload contains no `view_slug`/URL/financial key (§9) |
+| 2 | Stored XSS via narrative or evidence runs arbitrary script in a visitor's browser | Server-side allowlist sanitization of all user rich text before storage **and** enforcing CSP with no inline script (§5, §8) | Sanitizer unit tests on adversarial payloads; CSP header assertion test |
+| 3 | A mutation without optimistic concurrency silently overwrites a concurrent edit | Every mutation requires `If-Match: <version>`; stale → 409 with current state (§6) | 409-on-stale test on every PATCH/POST |
+| 4 | The `METRICS_TOKEN` ops gate is bypassed or its secret leaks into a path/query/log | Bearer-only, constant-time compare, secret only in `Authorization`; endpoint 404s entirely when unconfigured (§4.5) | Metrics-gate 401/403/404 test |
 
 ---
 
-## 2. Capability-token model (no login)
+## 2. No authentication or authorization (owner decision, 2026-09-13)
 
-Access is a **capability**, not an identity. Holding the secret *is* the authorization. There are no users, sessions, or cookies.
+This app has no access control of any kind, on any surface, for the projections product. There are no users, sessions, cookies, or secrets of any kind gating a projection.
 
-### 2.1 The four token types
+**What this means concretely:**
 
-| Token | Scope | Length / entropy | Delivery | Storage (server) |
-|---|---|---|---|---|
-| **Owner token** | Full control of one projection: read, write, share, rotate, trash, delete, list (owner-scoped) | **≥ 256-bit** bearer | `localStorage`; sent as `Authorization: Bearer <owner_token>` | **hashed** (`owner_token_hash`) |
-| **Edit token** | Read + write one projection (no rotate/delete) | ≥ 256-bit bearer | URL **fragment** on the `…/edit` link; sent as `Authorization: Bearer <edit_token>` | **hashed** (`edit_token_hash`) |
-| **`view_slug`** | Read-only one projection | **≥ 128-bit** | URL path segment (it is the public, shareable read key) | **plaintext** — it is the lookup key |
-| **Role link tokens** (board / funder / advisor, §6.2 of PRD) | Read-only with role-specific emphasis/CTAs; advisor adds comment capability | ≥ 128-bit | URL fragment; resolved to a role flag | hashed (per-role) |
-
-Rationale for hashing-but-not-`view_slug`: tokens that grant **write/control** must be unrecoverable from a DB dump → hashed. The `view_slug` is the indexed lookup key for read access and is deliberately public on the share link, so it is stored plaintext (an attacker with the DB already has read access; hashing it buys nothing and costs a lookup index).
-
-### 2.2 Generation — CSPRNG only
-
-```python
-import secrets
-owner_token = secrets.token_urlsafe(32)   # 32 bytes = 256-bit
-edit_token  = secrets.token_urlsafe(32)   # 256-bit
-view_slug   = secrets.token_urlsafe(16)   # 16 bytes = 128-bit
-```
-
-- Use **only** `secrets` (CSPRNG). Never `random`, `uuid4` as a secret, timestamps, or counters.
-- `secrets.token_urlsafe(32)` yields a 43-char URL-safe string carrying 256 bits; `token_urlsafe(16)` yields ≥128 bits. These satisfy the PRD ≥256/≥128 floors.
-
-### 2.3 Hashing & constant-time comparison
-
-These tokens are **high-entropy random secrets, not user passwords.** A 256-bit random value is not brute-forceable, so a slow KDF (bcrypt/argon2/scrypt) buys nothing and would only add latency. Use a fast cryptographic hash:
-
-```python
-import hashlib, hmac
-
-def hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-def token_matches(presented: str, stored_hash: str) -> bool:
-    return hmac.compare_digest(hash_token(presented), stored_hash)
-```
-
-- **Every** token comparison uses `hmac.compare_digest` (constant-time). Never `==` on a token or hash — it leaks length/prefix timing.
-- Store `owner_token_hash` and `edit_token_hash` (and role-link hashes). Look up a presented bearer by computing its hash and matching constant-time; look up read access by `view_slug` equality (still via `compare_digest` against the stored slug).
-- Never store, log, or return a plaintext owner/edit token after it leaves the create/rotate response. It is shown to the client once and persisted only by the client.
-
-### 2.4 Auth resolution (the `app/deps.py` dependency)
-
-Every request resolves to one of: `owner`, `edit`, `view`, `role:{board|funder|advisor}`, or `anonymous`. The auth dependency:
-
-1. Reads `Authorization: Bearer <secret>` (if present).
-2. Reads the target projection by `view_slug` (path) — this never requires a secret (read-only path).
-3. Computes `hash_token(secret)` and compares constant-time against `owner_token_hash`, then `edit_token_hash`, then role hashes.
-4. Returns the **highest** scope that matches; otherwise `view` (if a valid `view_slug`) or `anonymous`.
-5. **Mutations require ≥ `edit`.** Rotate/delete/trash require `owner`. Reject otherwise with `403` (never reveal whether the projection exists beyond what the `view_slug` already grants).
-
-**Override SESSION — Clerk owner identity (when `CLERK_ENABLED`).** The `Authorization: Bearer` value is **shape-routed** before the hash compare: a Clerk session JWT (three base64url segments, header `alg: RS256` + `kid`) is verified networklessly against the primary's JWKS (`app/clerk/verify.py`) and resolves the caller to the **Clerk owner** (`owner_clerk_user_id` / `owner_org_id`); an opaque `secrets.token_urlsafe` capability token takes the constant-time owner/edit/role compare above, exactly as today. Resolution is **cookie-blind** (`resolve_bearer_identity` reads only the header — there is no cookies parameter) and **fail-closed**: a JWT-shaped-but-invalid token (wrong `iss`/`exp`/`azp`/signature) falls through to the capability compare and matches nothing → `anonymous`, never a 500. With `CLERK_ENABLED` off, step 1 skips Clerk entirely and a JWT is just an unrecognized bearer — the capability path is byte-for-byte unchanged.
-
-### 2.5 No secrets in paths, queries, or logs
-
-- **Edit / recovery / role secrets travel only in the URL fragment** (the part after `#`, which browsers never send to the server). The client reads the fragment, moves the secret into the `Authorization` header for API calls, then **scrubs it from the URL** (`history.replaceState` after `location.hash` is consumed) so it does not linger in screenshots, browser history exports, or referrer headers.
-- **Never** accept a secret in a path segment (`/p/{token}`) or query string (`?token=`). The route table in [`API_SPEC.md`](API_SPEC.md) must not contain a token path/query parameter. A reviewer who sees one rejects the PR.
-- **Never** log `Authorization` headers or URL fragments. The request logger has an explicit redaction allowlist; `Authorization` is dropped, and any field whose name matches `*token*`/`*secret*` is masked. A log-redaction test enforces this (see [`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md)).
-
-### 2.6 Rotation & revocation (ship in v1 — not deferred)
-
-A leaked edit fragment is full write access with no second factor, so `rotate-tokens` (`POST /api/projections/{slug}/rotate-tokens`, owner-only, §25) **must exist at launch**:
-
-- Atomically (one DB transaction) regenerates and re-hashes **owner, edit, `view_slug`, and all role-link tokens**, immediately invalidating every previously shared link.
-- Writes a **rotation event** into the audit/revision log (`actor_token_hash`, timestamp, event type) — see §10.
-- Returns the new owner/edit secrets once to the rotating client (who must re-store them). The old links now 404/403.
-- Use rotation as the compromise response: "I think my edit link leaked" → rotate → all old links dead.
-
-### 2.7 Workspace recovery — the explicit tradeoff
-
-Because there is no login, losing the owner token loses the workspace. The **only** mitigations, and their cost, are:
-
-- **One-time recovery code** shown **once** at create time, surfaced forcefully (a modal the user must acknowledge: "Save this — it is the only way back in. We cannot recover it for you."). It is a capability secret, treated like the owner token: generated with the CSPRNG, stored **hashed**, never re-displayable, delivered/entered via fragment, never logged.
-- **Recovery secret in the URL fragment** of a recovery link (never a path segment, never sent to the server until the user explicitly redeems it, never logged).
-
-**Documented tradeoff (honest by design):** convenience vs. durability. We deliberately do **not** offer email-based account recovery in v1 because that would require collecting and storing identity (PII) and reintroduce an account system the product is explicitly built to avoid. The cost of this choice is **irrecoverable orphaning** on key loss. Staff tooling can resolve a `support_id` to a projection for *support context* but **cannot grant access** — there is no staff override that hands out a token, because such an override would itself be a takeover backdoor. This limitation is stated to the user at create time so expectations match reality (PRD §21, §29). See [`OPS_RUNBOOK.md`](OPS_RUNBOOK.md) for the support-ID resolution flow.
-
-### 2.8 Clerk satellite owner identity — **Override SESSION** (ship dark behind `CLERK_ENABLED`)
-
-> **This subsection supersedes the documented "No login / no cookies" Hard Rule for the OWNER/editor identity only.** It is the approved override (`docs/plans/2026-06-27-clerk-satellite-auth.md` §0). Capability share-links for viewers are **preserved verbatim** (§2.1–§2.7 stand). The amendment is gated behind `CLERK_ENABLED`: with the flag off (the default) this section is inert and §2 is the whole story.
-
-projections is registered as a **cross-apex Clerk satellite** of the rallytasks.com primary (`thriftly.com ≠ rallytasks.com`). The model is **COEXIST, not replace**:
-
-- **Clerk = the OWNER/editor identity.** When `CLERK_ENABLED`, the person who owns a projection may sign in with their rallytasks.com Clerk account; owner-scope is keyed on the Clerk `userId` (`owner_clerk_user_id`) and, for org sessions, `orgId` (`owner_org_id`). A projection can be **token-owned OR clerk-owned** (additive columns; a token-owner can *claim* a row into their Clerk identity — see the claim path below).
-- **Claim / bridge — `POST /api/projections/claim` (`API_SPEC.md` §4.9).** Both credentials are required together: a **verified Clerk JWT** (the new owner) **and possession of the capability owner token** (the body `owner_token` whose SHA-256 must match the row's `owner_token_hash`). A capability token alone cannot claim (no verified Clerk identity → `401`); a Clerk JWT alone claims nothing (it must possess a matching owner token). The backfill is **one atomic conditional UPDATE** guarded by `owner_clerk_user_id IS NULL`, which is the **anti-takeover** invariant: an already-claimed row can never be re-linked to a different Clerk user (so one owner can never steal another's claimed projections), and the claim is idempotent (a re-claim links 0 more). It is **owner-scoped** (only rows matching the presented token's hash are touched — `TENANT`, PRD §20), **cookie-blind** (identity from the `Authorization` header only), parameterized, per-IP rate-limited before the JWT verify + write, and a **`404` no-op when `CLERK_ENABLED` is off** (no new behavior on the dark path). The frontend fires it once on the signed-out→signed-in transition (`web/src/auth/ClaimLegacyOwnerToken.tsx`, mounted inside the Clerk provider so nothing Clerk-importing loads on the dark path); the owner token is **kept** in `localStorage` afterward as a harmless signed-out fallback.
-- **Editable shares that FOLLOW the account — `share_grants` + `POST …/claim-share` (`API_SPEC.md` §4.10, #323).** The owner decision is that shared **edit** access follows the recipient's Clerk account, not a per-device capability token. The server-side home is the `share_grants` table (`DATA_MODEL.md` §3.11), keyed on the grantee's Clerk `sub`. **A grant is minted ONLY from a verified edit-token presentation:** the recipient signs in and POSTs the edit token (in the **body**, never the path/query/log) for a specific `view_slug`; the server compares it **constant-time** against *that slug's* `edit_token_hash` and, on match, writes one `editor` grant on their Clerk sub. A wrong or **foreign** edit token (a valid token for a *different* projection) → `403` and **no grant** — possession of some other projection's edit token grants nothing here (the cross-owner wall). This is a strict tightening of the existing capability model: the grant is never more than what holding the edit token already authorizes; it merely **persists** that authorization to an account so it works on any device. The grant then scopes two surfaces, both **grantee-Clerk-sub-keyed and never global** (Override TENANT / PRD §20): the **"Shared with me"** list (`GET /api/projections`) and the **grant-based PATCH** path — a Clerk grantee may edit via their **JWT** (in addition to the capability edit-token path), authorized in `apply_projection_patch` by `has_share_grant` (or `_clerk_owns` for the row's Clerk owner). A Clerk user with **no** grant and no ownership → `403` (the negative cross-owner wall; the full Mutation Safety Quad — auth, tenant, `If-Match`/409, rate limit — applies). All of this is **cookie-blind** (identity from the `Authorization` header only) and a **`404` no-op when `CLERK_ENABLED` is off**. The frontend fires the claim once on the signed-out→signed-in transition (`web/src/auth/ClaimSharedToken.tsx`, mounted inside the Clerk provider so nothing Clerk-importing loads on the dark path), walking the locally-stored edit tokens; the tokens are **kept** in `localStorage` as a harmless same-device fallback.
-- **Capability share-links stay for everyone who does NOT log in.** `view_slug` (read), role links, and the fragment-delivered edit token are unchanged. Boards/funders/advisors **never** log in. This is non-negotiable — forcing Clerk on viewers would destroy the core sharing flow (§3, PRD §6.2/§20).
-- **The API is cookie-blind, JWKS-Bearer only — so there is still no CSRF.** Our FastAPI verifies a **short-lived Clerk session JWT** presented in `Authorization: Bearer` (minted client-side via `clerk.session.getToken()`), verified **networklessly against the primary's JWKS** with **no Clerk secret** on projections. It **never** reads the `__session` cookie — not even the first-party one a satellite sets on `thriftly.com`. Because our endpoints carry no ambient browser credential, cross-site requests cannot forge an authenticated mutation → **no CSRF** (Regression #11 preserved; see §6.2).
-- **No Clerk secret on projections (finding C1).** A satellite/daughter holds **no** `CLERK_SECRET_KEY` and **no** `CLERK_WEBHOOK_SIGNING_SECRET` — verification is public-key (JWKS) only. The boot path **refuses to boot** in production if either is set (§4.4).
-
-**JWT verification hardening (`app/clerk/verify.py`, mirrors timpager `lib/clerk-jwt-verify.js`):** **RS256 only** (no algorithm-confusion / `alg: none`), signing key resolved by `kid` from the issuer's JWKS, **`iss` mandatory and fail-closed** (an unset `CLERK_JWT_ISSUER` raises — never accepts), `exp`/`nbf` enforced within a small clock-skew leeway, and an **`azp` (authorized-parties) allowlist** (`CLERK_AUTHORIZED_PARTIES`) that is *stricter* than both pennyai and vibe101 (which omit it) — a cross-apex satellite widens the set of origins that can mint JWKS-valid tokens, so the authorized party is pinned. Tests use a locally-generated RSA keypair + a stub JWKS (no network, no real Clerk call).
-
-**The standing CI invariant (Regression #11 guard):** *a request carrying a valid `__session` cookie but no `Authorization` header resolves to `anonymous`.* `resolve_bearer_identity` takes only the header — there is no place to pass a cookie — so a cookie can never authenticate. The Clerk JWT in `Authorization` is XSS-exfiltratable the same way the owner token is today, but it is **short-lived** (≈60s), strictly better for blast radius than the long-lived owner token; XSS hardening (§5) remains the primary defense and matters *more*.
-
-**Frontend satellite wiring (`web/`, ship dark behind `VITE_CLERK_PUBLISHABLE_KEY`).** The React/Vite SPA wraps the app in the cross-apex `@clerk/clerk-react` satellite `<ClerkProvider isSatellite domain signInUrl allowedRedirectOrigins>` (`web/src/auth/ClerkAuthProvider.tsx`, mounted by `web/src/RootProviders.tsx`) **only when `VITE_CLERK_PUBLISHABLE_KEY` is set at build**. With the key unset (the default) the app renders **exactly as today** and the Clerk import path is **never executed** — `ClerkAuthProvider` and the sign-in control are `React.lazy` dynamic imports, so `@clerk/clerk-react` is code-split out of the booted path entirely (verified: the dark `vite build` entry HTML loads no Clerk chunk). The owner sign-in affordance (`web/src/auth/OwnerAuthControls.tsx`, top bar only, active-satellite only) navigates to the **primary** via `clerk.buildSignInUrl()` — never a hardcoded URL (Clerk appends `__clerk_synced` so the cross-apex session round-trips); **no passkeys** (registrable-domain-bound), and **no auto-sync** (clerk-react v5 has no `satelliteAutoSync`; its default of no first-visit redirect is the intended explicit-owner-sign-in behaviour). Owner API calls attach the short-lived Clerk session JWT (`await getToken()`) as `Authorization: Bearer` through the **single** `authHeader()` helper (`web/src/api/authHeader.ts`); with Clerk off, or signed out, it falls back to the localStorage owner token byte-for-byte as today. **Viewers' capability secrets (`view_slug`, the role/edit fragment tokens) never flow through `authHeader()`** — share-link routes stay no-login and are never gated by the provider. The CSP/CORS widening for the Clerk FAPI origins (§8.2) remains the matching, separately-signed-off backend follow-up, gated on `CLERK_ENABLED`.
+- `GET /api/projections` returns every projection in the database, to every caller, with no filter.
+- `GET/PATCH /api/projections/{view_slug}` and every other per-projection route (preview, `narrative`, `xlsx`, `packet`, `cashflow.csv`, `revisions`, `trash`, `restore`, `delete`, the Penny endpoints) work with no `Authorization` header at all. The `view_slug` in the URL is just a row lookup key now, not a secret — knowing it is not required to reach the row, since the row is also reachable through the global list.
+- There is no owner, no editor, no viewer distinction. Anyone who can reach the app can read, edit, export, trash, or permanently delete any projection.
+- The former capability-token machinery (owner token, edit token, role-link tokens, `rotate-tokens`) and the former Clerk satellite login (`CLERK_ENABLED`, JWKS verification, `owner_clerk_user_id`/`owner_org_id`, `share_grants`) are deleted from the code. The `POST /api/projections/claim` and `POST /api/projections/{slug}/claim-share` endpoints no longer exist (404).
+- A handful of now-unused columns (`owner_token_hash`, `edit_token_hash`, `owner_clerk_user_id`, `owner_org_id`, `role_tokens_json`) and one now-unused table (`share_grants`) remain in the live schema — this project's migrations are additive-only (a static CI gate forbids `DROP COLUMN`/`DROP TABLE`), so they were left in place rather than dropped. Nothing reads or compares against them for access control anymore; treat them as dead. See [`DATA_MODEL.md`](DATA_MODEL.md).
+- `/api/r/{role_slug}` (`app/routers/roles.py`) still exists — a read-only alternate URL that tailors emphasis/CTAs for a board/funder/advisor view. It was never an access-control boundary (the projection is public via its main URL too) and is unaffected by this decision, except that `rotate-tokens` — the only way to mint a *new* role link — is gone, so no new role links can be created going forward.
+- **What did NOT change:** `If-Match`/`version`/HTTP 409 optimistic concurrency (§6.1) is a CONCURRENCY control, not an access control, and is completely intact — every mutation still requires it. Per-IP rate limiting also stays (§10). `GET /api/metrics` keeps its own independent `METRICS_TOKEN` bearer gate — see §4.5 — an internal ops endpoint outside this decision's scope.
 
 ---
 
 ## 3. Read-only export & access boundary
 
-- Read-only holders (`view_slug` / role links) **may** view the projection and download the `.xlsx` and Board Packet — these contain nothing beyond what the read view already shows (PRD §20). This is not a leak.
+- Every visitor may view a projection and download its `.xlsx` and Board Packet — there is no read-only vs. read-write distinction anymore (PRD §20 is superseded by §2 above). This is not a leak; it is the design.
 - Whether export is **gated behind the paid expert-review event** is a **business-model toggle** (PRD §3), a config decision, not an access-control bug. The access layer always permits read+export at the read scope; a separate, clearly-labeled gate (terms acceptance, paid flag) may sit in front of it.
 - The toggle is the single server config `gate_config` ({`gate_mode`, `price_usd`}, [API_SPEC.md](./API_SPEC.md) §10a). It governs the **expert-review / sign-off surface ONLY** — the basic `.xlsx` and basic packet stay **free and ungated in every mode**. It is **orthogonal** to the terms gate below: a paid gate never bypasses terms, and flipping it never alters compute/`computed_json`/`model_version`.
 - **Terms acceptance is required before export/share** (PRD §21). The gate is a server-checked flag, not client-only.
@@ -179,27 +91,24 @@ projections is registered as a **cross-apex Clerk satellite** of the rallytasks.
 - Generic errors to clients: never echo internal IDs, file paths, stack traces, or key fragments in an API error body.
 - The **browser never holds a provider key.** All Places/Census/Anthropic/OpenAI/GitHub/CRM calls are server-side only (PRD §23). The frontend talks only to our own API.
 
-### 4.4 Clerk satellite auth (**Override SESSION**, required only when `CLERK_ENABLED`)
+### 4.4 (removed) Clerk satellite auth
 
-projections is a Clerk **satellite** that verifies JWKS-Bearer and holds **no Clerk secret** (§2.8, finding C1). Every var below is **optional when `CLERK_ENABLED` is off** (the default — boot is unchanged); when on in production they are **required-to-boot** via the same single-source `validate_required` mechanism (no fallback chains).
+This project used to run an optional Clerk satellite login (`CLERK_ENABLED`) for the owner/editor identity. It is deleted entirely as part of the 2026-09-13 decision to remove all authentication (§2) — there is no `CLERK_ENABLED`, no Clerk env var, and no Clerk code path left anywhere in this app.
 
-| Config | Env var | Required when | Notes |
-|---|---|---|---|
-| Kill switch | `CLERK_ENABLED` | optional (default **off**) | Strict truthy (`1`/`true`/`yes`/`on`), read at call time. Off ⇒ pure capability tokens (ship dark). |
-| Expected issuer | `CLERK_JWT_ISSUER` | **required when on** | The mandatory `iss`; JWKS at `<issuer>/.well-known/jwks.json`. The **primary** (`https://clerk.rallytasks.com`) even on the satellite (issuer ≠ FAPI host). Fail-closed if unset. |
-| Publishable key | `CLERK_PUBLISHABLE_KEY` | **required when on** | `pk_live_…` (same instance as rallytasks.com); shipped to the browser by the discovery endpoint. Not secret, but config-required. |
-| Authorized parties | `CLERK_AUTHORIZED_PARTIES` | **required when on** | CSV `azp` allowlist (e.g. `https://projections.thriftly.com`) — stricter than pennyai/vibe101. |
-| Clock-skew leeway | `CLERK_JWT_LEEWAY_SECONDS` | optional (default `10`) | `exp`/`nbf` leeway. |
-| ~~Clerk secret~~ | `CLERK_SECRET_KEY` | **NEVER set** | Primary-only (finding C1). **Boot refuses** in prod if present. |
-| ~~Webhook secret~~ | `CLERK_WEBHOOK_SIGNING_SECRET` | **NEVER set** | Webhooks are the primary's job. **Boot refuses** in prod if present. |
+### 4.5 `METRICS_TOKEN` — the one remaining auth gate
 
-The last two are an unconditional **boot-refuse guardrail**: a satellite never holds a Clerk secret, so their presence in production fails `validate_required` loudly.
+`GET /api/metrics` (per-provider cost/latency counters, OPS_RUNBOOK §6.3) is a separate internal ops endpoint, out of scope for the no-auth decision in §2 — it is not part of the product's projection data model, and the owner did not ask to remove it.
+
+- `METRICS_TOKEN` unset → the endpoint 404s (it does not exist; an unauthenticated probe learns nothing).
+- Missing `Authorization` → 401. Wrong bearer → 403 (constant-time compare; the token never appears in a path/query/log).
+- Correct bearer → 200 with the secret-free metrics snapshot.
+- This gate is self-contained in `app/routers/metrics.py` (its own hash/compare helpers) — it does not depend on anything in `app.deps`, which has no auth primitives left at all.
 
 ---
 
 ## 5. XSS & rich-text sanitization
 
-The narrative `body_md` (PRD §24) is **user-editable and rendered as HTML**. The evidence panel renders user-supplied source titles/notes. With bearer tokens in `localStorage`, a single stored XSS = token theft = full takeover. Therefore:
+The narrative `body_md` (PRD §24) is **user-editable and rendered as HTML**. The evidence panel renders user-supplied source titles/notes. A single stored XSS still lets an attacker run arbitrary script in another visitor's browser — there is no bearer token to steal anymore (§2), but that is not a reason to relax sanitization: script execution in someone else's session is its own harm regardless of what secrets are or aren't present. Therefore:
 
 - **Server-side allowlist sanitization** of `body_md` and any user rich text (evidence labels/notes, projection name, justification notes that travel into the packet) **before storage** (`narratives.body_md` is stored already-sanitized) **and** defense-in-depth on render.
 - Use an allowlist sanitizer (e.g. **`bleach`** for Python server-side; **DOMPurify** if any sanitization happens client-side as belt-and-suspenders). Allowlist a minimal Markdown-rendered tag set (`p`, `ul`/`ol`/`li`, `strong`, `em`, `a` with `href` restricted to `http`/`https`/`mailto`, headings, `blockquote`, `code`). **Strip** all `<script>`, all `on*` event-handler attributes, `style` attributes, `javascript:` URLs, `<iframe>`/`<object>`/`<embed>`, and inline SVG.
@@ -212,10 +121,9 @@ The narrative `body_md` (PRD §24) is **user-editable and rendered as HTML**. Th
 
 ### 6.1 Optimistic concurrency (every mutation)
 
-Autosave (PRD §19.3) means high write frequency on one row, and shared edit links mean concurrent editors. Therefore **every mutating endpoint requires both**:
+Autosave (PRD §19.3) means high write frequency on one row, and a fully public app (§2) means many concurrent editors on the same projection with no ownership to serialize them. Therefore **every mutating endpoint requires**:
 
 ```
-Authorization: Bearer <owner-or-edit token>
 If-Match: <version>
 ```
 
@@ -224,9 +132,9 @@ If-Match: <version>
 - A `409` must be a **real** conflict response, not cosmetic. The frontend tracks the server version from every computed response and never blind-overwrites.
 - Autosave is debounced client-side; the server serializes writes (single-writer WAL, §11) and writes **one revision snapshot per settle** (PRD §24). Revision growth is bounded — see [`OPS_RUNBOOK.md`](OPS_RUNBOOK.md) retention policy.
 
-### 6.2 No CSRF — keep it that way
+### 6.2 CSRF — not applicable
 
-Mutations authenticate via the `Authorization: Bearer` header, **not** a cookie. Because no ambient credential **that our API trusts** is attached by the browser, cross-site requests cannot forge authenticated mutations → **no CSRF**. The bearer is either an opaque capability token or — when `CLERK_ENABLED` (§2.8) — a verified Clerk session JWT; **either way it is a header value, never a cookie.** **Do not introduce a cookie, a session, or any ambient credential *that our API reads*.** Our API is **cookie-blind by invariant**: it never reads `request.cookies` — not even the Clerk `__session` cookie a satellite may set in the browser for clerk-js's own session sync (that cookie is inert against our endpoints). If you find yourself reaching for `Set-Cookie` **or** `request.cookies` in an auth path, stop — it reintroduces the CSRF class the design eliminated (PRD §20, Regression #11).
+There is no session, cookie, or credential of any kind for our API to read (§2), so there is no ambient browser credential a cross-site request could forge in the first place — the CSRF threat class does not apply to this app's mutation endpoints. **Do not introduce a cookie, a session, or any ambient credential that our API reads** — that would be the first thing in this app's history that could reintroduce CSRF, so treat `Set-Cookie` / `request.cookies` in any request-handling path as a hard stop requiring a design conversation first.
 
 ### 6.3 LLM injection defense & grounding (testable invariants, not prompt wishes)
 
@@ -251,11 +159,11 @@ The research and narrative subsystems are the app's trust surface. These are **h
 
 5. **Untrusted-data framing of the loop.** The user message and any proposal text are wrapped as untrusted **data** (extract-only / ignore-embedded-instructions framing) and run through `strip_injection_markers` before the model sees them; grounding facts stay in the **trusted** system prompt (`app/penny/loop.py`). Sanitization events are logged as **pattern + timestamp only**, never the input.
 6. **Figure-strip in mutate-tool args.** A mutate tool argument is an **intent** (a raw user input value), never a *computed* figure. The server **strips/rejects** any value argument that is display-formatted money/percent — contains `$`, `%`, or thousands-grouping commas (`$277,990`, `8%`, `($41,200)`, `50,000`) — via `app.aisafety.is_computed_figure_token`, so **no LLM-computed figure is ever applied** (extends the N2 figure-strip rule to the tool loop). Bare numbers/fractions (`0.08`, `5000`) pass.
-7. **One mutation wall, capability-gated.** Every mutate tool routes through the existing `apply_projection_patch` (the PATCH/`If-Match` service): owner/edit Bearer required, override-DAG + domain + cost-schedule validation unchanged, non-pinnable → **422 `node_not_pinnable`** relayed in plain language, stale version → **409** surfaced for re-read/retry, and **one revision tagged `actor:penny`** per applied edit. A **view-only** caller's Penny degrades to **answer-only** (`ctx.can_mutate` gate) and the 403 wall backstops it.
+7. **One mutation wall.** Every mutate tool routes through the existing `apply_projection_patch` (the PATCH/`If-Match` service): override-DAG + domain + cost-schedule validation unchanged, non-pinnable → **422 `node_not_pinnable`** relayed in plain language, stale version → **409** surfaced for re-read/retry, and **one revision tagged `actor:penny`** per applied edit. There is no view-only/edit distinction anymore (§2) — every caller can mutate.
 8. **Bounded `cost_schedule` (DoS guard, issue #166).** The timed `cost_schedule` array is COUNT-capped at **`MAX_COST_SCHEDULE_ROWS = 200`** rows — a generous bound (real launch schedules carry ~10-30 timed startup rows) that prevents per-projection blob / revision-bloat (the array is JSON-serialized into `inputs_json`/`cost_schedule_json` **and** snapshotted into a fresh revision on every save, so an unbounded array amplifies durable-volume + Litestream cost). Enforced **server-side identically on both write paths**: the manual PATCH (`_validate_schedule_inputs`) and Penny's `edit_cost_schedule` (re-checked after its add/edit/remove ops), each rejecting an over-cap array with **422 `invalid_inputs`** before any write — so neither a hand-crafted PATCH body nor a runaway consultant-proposal parse can balloon the schedule.
-9. **Penny → GitHub feedback at her discretion — dormant behind `PENNY_GITHUB_FEEDBACK_ENABLED` (default OFF, Epic F / decisions #7/#12).** When a chat surfaces a real bug/opportunity, Penny may file a redacted GitHub issue **without asking first** and **tell the user in-thread** — via the `file_product_feedback` tool (`app/penny/tools.py`), registered **only when the flag is on** (`build_registry` gates it), so Penny **cannot auto-file in prod** until it is flipped. It reuses the **same** chokepoint as the public feedback path (§1 risk #1, [IDEA_FAB.md](./IDEA_FAB.md) §5.8): the model-composed title/description go through **`redact.py`** (with the projection's `view_slug` as `own_slug`) **before** anything — `$`/`%`/links/slugs/tokens/emails stripped to a qualitative report — and file through the **existing** `file_github_issue()` (best-effort/non-fatal), tagged **`filed-by-penny`**. The server-only **`creator_*`** identity (Clerk JWT claims; no Clerk secret, finding C1) is persisted on the `feedback` **row only — never** the issue body/payload. Abuse controls: a **per-user (hashed bearer / Clerk `sub`) + per-IP** rate limit and a **server-side dedup** on the SHA-256 of the *redacted* body per identity/window (`app/feedback/dedup.py`), so a re-surfaced issue files **at most once** and a flood is capped before any GitHub/DB write (a duplicate/rate-limited attempt is a friendly no-op, never a second issue). Adversarial CI with a **stubbed GitHub client** (no real issue): flag-off no-op, flag-on redacted filing, redaction-at-the-wire, dedup, rate-limit, creator-on-row-not-issue, in-thread ack (`app/tests/test_penny_github_feedback.py`). **Diagnosability:** `file_github_issue()`'s failure handler logs GitHub's `status_code` + a **~200-char response-body excerpt** (GitHub's own error text — never our `GITHUB_TOKEN`/`GH_PAT`, never the issue body) so a filing outage is debuggable without leaking a secret.
+9. **Penny → GitHub feedback at her discretion — dormant behind `PENNY_GITHUB_FEEDBACK_ENABLED` (default OFF, Epic F / decisions #7/#12).** When a chat surfaces a real bug/opportunity, Penny may file a redacted GitHub issue **without asking first** and **tell the user in-thread** — via the `file_product_feedback` tool (`app/penny/tools.py`), registered **only when the flag is on** (`build_registry` gates it), so Penny **cannot auto-file in prod** until it is flipped. It reuses the **same** chokepoint as the public feedback path (§1 risk #1, [IDEA_FAB.md](./IDEA_FAB.md) §5.8): the model-composed title/description go through **`redact.py`** (with the projection's `view_slug` as `own_slug`) **before** anything — `$`/`%`/links/slugs/emails stripped to a qualitative report — and file through the **existing** `file_github_issue()` (best-effort/non-fatal), tagged **`filed-by-penny`**. There is no signed-in identity to record anymore (§2) — the feedback row carries no `creator_*` fields. Abuse controls: a **per-IP** rate limit and a **server-side dedup** on the SHA-256 of the *redacted* body per identity/window (`app/feedback/dedup.py`, identity falling back to IP or `"anon"`), so a re-surfaced issue files **at most once** and a flood is capped before any GitHub/DB write (a duplicate/rate-limited attempt is a friendly no-op, never a second issue). Adversarial CI with a **stubbed GitHub client** (no real issue): flag-off no-op, flag-on redacted filing, redaction-at-the-wire, dedup, rate-limit, in-thread ack (`app/tests/test_penny_github_feedback.py`). **Diagnosability:** `file_github_issue()`'s failure handler logs GitHub's `status_code` + a **~200-char response-body excerpt** (GitHub's own error text — never our `GITHUB_TOKEN`/`GH_PAT`, never the issue body) so a filing outage is debuggable without leaking a secret.
 
-These tests must be **adversarial**: feed a hallucinated figure → assert rejection; feed an unfetched citation → assert rejection; feed `ignore previous instructions` web/proposal text → assert it is stripped/ignored; put a computed `$`/`%` into a mutate-tool arg → assert it is stripped/rejected; mutate from a view-only token → assert refusal; push `cost_schedule` past `MAX_COST_SCHEDULE_ROWS` (manual PATCH **and** `edit_cost_schedule`) → assert **422** with no write. A happy-path-only test gives false safety.
+These tests must be **adversarial**: feed a hallucinated figure → assert rejection; feed an unfetched citation → assert rejection; feed `ignore previous instructions` web/proposal text → assert it is stripped/ignored; put a computed `$`/`%` into a mutate-tool arg → assert it is stripped/rejected; push `cost_schedule` past `MAX_COST_SCHEDULE_ROWS` (manual PATCH **and** `edit_cost_schedule`) → assert **422** with no write. A happy-path-only test gives false safety.
 
 #### 6.3.1 Penny tool-use loop — untrusted-data framing (Spec B, issue #122 / PE3)
 
@@ -265,7 +173,7 @@ Penny runs a **bounded server-side tool-use loop** (`app/penny/loop.py`) against
 2. **Log pattern + timestamp only.** When a strip removes markers, the loop logs a sanitization event (`event`, `source`, `ts`) — **never the input text** itself.
 3. **Hard caps (cost & abuse control, not optional).** Per turn: a **max tool-iteration** cap (a runaway loop terminates with a plain message, never an infinite loop), a **max input-token** preflight (oversized prompts are rejected before any provider call), a **max output-token** cap (passed to the provider), and a **per-turn token cost guard** (cumulative spend over budget stops the loop). An injected **rate limiter** (per-turn / per-projection / per token+IP, §10) surfaces **`429` with `retry_after_seconds`** before any provider work.
 4. **Fail-soft, never a 500.** AI opt-out or no key configured → **zero provider calls** and a `409 ai_disabled` signal; both providers down → `503 ai_unavailable`; a provider **parse failure degrades to a plain answer**; an unknown tool or a throwing tool handler becomes an `is_error` tool result the model can recover from. None of these become an HTTP 500.
-5. **Tool-registry seam.** The loop executes tools through an **injected registry** (`ToolRegistry`); the **seven real tools** (`read_projection`, `parse_proposal`, `set_input`, `set_assumption`, `set_override`, `clear_override`, `edit_cost_schedule`) and their figure-strip-in-tool-args rule land in PE4 and route through the **normal `PATCH` + `Bearer` + `If-Match`** mutation/recompute path — Penny is never a parallel writer and never computes a number.
+5. **Tool-registry seam.** The loop executes tools through an **injected registry** (`ToolRegistry`); the **seven real tools** (`read_projection`, `parse_proposal`, `set_input`, `set_assumption`, `set_override`, `clear_override`, `edit_cost_schedule`) and their figure-strip-in-tool-args rule land in PE4 and route through the **normal `PATCH` + `If-Match`** mutation/recompute path — Penny is never a parallel writer and never computes a number.
 6. **Same `If-Match` wall as the manual UI — no silent lost update (Regression #9, issue #165).** A Penny mutate tool carries the version Penny **grounded on at the start of the turn** as its `If-Match`: the loop threads the version it read (from the grounding context / `read_projection`) into `ToolContext.version` (`app/penny/loop.py`), and the shared write path (`apply_projection_patch`) enforces it exactly as for a human edit. The tool layer **never** back-fills a missing version from a fresh read of the row — that would manufacture a guaranteed-fresh `If-Match` that always matches and **silently clobbers a concurrent human/edit-token change** (a lost update). Fail-closed: an unset `ctx.version` is refused with the **same `428 if_match_required`** the manual PATCH raises (`app/deps.parse_if_match`); a grounded-but-stale version writes 0 rows and surfaces a **real `409 version_conflict`** (with current server state) that the loop hands back to Penny to **re-read and retry, or relay to the user**. Penny has **no privileged concurrency path** — it hits the identical optimistic-concurrency wall as the UI. CI-tested in `app/tests/test_penny_tools.py` (a concurrent external edit makes Penny's stale write 409, not a blind overwrite).
 
 #### 6.3.2 Proposal → cost-schedule parse (extract-only, PE9 / issue #128)
@@ -335,32 +243,13 @@ Content-Security-Policy:
 ### 8.2 CORS — locked to the app origin
 
 - `Access-Control-Allow-Origin` is the **exact app origin** (the production hostname in the thriftly.com project), not `*`, not a reflected `Origin`.
-- Allow only the methods/headers the API uses (`GET, POST, PATCH, DELETE`; `Authorization`, `If-Match`, `Content-Type`).
-- No `Access-Control-Allow-Credentials` is needed and it **stays off even when `CLERK_ENABLED`** (§2.8): we send **no cookies** to our API — the Clerk JWT travels in the `Authorization` header — so enabling credentialed CORS would only re-add an ambient-credential surface for no benefit. Do not enable it.
-- **Clerk CSP widening is shipped and gated on `CLERK_ENABLED`** (see below). CORS is **unchanged** by it: still exact-origin, `Allow-Credentials` off.
-
-#### Clerk satellite CSP widening — gated on `CLERK_ENABLED` (shipped)
-
-The Clerk satellite (§2.8) requires clerk-js to load from and talk to the Clerk Frontend API. That is a **named, signed-off relaxation** of the strict baseline in §8.1 and it is **gated on the `CLERK_ENABLED` kill switch**: `app/middleware.build_csp()` returns the strict `'self'`-only CSP **byte-for-byte** when the flag is off (the default), and the widened policy below only when it is on. The switch is read at request time, so flipping it takes effect on the next request with no restart. The backend JWKS-Bearer / cookie-blind design does not depend on this.
-
-The widening (`CLERK_ENABLED` on only) adds exactly these origins/directives; every hardening directive (`default-src 'self'`, `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`, `form-action 'self'`, and **no `'unsafe-inline'` in `script-src`**) is preserved verbatim:
-
-| Directive | Added when Clerk on | Why |
-|---|---|---|
-| `script-src` | `https://clerk.thriftly.com https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com` | clerk-js loads from the satellite FAPI (the `clerk.thriftly.com` CNAME) + the clerk-js host; `*.clerk.accounts.dev` covers dev instances; Turnstile is Clerk's bot-check script |
-| `style-src` | `'unsafe-inline'` (added to `'self'`) | Clerk's **prebuilt components** — the `<UserProfile>` opened by `clerk.openUserProfile()` (the account **"Manage"** modal) — inject runtime **CSS-in-JS**, which a `'self'`-only `style-src` blocks, leaving the modal a broken, interaction-trapping overlay (the "Manage freezes the app" bug). Clerk's CSP guide **requires** `'unsafe-inline'` here. Relaxes inline **styles only** — `script-src` stays inline-free, so the XSS/exfil posture is unchanged. The strict off-baseline keeps `style-src 'self'`. |
-| `connect-src` | `https://clerk.thriftly.com https://*.clerk.accounts.dev https://*.clerk.com` | clerk-js XHR/fetch to the satellite FAPI; `'self'` (our own API) is kept |
-| `img-src` | `https://img.clerk.com https://images.clerk.dev` | user/org avatars (current + legacy Clerk image hosts) |
-| `frame-src` *(new directive)* | `'self' https://clerk.thriftly.com https://*.clerk.accounts.dev https://challenges.cloudflare.com` | Clerk's cross-domain session-sync iframe + the Turnstile challenge frame |
-| `worker-src` *(new directive)* | `'self' blob:` | clerk-js spins a `blob:` web worker |
-
-- **jsdelivr is intentionally NOT allowlisted.** `@clerk/clerk-react` v5 is bundled by Vite and loads clerk-js from the **FAPI host**, not a public CDN — so our own JS stays `'self'`. The vanilla `<script src=cdn.jsdelivr.net …>` pattern (the same-apex `vibe101` daughter) does not apply here.
-- **The primary's origins (`rallytasks.com`) are NOT added** to `script`/`connect`/`frame-src`. On a cross-apex satellite, clerk-js only talks to its **own** FAPI (`clerk.thriftly.com`); the session handshake to the primary is a **top-level navigation** (`__clerk_synced` redirect), which CSP subresource directives do not govern. The verify-side issuer (`CLERK_JWT_ISSUER=https://clerk.rallytasks.com`) is a different host from the browser-side FAPI **by design** (§2.8): the issuer is for JWKS verification, the FAPI is for the browser.
-- `style-src` gains `'unsafe-inline'` (Clerk-on only) — the **signed-off follow-up** anticipated here. Sign-in still happens on the **primary** (`rallytasks.com`), but the satellite *does* now mount one heavy Clerk component: the **account "Manage"** modal (`UserMenu.tsx` → `clerk.openUserProfile()` → `<UserProfile>`), whose CSS-in-JS a `'self'`-only `style-src` blocked (it rendered as a frozen overlay). Clerk's CSP guide requires `'unsafe-inline'` for its components; this is scoped to **inline styles only** (never `script-src`) and **only when `CLERK_ENABLED`** — the strict off-baseline keeps `style-src 'self'`. *If the "Manage" surface is ever moved off the in-app modal to the primary account portal (`accounts.rallytasks.com/user`), this relaxation can be reverted.*
+- Allow only the methods/headers the API uses (`GET, POST, PATCH, DELETE`; `If-Match`, `Content-Type`).
+- No `Access-Control-Allow-Credentials` is needed — we send no cookies to our API and nothing to gate behind credentialed CORS (§2). Do not enable it.
+- **The Clerk CSP widening this app used to ship is gone.** `app/middleware.build_csp()` now always returns the strict `'self'`-only policy in §8.1 — there is no flag, no widened variant, and no Clerk origin allowlisted anywhere.
 
 ### 8.3 No-index
 
-Every response carries `X-Robots-Tag: noindex, nofollow`, and the app serves a `robots.txt` with `Disallow: /`. Projections are private capability-scoped documents; they must never be indexed (PRD §20). The owner-scoped list page and all `/{view_slug}` routes are no-index.
+Every response carries `X-Robots-Tag: noindex, nofollow`, and the app serves a `robots.txt` with `Disallow: /`. Projections are public within the app (§2) but must never be search-indexed — the global list page and every `/{view_slug}` route are no-index.
 
 ### 8.4 HTTPS / HSTS
 
@@ -373,55 +262,53 @@ Every response carries `X-Robots-Tag: noindex, nofollow`, and the app serves a `
 
 Bugs go to GitHub (the "idea fab"), which **may be a public repo**. Therefore the GitHub payload is **provably scrubbed** (PRD §22, [`IDEA_FAB.md`](IDEA_FAB.md)):
 
-- **Never** include `view_slug`, owner/edit token, any resolvable projection URL, or **any financial field** in the GitHub issue.
-- The user is shown a random **`support_id`** (the `feedback.support_id` column). Only server-side staff tooling resolves `support_id → projection` (and that resolution grants *context*, not *access* — see §2.7).
+- **Never** include `view_slug`, any resolvable projection URL, or **any financial field** in the GitHub issue.
+- The user is shown a random **`support_id`** (the `feedback.support_id` column). Only server-side staff tooling resolves `support_id → projection` for support context (not that it grants any *additional* access — every projection is already public, §2).
 - Auto-context is **non-sensitive only**: route, app version, `model_version`, `support_id`, timestamp.
 - **Server-side allowlist (the single chokepoint, both sinks).** The outbound GitHub payload **and** the persisted `feedback.context_json` are assembled by `app.feedback.redact.build_safe_context` from a fixed allowlist — `SAFE_CONTEXT_KEYS = (route, app_version, model_version, type, ts)` — and from those ONLY. **Client-supplied `context.*` is never trusted** (#201): `model_version` is **stamped server-side** from the engine (`engine.model.MODEL_VERSION`) — the client value is dropped at the schema (`extra="ignore"`); `type` is **coerced to the closed enum** `bug|idea|other` (`normalize_type`, unknown → `other`) so it can carry no link/token/financial/markdown; `route` is slug/fragment-stripped **and** run through `redact_text` so no token/link/financial/email survives even in a non-`/p` path segment. `title`/`description` pass through `redact_text` (injection markers, raw HTML, `Bearer`/recovery/high-entropy tokens, resolvable links, **emails**, `$`-amounts, bare percentages, then the §3.2 caps). **Both sinks are built from the same redacted artifact** — the persisted row is scrubbed identically to the payload, so it is safe-if-public even before live GitHub delivery is enabled.
 - UI notice: "Don't paste sensitive financial details." The `feedback` table itself stores **no financial fields and no projection link** (PRD §24). (The reply-to address has its own server-only `feedback.email` column and never reaches the payload.)
-- **Server-only creator identity (0011, Clerk satellite, Epic F / decisions #6/#13).** When `CLERK_ENABLED` is on and a **signed-in Clerk owner** files feedback, the server records WHO from the **verified Clerk session-JWT CLAIMS** — `creator_email` / `creator_name` / `creator_phone` / `creator_clerk_user_id` — using **NO Clerk Backend API and NO Clerk secret** (projections is a satellite that holds none, finding C1; the claims are already on the JWKS-verified token). These columns are **PII and SERVER-ONLY**: like `feedback.email` they sit beside the row for support follow-up and are **deliberately NOT part of the GitHub-bound payload** — `build_safe_context`'s allowlist does not include any `creator_*` field, so they cannot reach the public issue. All four are **nullable**; for anonymous feedback, an invalid/expired Clerk JWT, or with the kill switch off (the default), they are **NULL** and the row is byte-for-byte what it is today (additive + dormant). A new CI test asserts `creator_*` PII never reaches the payload.
-- **CI test (mandatory, non-regressable):** construct a feedback submission from a fully-populated projection and assert the outbound GitHub payload **and** the persisted `context_json` contain no `view_slug`, no token, no `http(s)` projection URL, none of the financial field names, and that client-stuffed `context.model_version`/`type` are dropped (server values only survive). This is risk #1 and must be impossible to regress. Covered by `app/tests/test_feedback_abuse.py` (M6.1 fixed-payload leak gate + the #201 stuffed-context test), `app/tests/test_feedback_redaction_fuzz.py` (#82 seeded fuzz over a populated projection's leak surface, asserting pattern-class absence in both sinks), and `app/tests/test_feedback_creator_identity.py` (Epic F — asserts signed-in `creator_*` PII from the Clerk JWT claims is persisted server-side yet never reaches the GitHub payload).
+- **No creator identity is recorded.** This project used to record a signed-in Clerk owner's identity (`creator_email`/`creator_name`/`creator_phone`/`creator_clerk_user_id`) alongside a feedback row. Clerk is gone (§2), and `app/feedback/creator.py` was deleted with it — the feedback row carries no creator identity fields anymore.
+- **CI test (mandatory, non-regressable):** construct a feedback submission from a fully-populated projection and assert the outbound GitHub payload **and** the persisted `context_json` contain no `view_slug`, no `http(s)` projection URL, none of the financial field names, and that client-stuffed `context.model_version`/`type` are dropped (server values only survive). This is risk #1 and must be impossible to regress. Covered by `app/tests/test_feedback_abuse.py` (M6.1 fixed-payload leak gate + the #201 stuffed-context test) and `app/tests/test_feedback_redaction_fuzz.py` (#82 seeded fuzz over a populated projection's leak surface, asserting pattern-class absence in both sinks).
 - **Intent → CRM** (email, role, reason, timeline, review request, follow-up consent, PRD §6.1/§22) is a **separate** path with explicit consent; it never carries the projection's financial detail and is gated by the optional `CRM_API_KEY`.
 
 ---
 
 ## 10. Rate limits & audit logging
 
-### 10.1 Rate limits (per IP **and** per token)
+### 10.1 Rate limits (per IP)
 
-Tokens are free to mint, so abuse and cost-amplification are open without limits. Cap the expensive/abusable endpoints on **both** dimensions (per-IP catches anonymous floods; per-token catches a single workspace hammering paid APIs). Starting template (tune against real usage; mirror timpager's explicit numbers as a starting point):
+Every write is unauthenticated (§2), so abuse and cost-amplification are open without limits. Cap the expensive/abusable endpoints per IP:
 
-| Endpoint | Why limited | Starting limit (per IP) | Starting limit (per token) |
-|---|---|---|---|
-| `POST /api/research` | LLM + Places + Census cost | 10 / hour | 20 / hour |
-| `POST …/narrative:regenerate` | LLM regeneration cost (PRD §27 cap) | 10 / hour | 20 / hour, hard cap per projection/day |
-| `POST /api/feedback` | GitHub-issue spam | 5 / hour | 10 / hour |
-| `POST /api/intent` | CRM spam | 5 / hour | — |
-| `POST /api/projections` (create) | token-mint flood | 20 / hour | — |
-| `PATCH …/{slug}` (autosave) | Quad leg (d): runaway/compromised writer + revision-row growth | 240 / hour | 240 / hour |
-| `POST …/rotate-tokens`, `…/revisions/{id}/restore`, `…/trash`, `…/restore`, `DELETE …/{slug}` | Quad leg (d): owner-only lifecycle mutations (rarer, heavier) | 60 / hour | 60 / hour |
-| `GET …/xlsx` | uncached workbook rebuild (CPU/openpyxl) | 30 / hour | 60 / hour |
-| `GET …/packet` | uncached packet render (CPU) | 30 / hour | 60 / hour |
-| `GET …/staticmap` | billed Google Static Maps proxy | 120 / hour | — |
-| `POST …/penny`, `POST /api/penny/draft` | bounded provider tool-use loop (LLM cost) | 600 / hour (coarse) | **120 / hour / token · 240 / hour / projection** |
-| `POST /api/penny/proposal` | upload intake (holds bytes) | 120 / hour (coarse) | 60 / hour / token |
+| Endpoint | Why limited | Limit (per IP) |
+|---|---|---|
+| `POST /api/research` | LLM + Places + Census cost | 10 / hour |
+| `POST …/narrative:regenerate` | LLM regeneration cost (PRD §27 cap) | 10 / hour, hard cap per projection/day |
+| `POST /api/feedback` | GitHub-issue spam | 5 / hour |
+| `POST /api/intent` | CRM spam | 5 / hour |
+| `POST /api/projections` (create) | flood | 20 / hour |
+| `PATCH …/{slug}` (autosave) | Quad leg (d): runaway writer + revision-row growth | 240 / hour |
+| `POST …/revisions/{id}/restore`, `…/trash`, `…/restore`, `DELETE …/{slug}` | Quad leg (d): lifecycle mutations (rarer, heavier) | 60 / hour |
+| `GET …/xlsx` | uncached workbook rebuild (CPU/openpyxl) | 30 / hour |
+| `GET …/packet` | uncached packet render (CPU) | 30 / hour |
+| `GET …/staticmap` | billed Google Static Maps proxy | 120 / hour |
+| `POST …/penny`, `POST /api/penny/draft` | bounded provider tool-use loop (LLM cost) | 120 / hour / IP · 240 / hour / projection |
+| `POST /api/penny/proposal` | upload intake (holds bytes) | 60 / hour |
 
-- **Penny is keyed on the token/projection, NOT the shared proxy IP (issue #189).** Every external user reaches us through Railway's **single** proxy IP, so a per-IP cap on the Penny loop is one **global** bucket: one owner's turns would 429 every other user (collateral lockout), and a token-mint abuser (tokens are free) would evade the per-token cap while the per-IP brake couldn't isolate them. So Penny's **primary** keys are the caller's **capability token** — **SHA-256-hashed** before it becomes a bucket key (§2.3; the plaintext secret is never used, logged, or exposed) — **and** the **`projection_id`** (which isolates anonymous/view-only turns that present no token, the worst case). The per-IP cap is demoted to a **coarse safety bound** on the *real* client IP (right-most `X-Forwarded-For` hop, not the raw socket peer) that only trips on a genuine single-real-IP flood. Implemented via `app/ratelimit.check(..., extra_scopes=…)` (a backward-compatible per-key-source option that leaves the create/export keying unchanged). Tested in `app/tests/test_penny_endpoints.py` (two different owners get independent buckets; a single owner/projection is still capped 429 + `retry_after_seconds`; the raw token is never a limiter key).
+- **Penny is keyed on the real client IP AND the projection, not just IP alone (issue #189).** Every external user reaches us through Railway's **single** proxy IP, so a per-IP-only cap on the Penny loop would be one **global** bucket: one flooded projection's turns would 429 every other user (collateral lockout). So Penny's caps run on **two** axes: the real client IP (right-most `X-Forwarded-For` hop, not the raw socket peer) and the **`projection_id`**, which isolates one flooded row's turns from starving every other caller's budget. Implemented via `app/ratelimit.check(..., extra_scopes=…)`. Tested in `app/tests/test_penny_endpoints.py`.
 - Research and narrative results are **cached** (PRD §16.6) — caching is also a cost brake, not only a latency win.
 - Exceeded limit → `429` with a top-level `{"error":"rate_limited","retry_after_seconds":…}` body **and** a `Retry-After` header; never a 500.
-- **The export surfaces (`/xlsx`, `/packet`, `/staticmap`) are reachable with only the public `view_slug` (no Bearer)**, so they are capped even when no token is presented. `xlsx`/`packet` rebuild on every call (no artifact cache yet) and add a per-token cap when a bearer *is* presented (a single workspace re-exporting in a loop); `staticmap` bytes are already cached per `(lat,lng,kind)`, so the Google-bill blast radius is bounded to first-fetch-per-location and a per-IP cap suffices.
-- **Client-IP extraction (the per-IP key):** take the **right-most** hop of `X-Forwarded-For`, falling back to the socket peer. Railway terminates TLS at a single proxy that **appends** the real client IP as the last `X-Forwarded-For` entry, so the right-most hop is the only one a client cannot spoof — anything the client sends arrives to the *left* of the proxy's append. (Never trust the left-most entry; it is fully attacker-controlled.)
+- **Client-IP extraction:** take the **right-most** hop of `X-Forwarded-For`, falling back to the socket peer. Railway terminates TLS at a single proxy that **appends** the real client IP as the last `X-Forwarded-For` entry, so the right-most hop is the only one a client cannot spoof — anything the client sends arrives to the *left* of the proxy's append. (Never trust the left-most entry; it is fully attacker-controlled.)
 - **One shared limiter, one test bypass.** All caps run through `app/ratelimit.py` (a process-local fixed-window counter) via the routers' shared `_rate_limited(...)` gate; the check fires **before** any compute/build/upstream call. The limiter is bypassed **only** under the non-prod E2E seed flag (`E2E_SEED=1` **and** not production — the same gate that guards the demo seed in `app/main.py`) so the Playwright create→export gate (three viewports + CI retries from one IP) never trips a production-realistic cap. It is **never** bypassed in production.
-- Compute itself (PATCH recompute) is cheap (<50 ms target) and AI-free and concurrency-bounded by the single-writer DB — so PATCH is **not** throttled per keystroke (the client debounces). It **does** still carry a **coarse abuse cap** (240 / hour / IP **and** / token) as **Mutation-Safety-Quad leg (d)** — CLAUDE.md's quad wins over the earlier "PATCH exempt" framing — so a runaway or compromised writer (and the revision-row it appends per settle) is bounded without ever tripping legitimate autosave (~170/hr worst-case at the 350 ms debounce). The owner-only lifecycle mutations (`rotate-tokens`, `revisions/restore`, `trash`, `restore`, `delete`) carry a tighter **60 / hour** on the same two axes and are emitted **after** the owner/auth check (a non-owner still gets 403, never a leaked 429) and **before** any state read/write. **PATCH is the one exception:** its cap runs after only the slug lookup (404) and **before** token auth — the same pre-auth placement as create/duplicate (§3.2) — so an over-cap request with a wrong/missing bearer gets **429, not 403** (see Adjudication B in the batch1 whole-branch review: a pre-auth cap here protects nothing extra, since buckets are per-IP-and-per-token and an unauthenticated attacker only ever fills their own bucket, but it is not worth moving to match the other five for no gain).
+- Compute itself (PATCH recompute) is cheap (<50 ms target) and AI-free and concurrency-bounded by the single-writer DB — so PATCH is **not** throttled per keystroke (the client debounces). It **does** still carry a **coarse per-IP abuse cap** (240 / hour) as **Mutation-Safety-Quad leg (d)** so a runaway flood (and the revision-row it appends per settle) is bounded without ever tripping legitimate autosave (~170/hr worst-case at the 350 ms debounce). The lifecycle mutations (`revisions/restore`, `trash`, `restore`, `delete`) carry a tighter **60 / hour** and are emitted **before** any state read/write.
 
 ### 10.2 Audit / access log
 
-The `revisions` table (`actor_token_hash`, `change_summary`, `created_at`, PRD §24) plus an access-event log records, for forensics and the "show access events" compromise view (PRD §20):
+The `revisions` table (`change_summary`, `created_at`, PRD §24) plus an access-event log records, for forensics:
 
-- **Mutations** (who/when via `actor_token_hash`, what changed).
-- **Token rotations** (§2.6).
+- **Mutations** (when, what changed — there is no actor identity to record anymore, §2; `actor_token_hash` is always `NULL`).
 - **Exports** (`.xlsx`, packet) and **share-link access** events.
 
-Log `actor_token_hash`, **never** the plaintext token. The audit log must never contain a secret. This is what lets a compromised owner see "access events" after rotating.
+The audit log must never contain a secret.
 
 ---
 
@@ -489,8 +376,8 @@ Users may attach rent quotes, broker notes, payroll plans, and comparable-store 
 
 Every endpoint and PR carries these, enforced as gates (full list in [`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md)):
 
-- **No secret in code, logs, or responses** (log-redaction test; `Authorization`/fragments never logged).
-- **Mutation safety quad** on every PATCH/POST: (1) bearer-token auth required, (2) owner/slug-scope isolation (never global list, never cross-owner read/write), (3) `If-Match` optimistic-concurrency **409-on-stale**, (4) a negative/abuse path (rate limit per IP+token).
+- **No secret in code, logs, or responses** (log-redaction test; the `METRICS_TOKEN` bearer is the only secret left in this app, §4.5, and it is never logged).
+- **Mutation safety quad** on every PATCH/POST, now two legs (owner decision 2026-09-13, §2): (1) `If-Match` optimistic-concurrency **409-on-stale**, (2) a negative/abuse path (rate limit per IP).
 - **Grounding/safety tests** as first-class, deterministic (stubbed provider responses): unfetched-citation rejected, hallucinated narrative figure rejected, injected web instructions ignored, sanitizer strips dangerous markup.
 - **Feedback-redaction test** (§9) — non-regressable.
 - **Boot-refuse test:** production boot fails with a required var unset; AI opt-out flow passes with all AI keys unset.
@@ -553,13 +440,13 @@ green (no regression to §0 invariants).
 
 ## 16. Quick checklist for adding an endpoint
 
-1. Does it mutate? → require `Authorization: Bearer` (≥ edit) **and** `If-Match: <version>`; return 409 on stale. (Owner-only for rotate/delete/trash.)
-2. Is it owner-scoped? → filter by the resolved token; **never** return another owner's data; list is never global.
-3. Any secret in the path/query? → **no.** Secrets only in header/fragment. No `:token` path param.
+1. Does it mutate? → require `If-Match: <version>`; return 409 on stale. No auth of any kind (§2) — do not add a bearer/owner check to a new endpoint.
+2. Is it a list endpoint? → it's global, like every other list in this app (§2). Don't add owner/tenant scoping — there's no owner concept to scope to.
+3. Any secret in the path/query? → **no**, for the same reason as always: this app has essentially no secrets left (§2), and the one exception (`METRICS_TOKEN`, §4.5) still only ever travels in `Authorization`.
 4. Does it call an LLM or fetch the web? → untrusted-data framing, citation rejection, numeric grounding (LLM); SSRF block-list + redirect re-validation (fetch).
-5. Is it expensive/abusable? → rate limit per IP **and** per token; cache where possible.
+5. Is it expensive/abusable? → rate limit per IP; cache where possible.
 6. Does it render user input? → server-side allowlist sanitize before store and on render.
 7. Does it touch feedback/GitHub? → run the redaction test; only `support_id` + non-sensitive context.
 8. Does it write a file? → server-owned path, type/size limits, non-executable content-type, `Content-Disposition: attachment`.
-9. Did you log anything? → no `Authorization`, no fragment, no token, no financial field; `actor_token_hash` only.
-10. New secret/env var? → add it to `app/env_requirements.py`, classify required vs optional, update §4 of this doc in the same PR (Docs Are Code).
+9. Did you log anything? → no financial field; no secret (there's only one left, §4.5, and it's never logged).
+10. New secret/env var? → add it to `app/config.py`, classify required vs optional, update §4 of this doc in the same PR (Docs Are Code).

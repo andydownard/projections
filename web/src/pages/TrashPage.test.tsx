@@ -5,8 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TrashPage } from "./TrashPage";
 import type { ProjectionListResponse } from "../api/projections";
 
-// The owner Trash view (API_SPEC §4.8): lists soft-deleted projections (owner-scoped)
-// with Restore and a STRONG type-to-confirm permanent delete (DESTRUCTIVE).
+// The Trash view (API_SPEC §4.8): lists soft-deleted projections (this project has
+// no authentication, owner decision 2026-09-13 — the list is global) with Restore
+// and a STRONG type-to-confirm permanent delete (DESTRUCTIVE).
 
 const trashed: ProjectionListResponse = {
   projections: [
@@ -39,15 +40,13 @@ function mockFetch(handler: (url: string, init?: RequestInit) => Response) {
 }
 
 describe("TrashPage", () => {
-  it("shows the empty state when there is no owner token", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
+  it("shows the empty state when there are no trashed projections", async () => {
+    mockFetch(() => new Response(JSON.stringify({ projections: [] }), { status: 200 }));
     render(<TrashPage />);
     expect(await screen.findByTestId("trash-empty")).toBeInTheDocument();
-    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("lists this owner's trashed projections (GET ?trashed=true)", async () => {
-    localStorage.setItem("projections.owner_token", "owner-abc");
+  it("lists trashed projections (GET ?trashed=true)", async () => {
     const calls: string[] = [];
     mockFetch((url) => {
       calls.push(url);
@@ -59,7 +58,6 @@ describe("TrashPage", () => {
   });
 
   it("restores a row (POST /restore with If-Match) and removes it", async () => {
-    localStorage.setItem("projections.owner_token", "owner-abc");
     const restoreCalls: Array<[string, RequestInit | undefined]> = [];
     mockFetch((url, init) => {
       if (url.includes("/restore")) {
@@ -83,7 +81,6 @@ describe("TrashPage", () => {
   });
 
   it("requires type-to-confirm before permanently deleting (DESTRUCTIVE)", async () => {
-    localStorage.setItem("projections.owner_token", "owner-abc");
     const deleteCalls: Array<[string, RequestInit | undefined]> = [];
     mockFetch((url, init) => {
       if (init?.method === "DELETE") {
@@ -112,7 +109,6 @@ describe("TrashPage", () => {
   });
 
   it("keeps the row when a permanent delete 409s (nothing erased)", async () => {
-    localStorage.setItem("projections.owner_token", "owner-abc");
     mockFetch((_url, init) => {
       if (init?.method === "DELETE") {
         return new Response(
@@ -135,7 +131,6 @@ describe("TrashPage", () => {
   });
 
   it("keeps the row when a restore 409s", async () => {
-    localStorage.setItem("projections.owner_token", "owner-abc");
     mockFetch((url) => {
       if (url.includes("/restore")) {
         return new Response(JSON.stringify({ detail: { error: "version_conflict" } }), {

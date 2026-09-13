@@ -73,13 +73,12 @@ def _accept_terms(store, slug):
 # ----------------------------------------- N12.1 preview never mutates (CI gate)
 def test_preview_is_provably_read_only(client, store):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     snap = dict(store.get_projection_by_slug(slug))
     for _ in range(3):
         r = client.post(
             f"/api/projections/{slug}/preview",
             json={"assumptions": {"labor_pct": "0.30"}},
-            headers={"Authorization": f"Bearer {owner}"},
         )
         assert r.status_code == 200, r.text
     after = store.get_projection_by_slug(slug)
@@ -113,10 +112,10 @@ def test_ungrounded_money_token_is_rejected():
 
 def test_regenerated_narrative_only_carries_grounded_figures(client, store):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     vm = client.get(f"/api/projections/{slug}").json()
@@ -136,14 +135,13 @@ def test_full_flow_with_all_ai_keys_unset(client, store, monkeypatch):
     p = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {created['owner_token']}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert p.status_code == 200, p.text
     # preview works with zero AI
     pv = client.post(
         f"/api/projections/{slug}/preview",
         json={"assumptions": {"labor_pct": "0.5"}},
-        headers={"Authorization": f"Bearer {created['owner_token']}"},
     )
     assert pv.status_code == 200, pv.text
     # .xlsx export works with zero AI

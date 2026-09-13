@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseRoute, readFragmentSecret } from "./route";
+import { parseRoute } from "./route";
 
 describe("parseRoute", () => {
   it("maps / to home", () => {
@@ -78,15 +78,5 @@ describe("parseRoute", () => {
 
   it("falls back to notfound", () => {
     expect(parseRoute("/nope")).toEqual({ kind: "notfound" });
-  });
-});
-
-describe("readFragmentSecret", () => {
-  it("extracts the fragment secret", () => {
-    expect(readFragmentSecret("#edit-secret")).toBe("edit-secret");
-  });
-  it("returns null for an empty fragment", () => {
-    expect(readFragmentSecret("")).toBeNull();
-    expect(readFragmentSecret("#")).toBeNull();
   });
 });

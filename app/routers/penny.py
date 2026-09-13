@@ -32,12 +32,11 @@ import os
 import secrets
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app import ratelimit
 from app.aisafety import is_computed_figure_token
-from app.deps import hash_token
 from app.penny import proposal as proposal_intake
 from app.penny.loop import AIDisabledError as LoopAIDisabledError
 from app.penny.loop import (
@@ -50,9 +49,6 @@ from app.penny.loop import (
 )
 from app.penny.providers import AIUnavailableError, ProviderChain, build_provider_chain
 from app.penny.tools import build_registry
-from app.routers.common import bearer as _bearer
-from app.routers.common import is_editor as _is_editor
-from app.routers.common import is_owner as _is_owner
 from app.routers.common import utcnow as _utcnow
 from app.store import Store, get_store
 
@@ -63,18 +59,12 @@ router = APIRouter(tags=["penny"])
 def get_penny_transcript(
     view_slug: str,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
 ):
-    """Owner/edit-scoped read of the persisted per-project transcript (Spec §7)."""
+    """Read of the persisted per-project transcript (Spec §7). This project has no
+    authentication (owner decision, 2026-09-13) — the slug alone grants read."""
     row = store.get_projection_by_slug(view_slug)
     if row is None:
-        # Unknown slug -> 404 (never reveal existence beyond the slug's grant).
         raise HTTPException(status_code=404, detail={"error": "not_found"})
-
-    token = _bearer(authorization)
-    if not (_is_owner(token, row) or _is_editor(token, row)):
-        # view-only / no token / a different owner's token cannot read (SECURITY §2).
-        raise HTTPException(status_code=403, detail={"error": "forbidden"})
 
     transcript = store.get_transcript_by_projection(row["id"])
     if transcript is None:
@@ -95,21 +85,16 @@ def get_penny_transcript(
 
 
 # ============================================================ PE5: loop endpoints
-# Rate-limit budgets (1h window; SECURITY §10.1, issue #189). The PRIMARY keys are
-# the caller's capability TOKEN and the PROJECTION — NOT the client IP. Every external
-# user sits behind Railway's single shared proxy IP, so a per-IP cap is one GLOBAL
-# bucket: one owner's turns would lock out everyone else (collateral lockout) and a
-# token-mint abuser would evade the per-token cap unchecked. Token (hashed) and
-# projection isolate legitimate concurrent owners; the per-IP cap is demoted to a
-# COARSE safety bound that only catches a genuine single-real-IP flood. Tokens are
-# free to mint, so the loop (provider spend) is capped tighter than read; the upload
-# holds bytes, so it is capped too.
-_PENNY_TOKEN_LIMIT = 120  # primary: per owner/edit bearer (hashed)
-_PENNY_PROJECTION_LIMIT = 240  # primary: per projection (isolates anonymous/view-only)
-_PENNY_IP_LIMIT = 600  # coarse safety bound on the real client IP (XFF, never global)
+# Rate-limit budgets (1h window; SECURITY §10.1, issue #189). This project has no
+# authentication (owner decision, 2026-09-13), so the PRIMARY keys are the real
+# client IP (XFF right-most hop, never the shared proxy socket peer) and the
+# PROJECTION — a per-projection cap isolates one flooded projection's turns from
+# starving every other caller's budget. The loop calls a paid provider, so it is
+# capped tighter than a plain read; the upload holds bytes, so it is capped too.
+_PENNY_PROJECTION_LIMIT = 240  # primary: per projection (isolates one flooded row)
+_PENNY_IP_LIMIT = 120  # primary: per real client IP (XFF, never global)
 _PENNY_WINDOW_SECONDS = 3600
-_UPLOAD_TOKEN_LIMIT = 60  # primary: per bearer (upload requires a token)
-_UPLOAD_IP_LIMIT = 120  # coarse safety bound (upload always carries a token)
+_UPLOAD_IP_LIMIT = 60  # primary: per real client IP
 
 
 class PennyTurnIn(BaseModel):
@@ -188,24 +173,20 @@ def _ai_disabled(chain: Any, row: Optional[dict] = None) -> bool:
 
 
 def _check_rate(
-    ip: Optional[str], token: Optional[str], projection_id: Optional[str] = None
+    ip: Optional[str], projection_id: Optional[str] = None
 ) -> tuple[bool, int]:
     """Penny loop rate-limit (SECURITY §10.1; issue #189). Module-level for monkeypatch.
 
-    PRIMARY keys are the caller's capability token and the projection — NOT the shared
-    proxy IP. The token (the owner/edit bearer) is HASHED with the same SHA-256 digest
-    used at rest (``app.deps.hash_token``) before it becomes a bucket key, so the
-    plaintext secret is never used, logged, or exposed. The projection key isolates
-    anonymous/view-only callers (which present no token) per projection. The per-IP cap
-    stays as a coarse safety bound only.
+    This project has no authentication (owner decision, 2026-09-13). PRIMARY keys
+    are the real client IP and the projection; the projection key isolates one
+    flooded row's turns from starving every other caller's budget.
     """
-    token_key = hash_token(token) if token else None
     extra: list[tuple[str, Optional[str], Optional[int]]] = []
     if projection_id:
         extra.append(("projection", projection_id, _PENNY_PROJECTION_LIMIT))
     return ratelimit.check(
-        "penny", ip=ip, token=token_key, ip_limit=_PENNY_IP_LIMIT,
-        token_limit=_PENNY_TOKEN_LIMIT, window_seconds=_PENNY_WINDOW_SECONDS,
+        "penny", ip=ip, ip_limit=_PENNY_IP_LIMIT,
+        window_seconds=_PENNY_WINDOW_SECONDS,
         extra_scopes=tuple(extra))
 
 
@@ -269,35 +250,28 @@ def penny_turn(
     request: Request,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
     chain: ProviderChain = Depends(get_penny_chain),  # noqa: B008
-    authorization: Optional[str] = Header(default=None),
 ):
     """Run the bounded §6 tool-use loop for a saved projection (Spec §12).
 
     Mutations happen INSIDE the loop via ``apply_projection_patch`` (version++ +
     ``actor:penny`` revision); there is NO top-level If-Match (the loop's internal
-    PATCHes carry it). Capability-gated: a view-only caller (not owner/editor) gets
-    answer-only — mutate tools refuse and nothing persists to the owner's transcript.
+    PATCHes carry it). This project has no authentication (owner decision,
+    2026-09-13) — every caller can mutate.
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
 
-    token = _bearer(authorization)
-    can_mutate = _is_owner(token, row) or _is_editor(token, row)
-
     # AI-disabled gate FIRST: opt-out / kill switch / no provider => ZERO calls.
     if _ai_disabled(chain, row):
         raise HTTPException(status_code=409, detail={"error": "ai_disabled"})
 
-    allowed, retry_after = _check_rate(
-        _client_ip(request), token, projection_id=row["id"])
+    allowed, retry_after = _check_rate(_client_ip(request), projection_id=row["id"])
     if not allowed:
         raise _rate_limited(retry_after)
 
     ctx = ToolContext(
         view_slug=view_slug,
-        bearer_token=token,
-        can_mutate=can_mutate,
         version=int(row["version"]),
         extra={
             "turn_id": _new_turn_id(),
@@ -334,11 +308,8 @@ def penny_turn(
         "ts": now,
     })
 
-    # Persist ONLY for an authorized editor — a view-only caller must never be able to
-    # write into the owner's per-project transcript (answer-only stays ephemeral).
-    if can_mutate:
-        for turn in turns:
-            store.append_transcript_turn(row["id"], turn)
+    for turn in turns:
+        store.append_transcript_turn(row["id"], turn)
 
     return {
         "turns_appended": turns,
@@ -353,31 +324,24 @@ def penny_draft(
     body: PennyDraftIn,
     request: Request,
     chain: ProviderChain = Depends(get_penny_chain),  # noqa: B008
-    authorization: Optional[str] = Header(default=None),
 ):
     """Wizard-draft variant: the SAME loop over a supplied draft (Spec §12).
 
     Acts ONLY on ``draft_state`` (there is no projection yet) and **persists nothing**
     — no transcript row, no revision, no projection. Returns the mutated draft +
-    narration; the ephemeral transcript stays in client state (Spec §7).
+    narration; the ephemeral transcript stays in client state (Spec §7). This
+    project has no authentication (owner decision, 2026-09-13).
     """
-    token = _bearer(authorization)
-    if token is None:
-        # Wizard-draft edits require an editing grant (Spec §12: edit Bearer).
-        raise HTTPException(status_code=403, detail={"error": "forbidden"})
-
     if _ai_disabled(chain):
         raise HTTPException(status_code=409, detail={"error": "ai_disabled"})
 
-    allowed, retry_after = _check_rate(_client_ip(request), token)
+    allowed, retry_after = _check_rate(_client_ip(request))
     if not allowed:
         raise _rate_limited(retry_after)
 
     draft = copy.deepcopy(body.draft_state or {})
     ctx = ToolContext(
         view_slug=None,
-        bearer_token=token,
-        can_mutate=True,  # the draft is the caller's own ephemeral state
         version=None,
         extra={"turn_id": _new_turn_id(), "proposal_ref": body.proposal_ref},
     )
@@ -403,7 +367,6 @@ async def penny_proposal(
     request: Request,
     response: Response,
     filename: Optional[str] = None,
-    authorization: Optional[str] = Header(default=None),
 ):
     """Accept an untrusted proposal PDF; return an opaque ``proposal_ref`` (Spec §9/§12).
 
@@ -411,18 +374,12 @@ async def penny_proposal(
     (magic-byte type sniff + size cap) and held behind a ref; a JSON ``{source_url}`` is
     SSRF-validated (a blocked host fails closed, 422) — remote fetching is PE9, so a
     clean URL returns ``remote_intake_unavailable``. Bytes are NEVER parsed/executed/
-    rendered here.
+    rendered here. This project has no authentication (owner decision, 2026-09-13);
+    the per-IP cap is the primary brake (#189).
     """
-    token = _bearer(authorization)
-    if token is None:
-        raise HTTPException(status_code=403, detail={"error": "forbidden"})
-
-    # Upload always carries a token (403 above): the per-token cap is the primary
-    # brake, keyed on the hashed bearer (never the raw secret); IP stays coarse (#189).
     allowed, retry_after = ratelimit.check(
-        "penny_proposal", ip=_client_ip(request), token=hash_token(token),
-        ip_limit=_UPLOAD_IP_LIMIT, token_limit=_UPLOAD_TOKEN_LIMIT,
-        window_seconds=_PENNY_WINDOW_SECONDS)
+        "penny_proposal", ip=_client_ip(request),
+        ip_limit=_UPLOAD_IP_LIMIT, window_seconds=_PENNY_WINDOW_SECONDS)
     if not allowed:
         raise _rate_limited(retry_after)
 

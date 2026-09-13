@@ -19,40 +19,13 @@ This document is the contract for the FastAPI HTTP surface. It is authoritative 
 
 ---
 
-## 1. Authentication & capability model
+## 1. Access model & concurrency
 
-No login, no cookies, no sessions. Access is by **capability token** (PRD §20). Because there is no cookie, mutations are **CSRF-free**; do not introduce a cookie (hard rule — see [SECURITY.md](./SECURITY.md)).
+**This app has no authentication or authorization of any kind** (owner decision, 2026-09-13; see [SECURITY.md](./SECURITY.md) §2). No login, no cookies, no sessions, and — as of this decision — no capability tokens either. Every projection is fully public: `GET /api/projections` lists every projection in the database to every caller, and every per-projection route (read, edit, export, trash, delete, Penny) works from the bare `view_slug` in the URL path with no `Authorization` header at all. Because there is no session or cookie, there is nothing for a cross-site request to forge — CSRF is not an applicable threat class here; do not introduce a cookie (hard rule — see [SECURITY.md](./SECURITY.md)).
 
-### 1.1 The three capabilities
+The former capability-token model (owner token, edit token, role-link tokens, `rotate-tokens`) and the former Clerk satellite login (`CLERK_ENABLED`, `owner_clerk_user_id`/`owner_org_id`, `share_grants`, `POST …/claim`, `POST …/claim-share`) are deleted from the API entirely — those routes now 404. `GET /api/metrics` is the one exception: it keeps its own independent `METRICS_TOKEN` bearer gate, out of scope for this decision (an internal ops endpoint, not part of the projections data model) — see SECURITY.md §4.5.
 
-| Capability | Carried as | Grants | Generated / stored |
-|---|---|---|---|
-| **owner token** | `Authorization: Bearer <owner_token>` | Full control of one projection **and** the owner-scoped list (`GET /api/projections`); rotate/revoke; trash/delete; revisions/restore. | ≥256-bit, `secrets.token_urlsafe(32)`. Stored **hashed** (`owner_token_hash`, SHA-256). Lives in browser `localStorage`. |
-| **edit token** | `Authorization: Bearer <edit_token>` | Read + mutate **one** projection (PATCH, narrative save/regenerate, evidence attach, upgrade-model). **Cannot** list, rotate, or delete. | ≥128-bit. Stored **hashed** (`edit_token_hash`). Delivered to the browser only via **URL fragment**; scrubbed from the URL after read; never sent in a path/query; never logged. |
-| **view_slug** (read-only) | path segment `/api/projections/{view_slug}` with **no** `Authorization` header | Read one projection + download `.xlsx`/packet (read-only). No mutation. Role flag (`board`/`funder`/`advisor`) tailors emphasis/CTAs in the read response (§6.2). | ≥128-bit, `secrets.token_urlsafe(16)`. Stored **plaintext** (it is the lookup key). |
-
-**Resolution order** for a request to `/api/projections/{view_slug}`:
-1. If `Authorization: Bearer` present → constant-time (`hmac.compare_digest`) compare the SHA-256 of the presented token against `owner_token_hash`, then `edit_token_hash`, of the projection identified by `{view_slug}`. First match wins and sets the request's capability (`owner` or `edit`).
-2. If no `Authorization` header → the request is **read-only** (`view` capability), valid only for `GET`/export routes.
-3. No match → **403** (never reveal whether the token would match a *different* projection).
-
-A token is always scoped to **one** projection except the owner token, which additionally authorizes that owner's list. There is **no global list** and no cross-owner read/write (PRD §20). Every list query is filtered by `owner_token_hash` server-side.
-
-### 1.2 Auth error responses
-
-| Condition | Status | Body `error` |
-|---|---|---|
-| Capability mutation with no `Authorization` header (or a bearer matching no token for this projection) | `403` | `forbidden` |
-| Read-only (`view`) capability attempts a mutation | `403` | `read_only` |
-| Edit token attempts an owner-only route (list, rotate, delete, trash, duplicate, revisions list/restore) | `403` | `owner_required` |
-| Verified-Clerk-identity route (`POST …/claim`, §4.9) with no Clerk JWT | `401` | `clerk_identity_required` |
-| Secret detected in URL path or query string | `400` | `secret_in_url` (defense-in-depth; secrets only via header/fragment) |
-
-**Convention (as-built):** the capability-token routes return **`403`** on every missing/mismatched bearer — `forbidden`, or `owner_required` when an edit token hits an owner-only route, or `read_only` for a view token. There is **no `401` path for a capability token**; the sole `401` is the Clerk-identity route `POST …/claim` (`clerk_identity_required`), where possession of a capability token does not authorize binding a workspace to an arbitrary Clerk identity.
-
-Bodies: `{ "error": "<code>", "message": "<human readable>", "support_hint": "<optional>" }`. Never echo the token. Never log `Authorization` headers or URL fragments (§20).
-
-### 1.3 Optimistic concurrency (`If-Match`)
+### 1.1 Optimistic concurrency (`If-Match`)
 
 Every **mutating** request (`PATCH`, and the `POST` routes that change projection state) **MUST** carry `If-Match: <version>`, where `<version>` is the integer `version` the client last received. The server runs the conditional update:
 
@@ -61,13 +34,13 @@ UPDATE projections SET version = version + 1, ... WHERE id = ? AND version = ?
 ```
 
 - 1 row affected → success; new `version` returned in the body **and** as the `ETag` response header (`ETag: "5"`).
-- 0 rows affected → **409 Conflict** (§1.4, Appendix B shape). The client offers Reload / Overwrite / Save-as-copy (§19.4).
+- 0 rows affected → **409 Conflict** (§1.2, Appendix B shape). The client offers Reload / Overwrite / Save-as-copy (§19.4).
 - Missing `If-Match` on a mutation → **428 Precondition Required**, body `{ "error": "if_match_required" }`.
 - Malformed `If-Match` (non-integer) → **400**, body `{ "error": "if_match_malformed" }`.
 
 Writes are serialized server-side (single writer, WAL, `busy_timeout`); see [OPS_RUNBOOK.md](./OPS_RUNBOOK.md). Each settled mutation writes one **revision snapshot** (PRD §19.3/§24).
 
-### 1.4 The 409 conflict shape (Appendix B / §19.4) — normative
+### 1.2 The 409 conflict shape (Appendix B / §19.4) — normative
 
 On any stale mutation the server returns **HTTP 409** with the **current server state** in the body so the client can present a meaningful diff and recovery options without a second round-trip:
 
@@ -107,33 +80,31 @@ Export endpoints additionally send `Content-Disposition: attachment; filename=".
 
 ### 2.2 CORS
 
-CORS is **locked to the app origin** (PRD §20). Allowed origin is the deployed SPA origin (e.g. `https://projections.thriftly.com`) plus the local dev origin in non-prod. Allowed methods: `GET, POST, PATCH, DELETE, OPTIONS`. Allowed headers: `Authorization, Content-Type, If-Match`. Exposed headers: `ETag`. `Access-Control-Allow-Credentials` is **false** (no cookies). Preflight (`OPTIONS`) is answered for the allowlisted origin only; any other `Origin` gets no CORS headers (browser blocks). This is not auth — bearer tokens are the auth boundary — but it limits drive-by cross-origin use.
+CORS is **locked to the app origin** (PRD §20). Allowed origin is the deployed SPA origin (e.g. `https://projections.thriftly.com`) plus the local dev origin in non-prod. Allowed methods: `GET, POST, PATCH, DELETE, OPTIONS`. Allowed headers: `Content-Type, If-Match`. Exposed headers: `ETag`. `Access-Control-Allow-Credentials` is **false** (no cookies, no auth headers to send — SECURITY.md §2). Preflight (`OPTIONS`) is answered for the allowlisted origin only; any other `Origin` gets no CORS headers (browser blocks).
 
 ### 2.3 Rate limits
 
-Limits apply **per IP and per token** (PRD §20/§27), 429 on breach with `Retry-After`. Tokens are free to mint (no accounts), so the expensive/abuse-prone endpoints are the brakes against cost-amplification and spam. Numbers below are the **starting template** (tune against real traffic; mirror timpager's pattern of explicit numeric limits):
+Limits apply **per IP** (PRD §20/§27; this app has no authentication, so there is no per-token dimension anymore — SECURITY.md §2), 429 on breach with `Retry-After`. Every write is unauthenticated, so the expensive/abuse-prone endpoints are the brakes against cost-amplification and spam:
 
-| Endpoint | Limit (per IP) | Limit (per token) | Rationale |
-|---|---|---|---|
-| `POST /api/research` | 10 / hour | 20 / hour | LLM + Places + Census cost; cached by location+size key (§16.6). |
-| `POST …/narrative:regenerate` | 10 / hour | 20 / hour + hard cap **50 / day / projection** | Paid-LLM regeneration cap (§27 cost control, SECURITY §10.1). All three caps are enforced **before** the provider call — a rejected request spends no LLM budget. |
-| `PUT …/narrative` | 120 / hour | 120 / hour | Coarse cap on the (local, no-provider) prose save. |
-| `POST /api/feedback` | 5 / hour | — | GitHub-issue spam. |
-| `POST /api/intent` | 5 / hour | — | CRM spam. |
-| `POST /api/projections` (create) | 20 / hour | — | Projection-creation flood. |
-| `POST /api/projections/claim` | 60 / hour | — | Claim/bridge (§4.9); capped before the JWT verify + write. |
-| `POST …/claim-share` | 60 / hour | 120 / hour / token | Editable-share grant (§4.10, #323); capped before the JWT verify + constant-time compare + write. |
-| `POST …/evidence` (file upload) | 30 / hour | 60 / hour / projection | Upload abuse. |
-| `POST …/penny`, `POST /api/penny/draft` | 600 / hour (coarse) | **120 / hour / token, 240 / hour / projection** | Bounded provider tool-use loop — **keyed on token/projection, not the shared proxy IP** (§6.6, issue #189). |
-| `POST /api/penny/proposal` | 120 / hour (coarse) | 60 / hour / token | Upload intake (token-hashed key). |
-| `PATCH …` (autosave) | 600 / 5 min | 600 / 5 min / token | High by design (debounced autosave); serialized server-side. Client debounces ~300–400 ms. Per-token key = the presented bearer (owner/edit capability token, or the Clerk grantee's JWT, #323). |
-| `GET …/xlsx`, `GET …/packet`, `GET …/cashflow.csv` | 60 / hour | — | Export cost (LibreOffice/render/serialize). |
-| `POST /api/cost-schedule/preview` | 600 / 5 min | — | Read-only grid-totals compute; fires as the user edits the startup-costs grid (general-read cadence). |
-| All other `GET` | 600 / 5 min | — | General read. |
+| Endpoint | Limit (per IP) | Rationale |
+|---|---|---|
+| `POST /api/research` | 10 / hour | LLM + Places + Census cost; cached by location+size key (§16.6). |
+| `POST …/narrative:regenerate` | 10 / hour + hard cap **50 / day / projection** | Paid-LLM regeneration cap (§27 cost control, SECURITY §10.1). Both caps are enforced **before** the provider call — a rejected request spends no LLM budget. |
+| `PUT …/narrative` | 120 / hour | Coarse cap on the (local, no-provider) prose save. |
+| `POST /api/feedback` | 5 / hour | GitHub-issue spam. |
+| `POST /api/intent` | 5 / hour | CRM spam. |
+| `POST /api/projections` (create) | 20 / hour | Projection-creation flood. |
+| `POST …/evidence` (file upload) | 30 / hour | Upload abuse. |
+| `POST …/penny`, `POST /api/penny/draft` | 120 / hour / IP, 240 / hour / projection | Bounded provider tool-use loop — **keyed on IP AND projection, so one flooded projection can't 429 every other caller** (§6.6, issue #189). |
+| `POST /api/penny/proposal` | 60 / hour | Upload intake. |
+| `PATCH …` (autosave) | 600 / 5 min | High by design (debounced autosave); serialized server-side. Client debounces ~300–400 ms. |
+| `GET …/xlsx`, `GET …/packet`, `GET …/cashflow.csv` | 60 / hour | Export cost (LibreOffice/render/serialize). |
+| `POST /api/cost-schedule/preview` | 600 / 5 min | Read-only grid-totals compute; fires as the user edits the startup-costs grid (general-read cadence). |
+| All other `GET` | 600 / 5 min | General read. |
 
-`429` body: `{ "error": "rate_limited", "retry_after_seconds": <int>, "scope": "ip" | "token" }`.
+`429` body: `{ "error": "rate_limited", "retry_after_seconds": <int>, "scope": "ip" }`.
 
-The Penny endpoints **key the rate limit primarily on the caller's capability token (SHA-256-hashed) and the `projection_id`, not the client IP** — behind Railway's single shared proxy IP a per-IP cap is one global bucket that lets one owner lock out all others (issue #189). The per-IP cap is a coarse safety bound only. See SECURITY.md §10.1.
+The Penny endpoints **key the rate limit on the real client IP and the `projection_id`** — behind Railway's single shared proxy IP a per-IP-only cap is one global bucket that lets one flooded projection lock out everyone else (issue #189). See SECURITY.md §10.1.
 
 ---
 
@@ -150,7 +121,6 @@ Every read or mutation of a projection returns the **same** view-model — the e
   "model_version": "2.0.0",
   "compute_schema_version": "1.0.0",
   "upgrade_available": false,
-  "role": "owner",
 
   "reco":    { "tag": "proceed", "headline": "...", "sub": "...", "icon": "..." },
   "metrics": {
@@ -248,11 +218,11 @@ Notes:
 
 ## 4. Projection lifecycle endpoints
 
-### 4.1 `GET /api/projections` — list (owner-scoped)
+### 4.1 `GET /api/projections` — list (global)
 
-- **Auth:** owner token **or** verified Clerk owner (Bearer). **Capability:** owner only. There is **no** view/edit access to the list and **no global index** (PRD §19.1/§20).
+- **Auth:** none. This app has no authentication (SECURITY.md §2) — the list is **global**: every projection in the database, to every caller.
 - **Request:** no body. Query: `?trashed=true` (default: active only).
-- **Response `200`:** a lightweight list (not the full view-model per row). Each row is tagged with the caller's relationship to it: `owner` (the caller owns it), `shared` (another owner granted the caller editable access — #323), `editable`.
+- **Response `200`:** a lightweight list (not the full view-model per row):
 
 ```json
 { "projections": [
@@ -262,20 +232,15 @@ Notes:
     "y1_net":{"raw":47100,"display":"$47,100"},
     "capital_required":{"raw":277990,"display":"$277,990"},
     "reco_tag":"proceed", "status":"active", "version":7,
-    "owner":true, "shared":false, "editable":true,
-    "updated_at":"2026-06-24T17:03:21Z" },
-  { "view_slug":"p_sh…", "name":"Partner Co — Dallas, TX",
-    "owner":false, "shared":true, "editable":true,
-    "status":"active", "version":3, "updated_at":"2026-06-25T09:00:00Z" }
+    "updated_at":"2026-06-24T17:03:21Z" }
 ] }
 ```
 
-- **"Shared with me" (#323):** for a **verified Clerk owner**, the active list UNIONs the rows another owner granted them editable access to (a `share_grant` on the caller's Clerk `sub`). Grant-scoped to the caller — **never global** (Override TENANT / PRD §20) — and only on the active list (Trash stays owner-only). Shared rows carry `{ "shared": true, "editable": true, "owner": false }`; the client renders them in a separate **"Shared with me"** section with **no** owner-only affordances (trash/rotate/delete — those are server-side owner-only regardless). Owner-token (non-Clerk) callers see only their own rows (no shared section).
-- **Errors:** `401` no bearer; `403` if the bearer is an edit token (edit tokens cannot list — `owner_required`).
+- **Errors:** none auth-related — there is no bearer to check.
 
 ### 4.2 `POST /api/projections` — create
 
-- **Auth:** none required to create (anonymous create; the response returns the freshly minted owner token). **No `If-Match`** (creation).
+- **Auth:** none — this app has no authentication (SECURITY.md §2). **No `If-Match`** (creation).
 - **Request body:** the wizard payload (PRD Appendix B):
 
 ```json
@@ -298,35 +263,22 @@ Notes:
 
 - **Occupancy driver (#245):** the wizard ships **`inputs.rent_per_sqft`** (and leaves `occupancy_annual` null) so the engine resolves occupancy = `building_sqft × rent_per_sqft`; a flat `inputs.occupancy_annual` is still accepted for back-compat and **takes precedence when present**. `assumptions.utilities_per_sqft` (default `"2.23"`) scales the Utilities/trash line (`building_sqft × utilities_per_sqft`); the Equipment & Fixtures / Build-out cost-schedule rows are seeded from `FIXTURES_PER_SQFT`/`BUILDOUT_PER_SQFT × building_sqft` (anchored so 10,000 sq ft reproduces today's literals).
 - **Validation:** `share_y1`…`share_y5` are **explicit per-year values** — no auto-midpoint (PRD §7.1; supersedes `methodology.md` line 17). The 5-year horizon (`model_version 2.6.0`) makes `share_y4`/`share_y5` **optional** with the decelerating-plateau defaults `0.11`/`0.12`, so the current 3-year wizard POST keeps working. The editable donation drivers are `inputs.donation_value`, `assumptions.basket`, and `assumptions.donations_per_hh` (E2). `salesfloor_pct ∈ (0,1]`; `building_sqft > 0` (0 sq ft blocked, §12.4); `terms_accepted` must be `true` before any export/share is later allowed (§21) — create may proceed without it, but exports are gated (see §6/§7).
-- **Behavior:** computes server-side (the only math authority), persists `inputs/assumptions/trade_area/computed_json/monthly_json/flags`, stamps `model_version`, sets `version=1`, mints owner + edit + view tokens. When `terms_accepted: true` is sent, the server **stamps `terms_accepted_at` = now** so the later `.xlsx`/packet exports (§6/§7) are reachable; when it is absent/`false`, `terms_accepted_at` stays unset and exports `403 terms_required`. `terms_accepted` defaults to `false` — an unchecked box must never silently accept.
-- **Response `201`:** the full view-model (§3) **plus** the one-time secrets, returned **only here** (never stored in retrievable plaintext on the server beyond `view_slug`):
-
-```json
-{
-  "...view-model (§3)...",
-  "tokens": {
-    "owner_token": "…(store in localStorage)…",
-    "edit_token":  "…(deliver via URL fragment)…",
-    "recovery_code": "…(show once; staff cannot recover it)…"
-  }
-}
-```
-
-The frontend MUST surface the **one-time recovery code** forcefully (key loss = data loss; staff cannot recover access — only resolve support IDs, [SECURITY.md](./SECURITY.md)).
+- **Behavior:** computes server-side (the only math authority), persists `inputs/assumptions/trade_area/computed_json/monthly_json/flags`, stamps `model_version`, sets `version=1`. When `terms_accepted: true` is sent, the server **stamps `terms_accepted_at` = now** so the later `.xlsx`/packet exports (§6/§7) are reachable; when it is absent/`false`, `terms_accepted_at` stays unset and exports `403 terms_required`. `terms_accepted` defaults to `false` — an unchecked box must never silently accept.
+- **Response `201`:** the full view-model (§3). There is no `tokens` block anymore — nothing is minted or returned beyond the view-model and `view_slug` (SECURITY.md §2).
 - **Errors:** `400` validation (`{ "error":"validation", "fields":{...} }`); `429` create rate limit.
 
 ### 4.3 `GET /api/projections/{view_slug}` — fetch one
 
-- **Auth:** owner/edit (Bearer) → full editable view-model with `role` set accordingly; **or** no header → read-only view (role from the share link). **Capability:** owner/edit/view.
+- **Auth:** none — this app has no authentication (SECURITY.md §2). The `view_slug` is just a row lookup key.
 - **Behavior:** returns the **stored** `computed_json` verbatim (no recompute on a newer engine; `upgrade_available` reflects drift, §13).
 - **Response `200`:** the view-model (§3). `ETag: "<version>"`.
-- **Errors:** `404` unknown slug or trashed-and-not-owner; `403` if a presented bearer matches no token for this projection.
+- **Errors:** `404` unknown slug.
 
 ### 4.4 `PATCH /api/projections/{view_slug}` — update + recompute
 
 The core editing endpoint. Drives autosave (debounced) and every Settings/driver edit.
 
-- **Auth:** owner or edit token (Bearer), **or** — when `CLERK_ENABLED` — a **verified Clerk identity that OWNS the row or holds a `share_grant`** for it (editable shares that follow a Clerk account, #323). **Capability:** owner/edit/clerk-grantee. **Requires `If-Match: <version>`.** Cookie-blind: the identity resolves from `Authorization: Bearer` only (never `request.cookies`). A Clerk user with **no** grant and no ownership → `403 forbidden` (the negative cross-owner wall). Per-IP + per-token rate limit (Mutation Safety Quad (d)).
+- **Auth:** none — this app has no authentication (SECURITY.md §2). **Requires `If-Match: <version>`.** Per-IP rate limit (Mutation Safety Quad (d)).
 - **Request body:** a partial of the editable surface — any subset of `inputs`, `assumptions` (the `settings` sliders), `trade_area`, `demand_drivers`, `name`, and **`overrides`** (pin/unpin operations):
 
 ```json
@@ -348,14 +300,14 @@ The core editing endpoint. Drives autosave (debounced) and every Settings/driver
   - **`fixed_annual` PATCH semantics ACCUMULATE, never replace:** a partial map (e.g. `{"Pest control": 600}`) deep-merges the incoming keys **over the STORED map** — a line set by an earlier PATCH survives a later PATCH that only touches a different line — and the resolved map then merges over the engine's `FIXED_ANNUAL` defaults for any line never touched at all. (A flat `dict.update` would silently revert every previously-edited line not present in the latest PATCH — fixed as part of the 1.3 review.)
 - **Behavior:** recompute server-side (<50 ms p95 target, §27), persist new `computed_json/monthly_json/overrides_json/flags`, increment `version`, write one revision snapshot (`actor_token_hash`, `change_summary`).
 - **Response `200`:** the recomputed view-model (§3). `ETag: "<new version>"`. `saveLabel:"All changes saved"`.
-- **Errors:** `428` missing `If-Match`; `409` stale (§1.4 shape); `422` invalid override / out-of-domain input (`invalid_inputs` / `invalid_assumptions` / `node_not_pinnable`); `403` read-only; `400` malformed.
+- **Errors:** `428` missing `If-Match`; `409` stale (§1.2 shape); `422` invalid override / out-of-domain input (`invalid_inputs` / `invalid_assumptions` / `node_not_pinnable`); `400` malformed.
 
 ### 4.4a `POST /api/projections/{view_slug}/preview` — dry-run (read-only)
 
 A **read-only what-if**: merge the same editable-surface partial as `PATCH` (§4.4), recompute via the engine, and return the before/after delta **without touching stored state**. Powers the Settings/driver "preview before you commit" surface.
 
-- **Auth:** owner or edit (Bearer). **Capability:** owner/edit. **No `If-Match`** (it never mutates).
-- **Read-only invariants (CI-blocking, epic-N N12):** it **MUST NOT** persist, **MUST NOT** bump `version`, and **MUST NOT** write a revision. A view-only request (no/invalid bearer) is `403`.
+- **Auth:** none — this app has no authentication (SECURITY.md §2). **No `If-Match`** (it never mutates).
+- **Read-only invariants (CI-blocking, epic-N N12):** it **MUST NOT** persist, **MUST NOT** bump `version`, and **MUST NOT** write a revision.
 - **Request body:** identical to the `PATCH` partial (any subset of `inputs`/`assumptions`/`trade_area`/`demand`/`name`/`overrides`).
 - **Behavior:** `before` is the stored snapshot's decision metrics; `after` recomputes the merged partial in memory. Same `422` rejections as `PATCH` (`invalid_inputs`, `node_not_pinnable`). Rate-limited on the **read bucket**.
 - **Response `200`:**
@@ -371,40 +323,29 @@ A **read-only what-if**: merge the same editable-surface partial as `PATCH` (§4
 ```
 
 `changed[].sign` ∈ `up | down | flat` (direction of the raw value). No `ETag` (no version change).
-- **Errors:** `403` read-only; `404` unknown slug; `422` `invalid_inputs` / `node_not_pinnable`; `429` read-bucket rate limit.
+- **Errors:** `404` unknown slug; `422` `invalid_inputs` / `node_not_pinnable`; `429` read-bucket rate limit.
 
 ### 4.5 `POST /api/projections/{view_slug}/duplicate`
 
-- **Auth:** **owner only** — the owner token Bearer, or a verified Clerk owner of the source. **Capability:** owner. An **edit** token → `403 owner_required`; a view/anonymous/wrong-owner bearer → `403 forbidden` (like rotate/trash/delete; this router has no `401` path for a capability bearer). **No `If-Match`** — it creates a new row and never version-mutates the source, exactly like create.
-- **Behavior:** deep-copies inputs/assumptions/overrides/trade_area into a **new** projection and recomputes at the current engine. Mints a **fresh** `view_slug` and **fresh** edit token (never the source's — a shared slug/edit token would leak the source), sets the copy's `version=1`, and appends **one** revision (`change_summary="duplicated"`). The caller is the owner, so the copy **joins the caller's workspace** — it is owner-scoped to the same owner (`owner_token_hash` copied) and appears in the owner's list. **No fresh owner token is minted** for a capability owner (identity-join, mirroring create §4.2); a Clerk/anonymous owner receives a one-time `owner_token` exactly as create does. There is **no recovery code**. The copy inherits the source's `terms_accepted_at` (exports stay reachable without re-accepting). Powers **"Save as copy" from the 409 conflict flow** (§1.4, `SaveConflictModal` / `SettingsTab`). *(There is no list-page "Duplicate" button today — the endpoint's only client is the 409 recovery path.)*
+- **Auth:** none — this app has no authentication (SECURITY.md §2); anyone who can reach a projection can duplicate it. **No `If-Match`** — it creates a new row and never version-mutates the source, exactly like create.
+- **Behavior:** deep-copies inputs/assumptions/overrides/trade_area into a **new** projection and recomputes at the current engine. Mints a **fresh** `view_slug` (never the source's), sets the copy's `version=1`, and appends **one** revision (`change_summary="duplicated"`). There is **no recovery code** and nothing is minted or returned beyond the view-model. The copy inherits the source's `terms_accepted_at` (exports stay reachable without re-accepting). Powers **"Save as copy" from the 409 conflict flow** (§1.2, `SaveConflictModal` / `SettingsTab`). *(There is no list-page "Duplicate" button today — the endpoint's only client is the 409 recovery path.)*
 - **Request body (optional):** `{ "patch": <PatchProjectionIn> }` — the same editable-surface partial `PATCH` accepts (§4.4). On a 409 the client's "Save as copy" sends the conflicted edit here so it lands on the fork instead of being dropped; the patch flows through the **same** `_merge_patch` + validation path as `PATCH` (override-DAG rejection of derived/total nodes, `AssumptionsIn`/`InputsIn` bounds, `fixed_annual` accumulation over the source's map). Omitted / `{}` / `null` → a **verbatim** copy of the source's editable surface. A stray key → `422` (the body is `extra="forbid"`).
-- **Response `201`:** the copy's compute view-model (§3) plus `view_slug`, `version: 1`, `name: "<source name> (copy)"`, a one-time `edit_token`, and — for a Clerk/anonymous owner **only** — a one-time `owner_token`. (Same shape as the §4.2 create response.)
-- **Errors:** `403` (`owner_required` for an edit token; `forbidden` otherwise); `404` unknown slug; `422` `invalid_inputs` / `node_not_pinnable` / out-of-bounds patch (same validation as `PATCH`); `429` create limit.
+- **Response `201`:** the copy's compute view-model (§3) plus `view_slug`, `version: 1`, `name: "<source name> (copy)"`. (Same shape as the §4.2 create response.)
+- **Errors:** `404` unknown slug; `422` `invalid_inputs` / `node_not_pinnable` / out-of-bounds patch (same validation as `PATCH`); `429` create limit.
 
 ### 4.6 `POST /api/projections/{view_slug}/upgrade-model` — **⚠ FORWARD SPEC — NOT IMPLEMENTED**
 
-> **This endpoint does not exist in the router yet** (no route decorator in `app/routers/projections.py`; the POST surface today is create, `/duplicate`, `/claim`, `/narrative:regenerate`, `/preview`, `/rotate-tokens`, `/revisions/{id}/restore`, `/trash`, `/restore`, and `DELETE`). Staleness is surfaced today via the read-time `upgrade_available` flag (§4.3), and a recompute is written by any `PATCH` (which stamps the current `model_version` on the new revision). The explicit, non-mutating "apply the new model, keep the old bytes" upgrade action below is the **intended** design and is retained here as the forward spec; wire it before relying on it.
+> **This endpoint does not exist in the router yet** (no route decorator in `app/routers/projections.py`; the POST surface today is create, `/duplicate`, `/narrative:regenerate`, `/preview`, `/revisions/{id}/restore`, `/trash`, `/restore`, and `DELETE`). Staleness is surfaced today via the read-time `upgrade_available` flag (§4.3), and a recompute is written by any `PATCH` (which stamps the current `model_version` on the new revision). The explicit, non-mutating "apply the new model, keep the old bytes" upgrade action below is the **intended** design and is retained here as the forward spec; wire it before relying on it.
 
-- **Auth:** owner or edit (Bearer). **Capability:** owner/edit. **Requires `If-Match: <version>`.**
+- **Auth:** none — this app has no authentication (SECURITY.md §2). **Requires `If-Match: <version>`.**
 - **Behavior:** recompute the projection under the **current** engine `model_version`, writing a **new revision** (the prior `computed_json`+`model_version` are preserved in `revisions`, never destroyed — §13). Only call when `upgrade_available` is true; calling when already current is a no-op `200` with unchanged version.
   - **3-year → 5-year auto-extend (`2.5.0` → `2.6.0`):** a legacy snapshot's stored inputs have no `share_y4`/`share_y5`. The recompute **auto-extends** the missing late-year shares to the decelerating-plateau defaults `0.11`/`0.12` (the new revision persists them, editable thereafter). The upgrade is non-destructive — the prior 3-year `2.5.0` bytes stay readable verbatim on the old revision.
 - **Response `200`:** the upgraded view-model with the new `model_version` and incremented `version`.
-- **Errors:** `428`/`409` (concurrency); `403`.
+- **Errors:** `428`/`409` (concurrency).
 
-### 4.7 `POST /api/projections/{view_slug}/rotate-tokens`
+### 4.7 (removed) `rotate-tokens`
 
-- **Auth:** **owner token only** (Bearer). **Capability:** owner. **Requires `If-Match: <version>`** (rotation is a state change).
-- **Behavior:** in **one transaction**, regenerate and re-hash the **owner, edit, view, and all role-link tokens**, immediately invalidating every previously shared link (PRD §20 — compromise response). Writes an access/rotation event to the revision/audit log (`actor_token_hash`, `change_summary:"tokens_rotated"`). Returns the **new** secrets once.
-- **Request body (optional):** `{ "scope": ["edit","view","role"] }` to rotate a subset; default rotates all. The owner token is always rotated unless `scope` explicitly omits it.
-- **Response `200`:**
-
-```json
-{ "view_slug":"p_NEW…", "version":8,
-  "tokens": { "owner_token":"…", "edit_token":"…", "view_slug":"p_NEW…", "recovery_code":"…" } }
-```
-
-Rotating the `view_slug` changes the read URL; the response carries the new slug. The client must update `localStorage` and any shared links it controls.
-- **Errors:** `403` (edit/view cannot rotate — `owner_required`); `428`/`409`.
+This endpoint minted fresh owner/edit/view/role-link secrets as a compromise response. There is nothing left to rotate — this project has no authentication or secrets of that kind (SECURITY.md §2) — so the route is deleted (`404`).
 
 ### 4.8 Trash lifecycle (soft delete)
 
@@ -412,49 +353,19 @@ Projections are soft-deleted (`status:"trashed"`, `deleted_at` set) and restorab
 
 | Route | Method | Auth | If-Match | Effect |
 |---|---|---|---|---|
-| `…/{view_slug}/trash` | `POST` | owner | required | `status → trashed`. Hidden from the default owner list; excluded from non-owner `GET` (returns `404`). |
-| `…/{view_slug}/restore` | `POST` | owner | required | `status → active`. |
-| `…/{view_slug}` | `DELETE` | owner | required | **Hard delete / purge** — irreversibly erases the projection AND cascades to every child row it owns (`revisions`, `narratives`, `evidence`, `penny_transcripts`, `actuals`, `role_links`), all in one transaction, so no orphaned financial data or Penny conversation survives (#202). Only permitted when already `trashed` (else `409 not_trashed`). |
+| `…/{view_slug}/trash` | `POST` | none | required | `status → trashed`. Hidden from the default list. |
+| `…/{view_slug}/restore` | `POST` | none | required | `status → active`. |
+| `…/{view_slug}` | `DELETE` | none | required | **Hard delete / purge** — irreversibly erases the projection AND cascades to every child row it owns (`revisions`, `narratives`, `evidence`, `penny_transcripts`, `actuals`, `role_links`), all in one transaction, so no orphaned financial data or Penny conversation survives (#202). Only permitted when already `trashed` (else `409 not_trashed`). |
 
-- **Capability:** owner only for all three (`owner_required` for edit/view).
-- **Listing trashed:** `GET /api/projections?trashed=true` returns this owner's trashed projections only (owner-scoped, never global — the Trash view). The default `GET /api/projections` excludes them.
-- **Rate limit (Mutation Safety Quad d):** each route is per-IP + per-token capped (its own bucket); over the cap → `429 { "error":"rate_limited", … }` with `Retry-After`, evaluated AFTER the owner check (so it never leaks existence) but BEFORE the state change.
+- **Auth:** none for all three — this app has no authentication (SECURITY.md §2).
+- **Listing trashed:** `GET /api/projections?trashed=true` returns every trashed projection (the list is global, §4.1). The default `GET /api/projections` excludes them.
+- **Rate limit (Mutation Safety Quad d):** each route is per-IP capped (its own bucket); over the cap → `429 { "error":"rate_limited", … }` with `Retry-After`, evaluated BEFORE the state change.
 - **Response:** `trash`/`restore` → `200` with the updated view-model (`status` reflected) + the new `ETag`. `DELETE` → `204 No Content`.
-- **Errors:** `428`/`409`; `403`; `429` over the cap; `DELETE` on an active projection → `409 { "error":"not_trashed" }`; a stale `If-Match` on `DELETE` → `409 { "error":"version_conflict", … }` (nothing erased).
+- **Errors:** `428`/`409`; `429` over the cap; `DELETE` on an active projection → `409 { "error":"not_trashed" }`; a stale `If-Match` on `DELETE` → `409 { "error":"version_conflict", … }` (nothing erased).
 
-### 4.9 `POST /api/projections/claim` — link token-owned projections to a Clerk owner
+### 4.9 (removed) `claim` and 4.10 (removed) `claim-share`
 
-The **claim / bridge** path for the Clerk satellite (`SECURITY.md` §2.8, ship dark behind `CLERK_ENABLED`). When an owner signs in with Clerk, the owner-scoped list (§4.1) keys on the Clerk `sub`, not the hashed capability token — so projections created **before** they signed in would silently vanish from their list. This endpoint backfills the Clerk identity onto those rows so they keep showing.
-
-- **Feature gate:** with `CLERK_ENABLED` off (the default) the endpoint **does not exist → `404`** (never a crash). The capability-token app is byte-for-byte unchanged.
-- **Auth:** the `Authorization: Bearer` MUST resolve to a **verified Clerk identity** (a Clerk session JWT). A capability-token-only caller (or no bearer) → **`401` `{ "error":"clerk_identity_required" }`** — possession of a capability token grants access to that workspace, **not** the right to bind it to an arbitrary Clerk identity. Cookie-blind (the header only). **No `If-Match`** (it touches a set of rows, not one versioned aggregate).
-- **Request body:** the capability owner token whose rows to claim.
-
-```json
-{ "owner_token": "…the localStorage owner token…" }
-```
-
-- **Behavior:** one **atomic conditional UPDATE** — `SET owner_clerk_user_id = <sub>` (and `owner_org_id` when the session is org-scoped) `WHERE owner_token_hash = hash(owner_token) AND owner_clerk_user_id IS NULL`. The `IS NULL` guard makes it **idempotent** (a re-claim links 0 more) and **anti-takeover** (an already-claimed row can never be re-linked to a different Clerk user, even by a caller presenting the same token). Only rows whose `owner_token_hash` matches are touched — the caller must possess the exact owner token (`TENANT`, PRD §20). Parameterized SQL only.
-- **Rate limit:** per-IP (§2.3), enforced **before** the JWT verify + the write.
-- **Response `200`:** `{ "linked": <count> }` — the number of rows newly linked (`0` on a no-op re-claim).
-- **Errors:** `404` (Clerk off); `401` (no verified Clerk identity); `422` (missing/empty `owner_token`); `429` (rate limit).
-
-### 4.10 `POST /api/projections/{view_slug}/claim-share` — bind an editable share to a Clerk account
-
-The **editable-shares-follow-the-account** path (#323, ship dark behind `CLERK_ENABLED`). A recipient who opened a share link (`/p/<slug>/edit#<edit-token>`) signs in and calls this **once per shared projection**; the server mints a `share_grant` on their Clerk `sub`. From then on the projection shows in their **"Shared with me"** list (§4.1) and they may edit it via their JWT on **any device** (the grant-based PATCH path, §4.4).
-
-- **Feature gate:** with `CLERK_ENABLED` off → `404` (the path does not exist).
-- **Auth:** the `Authorization: Bearer` MUST resolve to a **verified Clerk identity**; an opaque capability token (or no bearer) → **`401` `{ "error":"clerk_identity_required" }`**. Cookie-blind. **No `If-Match`** (it inserts a grant row, it does not version-mutate the projection).
-- **Request body:** the edit token for **this** projection — in the **body**, never the path/query/log (Regression #10):
-
-```json
-{ "edit_token": "…the edit token from the share-link fragment…" }
-```
-
-- **Behavior — the grant is minted ONLY from a VALID edit token for THIS slug:** the presented `edit_token` is compared **constant-time** against that slug's `edit_token_hash`. On match, `create_share_grant(projection_id, clerk_sub)` writes one `share_grant` (role `editor`). **Idempotent** — `UNIQUE(projection_id, grantee_clerk_user_id)` + a SELECT-then-INSERT means a re-claim writes nothing. **Cross-owner wall:** an unknown slug → `404`; a wrong or **foreign** edit token (a valid token for a *different* projection presented against this slug) → `403` and **no grant**.
-- **Rate limit:** per-IP + per-token (the presented edit token), enforced **before** the JWT verify + the constant-time compare + the write (Mutation Safety Quad (d)).
-- **Response `200`:** `{ "granted": <bool>, "view_slug": "<slug>", "role": "editor" }` — `granted:false` on an idempotent re-claim.
-- **Errors:** `404` (Clerk off / unknown slug); `401` (no verified Clerk identity); `403` `invalid_edit_token` (wrong/foreign/absent edit token); `422` (missing/empty `edit_token`); `429` (rate limit).
+These two endpoints bridged a token-owned projection onto a signed-in Clerk identity, and bound an editable share to one. Clerk is gone entirely (owner decision, 2026-09-13; SECURITY.md §2) — both routes are deleted (`404`). There is no owner identity to bridge onto and no share concept left to bind: every projection is already public to everyone.
 
 ---
 
@@ -464,7 +375,7 @@ Each settled mutation writes a snapshot (`monthly_json`+`computed_json`+`overrid
 
 ### 5.1 `GET /api/projections/{view_slug}/revisions`
 
-- **Auth:** owner token. **Capability:** owner. (Edit tokens cannot browse history — `owner_required`.)
+- **Auth:** none — this app has no authentication (SECURITY.md §2); the slug alone grants read.
 - **Response `200`:**
 
 ```json
@@ -475,15 +386,15 @@ Each settled mutation writes a snapshot (`monthly_json`+`computed_json`+`overrid
 ] }
 ```
 
-`actor` ∈ `user | penny | penny_undo | user_undo` (the stored revision `actor` enum, DATA_MODEL §4 — a Penny edit reads back `"penny"`, a manual edit `"user"`). `event` ∈ `edit | override | rotate | restore | upgrade_model | export | share_access`. Bodies of snapshots are not inlined in the list (fetch via restore preview if needed); the list is metadata + `change_summary`.
-- **Errors:** `403` (edit/view); `404`.
+`actor` ∈ `user | penny | penny_undo | user_undo` (the stored revision `actor` enum, DATA_MODEL §4 — a Penny edit reads back `"penny"`, a manual edit `"user"`). `event` ∈ `edit | override | restore | upgrade_model | export | share_access` (plus a historical `rotate`, only ever seen on a revision written before `rotate-tokens` was removed — no new row can produce it). Bodies of snapshots are not inlined in the list (fetch via restore preview if needed); the list is metadata + `change_summary`.
+- **Errors:** `404`.
 
 ### 5.2 `POST /api/projections/{view_slug}/revisions/{id}/restore`
 
-- **Auth:** owner token. **Capability:** owner. **Requires `If-Match: <version>`** (it mutates current state).
+- **Auth:** none — this app has no authentication (SECURITY.md §2). **Requires `If-Match: <version>`** (it mutates current state).
 - **Behavior:** restore the named snapshot's inputs/assumptions/overrides **as a new forward revision** (it does not rewrite history; it appends). Recomputes under the snapshot's `model_version` (preserving the locked result — restoring does not silently upgrade math).
 - **Response `200`:** the restored view-model with an incremented `version`.
-- **Errors:** `404` unknown revision; `428`/`409`; `403`.
+- **Errors:** `404` unknown revision; `428`/`409`.
 
 ---
 
@@ -495,9 +406,11 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 
 | Route | Method | Auth | If-Match | Purpose |
 |---|---|---|---|---|
-| `…/{view_slug}/narrative` | `GET` | owner/edit/view | — | Fetch the stored narrative + staleness. |
-| `…/{view_slug}/narrative` | `PUT` | owner/edit | required | Save user-edited prose (`body_md`). |
-| `…/{view_slug}/narrative:regenerate` | `POST` | owner/edit | required | Regenerate from current `computed_json`. |
+| `…/{view_slug}/narrative` | `GET` | none | — | Fetch the stored narrative + staleness. |
+| `…/{view_slug}/narrative` | `PUT` | none | required | Save user-edited prose (`body_md`). |
+| `…/{view_slug}/narrative:regenerate` | `POST` | none | required | Regenerate from current `computed_json`. |
+
+This app has no authentication (SECURITY.md §2) — every row above is reachable with no bearer.
 
 - **`GET` response `200`:**
 
@@ -513,7 +426,7 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 
 - **Optimistic concurrency (both `PUT` and `:regenerate`):** `If-Match: <version>` is **required** (`428` if absent) and compared to the projection's live `version`. A stale value → **`409 version_conflict`** (same shape as the autosave PATCH: `{ error, current_version, your_version, current_state, recovery }`) so a second editor never silently clobbers the first's board-packet prose. A successful write **bumps the projection `version`** (standard `… SET version = version + 1 WHERE version = ?`, 0 rows → `409`), returns the new value in the `ETag` header and a `"version"` body field, and snapshots one revision (`change_summary` = `narrative_edit` / `narrative_regenerate`).
 
-- **`PUT` request:** `{ "body_md":"…markdown…" }`. The server **sanitizes** `body_md` with an allowlist (`p`/headings/`ul`-`ol`-`li`/`strong`/`em`/`blockquote`/`code`/`a[http|https|mailto]`) before storage — no raw HTML, no inline event handlers (stored-XSS → token-theft defense, [SECURITY.md](./SECURITY.md)) — and applies **numeric grounding fail-closed**: an ungrounded figure in a hand-edit is **rejected** (`409 grounding_failed`) and the prior narrative is left untouched (epic-N N4). Sets `edit_origin:"human"`. Response `200`: `{ "body_md":"…sanitized…", "edited":true, "edit_origin":"human", "computed_hash":"…", "version":<int> }`.
+- **`PUT` request:** `{ "body_md":"…markdown…" }`. The server **sanitizes** `body_md` with an allowlist (`p`/headings/`ul`-`ol`-`li`/`strong`/`em`/`blockquote`/`code`/`a[http|https|mailto]`) before storage — no raw HTML, no inline event handlers ([SECURITY.md](./SECURITY.md) §5) — and applies **numeric grounding fail-closed**: an ungrounded figure in a hand-edit is **rejected** (`409 grounding_failed`) and the prior narrative is left untouched (epic-N N4). Sets `edit_origin:"human"`. Response `200`: `{ "body_md":"…sanitized…", "edited":true, "edit_origin":"human", "computed_hash":"…", "version":<int> }`.
 
 - **`:regenerate` behavior:** low-temperature generation, **Anthropic primary → OpenAI fallback**; the result passes the numeric-grounding validator before it is stored. The `provider` field reflects the **actual** provider used. The prose states rent as an **estimate/range**, never a fact. Query `?confirm=true` is required to regenerate over a hand-edited narrative (confirm-before-discard, N6).
   - Response `200`: `{ "body_md":"…", "edited":false, "edit_origin":"ai", "computed_hash":"…", "provider":"anthropic", "version":<int> }`.
@@ -521,27 +434,27 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
   - **`409 edited_confirm_required`** when regenerating over `edit_origin:"human"` without `?confirm=true` — user prose is never silently discarded.
   - **`503 ai_unavailable`** when both providers fail (compute and `.xlsx` still work — §21). Body `{ "error":"ai_unavailable" }`.
 - **AI opt-out (§21):** if the projection (or deployment) has AI disabled, `:regenerate` returns `409 { "error":"ai_disabled" }` and `GET` returns `ai_disabled:true`. Compute, save, and `.xlsx` export remain fully functional with **zero AI calls** — verified by a test running the full flow with all AI keys unset (DoD, [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md)).
-- **Errors:** `403` read-only attempts to `PUT`/regenerate; `428`/`409`; `429` regeneration cap (§2.3).
+- **Errors:** `428`/`409`; `429` regeneration cap (§2.3).
 
 ### 6.2 `POST /api/projections/{view_slug}/evidence` — attach evidence
 
-- **Auth:** owner or edit (Bearer). **Capability:** owner/edit. **Requires `If-Match: <version>`** (attaching evidence can promote an estimate → "verified (user-provided)" and raises confidence — §15, which changes `computed_json`'s evidence/flags).
+- **Auth:** none — this app has no authentication (SECURITY.md §2). **Requires `If-Match: <version>`** (attaching evidence can promote an estimate → "verified (user-provided)" and raises confidence — §15, which changes `computed_json`'s evidence/flags).
 - **Request:** `multipart/form-data`: `field` (e.g. `rent`/`households`/`payroll`), `kind` (`user_attached`), `value`, `confidence`, `method`, optional `source_url/source_title/source_date`, and an optional `file`.
 - **File-upload hardening ([SECURITY.md](./SECURITY.md)):** allowlist content types (PDF/PNG/JPG/CSV/XLSX); reject SVG-with-script and executables; cap size; store off-origin or serve with `Content-Disposition: attachment` and a non-executable content type. `file_ref` is stored, not the raw blob inline.
 - **Response `200`:** the recomputed view-model (§3) with the new `evidence[]` entry and any confidence/flag changes. New `version`.
-- **Errors:** `415` disallowed type; `413` too large; `428`/`409`; `403`; `429` upload limit.
+- **Errors:** `415` disallowed type; `413` too large; `428`/`409`; `429` upload limit.
 
 ### 6.3 `GET /api/projections/{view_slug}/xlsx` — formula-driven workbook
 
-- **Auth:** owner/edit/view. **Capability:** owner/edit/view (read-only users may download — they see nothing beyond the page; whether export is gated is a **business-model toggle**, §3/§20, not an access bug). **Terms acceptance required before export** (§21): if `terms_accepted` is not set, `403 { "error":"terms_required" }`.
+- **Auth:** none — this app has no authentication (SECURITY.md §2). Whether export is gated is a **business-model toggle** (§3/§20), not an access-control concern. **Terms acceptance required before export** (§21): if `terms_accepted` is not set, `403 { "error":"terms_required" }`.
 - **Behavior:** the engine renders the workbook from the **same resolved node values** as `computed_json` (one math surface). Cell contract (PRD §18, [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md)): inputs = blue hard-coded; computed = live formula; overridden components = orange hard-coded + comment `"Manual override — calc was =<formula> → $X; set to $Y on <date>"`; totals/net/margin/KPIs = **always formulas** over components (foots even with overrides); monthly cash flow on its own tab with the Year-1 P&L tab referencing the monthly roll-up; N/A cells = blank + comment, **never `#DIV/0!`** (`IF(denom=0,"",num/denom)` guards). The current `generate_projection.py` builder violates this (unguarded `=net/totrev`, `=startup/Y1net`, and `=AVERAGE` for Y2 share) and is rewritten in M1 — see [ENGINE_CONTRACT.md](./ENGINE_CONTRACT.md).
 - **Release gate (CI-blocking, §18):** the exported workbook is recalculated with a pinned LibreOffice via `recalc.py`; every cell must equal saved `computed_json` (<$0.50 / 0.1 pp) with **zero** formula errors, **with and without** overrides. This is a build gate, not a request-time check.
 - **Response `200`:** `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `Content-Disposition: attachment; filename="<name> 5-Year Projection.xlsx"`. Generated to a per-request temp dir (server-controlled path — never user-supplied) and streamed, then cleaned up (no path traversal via `org_name`).
-- **Errors:** `403 terms_required` / `read_only` (if gated by business model); `404`; `429`.
+- **Errors:** `403 terms_required` (if gated by business model); `404`; `429`.
 
 ### 6.4 `GET /api/projections/{view_slug}/packet` — Board/Funder Packet
 
-- **Auth:** owner/edit/view. **Capability:** owner/edit/view (role flag tailors emphasis/CTAs — board/funder/advisor, §6.2/§17). **Terms acceptance required** (`403 terms_required` otherwise).
+- **Auth:** none — this app has no authentication (SECURITY.md §2). `?role=` tailors emphasis/CTAs — board/funder/advisor, §6.2/§17. **Terms acceptance required** (`403 terms_required` otherwise).
 - **Query:** `?format=md|docx` (default `md`); `?role=board|funder|advisor` (defaults to the share-link role, else `board`). There is no `pdf` path.
 - **Behavior:** the packet **leads with evidence** (§15), then decision recommendation, assumptions (verified vs estimated), citations w/ dates+confidence, sensitivity table, **§12.2 guardrails** (any out-of-band driver + the justification note it requires — sourced from the engine `flags` that carry `requires_note: true`; empty/silent when every driver is in band), risks, cash need + break-even, monthly cash-flow summary, 5-year P&L, KPIs. Prose is the grounded narrative (§6.1); if AI is disabled, the packet omits generated prose but still includes the structured/evidence sections (guardrails included — they are flag-derived, never AI-derived).
 - **Response `200`:** `text/markdown; charset=utf-8` (`filename="<name> Board Packet.md"`) or the `.docx` content type (`filename="<name> Board Packet.docx"`); `Content-Disposition: attachment`.
@@ -549,16 +462,16 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 
 ### 6.4a `GET /api/projections/{view_slug}/cashflow.csv` — monthly cash-flow CSV
 
-- **Auth:** owner/edit/view (mirrors §6.3/§6.4 — the slug alone grants read). **Terms acceptance required** (`403 terms_required` otherwise).
+- **Auth:** none — this app has no authentication (SECURITY.md §2); the slug alone grants read. **Terms acceptance required** (`403 terms_required` otherwise).
 - **Behavior:** served from the **stored `computed_json` monthly[] verbatim** — a read is **never** a recompute (Regression #12), unlike `/xlsx` which rebuilds the workbook. One row per project month `1..N`. Columns: `Month` (integer), `Group` (`Pre-opening | Year 1 … Year 5`, bucketed by integer month against `milestones.grandOpening.raw` — months `1..G-1` pre-opening, `G..G+11` Year 1, each subsequent 12-month block a year; `G` defaults to `1` for legacy snapshots without milestones), and the four money columns `Revenue, Expenses, Net, Cumulative Cash` as **raw signed integers** (`round(raw)`, e.g. `-263269`) — a spreadsheet must be able to `SUM` the column, so the `($263,269)` display string (which imports as text) is deliberately **not** used. Reformatting is not the CSV's job.
 - **Response `200`:** `text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="<name> Cash Flow.csv"` (via `_safe_filename_stem`, matching the `.xlsx`/packet filename convention).
-- **Rate limit:** the shared export budget — per-IP (`_EXPORT_IP_LIMIT`) + per-token (`_EXPORT_TOKEN_LIMIT`, when a bearer is presented), emitted **first**.
+- **Rate limit:** the shared export budget — per-IP (`_EXPORT_IP_LIMIT`), emitted **first**.
 - **Errors:** `403 terms_required`; `404`; `429`.
 
 ### 6.5 `GET /api/projections/{view_slug}/penny/transcript` — Penny conversation (read seam)
 
-- **Auth:** owner/edit Bearer. **Capability:** owner OR this projection's edit token (Spec B §7/§12). A view-only caller (no/invalid token) or a different owner's token → `403 forbidden`; unknown slug → `404`.
-- **Behavior:** returns the persisted per-project Penny transcript verbatim (the server is the one shape authority; the client renders turns as-is). Wizard-draft conversations have no projection and are **never persisted** (Spec B §7), so there is nothing to read for them. No cross-owner leakage (the read keys on the slug-resolved `projection_id`).
+- **Auth:** none — this app has no authentication (SECURITY.md §2). Unknown slug → `404`.
+- **Behavior:** returns the persisted per-project Penny transcript verbatim (the server is the one shape authority; the client renders turns as-is). Wizard-draft conversations have no projection and are **never persisted** (Spec B §7), so there is nothing to read for them.
 - **Response `200`:**
 
 ```json
@@ -570,13 +483,13 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 ```
 
   An absent transcript returns `200` with `"transcript_id": null` and `"turns": []`. Turn shape + the retention cap are normative in [`DATA_MODEL.md`](./DATA_MODEL.md) §3.9/§4.9.
-- **Errors:** `403 forbidden`; `404 not_found`.
+- **Errors:** `404 not_found`.
 
 ### 6.6 `POST /api/projections/{view_slug}/penny` — run the tool-use loop (PE5)
 
-- **Auth:** owner/edit Bearer. **Capability:** owner OR this projection's edit token may **mutate**; a view-only caller (no/invalid token) is **answer-only** (the loop still runs, but every `mutate` tool refuses and nothing is persisted to the owner's transcript). Unknown slug → `404`.
+- **Auth:** none — this app has no authentication (SECURITY.md §2); every caller can mutate. Unknown slug → `404`.
 - **Body:** `{ "message": "…", "proposal_ref": "prop_…"? }`. There is **NO top-level `If-Match`** — the loop's internal `PATCH`es each carry the caller's known version (Spec B §12).
-- **Behavior:** runs the bounded server-side tool-use loop (Spec B §6.1): system prompt + grounding context (current `computed_json` + editable surface) + user message → the provider replies with prose or tool calls → each tool runs server-side → repeat until a final message or a hard cap. The user message and any proposal text are wrapped as **untrusted DATA** (injection-marker stripped, extract-only framing — SECURITY §6.3). Every `mutate` tool converges on the **same** `apply_projection_patch` write path the manual UI hits, so each applied edit produces `version++` + **one** `actor:penny` revision as a side effect (no parallel writer, no privileged path). Detail-page turns persist to `penny_transcripts` (PE2); a view-only caller's answer-only turns persist **nothing**.
+- **Behavior:** runs the bounded server-side tool-use loop (Spec B §6.1): system prompt + grounding context (current `computed_json` + editable surface) + user message → the provider replies with prose or tool calls → each tool runs server-side → repeat until a final message or a hard cap. The user message and any proposal text are wrapped as **untrusted DATA** (injection-marker stripped, extract-only framing — SECURITY §6.3). Every `mutate` tool converges on the **same** `apply_projection_patch` write path the manual UI hits, so each applied edit produces `version++` + **one** `actor:penny` revision as a side effect (no parallel writer, no privileged path). Every turn persists to `penny_transcripts` (PE2).
 - **Response `200`:**
 
 ```json
@@ -594,23 +507,23 @@ The Board Packet is the primary trust surface; **narrative prose is generated fr
 ```
 
   `applied_revisions[].changed` is the engine's recomputed view-model diff (`was→now`), so Penny narrates the effect without inventing a figure. `provider` reflects the **actual** provider used.
-- **Errors:** `409 ai_disabled` (per-projection opt-out, deployment kill switch, or no provider key — **zero** provider calls); `503 ai_unavailable` (both providers down); `429 rate_limited` with `{ "retry_after_seconds": N }` + a `Retry-After` header (surfaced **before** any provider call — **keyed on the caller's hashed token and the `projection_id`, not the shared proxy IP**, so one owner cannot lock out others, §2.3/SECURITY §10.1, issue #189); `422` relays a rejected edit to the model (e.g. `node_not_pinnable`, `invalid_inputs`) and `input_too_large` when the assembled prompt exceeds the input-token cap; `404 not_found`.
+- **Errors:** `409 ai_disabled` (per-projection opt-out, deployment kill switch, or no provider key — **zero** provider calls); `503 ai_unavailable` (both providers down); `429 rate_limited` with `{ "retry_after_seconds": N }` + a `Retry-After` header (surfaced **before** any provider call — **keyed on the real client IP and the `projection_id`**, so one flooded projection cannot lock out others, §2.3/SECURITY §10.1, issue #189); `422` relays a rejected edit to the model (e.g. `node_not_pinnable`, `invalid_inputs`) and `input_too_large` when the assembled prompt exceeds the input-token cap; `404 not_found`.
 
 ### 6.7 `POST /api/penny/draft` — wizard-draft loop (PE5)
 
-- **Auth:** edit Bearer (any bearer token present; there is no projection yet). Missing token → `403 forbidden`.
+- **Auth:** none — this app has no authentication (SECURITY.md §2); there is no projection yet.
 - **Body:** `{ "message":"…", "draft_state":{…}, "proposal_ref":"prop_…"? }`.
 - **Behavior:** the **same** loop, but every `mutate` tool edits the supplied `draft_state` (the wizard's in-progress inputs/assumptions/overrides/cost-schedule) instead of routing through `apply_projection_patch`. **Persists nothing** — no transcript row, no revision, no projection (the ephemeral wizard transcript stays in client state, Spec B §7). The figure-strip guard still applies (no LLM-computed figure reaches the draft).
 - **Response `200`:** `{ "draft":{…mutated…}, "narration":"…", "provider":"anthropic", "applied":[…] }`.
-- **Errors:** `403 forbidden`; `409 ai_disabled`; `503 ai_unavailable`; `429 rate_limited`.
+- **Errors:** `409 ai_disabled`; `503 ai_unavailable`; `429 rate_limited`.
 
 ### 6.8 `POST /api/penny/proposal` — proposal upload intake (PE5)
 
-- **Auth:** owner/edit Bearer (any bearer token present). Missing token → `403 forbidden`.
+- **Auth:** none — this app has no authentication (SECURITY.md §2).
 - **Body:** either a **raw PDF body** (`Content-Type: application/pdf`, optional `?filename=`) **or** JSON `{ "source_url":"…" }`.
 - **Behavior:** accepts the consultant proposal **server-side as untrusted bytes** and returns an opaque `proposal_ref`. The bytes are **never executed or rendered**; they are extracted (text only) lazily by the `parse_proposal` tool inside the Penny loop (PE9, SECURITY §6.3.2), never here. Guards: **type** — a magic-byte sniff (`%PDF-`) is the authority (a forgeable `Content-Type`/filename is advisory only); **size** — capped (`413` over the limit); **SSRF** — a `source_url` is validated with the research fetcher's scheme allowlist + private/loopback/link-local/metadata IP rejection (a blocked host → `422 ssrf_blocked`, fail-closed; remote fetching itself is out of scope, so a clean URL returns `422 remote_intake_unavailable`).
 - **Response `201`:** `{ "proposal_ref":"prop_…", "filename":"plan.pdf", "size":1234, "content_type":"application/pdf" }`.
-- **Errors:** `403 forbidden`; `413 file_too_large`; `415 unsupported_type`; `422 ssrf_blocked` / `remote_intake_unavailable` / `empty_upload`; `429 rate_limited`.
+- **Errors:** `413 file_too_large`; `415 unsupported_type`; `422 ssrf_blocked` / `remote_intake_unavailable` / `empty_upload`; `429 rate_limited`.
 - **`parse_proposal` result (PE9):** when the loop calls `parse_proposal` with this ref it returns extract-only candidates — `{ extract_only, untrusted, candidates:[{amount_text, amount, category, snippet, tier?}], tiers:[…], needs_tier_choice, phases:[{phase, description, duration_months, month}], phase_month_map:[{phase, month}], opening_month, needs_month_confirm }` — every figure traceable to the document; multiple tiers force disambiguation and the phase→month mapping is confirmed before any row is populated via `edit_cost_schedule` (`provenance.source="ai"`).
 
 ### 6.9 `POST /api/cost-schedule/preview` — startup-grid totals (read-only, dormant)
@@ -681,15 +594,14 @@ All third-party calls (Places, Census, web fetch, LLM extract) are **server-side
 
 The **rent-research slice** (#60/#62/#64/#65): a representative `$/sq ft` for the resolved location, extracted-only from server-fetched snippets. **Households are not researched here** — they come from `POST /api/places/resolve` (§7.1 derivation), keeping this endpoint a single-purpose rent pre-fill off the compute hot path.
 
-- **Auth:** none required (research happens during the wizard, before a projection exists); rate-limited **per IP + per token** (the token, when present, is SHA-256-hashed before it keys the limiter — no raw secret in memory/logs). **No `If-Match`** (read-only against external data; does not mutate a projection — the user accepts the result into the wizard, which then creates/`PATCH`es).
+- **Auth:** none (this app has no authentication, SECURITY.md §2); rate-limited **per IP**. **No `If-Match`** (read-only against external data; does not mutate a projection — the user accepts the result into the wizard, which then creates/`PATCH`es).
 - **Request body:**
 
 ```json
 { "location": { "geography_name":"Longview city", "formatted_address":"Longview, TX, USA" },
   "location_label": "Longview, TX",
   "building_sqft": "10000",
-  "basis": "nnn",
-  "token": "<optional owner token for the per-token cap>" }
+  "basis": "nnn" }
 ```
 `location` is the resolved geo object from `/api/places/resolve` (or pass `location_label` as a plain string). `basis ∈ {nnn, gross}` (defaults `nnn`).
 
@@ -746,12 +658,12 @@ The **rent-research slice** (#60/#62/#64/#65): a representative `$/sq ft` for th
 
 ## 9. Actuals (post-launch — schema only in v1)
 
-The endpoints exist and the table ships (so it is not a later migration, PRD §24), but **no actuals UI is built in v1** (§6.3). The routes are owner/edit-gated and documented here for completeness.
+The endpoints exist and the table ships (so it is not a later migration, PRD §24), but **no actuals UI is built in v1** (§6.3). This app has no authentication (SECURITY.md §2); the routes are documented here for completeness.
 
 | Route | Method | Auth | If-Match | Purpose |
 |---|---|---|---|---|
-| `…/{view_slug}/actuals` | `POST` | owner/edit | required | Upsert a month's actuals (`month, revenue, donations, payroll, rent, other_expense`). |
-| `…/{view_slug}/actuals` | `GET` | owner/edit/view | — | List actuals for forecast-vs-actual (post-launch). |
+| `…/{view_slug}/actuals` | `POST` | none | required | Upsert a month's actuals (`month, revenue, donations, payroll, rent, other_expense`). |
+| `…/{view_slug}/actuals` | `GET` | none | — | List actuals for forecast-vs-actual (post-launch). |
 
 - **Response `200`:** `{ "actuals":[ { "month":"2027-03", "revenue":38000, … } ] }`.
 - **v1 status:** wired and tested at the API/schema level; not surfaced in the UI. Opt-in anonymized pooling is **out of scope for v1**.
@@ -787,71 +699,74 @@ All errors share the shape `{ "error":"<code>", "message":"<human>", ... }` (ext
 
 | Status | `error` | When |
 |---|---|---|
-| `400` | `validation` / `if_match_malformed` / `secret_in_url` | Bad request shape; secret leaked into URL. |
-| `401` | `auth_required` | Mutation with no `Authorization`. |
+| `400` | `validation` / `if_match_malformed` | Bad request shape. |
 | `402` | `payment_required` | Expert-review / sign-off surface while `gate_mode=paid_review` (§10a); carries `price_usd`. A business-model gate, not an access bug — basic export is unaffected. |
-| `403` | `forbidden` / `read_only` / `owner_required` / `terms_required` | Capability insufficient; terms not accepted before export/share. |
-| `404` | `not_found` | Unknown `view_slug` (or trashed and requester not owner). |
-| `409` | `version_conflict` | Stale `If-Match` — body carries `current_version` + `current_state` (§1.4). |
+| `403` | `terms_required` | Terms not accepted before export/share. |
+| `404` | `not_found` | Unknown `view_slug` (or already-trashed for a route that requires trashed). |
+| `409` | `version_conflict` | Stale `If-Match` — body carries `current_version` + `current_state` (§1.2). |
 | `409` | `grounding_failed` / `ai_disabled` / `not_trashed` | Narrative figure ungrounded; AI opt-out; hard-delete on an active projection. |
 | `413` / `415` | `file_too_large` / `unsupported_media_type` | Evidence upload limits. |
 | `422` | `node_not_pinnable` / `unsupported_basis` / `input_out_of_domain` | Pin on a derived node; radius/ZCTA basis; e.g. 0 sq ft. |
 | `422` | `invalid_inputs` / `invalid_assumptions` | The merged `inputs`/`assumptions` surface fails `InputsIn`/`AssumptionsIn` re-validation (e.g. a percent knob outside `[0,1]`, `sensitivity_delta` outside `[0,0.9]`, a negative `reserve_buffer`/`donations_per_hh`/`basket`/`utilities_per_sqft`, an off-allowlist or negative `fixed_annual` line, an oversized `cost_schedule`). Applies on **every** `PATCH`, including one that merely re-validates a legacy stored value from before a bound existed. |
 | `428` | `if_match_required` | Mutation missing `If-Match`. |
-| `429` | `rate_limited` | Per-IP or per-token limit (carries `retry_after_seconds`). |
+| `429` | `rate_limited` | Per-IP limit (carries `retry_after_seconds`). |
 | `502` | `places_unavailable` / `census_unavailable` / `research_unavailable` | Upstream data provider down — client falls back to manual entry. |
 | `503` | `ai_unavailable` | Both AI providers failed — compute and `.xlsx` still work. |
 
+`GET /api/metrics` is the one endpoint with its own auth errors (`401 unauthorized`, `403 forbidden`, `404` when unconfigured) — see SECURITY.md §4.5. Every other endpoint in this document has no auth error path at all.
+
 ---
 
-## 12. Endpoint → capability → mutation quick reference
+## 12. Endpoint → concurrency → mutation quick reference
 
-| Method · Path | Capability | `If-Match` | Mutates | Rate-limited |
-|---|---|---|---|---|
-| `GET /api/projections` | owner | — | no | read |
-| `POST /api/projections` | (none) | no | create | create |
-| `GET …/{slug}` | owner/edit/view | — | no | read |
-| `PATCH …/{slug}` | owner/edit | **yes** | yes | autosave |
-| `POST …/{slug}/preview` | owner/edit | no | **no (read-only)** | read |
-| `POST …/{slug}/duplicate` | owner | no | create | create |
-| `POST …/{slug}/upgrade-model` *(forward spec — not implemented, §4.6)* | owner/edit | **yes** | yes | read |
-| `POST …/{slug}/rotate-tokens` | owner | **yes** | yes | read |
-| `POST …/{slug}/trash` · `…/restore` | owner | **yes** | yes | read |
-| `DELETE …/{slug}` | owner | **yes** | yes (purge) | read |
-| `GET …/{slug}/revisions` | owner | — | no | read |
-| `POST …/{slug}/revisions/{id}/restore` | owner | **yes** | yes | read |
-| `GET …/{slug}/narrative` | owner/edit/view | — | no | read |
-| `PUT …/{slug}/narrative` | owner/edit | **yes** | yes | read |
-| `POST …/{slug}/narrative:regenerate` | owner/edit | **yes** | yes | regenerate |
-| `POST …/{slug}/evidence` | owner/edit | **yes** | yes | upload |
-| `GET …/{slug}/xlsx` · `…/packet` · `…/cashflow.csv` | owner/edit/view | — | no | export |
-| `GET …/{slug}/penny/transcript` | owner/edit | — | no | read |
-| `POST …/{slug}/penny` | owner/edit (view = answer-only) | — (loop's internal `PATCH`es carry it) | yes (`actor:penny` via the loop) | penny |
-| `POST /api/penny/draft` | edit Bearer | — | no (persists nothing) | penny |
-| `POST /api/penny/proposal` | owner/edit Bearer | — | holds bytes (no parse) | upload |
-| `GET/POST …/{slug}/actuals` | owner/edit(/view GET) | POST: **yes** | POST yes | read |
-| `POST /api/research` | (none) | no | no | research |
-| `POST /api/cost-schedule/preview` | (none) | no | **no (read-only)** | read |
-| `GET /api/places/autocomplete` | (none) | — | no | read |
-| `POST /api/feedback` | (none) | no | persist | feedback |
-| `POST /api/intent` | (none) | no | persist | intent |
-| `GET /api/health` | (none) | — | no | none |
-| `GET /api/config` | (none) | — | no | none |
-| `POST /api/expert-review` | (none) | no | no (stub) | — |
+This app has no authentication (SECURITY.md §2), so there is no capability column anymore — every route below is reachable by anyone.
+
+| Method · Path | `If-Match` | Mutates | Rate-limited |
+|---|---|---|---|
+| `GET /api/projections` | — | no | read |
+| `POST /api/projections` | no | create | create |
+| `GET …/{slug}` | — | no | read |
+| `PATCH …/{slug}` | **yes** | yes | autosave |
+| `POST …/{slug}/preview` | no | **no (read-only)** | read |
+| `POST …/{slug}/duplicate` | no | create | create |
+| `POST …/{slug}/upgrade-model` *(forward spec — not implemented, §4.6)* | **yes** | yes | read |
+| `POST …/{slug}/trash` · `…/restore` | **yes** | yes | read |
+| `DELETE …/{slug}` | **yes** | yes (purge) | read |
+| `GET …/{slug}/revisions` | — | no | read |
+| `POST …/{slug}/revisions/{id}/restore` | **yes** | yes | read |
+| `GET …/{slug}/narrative` | — | no | read |
+| `PUT …/{slug}/narrative` | **yes** | yes | read |
+| `POST …/{slug}/narrative:regenerate` | **yes** | yes | regenerate |
+| `POST …/{slug}/evidence` | **yes** | yes | upload |
+| `GET …/{slug}/xlsx` · `…/packet` · `…/cashflow.csv` | — | no | export |
+| `GET …/{slug}/penny/transcript` | — | no | read |
+| `POST …/{slug}/penny` | — (loop's internal `PATCH`es carry it) | yes (`actor:penny` via the loop) | penny |
+| `POST /api/penny/draft` | — | no (persists nothing) | penny |
+| `POST /api/penny/proposal` | — | holds bytes (no parse) | upload |
+| `GET/POST …/{slug}/actuals` | POST: **yes** | POST yes | read |
+| `POST /api/research` | no | no | research |
+| `POST /api/cost-schedule/preview` | no | **no (read-only)** | read |
+| `GET /api/places/autocomplete` | — | no | read |
+| `POST /api/feedback` | no | persist | feedback |
+| `POST /api/intent` | no | persist | intent |
+| `GET /api/health` | — | no | none |
+| `GET /api/config` | — | no | none |
+| `POST /api/expert-review` | no | no (stub) | — |
+| `GET /api/metrics` — the one exception, `METRICS_TOKEN` bearer gate (SECURITY.md §4.5) | — | no | none |
 
 ---
 
 ## 13. Invariants (testable; see [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md))
 
 1. **No client math.** The frontend never computes a financial figure; it renders `display` strings from the compute response (§13/Appendix C #22).
-2. **Mutation safety quad** on every `PATCH`/state-changing `POST`: bearer-auth required, owner-scope isolation (no cross-owner, no global list), `If-Match` 409-on-stale, and a negative/rate-limit path — all four tested.
-3. **409 carries current state** (§1.4) so the client never needs a follow-up `GET` to recover.
+2. **Mutation safety quad** on every `PATCH`/state-changing `POST`, now two legs (owner decision 2026-09-13, SECURITY.md §2): `If-Match` 409-on-stale, and a negative/rate-limit path — both tested.
+3. **409 carries current state** (§1.2) so the client never needs a follow-up `GET` to recover.
 4. **Derived nodes are non-pinnable** server-side (`422`), not just hidden in the UI (§14).
 5. **No silent recompute** on read; `upgrade-model` writes a new revision preserving the prior (§13).
 6. **Feedback never leaks** a `view_slug`, token, projection link, or financial field — CI-asserted (§22).
 7. **AI opt-out works end-to-end** — compute, save, and `.xlsx` export succeed with all AI keys unset (§21).
-8. **Secrets only via header/fragment** — never path/query; `Authorization` and fragments never logged (§20).
+8. **`METRICS_TOKEN` is the one remaining secret in this app** — it only ever travels via `Authorization` (never path/query) and is never logged (SECURITY.md §4.5). Every other endpoint has no secret to leak.
 9. **Excel ↔ computed_json reconcile** (<$0.50 / 0.1 pp, zero formula errors) with and without overrides, CI-blocking (§18) — the only thing keeping "single math authority" true.
 10. **`/preview` is provably read-only** (epic-N N12): a dry-run never persists, never bumps `version`, never writes a revision — CI-asserted over repeated calls.
 11. **No ungrounded LLM figure reaches a render path** (§6.1, SECURITY §6.3): every currency/percent token in narrative/packet prose must be a display string the engine produced; an ungrounded `$`/`%` token is rejected. Injection markers are stripped from untrusted text. AI opt-out runs the full compute/save/`.xlsx` flow with **all AI keys unset**.
-12. **Penny mutates only through the one write path** (§6.6, Spec B §4/§6.2): the `POST …/penny` tool-use loop applies every edit via `apply_projection_patch` — the same merge → recompute → `If-Match` → one revision the manual `PATCH` uses — producing `version++` + an `actor:penny` revision; there is no parallel writer and no privileged Penny path. Capability-gated (a view-only caller is answer-only, mutate tools refuse). `409 ai_disabled` makes **zero** provider calls; both providers down → `503 ai_unavailable`; an LLM-bucket breach → `429 retry_after_seconds`. `POST /api/penny/draft` mutates only the supplied draft and **persists nothing**. `POST /api/penny/proposal` holds the upload as untrusted bytes (type/size/SSRF guarded) and never executes/renders it — all CI-asserted with **stubbed providers**.
+12. **Penny mutates only through the one write path** (§6.6, Spec B §4/§6.2): the `POST …/penny` tool-use loop applies every edit via `apply_projection_patch` — the same merge → recompute → `If-Match` → one revision the manual `PATCH` uses — producing `version++` + an `actor:penny` revision; there is no parallel writer and no privileged Penny path. `409 ai_disabled` makes **zero** provider calls; both providers down → `503 ai_unavailable`; an LLM-bucket breach → `429 retry_after_seconds`. `POST /api/penny/draft` mutates only the supplied draft and **persists nothing**. `POST /api/penny/proposal` holds the upload as untrusted bytes (type/size/SSRF guarded) and never executes/renders it — all CI-asserted with **stubbed providers**.

@@ -4,9 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ListPage } from "./ListPage";
 import type { ProjectionListResponse } from "../api/projections";
 
-// SLICE 2 — owner-scoped list page wiring (PRD §19.1 / §20). The page fetches the
-// owner-scoped list (no global index) and renders ProjectionsList. Without an
-// owner token there is nothing to list, so it shows the utilitarian empty state.
+// This project has no authentication (owner decision, 2026-09-13): the list page
+// always fetches the global list — every projection in the database, unfiltered.
 // v2 (EPIC L): the list page renders the redesigned ProjectionsList with the new
 // column contract (income_series, y5_income, payback, breakeven).
 
@@ -41,20 +40,8 @@ afterEach(() => {
 });
 
 describe("ListPage", () => {
-  it("renders the empty state with no owner token (no global index)", async () => {
-    // No fetch should be made without a token; listProjections short-circuits.
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    render(<ListPage />);
-    // v2 (L1): h1 is "Projections" on both states.
-    expect(
-      await screen.findByRole("heading", { level: 1, name: /^Projections$/i }),
-    ).toBeInTheDocument();
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it("renders owner-scoped rows from the server (verbatim display strings)", async () => {
-    localStorage.setItem("projections.owner_token", "owner-abc");
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+  it("fetches and renders the global list with no credential of any kind", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify(populated), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -64,56 +51,25 @@ describe("ListPage", () => {
     expect(
       await screen.findByText("House of Hope — Longview, TX"),
     ).toBeInTheDocument();
-    // v2: capital required is still shown; payback and breakeven now appear.
     expect(screen.getByText("$277,990")).toBeInTheDocument();
     expect(screen.getByText("Month 25")).toBeInTheDocument();
     expect(screen.getByText("Month 5")).toBeInTheDocument();
+
+    // No Authorization header of any kind — this project has no authentication.
+    const init = fetchSpy.mock.calls[0][1] as RequestInit | undefined;
+    expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
   });
 
-  it("sends the owner bearer token (owner-scoped, never global)", async () => {
-    localStorage.setItem("projections.owner_token", "owner-abc");
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify(populated), { status: 200 }),
-    );
-    render(<ListPage />);
-    await screen.findByText("House of Hope — Longview, TX");
-    const init = fetchSpy.mock.calls[0][1] as RequestInit;
-    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer owner-abc");
-  });
-
-  it("renders a 'Shared with me' section for shared rows with no owner-only affordances (#323)", async () => {
-    localStorage.setItem("projections.owner_token", "owner-abc");
-    const sharedRow = {
-      ...populated.projections[0],
-      view_slug: "p_shared",
-      name: "Partner Co — Dallas, TX",
-      owner: false,
-      shared: true,
-      editable: true,
-    };
-    const ownerRow = { ...populated.projections[0], owner: true, shared: false };
+  it("renders the empty state when the list has no rows", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ projections: [ownerRow, sharedRow] }), { status: 200 }),
+      new Response(JSON.stringify({ projections: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
     );
     render(<ListPage />);
-
-    // The shared row appears under its own "Shared with me" heading.
     expect(
-      await screen.findByRole("heading", { name: /shared with me/i }),
+      await screen.findByRole("heading", { level: 1, name: /^Projections$/i }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Partner Co — Dallas, TX")).toBeInTheDocument();
-    // Owner-only affordances render ONLY on the owner section: exactly one header
-    // "Trash" link (the owner list), none on the shared section.
-    expect(screen.getAllByTestId("open-trash")).toHaveLength(1);
-  });
-
-  it("omits the 'Shared with me' section when there are no shared rows", async () => {
-    localStorage.setItem("projections.owner_token", "owner-abc");
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify(populated), { status: 200 }),
-    );
-    render(<ListPage />);
-    await screen.findByText("House of Hope — Longview, TX");
-    expect(screen.queryByRole("heading", { name: /shared with me/i })).toBeNull();
   });
 });

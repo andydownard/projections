@@ -1,16 +1,14 @@
-// web/src/pages/ListPage.tsx — owner-scoped list page (PRD §19.1 / §20).
+// web/src/pages/ListPage.tsx — the global projections list (PRD §19.1).
 //
-// OWNER-SCOPED, no global index: listProjections sends Authorization: Bearer
-// <owner_token> from localStorage and the server filters by owner_token_hash.
-// Without a token there is nothing to list — the utilitarian empty state shows.
-// Money arrives as server { display } and is rendered VERBATIM (no client math).
+// This project has no authentication (owner decision, 2026-09-13): listProjections
+// returns every projection in the database, unfiltered. Money arrives as server
+// { display } and is rendered VERBATIM (no client math).
 //
 // v2 (EPIC L): the entire row is the click target → /p/<slug>/edit. Moving a
 // projection to Trash is a detail-page-only action (its own "Delete" button +
 // confirm dialog on /p/<slug>/edit) — the list carries no per-row actions menu.
 // The header "Trash" link opens the Trash view (/trash) where trashed
-// projections can be restored or permanently deleted. All owner-scoped; no
-// secret in any URL.
+// projections can be restored or permanently deleted.
 import { useEffect, useState } from "react";
 
 import { listProjections, type ProjectionListItem } from "../api/projections";
@@ -32,7 +30,6 @@ export function ListPage() {
         if (alive) setProjections(resp.projections);
       })
       .catch(() => {
-        // Owner-scoped read failure falls back to the empty state; never a global list.
         if (alive) setProjections([]);
       })
       .finally(() => {
@@ -46,41 +43,20 @@ export function ListPage() {
   if (!loaded) {
     return (
       <section className="list-loading" aria-busy="true">
-        <p>Loading your projections…</p>
+        <p>Loading projections…</p>
       </section>
     );
   }
 
-  // EPIC #323: split the owner-scoped rows from the "Shared with me" rows (another
-  // owner granted editable access). Owner-only affordances (trash menu, the New
-  // button) render ONLY on the owner section; shared rows are edit-only.
-  const owned = projections.filter((p) => p.shared !== true);
-  const shared = projections.filter((p) => p.shared === true);
-
   return (
-    <>
-      <ProjectionsList
-        projections={owned}
-        onCreate={() => navigate("/wizard")}
-        // v2 (L2): the entire row is the click target; always routes to the editable
-        // detail (/p/<slug>/edit). No secret in the URL — the owner token in
-        // localStorage authorizes the PATCH (ProjectionDetail's token fallback).
-        onRowClick={(slug) => navigate(`/p/${slug}/edit`)}
-        onOpenTrash={() => navigate("/trash")}
-      />
-      {shared.length > 0 && (
-        <ProjectionsList
-          projections={shared}
-          heading="Shared with me"
-          headingId="shared-with-me-heading"
-          showCreate={false}
-          onCreate={() => navigate("/wizard")}
-          // Edit-only: the grant authorizes the PATCH via the Clerk JWT on any device.
-          onRowClick={(slug) => navigate(`/p/${slug}/edit`)}
-          // No onOpenTrash → no owner-only affordances on a shared row.
-        />
-      )}
-    </>
+    <ProjectionsList
+      projections={projections}
+      onCreate={() => navigate("/wizard")}
+      // v2 (L2): the entire row is the click target; always routes to the editable
+      // detail (/p/<slug>/edit) — no credential of any kind gates the edit.
+      onRowClick={(slug) => navigate(`/p/${slug}/edit`)}
+      onOpenTrash={() => navigate("/trash")}
+    />
   );
 }
 

@@ -198,7 +198,7 @@ def test_create_rejects_bad_schedule(client, bad):
 
 def test_patch_round_trips_schedule(client, store):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     new_schedule = [{"category": "Equipment", "month": 3, "amount": 45000}]
     r = client.patch(
         f"/api/projections/{slug}",
@@ -207,7 +207,7 @@ def test_patch_round_trips_schedule(client, store):
             "opening_month_number": 4,
             "target_opening_date": "2027-01",
         }},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     row = store.get_projection_by_slug(slug)
@@ -228,11 +228,11 @@ def test_patch_round_trips_schedule(client, store):
 )
 def test_patch_rejects_bad_schedule(client, bad):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": bad},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 422, r.text
 
@@ -240,13 +240,13 @@ def test_patch_rejects_bad_schedule(client, bad):
 # --------------------------------------- 5. treatment enum (Model v3, Task 2.2)
 def test_patch_rejects_bogus_treatment(client, store):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"cost_schedule": [
             {"category": "X", "month": 1, "amount": 1000, "treatment": "bogus"},
         ]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 422, r.text
 
@@ -254,13 +254,13 @@ def test_patch_rejects_bogus_treatment(client, store):
 @pytest.mark.parametrize("treatment", ["included", "separate", "contingent"])
 def test_patch_accepts_and_persists_every_valid_treatment(client, store, treatment):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"cost_schedule": [
             {"category": "X", "month": 1, "amount": 1000, "treatment": treatment},
         ]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     stored = json.loads(store.get_projection_by_slug(slug)["inputs_json"])
@@ -269,7 +269,7 @@ def test_patch_accepts_and_persists_every_valid_treatment(client, store, treatme
 
 def test_patch_persists_a_separate_rows_note(client, store):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"cost_schedule": [{
@@ -277,7 +277,7 @@ def test_patch_persists_a_separate_rows_note(client, store):
             "treatment": "separate",
             "note": "Attach the signed proposal once available.",
         }]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     stored = json.loads(store.get_projection_by_slug(slug)["inputs_json"])
@@ -302,7 +302,7 @@ def test_patched_treatment_does_not_move_the_live_projection_capital_yet(client,
     test_cost_schedule_router.py::test_preview_excludes_separate_and_contingent_rows_from_grand_total.
     """
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     before = created["metrics"]["capital"]["raw"]
     r = client.patch(
         f"/api/projections/{slug}",
@@ -310,7 +310,7 @@ def test_patched_treatment_does_not_move_the_live_projection_capital_yet(client,
             "category": "Huge separate line", "month": 1, "amount": 9999999,
             "treatment": "separate",
         }]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["metrics"]["capital"]["raw"] == before

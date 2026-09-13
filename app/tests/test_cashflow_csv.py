@@ -206,23 +206,6 @@ def test_cashflow_csv_per_ip_rate_limit(client, store, monkeypatch):
     assert r.json()["error"] == "rate_limited"
 
 
-def test_cashflow_csv_per_token_rate_limit(client, store, monkeypatch):
-    # A generous IP cap but a tight per-token cap proves the per-token leg fires
-    # independently when a bearer is presented.
-    monkeypatch.setattr(P, "_EXPORT_IP_LIMIT", 1000, raising=False)
-    monkeypatch.setattr(P, "_EXPORT_TOKEN_LIMIT", 3, raising=False)
-    slug = _create(client).json()["view_slug"]
-    _accept_terms(store, slug)
-    headers = {"Authorization": "Bearer tok-abc"}
-    for _ in range(3):
-        assert client.get(
-            f"/api/projections/{slug}/cashflow.csv", headers=headers
-        ).status_code == 200
-    r = client.get(f"/api/projections/{slug}/cashflow.csv", headers=headers)
-    assert r.status_code == 429, r.text
-    assert r.json()["error"] == "rate_limited"
-
-
 def test_cashflow_csv_legacy_12_row_snapshot_degrades(client, store):
     slug = _create(client).json()["view_slug"]
     _accept_terms(store, slug)

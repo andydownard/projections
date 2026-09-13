@@ -1,8 +1,7 @@
 """app/seed.py — deterministic `example` projection for the E2E gate.
 
 The Playwright flows (e2e/) drive a fixed projection so the gate is reproducible
-across machines: view_slug `example`, edit token `edit-secret` (the URL fragment
-the override-conflict / feedback specs read), terms accepted (so .xlsx export is
+across machines: view_slug `example`, terms accepted (so .xlsx export is
 reachable read-only), and a board role link `board-slug` (the readonly-share
 spec's /r/ path). This is e2e/demo scaffolding — NOT a production data path; it
 runs only when E2E_SEED=1 (or explicitly in tests).
@@ -17,14 +16,12 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any
 
-from app.deps import hash_token
+from app.deps import new_internal_owner_hash
 from engine import model
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.viewmodel import to_view_model
 
 EXAMPLE_SLUG = "example"
-EXAMPLE_EDIT_TOKEN = "edit-secret"
-EXAMPLE_OWNER_TOKEN = "owner-secret"
 ROLE_SLUG = "board-slug"
 ROLE_NAME = "board"
 
@@ -100,8 +97,7 @@ def seed_example(store) -> None:
     row = {
         "id": "seed-example-" + secrets.token_hex(4),
         "view_slug": EXAMPLE_SLUG,
-        "owner_token_hash": hash_token(EXAMPLE_OWNER_TOKEN),
-        "edit_token_hash": hash_token(EXAMPLE_EDIT_TOKEN),
+        "owner_token_hash": new_internal_owner_hash(),
         "role_tokens_json": json.dumps({ROLE_SLUG: ROLE_NAME}),
         "name": "House of Hope",
         "model_version": vm.get("model_version", ""),

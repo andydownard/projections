@@ -3,10 +3,11 @@
 //
 // The wizard-draft variant of Penny runs the SAME server-side tool-use loop, but
 // acts on the supplied in-memory `draft_state` (there is no projection yet) and
-// PERSISTS NOTHING — no transcript row, no revision, no projection (Spec §7). The
-// client only sends { message, draft_state, proposal_ref? } + an ephemeral Bearer;
-// it renders the server's { draft, narration, provider, applied } verbatim and
-// computes NOTHING (the returned draft is mapped straight onto the wizard fields).
+// PERSISTS NOTHING — no transcript row, no revision, no projection (Spec §7). This
+// project has no authentication (owner decision, 2026-09-13): the client only
+// sends { message, draft_state, proposal_ref? }; it renders the server's
+// { draft, narration, provider, applied } verbatim and computes NOTHING (the
+// returned draft is mapped straight onto the wizard fields).
 //
 // Errors are CLASSIFIED with the SAME PennyError taxonomy as the saved-projection
 // endpoint (409 ai_disabled, 503 ai_unavailable, 429 rate_limited, 422 rejected,
@@ -58,35 +59,24 @@ afterEach(() => {
 });
 
 describe("sendPennyDraftMessage — request shape (API_SPEC §12)", () => {
-  it("POSTs to /api/penny/draft with Authorization: Bearer + { message, draft_state }", async () => {
+  it("POSTs to /api/penny/draft with { message, draft_state }", async () => {
     const fetchMock = mockFetch(() => jsonResponse(OK, { status: 200 }));
     await sendPennyDraftMessage({
-      token: "wizdraft-tok",
       message: "Set Year-1 share to 8%",
       draftState: DRAFT_STATE,
     });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/penny/draft");
     expect(init.method).toBe("POST");
-    const headers = new Headers(init.headers);
-    expect(headers.get("Authorization")).toBe("Bearer wizdraft-tok");
     expect(JSON.parse(init.body as string)).toEqual({
       message: "Set Year-1 share to 8%",
       draft_state: DRAFT_STATE,
     });
   });
 
-  it("never puts the token in the URL (path/query) — header only (PRD §20)", async () => {
-    const fetchMock = mockFetch(() => jsonResponse(OK, { status: 200 }));
-    await sendPennyDraftMessage({ token: "secret-token", message: "hi", draftState: {} });
-    const [url] = fetchMock.mock.calls[0];
-    expect(url).not.toContain("secret-token");
-  });
-
   it("includes proposal_ref only when provided", async () => {
     const fetchMock = mockFetch(() => jsonResponse(OK, { status: 200 }));
     await sendPennyDraftMessage({
-      token: "t",
       message: "use this proposal",
       draftState: DRAFT_STATE,
       proposalRef: "prop_9",
@@ -101,7 +91,6 @@ describe("sendPennyDraftMessage — request shape (API_SPEC §12)", () => {
     const fetchMock = mockFetch(() => jsonResponse(OK, { status: 200 }));
     const controller = new AbortController();
     await sendPennyDraftMessage({
-      token: "t",
       message: "hi",
       draftState: {},
       signal: controller.signal,
@@ -111,7 +100,7 @@ describe("sendPennyDraftMessage — request shape (API_SPEC §12)", () => {
 
   it("returns the parsed { draft, narration, provider, applied }", async () => {
     mockFetch(() => jsonResponse(OK, { status: 200 }));
-    const res = await sendPennyDraftMessage({ token: "t", message: "hi", draftState: DRAFT_STATE });
+    const res = await sendPennyDraftMessage({ message: "hi", draftState: DRAFT_STATE });
     expect(res.provider).toBe("anthropic");
     expect(res.narration).toBe("Done. Year-1 share is now 8%.");
     expect(res.applied[0].changed[0]).toEqual({ field: "share_y1", was: "6", now: "8" });
@@ -123,14 +112,14 @@ describe("sendPennyDraftMessage — error classification (Spec B §8/§11)", () 
   it("classifies 409 as ai_disabled (opt-out → zero provider calls)", async () => {
     mockFetch(() => jsonResponse({ error: "ai_disabled" }, { status: 409 }));
     await expect(
-      sendPennyDraftMessage({ token: "t", message: "hi", draftState: {} }),
+      sendPennyDraftMessage({ message: "hi", draftState: {} }),
     ).rejects.toMatchObject({ kind: "ai_disabled", status: 409 });
   });
 
   it("classifies 503 as ai_unavailable", async () => {
     mockFetch(() => jsonResponse({ error: "ai_unavailable" }, { status: 503 }));
     await expect(
-      sendPennyDraftMessage({ token: "t", message: "hi", draftState: {} }),
+      sendPennyDraftMessage({ message: "hi", draftState: {} }),
     ).rejects.toMatchObject({ kind: "ai_unavailable", status: 503 });
   });
 
@@ -139,7 +128,7 @@ describe("sendPennyDraftMessage — error classification (Spec B §8/§11)", () 
       jsonResponse({ error: "rate_limited", retry_after_seconds: 30 }, { status: 429 }),
     );
     try {
-      await sendPennyDraftMessage({ token: "t", message: "hi", draftState: {} });
+      await sendPennyDraftMessage({ message: "hi", draftState: {} });
       throw new Error("should have thrown");
     } catch (e) {
       const err = e as PennyError;
@@ -156,7 +145,7 @@ describe("sendPennyDraftMessage — error classification (Spec B §8/§11)", () 
       ),
     );
     try {
-      await sendPennyDraftMessage({ token: "t", message: "set net profit to $9", draftState: {} });
+      await sendPennyDraftMessage({ message: "set net profit to $9", draftState: {} });
       throw new Error("should have thrown");
     } catch (e) {
       const err = e as PennyError;
@@ -168,14 +157,14 @@ describe("sendPennyDraftMessage — error classification (Spec B §8/§11)", () 
   it("classifies any other non-2xx as unknown (never a bare crash)", async () => {
     mockFetch(() => jsonResponse({ error: "forbidden" }, { status: 403 }));
     await expect(
-      sendPennyDraftMessage({ token: "t", message: "hi", draftState: {} }),
+      sendPennyDraftMessage({ message: "hi", draftState: {} }),
     ).rejects.toMatchObject({ kind: "unknown", status: 403 });
   });
 
   it("PennyError is a real Error instance (so callers can catch it)", async () => {
     mockFetch(() => jsonResponse({ error: "ai_disabled" }, { status: 409 }));
     await expect(
-      sendPennyDraftMessage({ token: "t", message: "hi", draftState: {} }),
+      sendPennyDraftMessage({ message: "hi", draftState: {} }),
     ).rejects.toBeInstanceOf(PennyError);
   });
 });

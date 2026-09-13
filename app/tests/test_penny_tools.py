@@ -78,10 +78,9 @@ def projection(client):
     return r.json()
 
 
-def _ctx(projection, *, can_mutate=True, version=1, token_key="owner_token", **extra):
+def _ctx(projection, *, can_mutate=True, version=1, **extra):
     return ToolContext(
         view_slug=projection["view_slug"],
-        bearer_token=projection[token_key],
         can_mutate=can_mutate,
         version=version,
         extra=extra,
@@ -416,12 +415,12 @@ def test_provenance_row_survives_a_later_manual_patch(client, store, projection)
     ctx = _ctx(projection)
     _run(store, ctx, "edit_cost_schedule",
          {"ops": [{"op": "add", "category": "Build-out", "month": 2, "amount": 50000}]})
-    slug, owner = projection["view_slug"], projection["owner_token"]
+    slug = projection["view_slug"]
     # a manual PATCH of an unrelated field must still succeed (no 422 on provenance)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.55"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r.status_code == 200, r.text
     sched = json.loads(store.get_projection_by_slug(slug)["inputs_json"])["cost_schedule"]
@@ -477,12 +476,12 @@ def test_mutate_with_unset_version_fails_closed_no_self_match(client, store, pro
     write is refused with the SAME 428 the manual PATCH raises (deps.parse_if_match):
     Penny hits the identical optimistic-concurrency wall as the UI, no privileged path.
     """
-    slug, owner = projection["view_slug"], projection["owner_token"]
+    slug = projection["view_slug"]
     # a concurrent human edit moves the version behind Penny's back (1 -> 2).
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.42"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     assert store.get_projection_by_slug(slug)["version"] == 2
@@ -506,7 +505,7 @@ def test_penny_loop_threads_grounded_version_no_lost_update(client, store, proje
     stale write a real 409 (surfaced for re-read/retry) instead of silently clobbering
     the human's edit — the lost-update Regression #9 / Mutation-Safety item 3 for AI.
     """
-    slug, owner = projection["view_slug"], projection["owner_token"]
+    slug = projection["view_slug"]
 
     # Penny grounds on what it read at the start of the turn: version 1, labor 0.60.
     grounding = _run(store, _ctx(projection, version=1), "read_projection", {})
@@ -516,7 +515,7 @@ def test_penny_loop_threads_grounded_version_no_lost_update(client, store, proje
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.42"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     assert store.get_projection_by_slug(slug)["version"] == 2
@@ -534,7 +533,7 @@ def test_penny_loop_threads_grounded_version_no_lost_update(client, store, proje
                             text="I hit a conflict — let me re-read the latest numbers.",
                             usage=Usage(1, 1))
     chain = _ScriptedChain(tool_call, done)
-    ctx = ToolContext(view_slug=slug, bearer_token=owner, can_mutate=True, version=None)
+    ctx = ToolContext(view_slug=slug, can_mutate=True, version=None)
     res = run_turn(
         user_message="set labor to 0.50",
         chain=chain,

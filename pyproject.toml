@@ -13,10 +13,6 @@ dependencies = [
     # path only. Must also be listed in the Dockerfile pip install (test_dockerfile_deps).
     "python-docx>=1.1",
     "bleach",
-    # Clerk satellite auth: networkless RS256 JWKS-Bearer verify (no Clerk secret).
-    # The [crypto] extra pulls in `cryptography` for RS256 (required at runtime
-    # whenever CLERK_ENABLED is on). See app/clerk/verify.py.
-    "pyjwt[crypto]>=2.8",
 ]
 
 [project.optional-dependencies]

@@ -22,17 +22,17 @@ import pytest
 from app.tests.conftest import create_projection
 
 
-def _hdr(token, version):
-    return {"Authorization": f"Bearer {token}", "If-Match": str(version)}
+def _hdr(version):
+    return {"If-Match": str(version)}
 
 
 # ---- (1) a numeric labor_pct (the deployed assumptions wire shape) saves ---------
 def test_patch_assumptions_labor_pct_json_number_ok(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": 0.45}},  # JSON number, not "0.45"
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
     assert r.json()["settings"]["laborPct"] == pytest.approx(0.45)
@@ -40,11 +40,11 @@ def test_patch_assumptions_labor_pct_json_number_ok(client):
 
 # ---- (2) a numeric donation_value (the deployed inputs wire shape) saves ---------
 def test_patch_inputs_donation_value_json_number_ok(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"donation_value": 60}},  # JSON number, not "60"
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
     assert r.json()["settings"]["donationValue"] == pytest.approx(60)
@@ -55,7 +55,7 @@ def test_patch_inputs_donation_value_json_number_ok(client):
 # whole row un-editable pre-fix. Plant one and PATCH an UNRELATED field.
 def test_stored_float_assumptions_row_patchable(client_store):
     client, store = client_store
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     row = store.get_projection_by_slug(slug)
     a = json.loads(row["assumptions_json"])
     a["labor_pct"] = 0.45  # a real JSON FLOAT, as a deployed-era PATCH would have stored
@@ -67,7 +67,7 @@ def test_stored_float_assumptions_row_patchable(client_store):
     r = client.patch(
         f"/api/projections/{slug}",
         json={"name": "Renamed"},  # unrelated field — must not trip the revalidation
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
     # the recompute preserves the stored 0.45 (the float survives the coercion round-trip)
@@ -77,7 +77,7 @@ def test_stored_float_assumptions_row_patchable(client_store):
 # ---- (3b) the same for a stored-float INPUTS row (donation_value) -----------------
 def test_stored_float_inputs_row_patchable(client_store):
     client, store = client_store
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     row = store.get_projection_by_slug(slug)
     i = json.loads(row["inputs_json"])
     i["donation_value"] = 60.0  # a real JSON FLOAT
@@ -89,7 +89,7 @@ def test_stored_float_inputs_row_patchable(client_store):
     r = client.patch(
         f"/api/projections/{slug}",
         json={"name": "Renamed"},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
     assert r.json()["settings"]["donationValue"] == pytest.approx(60)
@@ -97,22 +97,22 @@ def test_stored_float_inputs_row_patchable(client_store):
 
 # ---- (4) bounds are STILL enforced on a coerced number (not loosened) ------------
 def test_patch_labor_pct_number_out_of_range_still_422(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": 5.0}},  # 500% as a NUMBER — still rejected
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 422, r.text
 
 
 # ---- (5) a bool must NOT pass as a number (bool is an int subclass) ---------------
 def test_patch_labor_pct_bool_422(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": True}},  # JSON true — never a valid pct
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 422, r.text
 
@@ -127,12 +127,12 @@ def test_patch_labor_pct_bool_422(client):
 # CORRECTLY; it is echoed VERBATIM (as the string sent) since the engine stores the raw
 # knob. VERIFIED + pinned below (Penny/FE normally send true ints, which echo as ints).
 def test_patch_reserve_buffer_intlike_string_ok(client):
-    slug, owner, version, body = create_projection(client)
+    slug, version, body = create_projection(client)
     before_cap = body["metrics"]["capital"]["raw"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"reserve_buffer": "40000"}},  # int-like string
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text  # accepted, never 422
     vm = r.json()
@@ -143,11 +143,11 @@ def test_patch_reserve_buffer_intlike_string_ok(client):
 
 
 def test_patch_donations_per_hh_intlike_string_ok(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"donations_per_hh": "4"}},  # int-like string
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text  # accepted, never 422
     assert r.json()["settings"]["donationsPerHouseholdPerYear"] == "4"  # verbatim
@@ -155,11 +155,11 @@ def test_patch_donations_per_hh_intlike_string_ok(client):
 
 # ---- and an actual INT for those knobs echoes as an int (the FE/Penny normal path)
 def test_patch_reserve_buffer_int_ok(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"reserve_buffer": 40000, "donations_per_hh": 4}},
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
     s = r.json()["settings"]
@@ -170,7 +170,7 @@ def test_patch_reserve_buffer_int_ok(client):
 # ---- (6) THE INTEGRATION CLASS THAT WAS MISSING: the FE's exact numeric buildBody
 # shape for EVERY legacy driver, in ONE body, saves and echoes each -----------------
 def test_patch_fe_numeric_buildbody_all_legacy_drivers(client):
-    slug, owner, version, _ = create_projection(client)
+    slug, version, _ = create_projection(client)
     r = client.patch(
         f"/api/projections/{slug}",
         json={
@@ -191,7 +191,7 @@ def test_patch_fe_numeric_buildbody_all_legacy_drivers(client):
                 "donation_value": 65,
             },
         },
-        headers=_hdr(owner, version),
+        headers=_hdr(version),
     )
     assert r.status_code == 200, r.text
     s = r.json()["settings"]

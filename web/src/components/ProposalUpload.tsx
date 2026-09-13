@@ -16,8 +16,6 @@ import { PennyError, uploadProposal } from "../api/penny";
 const BRAND = "#35644f";
 
 export interface ProposalUploadProps {
-  /** The caller's owner/edit Bearer token (passed to the upload, header-only). */
-  token: string;
   /** Disable the control while a turn is in flight. */
   disabled?: boolean;
   /** When set, the chip shows this attached filename + a remove control. */
@@ -42,7 +40,6 @@ function friendlyUploadError(err: unknown): string {
 
 /** The PDF attach affordance hosted in the Penny composer (Spec §5.1). */
 export function ProposalUpload({
-  token,
   disabled = false,
   attachedName,
   onUploaded,
@@ -56,7 +53,7 @@ export function ProposalUpload({
     async (file: File) => {
       setBusy(true);
       try {
-        const res = await uploadProposal({ token, file });
+        const res = await uploadProposal({ file });
         onUploaded(res.proposalRef, res.filename);
       } catch (err) {
         onError?.(friendlyUploadError(err));
@@ -65,7 +62,7 @@ export function ProposalUpload({
         if (inputRef.current) inputRef.current.value = ""; // allow re-selecting same file
       }
     },
-    [token, onUploaded, onError],
+    [onUploaded, onError],
   );
 
   if (attachedName) {

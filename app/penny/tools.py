@@ -27,8 +27,6 @@ The tools (Spec B §6.2):
 
 Guardrails enforced here (SECURITY §6.3):
 
-- **Capability-gating** — a view-only caller (``ctx.can_mutate is False``) gets an
-  answer-only refusal; a bad token still hits the 403 wall inside the service.
 - **Figure-strip** — a *computed* money/percent figure an LLM puts in a mutate-tool
   argument (vs a raw user input value) is stripped/rejected before any write, so no
   LLM figure ever reaches the data (extends the N2 rule to the tool loop).
@@ -48,9 +46,7 @@ from fastapi import HTTPException
 
 from app import config, ratelimit
 from app.aisafety import is_computed_figure_token
-from app.deps import hash_token, resolve_clerk_identity
 from app.feedback import dedup
-from app.feedback.creator import creator_fields_from_claims
 from app.feedback.redact import (
     DESCRIPTION_CAP,
     TITLE_CAP,
@@ -227,7 +223,7 @@ def _apply(
     if_match = ctx.version
     try:
         vm, new_version, _name = apply_projection_patch(
-            row=row, body=body, store=store, token=ctx.bearer_token,
+            row=row, body=body, store=store,
             if_match=if_match, actor="penny", change_summary=change_summary)
     except HTTPException as exc:
         return _relay(exc)
@@ -552,33 +548,20 @@ def _edit_cost_schedule(store: Store):
 # (see ``build_registry``), so with the flag off Penny can never auto-file in prod.
 #
 # Guardrails (mirrors the public /api/feedback abuse controls, IDEA_FAB §4):
-#   * per-user (hashed bearer / Clerk sub) AND per-IP rate limit;
+#   * per-IP rate limit (this project has no authentication, owner decision 2026-09-13);
 #   * server-side DEDUP on the SHA-256 of the REDACTED body, per identity/window.
-# The label attribution; the creator_* identity rides the feedback ROW only.
-_PENNY_FEEDBACK_USER_LIMIT = 5   # per owner/Clerk filer per hour (primary brake)
 _PENNY_FEEDBACK_IP_LIMIT = 20    # coarse per-IP safety bound (shared proxy, #189)
 _PENNY_FEEDBACK_WINDOW_SECONDS = 3600
 _PENNY_LABEL = "filed-by-penny"
 
 
-def _penny_feedback_identity(
-    ctx: ToolContext, creator: dict, ip: str | None
-) -> tuple[str, str | None]:
-    """Resolve (dedup_identity, rate_limit_token_key) — server-only, never logged.
+def _penny_feedback_identity(ip: str | None) -> str:
+    """Resolve the dedup identity — server-only, never logged.
 
-    The rate-limit token scope is the HASHED bearer (never the raw secret), matching
-    the public feedback path; an anonymous caller falls back to the IP-only brake.
-    The dedup identity is the most stable server-only id available so the same filer
-    re-filing the same redacted body is caught: hashed token > Clerk sub > IP > anon.
+    This project has no authentication, so the IP is the most stable identity
+    available; falls back to "anon" when even that is missing.
     """
-    token_key = hash_token(ctx.bearer_token) if ctx.bearer_token else None
-    dedup_identity = (
-        token_key
-        or creator.get("creator_clerk_user_id")
-        or ip
-        or "anon"
-    )
-    return dedup_identity, token_key
+    return ip or "anon"
 
 
 def _file_product_feedback(store: Store):
@@ -602,17 +585,12 @@ def _file_product_feedback(store: Store):
         title = redact_text(str(args.get("title") or ""), own_slug=own_slug, cap=TITLE_CAP)
         redacted_body = redact_text(description, own_slug=own_slug, cap=DESCRIPTION_CAP)
 
-        # 2) Server-only creator identity from the verified Clerk JWT CLAIMS (no Clerk
-        #    Backend API, no secret — finding C1). It rides the ROW only, NEVER the issue.
+        # This project has no authentication (owner decision, 2026-09-13) — there is
+        # no creator identity to attach to the feedback row.
         creator: dict = {}
-        if ctx.bearer_token:
-            ident = resolve_clerk_identity(f"Bearer {ctx.bearer_token}")
-            if ident is not None:
-                creator = creator_fields_from_claims(
-                    ident.claims, clerk_user_id=ident.clerk_user_id)
 
         ip = ctx.extra.get("client_ip") if isinstance(ctx.extra, dict) else None
-        dedup_identity, token_key = _penny_feedback_identity(ctx, creator, ip)
+        dedup_identity = _penny_feedback_identity(ip)
 
         # 3) Dedup on the redacted body (read-only) — a duplicate is a friendly no-op,
         #    not a second issue. Checked BEFORE the rate limit so it costs no budget.
@@ -624,10 +602,10 @@ def _file_product_feedback(store: Store):
                     "message": ("I've already logged that one for the team — no need "
                                 "to file it twice.")}
 
-        # 4) Rate limit (per-user primary + per-IP coarse), BEFORE any GitHub/DB work.
+        # 4) Rate limit (per-IP), BEFORE any GitHub/DB work.
         allowed, retry_after = ratelimit.check(
-            "penny_feedback", ip=ip, token=token_key,
-            ip_limit=_PENNY_FEEDBACK_IP_LIMIT, token_limit=_PENNY_FEEDBACK_USER_LIMIT,
+            "penny_feedback", ip=ip,
+            ip_limit=_PENNY_FEEDBACK_IP_LIMIT,
             window_seconds=_PENNY_FEEDBACK_WINDOW_SECONDS)
         if not allowed:
             return {"filed": False, "rate_limited": True, "status": 429,

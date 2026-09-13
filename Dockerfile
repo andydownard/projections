@@ -22,8 +22,7 @@ COPY pyproject.toml ./
 # here too — scripts/test_dockerfile_deps.py is a CI guard that fails if they drift.
 # (bleach was missing here once and crash-looped a prod deploy on `import bleach`.)
 RUN pip install --no-cache-dir \
-    "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl "python-docx>=1.1" bleach \
-    "pyjwt[crypto]>=2.8"
+    "fastapi>=0.110" "uvicorn[standard]" "pydantic>=2" httpx openpyxl "python-docx>=1.1" bleach
 
 # --- Frontend build ---
 FROM node:22-slim AS web
@@ -31,12 +30,6 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
 RUN npm install --no-audit --no-fund
 COPY web/ ./
-# Vite inlines VITE_* at build time, so the Clerk publishable key MUST be present
-# as an ARG/ENV before `npm run build` or the satellite compiles out to `undefined`
-# (ship-dark). Railway auto-passes the declared service var of the same name as a
-# build ARG; with it unset the build is byte-for-byte today's capability-token app.
-ARG VITE_CLERK_PUBLISHABLE_KEY
-ENV VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY
 RUN npm run build
 
 # --- Final image ---

@@ -57,13 +57,13 @@ def _create(client):
 
 def test_pin_via_set_surfaces_override_with_calc_and_affected(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"overrides": {"set": [
             {"node": "Payroll", "year": 2, "value": "250000", "note": "signed 2 hires"}
         ]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     vm = r.json()
@@ -84,13 +84,13 @@ def test_pin_via_set_surfaces_override_with_calc_and_affected(client):
 
 def test_pin_derived_node_rejected_422(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"overrides": {"set": [
             {"node": "Net income", "year": 1, "value": "999999"}
         ]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 422, r.text
     body = r.json().get("detail", r.json())
@@ -102,7 +102,7 @@ def test_pin_derived_node_rejected_422(client):
 
 def test_set_equal_to_calculated_auto_clears(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     # read the calculated Payroll Y1 from the current view-model
     cur = client.get(f"/api/projections/{slug}").json()
     payroll_y1 = [r for r in cur["rows"] if r["label"] == "Payroll"][0]["y1"]["raw"]
@@ -111,7 +111,7 @@ def test_set_equal_to_calculated_auto_clears(client):
         json={"overrides": {"set": [
             {"node": "Payroll", "year": 1, "value": str(payroll_y1)}
         ]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     vm = r.json()
@@ -123,20 +123,20 @@ def test_set_equal_to_calculated_auto_clears(client):
 
 def test_clear_removes_pin(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r1 = client.patch(
         f"/api/projections/{slug}",
         json={"overrides": {"set": [
             {"node": "Payroll", "year": 2, "value": "250000", "note": "n"}
         ]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r1.status_code == 200
     assert len(r1.json()["overrides"]) == 1
     r2 = client.patch(
         f"/api/projections/{slug}",
         json={"overrides": {"clear": [{"node": "Payroll", "year": 2}]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r2.status_code == 200, r2.text
     assert r2.json()["overrides"] == []
@@ -145,14 +145,14 @@ def test_clear_removes_pin(client):
 def test_pin_no_back_solve_upstream_unchanged(client):
     """Pinning Payroll must not mutate the upstream share input (no back-solve)."""
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     before = client.get(f"/api/projections/{slug}").json()["settings"]["shareY2"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"overrides": {"set": [
             {"node": "Payroll", "year": 2, "value": "250000"}
         ]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     after = r.json()["settings"]["shareY2"]

@@ -22,8 +22,6 @@ import {
 } from "../api/penny";
 import { newSessionToken, placesAutocomplete, placesResolve } from "../api/places";
 import type { ViewModel } from "../api/viewModel";
-import { setEditToken, setOwnerToken } from "../api/projections";
-import { authHeader } from "../api/authHeader";
 import { PennyDraftAssistant } from "../components/PennyDrawer";
 import { SidePanelProvider } from "../components/sidePanels";
 import {
@@ -70,15 +68,6 @@ const DRAFT_FIELD_LABELS: Record<string, string> = {
 
 function labelDraftField(field: string): string {
   return DRAFT_FIELD_LABELS[field] ?? field;
-}
-
-/** Mint an EPHEMERAL session Bearer for the wizard's /penny/draft calls. There is no
- *  projection (and no owner/edit token) yet, so this is only a rate-limit id; it is
- *  never persisted, never put in a URL/log, and dropped when the wizard unmounts. */
-function makeWizardDraftToken(): string {
-  const c = globalThis.crypto as Crypto | undefined;
-  if (c && typeof c.randomUUID === "function") return `wizdraft-${c.randomUUID()}`;
-  return `wizdraft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 /** Plain-language copy for a proposal upload / parse failure (#32). The manual grid +
@@ -233,8 +222,6 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
   // #32 — the contextual proposal upload on the startup-costs step.
   const [proposalBusy, setProposalBusy] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
-  // One ephemeral Bearer for the whole wizard session's /penny/draft calls.
-  const draftToken = useRef<string>(makeWizardDraftToken());
 
   // A polite live region that announces the blocking Generate transition to assistive
   // tech (the only async transition that warrants a between-steps spinner, #15).
@@ -339,9 +326,8 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
     setProposalBusy(true);
     setProposalError(null);
     try {
-      const { proposalRef } = await uploadProposal({ token: draftToken.current, file });
+      const { proposalRef } = await uploadProposal({ file });
       const resp = await sendPennyDraftMessage({
-        token: draftToken.current,
         message:
           "I uploaded a consultant proposal PDF. Please read it and set up the timed startup " +
           "cost schedule and the grand-opening month from it.",
@@ -393,16 +379,11 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
       } else {
         body.trade_area = { ...body.trade_area, households_source: "manual" };
       }
-      // Send the owner identity (B3 data-loss fix): a signed-in Clerk owner sends
-      // their JWT; an EXISTING capability owner sends their localStorage token so a
-      // 2nd+ create JOINS that same workspace instead of minting a fresh token that
-      // would orphan the prior projection. Capture whether any owner identity already
-      // existed BEFORE this create so we only persist a genuinely new token.
-      const owner = await authHeader();
-      const hadOwnerIdentity = Boolean(owner.Authorization);
+      // This project has no authentication (owner decision, 2026-09-13) — a plain
+      // POST, nothing to attach or persist.
       const resp = await fetch("/api/projections", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...owner },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!resp.ok) {
@@ -411,10 +392,7 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
         );
         return;
       }
-      const created = (await resp.json()) as ViewModel & {
-        owner_token?: string;
-        edit_token?: string;
-      };
+      const created = (await resp.json()) as ViewModel;
       // A 2xx with no view_slug is still a failure to navigate on (the
       // /p/undefined/edit bug) — treat it the same as a non-ok response.
       if (!created.view_slug) {
@@ -422,21 +400,6 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
           "Couldn't generate your projection — please try again.",
         );
         return;
-      }
-      // Persist a minted owner token ONLY when the request went out anonymous (no
-      // pre-existing owner). Never overwrite an existing owner token — that single
-      // localStorage slot is the only handle on the prior projection, and clobbering
-      // it orphans that projection (the B3 data-loss bug). A Clerk-owned create also
-      // returns a token, but the row is Clerk-scoped, so we likewise do not store it.
-      if (created.owner_token && !hadOwnerIdentity) {
-        setOwnerToken(created.owner_token);
-      }
-      // EPIC SHARE (Decision 12): retain the one-time edit token so the Share panel can
-      // later build the editable deep link. The server returns it once and keeps only a
-      // hash, so this localStorage slot (owner's device) is the only handle on it. Same
-      // secrecy posture as the owner token — never a URL path/query, never logged.
-      if (created.edit_token && created.view_slug) {
-        setEditToken(created.view_slug, created.edit_token);
       }
       // Task 2.6: the draft became a real projection — clear the persisted local draft
       // so a return to /wizard starts clean (nothing left to resume). Success path ONLY.
@@ -645,7 +608,6 @@ export function CreateProjectionPage({ aiOff = false, step = null }: CreateProje
             whole manual wizard stays intact (CLAUDE.md "AI opt-out works end-to-end"). */}
         <SidePanelProvider>
           <PennyDraftAssistant
-            token={draftToken.current}
             aiEnabled={!aiOff}
             buildDraftState={() => wizardToDraftState(wiz)}
             onApplyDraft={onApplyDraft}

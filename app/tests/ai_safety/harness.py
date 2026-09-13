@@ -77,28 +77,16 @@ def tool_resp(name, args, *, call_id="tu_1", provider="anthropic", text="", in_t
 
 
 # ------------------------------------------------------------------ tool context
-_USE_PROJECTION_TOKEN = object()
-
-
-def make_ctx(
-    projection,
-    *,
-    can_mutate=True,
-    version=1,
-    token_key="owner_token",
-    bearer=_USE_PROJECTION_TOKEN,
-    **extra,
-):
+def make_ctx(projection, *, can_mutate=True, version=1, **extra):
     """Build a :class:`ToolContext` for a created projection.
 
-    ``bearer`` defaults to the projection's ``token_key`` token; pass ``bearer=None``
-    (or a wrong token) to exercise the 403 real-mutation-wall backstop independent of
-    the ``can_mutate`` capability flag.
+    This project has no authentication (owner decision, 2026-09-13) — there is no
+    bearer/token concept left on ``ToolContext``. ``can_mutate`` is still a real
+    field on the tool-level guard (defaults True); pass ``can_mutate=False`` to
+    exercise Penny's own answer-only degrade path.
     """
-    token = projection[token_key] if bearer is _USE_PROJECTION_TOKEN else bearer
     return ToolContext(
         view_slug=projection["view_slug"],
-        bearer_token=token,
         can_mutate=can_mutate,
         version=version,
         extra=extra,

@@ -1,13 +1,9 @@
-// web/src/components/ShareModal.test.tsx — the unified Share affordance (EPIC SHARE).
+// web/src/components/ShareModal.test.tsx — the Share affordance (EPIC SHARE).
 //
-// Decision 12: a read-only deep link (view_slug) AND an editable link (edit token in
-// the URL FRAGMENT). Hard rules under test:
-//   • the read-only link is the /p/<slug> view_slug URL (no token),
-//   • the editable link carries the edit token in the FRAGMENT (#…), never the path
-//     or query (Regression #10 — secret in URL path/query/log),
-//   • copy → useToast("Link copied"),
-//   • absent edit token ⇒ no editable link is shown and no token is fabricated,
-//   • the owner token is NEVER surfaced.
+// This project has no authentication (owner decision, 2026-09-13): there is only
+// one link — /p/<slug> — fully viewable and editable by anyone. Hard rules under
+// test: the link is the plain /p/<slug> URL, copy → useToast("Link copied"), and a
+// rejected/absent clipboard write never lies about success.
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,10 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ShareModal } from "./ShareModal";
 import { ToastProvider } from "./Toast";
 
-function renderModal(props: { slug: string; editToken: string | null; onClose?: () => void }) {
+function renderModal(props: { slug: string; onClose?: () => void }) {
   return render(
     <ToastProvider>
-      <ShareModal slug={props.slug} editToken={props.editToken} onClose={props.onClose ?? (() => {})} />
+      <ShareModal slug={props.slug} onClose={props.onClose ?? (() => {})} />
     </ToastProvider>,
   );
 }
@@ -44,58 +40,28 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("ShareModal — links", () => {
-  it("renders the read-only view_slug link (no token in it)", () => {
-    renderModal({ slug: "p_8x", editToken: "edit_secret" });
-    const link = screen.getByTestId("share-readonly-link") as HTMLInputElement;
+describe("ShareModal — link", () => {
+  it("renders the plain view_slug link", () => {
+    renderModal({ slug: "p_8x" });
+    const link = screen.getByTestId("share-link") as HTMLInputElement;
     expect(link.value).toBe(`${window.location.origin}/p/p_8x`);
-    // The read-only link never carries the edit token.
-    expect(link.value).not.toContain("edit_secret");
-  });
-
-  it("renders the editable link with the edit token in the FRAGMENT, not the path/query", () => {
-    renderModal({ slug: "p_8x", editToken: "edit_secret" });
-    const link = screen.getByTestId("share-edit-link") as HTMLInputElement;
-    expect(link.value).toBe(`${window.location.origin}/p/p_8x/edit#edit_secret`);
-    // Regression #10: the secret rides the fragment ONLY — never the path or query.
-    const url = new URL(link.value);
-    expect(url.hash).toBe("#edit_secret");
-    expect(url.pathname).not.toContain("edit_secret");
-    expect(url.search).toBe("");
-  });
-
-  it("hides the editable link and shows an unavailable note when no edit token is held", () => {
-    renderModal({ slug: "p_8x", editToken: null });
-    expect(screen.queryByTestId("share-edit-link")).not.toBeInTheDocument();
-    expect(screen.getByTestId("share-edit-unavailable")).toBeInTheDocument();
-    // The read-only link is still offered.
-    expect(screen.getByTestId("share-readonly-link")).toBeInTheDocument();
   });
 });
 
 describe("ShareModal — copy", () => {
-  it("copies the read-only link and toasts on success", async () => {
+  it("copies the link and toasts on success", async () => {
     const user = userEvent.setup();
     installClipboard(); // override user-event's own clipboard stub
-    renderModal({ slug: "p_8x", editToken: "edit_secret" });
-    await user.click(screen.getByTestId("share-copy-readonly"));
+    renderModal({ slug: "p_8x" });
+    await user.click(screen.getByTestId("share-copy"));
     expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/p/p_8x`);
-    expect(await screen.findByTestId("toast")).toHaveTextContent(/link copied/i);
-  });
-
-  it("copies the editable (fragment) link and toasts on success", async () => {
-    const user = userEvent.setup();
-    installClipboard(); // override user-event's own clipboard stub
-    renderModal({ slug: "p_8x", editToken: "edit_secret" });
-    await user.click(screen.getByTestId("share-copy-edit"));
-    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/p/p_8x/edit#edit_secret`);
     expect(await screen.findByTestId("toast")).toHaveTextContent(/link copied/i);
   });
 });
 
 describe("ShareModal — a11y + dismissal", () => {
   it("is a labelled modal dialog", () => {
-    renderModal({ slug: "p_8x", editToken: null });
+    renderModal({ slug: "p_8x" });
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(dialog).toHaveAccessibleName(/share/i);
@@ -104,16 +70,9 @@ describe("ShareModal — a11y + dismissal", () => {
   it("closes on the Close button", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    renderModal({ slug: "p_8x", editToken: null, onClose });
+    renderModal({ slug: "p_8x", onClose });
     await user.click(screen.getByRole("button", { name: /close/i }));
     expect(onClose).toHaveBeenCalled();
-  });
-
-  it("never renders the owner token", () => {
-    localStorage.setItem("projections.owner_token", "OWNER-SUPER-SECRET");
-    renderModal({ slug: "p_8x", editToken: "edit_secret" });
-    expect(document.body.textContent).not.toContain("OWNER-SUPER-SECRET");
-    localStorage.clear();
   });
 });
 
@@ -132,8 +91,8 @@ describe("ShareModal — clipboard fallback", () => {
       configurable: true,
       writable: true,
     });
-    renderModal({ slug: "p_8x", editToken: null });
-    await user.click(screen.getByTestId("share-copy-readonly"));
+    renderModal({ slug: "p_8x" });
+    await user.click(screen.getByTestId("share-copy"));
     expect(await screen.findByText(/press ctrl\+c to copy/i)).toBeInTheDocument();
     expect(screen.queryByTestId("toast")).not.toBeInTheDocument();
   });
@@ -154,39 +113,27 @@ describe("ShareModal — copy honesty (rejects don't lie)", () => {
     return writeText;
   }
 
-  it("does not toast on a rejected read-only copy; shows a manual-copy hint instead", async () => {
+  it("does not toast on a rejected copy; shows a manual-copy hint instead", async () => {
     const user = userEvent.setup();
     const writeText = installRejectingClipboard();
-    renderModal({ slug: "p_8x", editToken: "edit_secret" });
-    await user.click(screen.getByTestId("share-copy-readonly"));
+    renderModal({ slug: "p_8x" });
+    await user.click(screen.getByTestId("share-copy"));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
-    expect(await screen.findByTestId("share-copy-readonly-manual")).toHaveTextContent(
+    expect(await screen.findByTestId("share-copy-manual")).toHaveTextContent(
       /press ctrl\+c to copy/i,
     );
     expect(screen.queryByTestId("toast")).not.toBeInTheDocument();
   });
 
-  it("does not toast on a rejected editable-link copy; shows a manual-copy hint instead", async () => {
-    const user = userEvent.setup();
-    const writeText = installRejectingClipboard();
-    renderModal({ slug: "p_8x", editToken: "edit_secret" });
-    await user.click(screen.getByTestId("share-copy-edit"));
-    await waitFor(() => expect(writeText).toHaveBeenCalled());
-    expect(await screen.findByTestId("share-copy-edit-manual")).toHaveTextContent(
-      /press ctrl\+c to copy/i,
-    );
-    expect(screen.queryByTestId("toast")).not.toBeInTheDocument();
-  });
-
-  it("clears the manual-copy hint once a later copy of the same link succeeds", async () => {
+  it("clears the manual-copy hint once a later copy succeeds", async () => {
     const user = userEvent.setup();
     installRejectingClipboard();
-    renderModal({ slug: "p_8x", editToken: "edit_secret" });
-    await user.click(screen.getByTestId("share-copy-readonly"));
-    await screen.findByTestId("share-copy-readonly-manual");
+    renderModal({ slug: "p_8x" });
+    await user.click(screen.getByTestId("share-copy"));
+    await screen.findByTestId("share-copy-manual");
     installClipboard(); // re-install a resolving clipboard
-    await user.click(screen.getByTestId("share-copy-readonly"));
+    await user.click(screen.getByTestId("share-copy"));
     await screen.findByTestId("toast");
-    expect(screen.queryByTestId("share-copy-readonly-manual")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("share-copy-manual")).not.toBeInTheDocument();
   });
 });

@@ -15,15 +15,14 @@ def test_shared_client_serves_health(client):
 
 def test_shared_client_store_is_client_plus_store(client_store):
     client, store = client_store
-    slug, owner_token, version, body = create_projection(client)
+    slug, version, body = create_projection(client)
     # The row landed in THIS client's store (same in-memory SqliteStore).
     assert store.get_projection_by_slug(slug) is not None
 
 
-def test_create_projection_returns_slug_token_version_body(client):
-    slug, owner_token, version, body = create_projection(client)
+def test_create_projection_returns_slug_version_body(client):
+    slug, version, body = create_projection(client)
     assert slug and slug == body["view_slug"]
-    assert owner_token == body["owner_token"]
     assert version == 1 == body["version"]
     assert body["reco"]["tag"] in {
         "proceed", "revise", "find_cheaper_rent", "raise_cash", "delay",
@@ -31,7 +30,7 @@ def test_create_projection_returns_slug_token_version_body(client):
 
 
 def test_create_projection_overrides_replace_top_level_keys(client):
-    slug, owner_token, version, body = create_projection(
+    slug, version, body = create_projection(
         client, name="Override Name")
     assert body["name"] == "Override Name"
     # The canonical template must not be mutated by per-call overrides.

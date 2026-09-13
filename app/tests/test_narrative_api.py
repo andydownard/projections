@@ -5,6 +5,8 @@
   - POST  …/narrative:regenerate -> regenerate from computed_json, grounded
   - GET   …/packet               -> board/funder/advisor packet (terms-gated)
 
+This project has no authentication (owner decision, 2026-09-13).
+
 HARD invariants tested adversarially:
   - hallucinated-figure rejection: regenerate w/ ungrounded prose -> 409, prior
     narrative NOT overwritten.
@@ -88,21 +90,15 @@ def test_get_narrative_empty_when_none(client):
 
 
 # ----------------------------------------------------------------- PUT save
-def test_put_narrative_sanitizes_and_requires_edit(client):
+def test_put_narrative_sanitizes(client):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
-    # view-only (no token) cannot write
-    r = client.put(f"/api/projections/{slug}/narrative",
-                   json={"body_md": "<p>hi</p>"}, headers={"If-Match": "1"})
-    assert r.status_code == 403
-
-    # edit token: stored sanitized
+    slug = created["view_slug"]
     dirty = '<p>ok</p><script>steal(localStorage.token)</script>' \
             '<a href="javascript:alert(1)" onclick="x()">x</a>'
     r = client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": dirty},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     saved = r.json()["body_md"]
@@ -121,10 +117,10 @@ def test_put_narrative_sanitizes_and_requires_edit(client):
 # -------------------------------------------------------- regenerate grounded
 def test_regenerate_produces_grounded_prose(client):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -138,12 +134,12 @@ def test_regenerate_produces_grounded_prose(client):
 
 def test_regenerate_rejects_hallucinated_figure_without_clobbering(client, monkeypatch):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     # seed a saved narrative first (a successful narrative write bumps the version 1->2)
     client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": "<p>original prose</p>"},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     # force the generator to emit an ungrounded figure
     import app.routers.projections as proj
@@ -152,7 +148,7 @@ def test_regenerate_rejects_hallucinated_figure_without_clobbering(client, monke
         lambda vm, role=None: "The store needs $9,999,999 in capital.")
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r.status_code == 409, r.text
     assert r.json()["detail"]["error"] == "grounding_failed"
@@ -165,7 +161,7 @@ def test_regenerate_rejects_hallucinated_figure_without_clobbering(client, monke
 # ----------------------------------------------------------- stale detection
 def test_stale_detection_without_clobbering_edits(client):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     vm, _ = _grounded_figures(client, slug)
     cap = vm["metrics"]["capital"]["display"]
     # save grounded edited prose
@@ -173,7 +169,7 @@ def test_stale_detection_without_clobbering_edits(client):
     client.put(
         f"/api/projections/{slug}/narrative",
         json={"body_md": body},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     g = client.get(f"/api/projections/{slug}/narrative").json()
     assert g["stale"] is False
@@ -183,7 +179,7 @@ def test_stale_detection_without_clobbering_edits(client):
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"share_y1": "0.12"}},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r.status_code == 200, r.text
 
@@ -204,7 +200,7 @@ def _set_ai_opt_out(store, slug):
 
 def test_ai_opt_out_blocks_regenerate_but_not_compute_or_export(client, store):
     created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
+    slug = created["view_slug"]
     _set_ai_opt_out(store, slug)
 
     g = client.get(f"/api/projections/{slug}/narrative").json()
@@ -212,7 +208,7 @@ def test_ai_opt_out_blocks_regenerate_but_not_compute_or_export(client, store):
 
     r = client.post(
         f"/api/projections/{slug}/narrative:regenerate",
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 409
     assert r.json()["detail"]["error"] == "ai_disabled"

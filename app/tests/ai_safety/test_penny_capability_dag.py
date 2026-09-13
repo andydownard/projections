@@ -1,9 +1,10 @@
 """PE11 §11 — Capability-gating + DAG/domain guards (CI-blocking; issue #130).
 
-Invariants:
-- *A view-only caller's Penny cannot mutate* (the mutate tools refuse without an edit
-  capability), and the real ``apply_projection_patch`` 403 wall **backstops** the
-  capability flag — Penny is never a privileged writer.
+This project has no authentication (owner decision, 2026-09-13), so the former
+"a non-edit token hits the 403 wall" backstop tests are gone — every caller can
+mutate now. What remains:
+- *A view-only caller's Penny cannot mutate* — this is now a pure tool-level guard
+  (``ctx.can_mutate``), Penny's own answer-only degrade, not an auth wall.
 - *A non-pinnable target → 422 relayed in plain language, no mutation*, and an illegal
   override / out-of-domain input is rejected by the **same server validation the manual
   PATCH uses** (single rejection authority — Penny carries intents through the same wall).
@@ -48,28 +49,9 @@ def test_view_only_penny_cannot_mutate_through_the_loop(store, projection):
     assert store.get_projection_by_slug(projection["view_slug"])["version"] == 1
 
 
-def test_capability_flag_is_backstopped_by_the_403_wall(store, projection):
-    """Even if ``can_mutate`` were wrongly True, a non-edit token hits the 403 wall."""
-    ctx = make_ctx(projection, can_mutate=True, bearer=None)  # no edit capability
-    res = _loop_tool(store, ctx, "set_assumption", {"name": "labor_pct", "value": "0.5"})
-    relayed = res.tool_invocations[0].result
-    assert relayed["status"] == 403
-    assert relayed["error"] == "forbidden"
-    row = store.get_projection_by_slug(projection["view_slug"])
-    assert row["version"] == 1
-    assert store.list_revisions(row["id"]) == []
-
-
-def test_wrong_owner_token_cannot_mutate_via_penny(store, projection):
-    ctx = make_ctx(projection, can_mutate=True, bearer="not-a-real-token")
-    res = _loop_tool(store, ctx, "set_input", {"field": "households", "value": "40000"})
-    assert res.tool_invocations[0].result["status"] == 403
-    assert store.get_projection_by_slug(projection["view_slug"])["version"] == 1
-
-
-def test_edit_token_caller_can_mutate(store, projection):
-    """Positive control: the edit capability DOES let Penny mutate (gate not over-broad)."""
-    ctx = make_ctx(projection, can_mutate=True, token_key="edit_token")
+def test_can_mutate_caller_can_mutate(store, projection):
+    """Positive control: ``can_mutate=True`` DOES let Penny mutate (gate not over-broad)."""
+    ctx = make_ctx(projection, can_mutate=True)
     res = _loop_tool(store, ctx, "set_assumption", {"name": "labor_pct", "value": "0.5"})
     assert res.tool_invocations[0].result["applied"] is True
     row = store.get_projection_by_slug(projection["view_slug"])
@@ -91,7 +73,7 @@ def test_non_pinnable_target_relayed_as_422_through_the_loop(store, projection):
 
 
 def test_penny_and_manual_share_one_rejection_authority_for_non_pinnable(client, store, projection):
-    slug, owner = projection["view_slug"], projection["owner_token"]
+    slug = projection["view_slug"]
     bad = {"node": "Net income", "year": 1, "value": "100"}
 
     # Penny path (loop + tools)
@@ -101,7 +83,7 @@ def test_penny_and_manual_share_one_rejection_authority_for_non_pinnable(client,
     r = client.patch(
         f"/api/projections/{slug}",
         json={"overrides": {"set": [bad]}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     manual = r.json().get("detail", r.json())
 
@@ -113,7 +95,7 @@ def test_penny_and_manual_share_one_rejection_authority_for_non_pinnable(client,
 
 
 def test_out_of_domain_cost_input_rejected_by_same_authority(client, store, projection):
-    slug, owner = projection["view_slug"], projection["owner_token"]
+    slug = projection["view_slug"]
 
     # Penny: an opening anchor below 1 is out of domain.
     penny = _loop_tool(
@@ -125,7 +107,7 @@ def test_out_of_domain_cost_input_rejected_by_same_authority(client, store, proj
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"opening_month_number": 0}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     manual = r.json().get("detail", r.json())
 

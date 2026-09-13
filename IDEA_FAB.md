@@ -108,7 +108,8 @@ All of this lives in `app/routers/feedback.py` plus a pure helper `app/feedback/
 ### 3.1 Request shape (`POST /api/feedback`)
 
 ```jsonc
-// Authorization: Bearer <owner token>   (any valid owner token; see §3.6)
+// No Authorization header — this project has no authentication (owner decision,
+// 2026-09-13; see §3.6).
 {
   "type": "idea" | "bug" | "other",
   "title": "string",
@@ -172,35 +173,35 @@ The function signature is pure and deterministic so it can be unit-tested:
 
 ### 3.6 Auth
 
-`POST /api/feedback` requires `Authorization: Bearer <owner token>` (any valid owner token in the system), so feedback is tied to a real workspace for rate-limiting and abuse control (§4) — **but the owner token, the workspace identity, and the projection are never exposed in the GitHub payload.** Per PRD §20 the token is compared constant-time against `owner_token_hash`; the token itself is never logged. Unlike every other mutation, feedback does **not** require `If-Match`/`version` (PRD §25) because it does not mutate a projection.
+`POST /api/feedback` requires no `Authorization` header at all — this project has no authentication (owner decision, 2026-09-13). Rate-limiting and abuse control (§4) key on the caller's IP instead of any account/workspace identity. Unlike every other mutation, feedback does **not** require `If-Match`/`version` (PRD §25) because it does not mutate a projection.
 
 ---
 
 ## 4. Abuse controls
 
-The no-login capability-token model means tokens are free to mint, so the abuse surface is "anyone who can create a projection" (PRD §29). The brakes:
+This project has no authentication (owner decision, 2026-09-13), so the abuse surface is "anyone who can reach the app" (PRD §29). The brakes:
 
-### 4.1 Rate limits (per-IP AND per-token)
+### 4.1 Rate limits (per-IP)
 
-Per PRD §20/§27, every abuse-prone endpoint is capped on **both** axes. Starting template (tune against real traffic; numbers borrowed from timpager's explicit limits, [CLAUDE.md](CLAUDE.md) / [SECURITY.md](SECURITY.md)):
+Per PRD §20/§27, every abuse-prone endpoint is capped per IP (there is no per-token/per-account dimension — see [SECURITY.md](SECURITY.md) §2 for why). Starting template (tune against real traffic; numbers borrowed from timpager's explicit limits, [CLAUDE.md](CLAUDE.md) / [SECURITY.md](SECURITY.md)):
 
-| Endpoint | Per IP | Per owner token | On exceed |
-|---|---|---|---|
-| `POST /api/feedback` | **10 / hour** | **20 / day** | `429` + `Retry-After`; **no** GitHub call, **no** DB write |
-| `POST /api/research` | 5 / hour | 20 / day | `429` (cost: LLM + Places + Census) |
-| `POST …/narrative:regenerate` | 5 / hour | 15 / day | `429` (cost: LLM) |
-| `POST /api/intent` | 10 / hour | 20 / day | `429` (CRM spam) |
-| `POST /api/projections` (create) | 10 / hour | 50 / day | `429` |
+| Endpoint | Per IP | On exceed |
+|---|---|---|
+| `POST /api/feedback` | **10 / hour** | `429` + `Retry-After`; **no** GitHub call, **no** DB write |
+| `POST /api/research` | 5 / hour | `429` (cost: LLM + Places + Census) |
+| `POST …/narrative:regenerate` | 5 / hour | `429` (cost: LLM) |
+| `POST /api/intent` | 10 / hour | `429` (CRM spam) |
+| `POST /api/projections` (create) | 10 / hour | `429` |
 
-Rate-limit state keyed by `(client_ip, token_hash)`. `client_ip` is the real client IP from the trusted proxy hop (Railway edge appends the public client IP to `X-Forwarded-For`; take the right-most untrusted hop — see the timpager `net-guard` XFF handling in [SECURITY.md](SECURITY.md)). Limits are checked **before** the honeypot to keep the cheapest rejection first.
+Rate-limit state keyed by `client_ip` — the real client IP from the trusted proxy hop (Railway edge appends the public client IP to `X-Forwarded-For`; take the right-most untrusted hop — see the timpager `net-guard` XFF handling in [SECURITY.md](SECURITY.md)). Limits are checked **before** the honeypot to keep the cheapest rejection first.
 
 ### 4.2 Why the limits matter here specifically
 
-Each accepted feedback creates a **GitHub Issue**. Without a cap, anyone who mints a token can spam-create issues in `rallytasks/projections` and pollute the Project board (and consume GitHub API rate budget). The per-IP + per-token caps + honeypot are the only brakes.
+Each accepted feedback creates a **GitHub Issue**. Without a cap, anyone can spam-create issues in `rallytasks/projections` and pollute the Project board (and consume GitHub API rate budget). The per-IP cap + honeypot are the only brakes.
 
 ### 4.3 GitHub-side dedupe / flood protection
 
-- **Idempotency:** if the same `(token_hash, sha256(title+description))` arrives within a short window, return the existing `support_id` instead of filing a duplicate issue. Mirrors timpager's "idempotency guard" mutation requirement ([CLAUDE.md](CLAUDE.md) Mutation Safety quad — adapted: feedback isn't a projection mutation but still gets idempotency + rate-limit + negative-path tests).
+- **Idempotency:** if the same `sha256(title+description)` arrives within a short window, return the existing `support_id` instead of filing a duplicate issue. Mirrors timpager's "idempotency guard" mutation requirement ([CLAUDE.md](CLAUDE.md) Mutation Safety quad — adapted: feedback isn't a projection mutation but still gets idempotency + rate-limit + negative-path tests).
 - **Circuit breaker:** if GitHub returns sustained `5xx`/`403 (secondary rate limit)`, stop filing for a cool-down window; feedback rows still persist with `github_issue_url = null` and a `status = "pending_github"` so a backfill job (§5.5) can file them later.
 
 ### 4.4 Honeypot
@@ -267,10 +268,10 @@ Penny (the assistant) can file a redacted GitHub issue **at her own discretion**
 
 - **Always through `redact.py`.** The model-composed `title`/`description` are run through `redact_text` (with the projection's own `view_slug` as `own_slug`) **before** anything else, so any `$`/`%`/link/slug/token/email Penny might include is stripped to a qualitative report. The outbound issue is assembled by the same `_issue_body`/`build_safe_context` allowlist, and files through the **existing** `file_github_issue()` (best-effort/non-fatal, §5.4).
 - **Tagged `filed-by-penny`.** The issue carries the normal channel/`type:*` labels **plus** a server-controlled `filed-by-penny` attribution label (never user content).
-- **Creator identity on the ROW only.** The server-only `creator_*` identity (from the verified Clerk JWT **claims** — no Clerk Backend API, no secret; §7/decisions #6/#13) is persisted on the `feedback` row, **never** in the issue body or payload.
-- **Guardrails.** A **per-user (hashed bearer / Clerk `sub`) + per-IP** rate limit (5/user/hr, 20/IP/hr) and a **server-side dedup** on the SHA-256 of the *redacted* body, scoped per identity/window (`app/feedback/dedup.py`), so the same chat re-surfacing the same issue files **at most once** and a flood is capped before any GitHub/DB write. A duplicate or a rate-limited attempt is a **friendly no-op** Penny relays ("I've already logged that one") — never a second issue.
+- **No creator identity.** This project has no authentication (owner decision, 2026-09-13), so there is no signed-in identity to persist on the `feedback` row — the `creator_*` columns exist in the schema (kept because migrations are additive-only) but are never populated anymore.
+- **Guardrails.** A **per-IP** rate limit (20/IP/hr) and a **server-side dedup** on the SHA-256 of the *redacted* body, scoped per identity/window (`app/feedback/dedup.py`, identity = the caller's IP), so the same chat re-surfacing the same issue files **at most once** and a flood is capped before any GitHub/DB write. A duplicate or a rate-limited attempt is a **friendly no-op** Penny relays ("I've already logged that one") — never a second issue.
 
-CI (adversarial, **stubbed GitHub client** — no real issue): flag-off = no-op (tool absent, seven-tool surface unchanged); flag-on = files via the redacted path; redaction-intact-at-the-wire; dedup; rate-limit; creator_* on the row but never the issue; and the in-thread acknowledgement through the loop (`app/tests/test_penny_github_feedback.py`).
+CI (adversarial, **stubbed GitHub client** — no real issue): flag-off = no-op (tool absent, seven-tool surface unchanged); flag-on = files via the redacted path; redaction-intact-at-the-wire; dedup; rate-limit; and the in-thread acknowledgement through the loop (`app/tests/test_penny_github_feedback.py`).
 
 ### 5.5 Backfill / retry job
 
@@ -322,7 +323,7 @@ This test is the materialization of PRD §22 and is **impossible to regress** �
 `redact()` strips token shapes, links, slug occurrences, and injection markers; truncates to caps; preserves benign text. Adversarial inputs (pasted edit link, pasted dollar figures, `ignore previous instructions`) all neutralized.
 
 ### 6.3 Abuse-control tests
-- Per-IP and per-token rate limits return `429 + Retry-After` and **make no GitHub call / no DB write** past the limit.
+- Per-IP rate limits return `429 + Retry-After` and **make no GitHub call / no DB write** past the limit.
 - Honeypot non-empty ⇒ `201` with discarded support ID, **no** DB write, **no** GitHub call.
 - Idempotent re-submit returns the same `support_id`, no duplicate issue.
 
@@ -383,11 +384,11 @@ Notes:
 1. **No `view_slug`, token, link, email, or financial value ever reaches GitHub** — proven by the §6.1 leak test (Tier-1 gate). [§3, §6.1]
 2. **Auto-context is the fixed 5-key allowlist; `route` is a pattern, not a path; only 4 keys reach GitHub.** [§1.3, §3.3]
 3. **Redaction + length caps are server-side and run before persist and before GitHub.** [§2, §3.2, §3.3]
-4. **Rate-limited per IP and per token; honeypot drops bots silently; idempotent.** [§4]
+4. **Rate-limited per IP (this project has no authentication, owner decision 2026-09-13 — no per-token dimension); honeypot drops bots silently; idempotent.** [§4]
 5. **Least-scoped `GITHUB_TOKEN`; repo may be public or private; feedback safe either way.** [§5.1, §5.2, §5.6]
 6. **GitHub filing is best-effort/non-fatal — feedback persists and returns a support ID even if GitHub is unset or down.** [§5.4, §6.4]
 7. **Issues land on "Projections Roadmap" (GitHub Project #5, `rallytasks`) (Project v2) with `Status` Inbox → Triage → Planned → Done; server sets `Inbox`.** [§5.7]
 8. **`GITHUB_PROJECT_NUMBER` is a placeholder until the board is created** — fill in per the §5.7 checklist. [§5.7]
 9. **`support_id` is the only user-visible handle; `github_issue_url` is server-only; only staff resolve support_id → projection.** [§3.4, §2]
-10. **Penny auto-filing is dormant behind `PENNY_GITHUB_FEEDBACK_ENABLED` (default OFF); flag-on files via the same redacted path, tagged `filed-by-penny`, dedup + rate-limited, creator_* on the row only.** [§5.8]
+10. **Penny auto-filing is dormant behind `PENNY_GITHUB_FEEDBACK_ENABLED` (default OFF); flag-on files via the same redacted path, tagged `filed-by-penny`, dedup + rate-limited.** [§5.8]
 11. **Filing failures log GitHub's `status_code` + a ~200-char response-body excerpt — never our token/PAT or the issue body.** [§5.4]

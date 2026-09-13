@@ -3,8 +3,9 @@
 POST /api/projections/{view_slug}/preview merges an editable-surface partial,
 recomputes via the engine, and returns {before, after, changed[], reco_before,
 reco_after}. It is READ-ONLY: no persist, no version bump, no revision. Same 422
-rejections as PATCH (invalid input, non-pinnable node). Bearer owner/edit, NO
-If-Match. Rate-limited on the read bucket.
+rejections as PATCH (invalid input, non-pinnable node). This project has no
+authentication (owner decision, 2026-09-13); no If-Match either. Rate-limited on
+the read bucket.
 
 RED-first: written before the /preview endpoint exists.
 """
@@ -60,11 +61,10 @@ def _pid(store, slug):
 
 def test_preview_returns_before_after_changed_and_reco(client, store):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.post(
         f"/api/projections/{slug}/preview",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {owner}"},
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -82,12 +82,11 @@ def test_preview_returns_before_after_changed_and_reco(client, store):
 
 def test_preview_does_not_persist_or_bump_version_or_write_revision(client, store):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     before_row = store.get_projection_by_slug(slug)
     r = client.post(
         f"/api/projections/{slug}/preview",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {owner}"},
     )
     assert r.status_code == 200, r.text
     after_row = store.get_projection_by_slug(slug)
@@ -101,45 +100,21 @@ def test_preview_does_not_persist_or_bump_version_or_write_revision(client, stor
 
 def test_preview_requires_no_if_match(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     # NO If-Match header at all -> still 200 (preview is read-only)
     r = client.post(
         f"/api/projections/{slug}/preview",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {owner}"},
     )
     assert r.status_code == 200, r.text
 
 
-def test_preview_edit_token_allowed_view_only_rejected(client, store):
-    created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
-    ok = client.post(
-        f"/api/projections/{slug}/preview",
-        json={"name": "x"},
-        headers={"Authorization": f"Bearer {edit}"},
-    )
-    assert ok.status_code == 200, ok.text
-    # view-only (no bearer) cannot preview
-    no_auth = client.post(f"/api/projections/{slug}/preview", json={"name": "x"})
-    assert no_auth.status_code == 403, no_auth.text
-    wrong = client.post(
-        f"/api/projections/{slug}/preview",
-        json={"name": "x"},
-        headers={"Authorization": "Bearer not-the-token"},
-    )
-    assert wrong.status_code == 403, wrong.text
-    # still no version bump
-    assert store.get_projection_by_slug(slug)["version"] == 1
-
-
 def test_preview_rejects_non_pinnable_node_422(client, store):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.post(
         f"/api/projections/{slug}/preview",
         json={"overrides": {"set": [{"node": "Net income", "year": 2, "value": "1"}]}},
-        headers={"Authorization": f"Bearer {owner}"},
     )
     assert r.status_code == 422, r.text
     assert r.json()["detail"]["error"] == "node_not_pinnable"
@@ -149,11 +124,10 @@ def test_preview_rejects_non_pinnable_node_422(client, store):
 
 def test_preview_rejects_invalid_input_422(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.post(
         f"/api/projections/{slug}/preview",
         json={"inputs": {"building_sqft": "not-a-number"}},
-        headers={"Authorization": f"Bearer {owner}"},
     )
     assert r.status_code == 422, r.text
     assert r.json()["detail"]["error"] == "invalid_inputs"
@@ -163,50 +137,23 @@ def test_preview_unknown_slug_404(client):
     r = client.post(
         "/api/projections/does-not-exist/preview",
         json={"name": "x"},
-        headers={"Authorization": "Bearer whatever"},
     )
     assert r.status_code == 404, r.text
 
 
 def test_preview_rate_limited_on_read_bucket(client, monkeypatch):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     # shrink the read bucket so the cap is reachable in a test
     import app.routers.projections as P
     monkeypatch.setattr(P, "_PREVIEW_IP_LIMIT", 3, raising=False)
-    headers = {"Authorization": f"Bearer {owner}"}
     body = {"assumptions": {"labor_pct": "0.45"}}
     seen_429 = False
     for _ in range(10):
-        r = client.post(f"/api/projections/{slug}/preview", json=body, headers=headers)
+        r = client.post(f"/api/projections/{slug}/preview", json=body)
         if r.status_code == 429:
             seen_429 = True
             assert r.json()["error"] == "rate_limited"
             assert "retry_after_seconds" in r.json()
             break
     assert seen_429, "preview never hit the read-bucket rate limit"
-
-
-def test_preview_over_token_cap_returns_429_across_distinct_ips(client, monkeypatch):
-    # IMP-3(7): only the IP leg above was pinned, even though `preview_projection`
-    # passes BOTH ip_limit and token_limit to `_rate_limited` (an independently
-    # enforced token bucket). Drive the SAME owner token from THREE DISTINCT IPs
-    # (XFF-spoof, matching test_rate_limits_mutations.py's convention) so the
-    # per-IP bucket never fills — only the per-token bucket can produce the 429.
-    created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
-    import app.routers.projections as P
-    monkeypatch.setattr(P, "_PREVIEW_TOKEN_LIMIT", 3, raising=False)
-    body = {"assumptions": {"labor_pct": "0.45"}}
-
-    def _preview(ip):
-        return client.post(
-            f"/api/projections/{slug}/preview", json=body,
-            headers={"Authorization": f"Bearer {owner}", "X-Forwarded-For": ip},
-        )
-
-    for i in range(3):
-        assert _preview(f"10.0.2.{i}").status_code == 200
-    r = _preview("10.0.2.99")
-    assert r.status_code == 429, r.text
-    assert r.json()["error"] == "rate_limited"

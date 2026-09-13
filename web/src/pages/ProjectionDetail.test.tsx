@@ -115,7 +115,6 @@ describe("ProjectionDetail — Penny mount (PE6, #125)", () => {
   beforeEach(() => {
     // Edit mode reads the owner token from localStorage when no edit fragment is
     // present (issue #143). Penny's mutate path needs it.
-    localStorage.setItem("projections.owner_token", "owner-tok");
   });
   afterEach(() => {
     localStorage.clear();
@@ -221,7 +220,6 @@ describe("App shell — Penny is openable on every primary route (#264, Epic E #
 
   it("does NOT double-mount Penny on the editable detail page (the page mounts its own)", async () => {
     // Edit mode mounts the live PennyAssistant; the shell must NOT add a second FAB.
-    localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     window.history.pushState({}, "", "/p/p_8x/edit");
     render(<App />);
@@ -242,7 +240,6 @@ describe("App shell — Penny is openable on every primary route (#264, Epic E #
 
 describe("ProjectionDetail — per-field change affordance (PE7, #126)", () => {
   beforeEach(() => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
   });
   afterEach(() => {
     localStorage.clear();
@@ -429,7 +426,6 @@ describe("ProjectionDetail — Epic G reorg", () => {
   });
 
   it("edit mode shows a Projection | KPIs tablist and merges KPIs + Settings into the KPIs tab (D11)", async () => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     const user = userEvent.setup();
     render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
@@ -506,7 +502,6 @@ describe("ProjectionDetail — D1 header + D9 downloads", () => {
   });
 
   it("D8: renders no bottom Feedback button", async () => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
     await screen.findByTestId("decision-banner");
@@ -515,7 +510,6 @@ describe("ProjectionDetail — D1 header + D9 downloads", () => {
   });
 
   it("D1/Decision 13: the always-on 'Store name' input is gone; a pencil reveals the rename input", async () => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     const user = userEvent.setup();
     render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
@@ -536,7 +530,6 @@ describe("ProjectionDetail — D1 header + D9 downloads", () => {
 // version and the force-save lands.
 describe("ProjectionDetail — 409 Overwrite resolves (does not loop) #188", () => {
   beforeEach(() => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
   });
   afterEach(() => {
     localStorage.clear();
@@ -618,7 +611,6 @@ describe("ProjectionDetail — 409 Overwrite resolves (does not loop) #188", () 
 // ============================================================================
 describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
   beforeEach(() => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
   });
   afterEach(() => {
     localStorage.clear();
@@ -773,7 +765,6 @@ describe("ProjectionDetail — Override Inspector → Penny (#42)", () => {
 // navigates to the fork; Reload discards.
 describe("ProjectionDetail — 409 modal preserves the edit (#P0 3.2)", () => {
   beforeEach(() => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
   });
   afterEach(() => {
     localStorage.clear();
@@ -882,7 +873,7 @@ describe("ProjectionDetail — 409 modal preserves the edit (#P0 3.2)", () => {
 
   it("Save-as-copy POSTs …/duplicate carrying the conflicted edit, then navigates to the fork", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
-    const dupCalls: Array<{ url: string; body: unknown; auth: string | null }> = [];
+    const dupCalls: Array<{ url: string; body: unknown }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string, init?: RequestInit) => {
@@ -891,7 +882,6 @@ describe("ProjectionDetail — 409 modal preserves the edit (#P0 3.2)", () => {
           dupCalls.push({
             url: u,
             body: JSON.parse(String(init?.body)),
-            auth: new Headers(init?.headers).get("Authorization"),
           });
           return Promise.resolve(
             new Response(
@@ -899,7 +889,6 @@ describe("ProjectionDetail — 409 modal preserves the edit (#P0 3.2)", () => {
                 view_slug: "p_copy",
                 version: 1,
                 name: "House of Hope (copy)",
-                edit_token: "edit_copy",
               }),
               { status: 200, headers: { "Content-Type": "application/json" } },
             ),
@@ -925,15 +914,14 @@ describe("ProjectionDetail — 409 modal preserves the edit (#P0 3.2)", () => {
 
     await user.click(screen.getByRole("button", { name: /save as copy/i }));
 
-    // The fork POST carries the conflicted edit as {patch}, with the owner Bearer.
+    // The fork POST carries the conflicted edit as {patch}. This project has no
+    // authentication (owner decision, 2026-09-13) — no auth header to assert.
     await waitFor(() => expect(dupCalls).toHaveLength(1));
     expect(dupCalls[0].url).toBe("/api/projections/p_8x/duplicate");
     expect(dupCalls[0].body).toEqual({ patch: EXPECTED_EDIT });
-    expect(dupCalls[0].auth).toBe("Bearer owner-tok");
 
-    // Navigates to the editable copy + retains its fresh edit token (owner's device).
+    // Navigates to the editable copy.
     await waitFor(() => expect(window.location.pathname).toBe("/p/p_copy/edit"));
-    expect(localStorage.getItem("projections.edit_token.p_copy")).toBe("edit_copy");
     // The modal is dismissed.
     expect(screen.queryByTestId("save-conflict-modal")).toBeNull();
   });
@@ -1019,68 +1007,37 @@ describe("ProjectionDetail — 409 modal preserves the edit (#P0 3.2)", () => {
   });
 });
 
-// EPIC SHARE (Decision 12) — the unified Share affordance on the detail header. The
-// read-only link is always offered; the editable link appears only when this device
-// holds the projection's edit token (localStorage), and carries it in the fragment.
+// EPIC SHARE (Decision 12) — the Share affordance on the detail header. This
+// project has no authentication (owner decision, 2026-09-13): there is only one
+// link, and it is fully viewable and editable by anyone who opens it.
 describe("ProjectionDetail — Share affordance (EPIC SHARE)", () => {
   afterEach(() => {
     localStorage.clear();
     window.history.pushState({}, "", "/");
   });
 
-  it("opens the Share panel with the read-only view_slug link", async () => {
+  it("opens the Share panel with the plain view_slug link", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     const user = userEvent.setup();
     render(<ProjectionDetail slug="p_8x" edit={false} />);
     await screen.findByTestId("decision-banner");
 
     await user.click(screen.getByTestId("share-projection"));
-    const readonly = (await screen.findByTestId("share-readonly-link")) as HTMLInputElement;
-    expect(readonly.value).toBe(`${window.location.origin}/p/p_8x`);
-  });
-
-  it("offers the editable link (token in the fragment) when the edit token is held", async () => {
-    localStorage.setItem("projections.edit_token.p_8x", "edit_secret_xyz");
-    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
-    const user = userEvent.setup();
-    render(<ProjectionDetail slug="p_8x" edit aiOff={false} />);
-    await screen.findByTestId("decision-banner");
-
-    await user.click(screen.getByTestId("share-projection"));
-    const editLink = (await screen.findByTestId("share-edit-link")) as HTMLInputElement;
-    expect(editLink.value).toBe(`${window.location.origin}/p/p_8x/edit#edit_secret_xyz`);
-    // Regression #10: the secret is in the fragment, never the path/query.
-    expect(new URL(editLink.value).pathname).not.toContain("edit_secret_xyz");
-  });
-
-  it("omits the editable link when no edit token is held on this device", async () => {
-    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
-    const user = userEvent.setup();
-    render(<ProjectionDetail slug="p_8x" edit={false} />);
-    await screen.findByTestId("decision-banner");
-
-    await user.click(screen.getByTestId("share-projection"));
-    await screen.findByTestId("share-readonly-link");
-    expect(screen.queryByTestId("share-edit-link")).not.toBeInTheDocument();
-    expect(screen.getByTestId("share-edit-unavailable")).toBeInTheDocument();
+    const link = (await screen.findByTestId("share-link")) as HTMLInputElement;
+    expect(link.value).toBe(`${window.location.origin}/p/p_8x`);
   });
 });
 
 // ============================================================================
-// Wave 3.2f (review-mandated) — two CRITICAL bugs in the landed 409-recovery code:
-//   C1  Save-as-copy sent `token.current` to the OWNER-ONLY POST …/duplicate.
-//       token.current resolves to the per-slug EDIT token, which the owner device
-//       stores at create — so on the real owner device the fork sent the EDIT token
-//       and the server 403'd owner_required ("Save failed"). It must send the OWNER
-//       token; and an editor-link holder (no owner token) must see Save-as-copy
-//       DISABLED with an owner-account tooltip (it is guaranteed to 403).
-//   C2  resolveOverwrite/resolveSaveAsCopy cleared `conflict` + `failedBody` BEFORE
-//       the async call, so a failed Overwrite/duplicate (403/429/500/network) both
-//       DISMISSED the modal AND destroyed the pending edit — the exact P0 this feature
-//       exists to fix, recurring on the failure path. The state must survive until
-//       SUCCESS (cleared in .then), and a failure must keep the modal actionable.
+// Wave 3.2f (review-mandated): resolveOverwrite/resolveSaveAsCopy cleared
+// `conflict` + `failedBody` BEFORE the async call, so a failed Overwrite/duplicate
+// (429/500/network) both DISMISSED the modal AND destroyed the pending edit — the
+// exact P0 this feature exists to fix, recurring on the failure path. The state
+// must survive until SUCCESS (cleared in .then), and a failure must keep the
+// modal actionable. This project has no authentication (owner decision,
+// 2026-09-13) — Save-as-copy is always enabled and carries no token.
 // ============================================================================
-describe("ProjectionDetail — Save-as-copy owner token + failure-path preservation (3.2f)", () => {
+describe("ProjectionDetail — Save-as-copy + failure-path preservation (3.2f)", () => {
   afterEach(() => {
     localStorage.clear();
     window.history.pushState({}, "", "/");
@@ -1159,31 +1116,21 @@ describe("ProjectionDetail — Save-as-copy owner token + failure-path preservat
     await screen.findByTestId("save-conflict-modal");
   }
 
-  // ---- C1: the OWNER token reaches /duplicate on the real owner device ------------
-  it("C1: Save-as-copy sends the OWNER token to /duplicate even when the per-slug EDIT token is also stored (real owner device)", async () => {
-    // The owner device stores BOTH the owner token AND the per-slug edit token (set at
-    // create) — so token.current resolves to the EDIT token. /duplicate is OWNER-ONLY;
-    // the edit token 403s. The fork must carry the OWNER token.
-    localStorage.setItem("projections.owner_token", "owner-tok");
-    localStorage.setItem("projections.edit_token.p_8x", "edit-tok");
+  it("Save-as-copy POSTs /duplicate with the conflicted edit as {patch}, no auth required", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
-    const dupCalls: Array<{ auth: string | null; body: unknown }> = [];
+    const dupCalls: Array<{ body: unknown }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string, init?: RequestInit) => {
         const u = String(url);
         if (u.includes("/duplicate")) {
-          dupCalls.push({
-            auth: new Headers(init?.headers).get("Authorization"),
-            body: JSON.parse(String(init?.body)),
-          });
+          dupCalls.push({ body: JSON.parse(String(init?.body)) });
           return Promise.resolve(
             new Response(
               JSON.stringify({
                 view_slug: "p_copy",
                 version: 1,
                 name: "House of Hope (copy)",
-                edit_token: "edit_copy",
               }),
               { status: 200, headers: { "Content-Type": "application/json" } },
             ),
@@ -1208,44 +1155,11 @@ describe("ProjectionDetail — Save-as-copy owner token + failure-path preservat
     await user.click(screen.getByRole("button", { name: /save as copy/i }));
 
     await waitFor(() => expect(dupCalls).toHaveLength(1));
-    // The decisive proof: the OWNER token, NOT the per-slug EDIT token (which 403s).
-    expect(dupCalls[0].auth).toBe("Bearer owner-tok");
     expect(dupCalls[0].body).toEqual({ patch: EXPECTED_EDIT });
-  });
-
-  it("C1: disables Save-as-copy with an owner-account tooltip when this device holds no owner token (editor-link holder)", async () => {
-    // Editor-link holder: only the per-slug edit token, NO owner token. /duplicate is
-    // owner-only → guaranteed 403, so the affordance is disabled + explained rather
-    // than dangled as a dead button.
-    localStorage.setItem("projections.edit_token.p_8x", "edit-tok");
-    vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((_url: string, init?: RequestInit) => {
-        if ((init?.method ?? "GET").toUpperCase() === "PATCH") {
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({ detail: { ...CONFLICT_DETAIL, current_state: payrollVm(9) } }),
-              { status: 409, headers: { "Content-Type": "application/json" } },
-            ),
-          );
-        }
-        return Promise.resolve(
-          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
-        );
-      }),
-    );
-
-    const user = userEvent.setup();
-    await editCellIntoConflict(user);
-    const btn = screen.getByRole("button", { name: /save as copy/i });
-    expect(btn).toBeDisabled();
-    expect(btn).toHaveAttribute("title", "Requires the owner account");
   });
 
   // ---- C2: the failure path keeps the modal AND the pending edit ------------------
   it("C2: a failed duplicate keeps the conflict modal AND the pending edit (Overwrite still replays it)", async () => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
     const bodies: Array<Record<string, unknown>> = [];
     const ifMatches: string[] = [];
@@ -1307,7 +1221,6 @@ describe("ProjectionDetail — Save-as-copy owner token + failure-path preservat
   });
 
   it("C2: a failed Overwrite (server 500 / network) keeps the conflict modal AND the pending edit for retry", async () => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
     const bodies: Array<Record<string, unknown>> = [];
     const ifMatches: string[] = [];
@@ -1368,28 +1281,21 @@ describe("ProjectionDetail — Save-as-copy owner token + failure-path preservat
   });
 
   // ---- I2: the SettingsTab banner's Save-as-copy carries the driver edit ----------
-  it("I2: a settings-driver (labor %) 409 → SettingsTab banner Save-as-copy POSTs /duplicate with {patch:{assumptions:{labor_pct}}} + the owner token", async () => {
-    // Realistic owner-device config: BOTH the owner token AND the per-slug edit token.
-    localStorage.setItem("projections.owner_token", "owner-tok");
-    localStorage.setItem("projections.edit_token.p_8x", "edit-tok");
+  it("I2: a settings-driver (labor %) 409 → SettingsTab banner Save-as-copy POSTs /duplicate with {patch:{assumptions:{labor_pct}}}", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(settingsVm(3));
-    const dupCalls: Array<{ auth: string | null; body: unknown }> = [];
+    const dupCalls: Array<{ body: unknown }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string, init?: RequestInit) => {
         const u = String(url);
         if (u.includes("/duplicate")) {
-          dupCalls.push({
-            auth: new Headers(init?.headers).get("Authorization"),
-            body: JSON.parse(String(init?.body)),
-          });
+          dupCalls.push({ body: JSON.parse(String(init?.body)) });
           return Promise.resolve(
             new Response(
               JSON.stringify({
                 view_slug: "p_copy",
                 version: 1,
                 name: "House of Hope (copy)",
-                edit_token: "edit_copy",
               }),
               { status: 200, headers: { "Content-Type": "application/json" } },
             ),
@@ -1426,15 +1332,13 @@ describe("ProjectionDetail — Save-as-copy owner token + failure-path preservat
     const copyBtn = within(banner).getByRole("button", { name: /save as (a )?copy/i });
     await user.click(copyBtn);
 
-    // The fork carries the conflicted labor edit as {patch} with the OWNER Bearer.
+    // The fork carries the conflicted labor edit as {patch}.
     await waitFor(() => expect(dupCalls).toHaveLength(1));
-    expect(dupCalls[0].auth).toBe("Bearer owner-tok");
     expect(dupCalls[0].body).toEqual({ patch: { assumptions: { labor_pct: 0.45 } } });
   });
 
   // ---- w1: a double-click on Save-as-copy must fork EXACTLY once -----------------
   it("w1: double-clicking Save-as-copy fires exactly one /duplicate POST (disabled while a resolution is in flight)", async () => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
     const dupCalls: string[] = [];
     // The fork HANGS so the second click lands while the first is still in flight —
@@ -1490,7 +1394,6 @@ describe("ProjectionDetail — Save-as-copy owner token + failure-path preservat
 
   // ---- w4: a SECOND 409 during an Overwrite replay re-stashes the NEW version -----
   it("w4: a second 409 during an Overwrite replay re-stashes the edit with the NEW current_version", async () => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(payrollVm(3));
     const ifMatches: string[] = [];
     const bodies: Array<Record<string, unknown>> = [];
@@ -1560,7 +1463,6 @@ describe("ProjectionDetail — Save-as-copy owner token + failure-path preservat
   // not leave the page's stashed `failedBody` around for the STILL-OPEN banner's own
   // Save-as-copy to replay — that would resurrect an edit the owner just discarded.
   it("m49: Reload clears the page-level failedBody so the SettingsTab's still-open banner can't replay the discarded edit via Save-as-copy", async () => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(settingsVm(3));
     const dupCalls: Array<{ auth: string | null; body: unknown }> = [];
     vi.stubGlobal(
@@ -1680,7 +1582,6 @@ describe("ProjectionDetail — Move to Trash (soft delete, owner-only)", () => {
   });
 
   it("shows a Delete affordance for the owner and trashes on confirm → navigates home", async () => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
     vi.mocked(fetchProjection).mockResolvedValue(fullVm()); // version 3
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -1709,21 +1610,10 @@ describe("ProjectionDetail — Move to Trash (soft delete, owner-only)", () => {
     expect(String(trashCall![0])).not.toContain("owner-tok");
   });
 
-  it("does NOT show the Delete affordance in read-only mode", async () => {
-    localStorage.setItem("projections.owner_token", "owner-tok");
+  it("shows the Delete affordance in read-only mode too (no authentication, owner decision 2026-09-13)", async () => {
     vi.mocked(fetchProjection).mockResolvedValue(fullVm());
     render(<ProjectionDetail slug="p_8x" edit={false} />);
     await screen.findByTestId("decision-banner");
-    expect(screen.queryByTestId("trash-projection")).not.toBeInTheDocument();
-  });
-
-  it("does NOT show the Delete affordance to an editor (share link, not the owner)", async () => {
-    // No owner token on this device; the edit capability rides the fragment → editor,
-    // not owner. Trash is owner-only on the server, so the button is hidden.
-    vi.mocked(fetchProjection).mockResolvedValue(fullVm());
-    window.history.pushState({}, "", "/p/p_8x/edit#edit-secret");
-    render(<ProjectionDetail slug="p_8x" edit />);
-    await screen.findByTestId("decision-banner");
-    expect(screen.queryByTestId("trash-projection")).not.toBeInTheDocument();
+    expect(screen.getByTestId("trash-projection")).toBeInTheDocument();
   });
 });

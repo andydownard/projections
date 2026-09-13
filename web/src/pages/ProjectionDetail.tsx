@@ -1,16 +1,17 @@
 // web/src/pages/ProjectionDetail.tsx — read + edit a projection (M2/M4).
 //
+// This project has no authentication (owner decision, 2026-09-13): the same
+// /p/<slug> URL serves both read and edit — no secret, no token, no gate.
+//
 // READ (/p/<slug>): renders the stored decision verbatim — banner, KPIs, monthly
 // cash-flow, .xlsx export. No editable affordance, no settings tab. With ai=off a
 // narrative-disabled placeholder renders (the surface degrades, never crashes).
 //
-// EDIT (/p/<slug>/edit#<edit-secret>): the fragment secret is read once then
-// scrubbed from the address bar (SECURITY.md §2.5). Owner/edit token drives the
-// autosave PATCH (If-Match: version) — for the OWNER the fallback owner token in
-// localStorage authorizes it, so the editable surface is reachable from the list
-// with no secret in the URL (issue #143). A stale save → the 409 SaveConflictModal
-// (reload / overwrite / save-as-copy). Net income is a derived total — its cell
-// is non-pinnable (aria-disabled), enforced server-side too (PRD §14).
+// EDIT (/p/<slug>/edit): the autosave PATCH (If-Match: version) is reachable by
+// anyone. A stale save → the 409 SaveConflictModal (reload / overwrite /
+// save-as-copy) — that's optimistic concurrency, unrelated to auth. Net income is
+// a derived total — its cell is non-pinnable (aria-disabled), enforced
+// server-side too (PRD §14).
 //
 // A 404 (bad/expired/removed slug) rejects the load; we render a load-failed
 // DegradedState rather than spinning "Loading…" forever (issue #146). The model
@@ -30,15 +31,10 @@ import {
 } from "../api/viewModel";
 import {
   duplicateProjection,
-  getEditToken,
-  getOwnerToken,
-  setEditToken,
-  setOwnerToken,
   trashProjection,
   LifecycleConflictError,
 } from "../api/projections";
 import { patchProjection, PatchConflictError, type PatchBody } from "../api/patch";
-import { clerkActive, getClerkToken } from "../auth/clerkToken";
 import { ShareModal } from "../components/ShareModal";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
@@ -66,7 +62,6 @@ import {
 } from "../components/displayLabels";
 import type { ServerValue } from "../api/client";
 import type { PatchHandlerArgs } from "../components/SettingsTab";
-import { readFragmentSecret } from "../router/route";
 
 export interface ProjectionDetailProps {
   slug: string;
@@ -450,10 +445,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   const [renaming, setRenaming] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTabId>("projection");
   const [loadError, setLoadError] = useState(false);
-  // EPIC SHARE (Decision 12): the unified Share panel. The editable link's capability
-  // (the edit token) is held in localStorage on the owner's device only — never minted
-  // here and never in a URL path/query (it rides the fragment in the link the panel
-  // builds). Absent ⇒ the panel offers the read-only link alone.
+  // EPIC SHARE (Decision 12): the unified Share panel — just the plain view_slug link.
   const [shareOpen, setShareOpen] = useState(false);
   // Move-to-Trash (soft delete) confirm + in-flight flag. Owner-only (below).
   const [confirmTrashOpen, setConfirmTrashOpen] = useState(false);
@@ -489,32 +481,6 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     document.getElementById(`detail-tab-${next.id}`)?.focus();
   }
   const nameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Capture the edit secret from the fragment ONCE on first render (a lazy ref
-  // initializer), BEFORE StrictMode's double-invoke can re-read the (scrubbed)
-  // hash. Fall back to the per-slug stored edit token (set by App's capture effect
-  // BEFORE the Clerk gate shows, so it's available after a sign-in round-trip), then
-  // to the owner token. Then scrub the fragment from the URL so the secret never
-  // lands in history/logs (SECURITY.md §2.5).
-  const token = useRef<string | null>(
-    edit
-      ? readFragmentSecret(window.location.hash) ?? getEditToken(slug) ?? getOwnerToken()
-      : null,
-  );
-  // Whether THIS device is the OWNER (not an editor opening a share link). An editor's
-  // token arrives in the fragment; the owner's token is the localStorage owner token.
-  // Captured once at first render (before the fragment is scrubbed). Trash/restore/
-  // purge are owner-only on the server (editors get 403), so the Delete affordance is
-  // shown ONLY to the owner — an editor never sees a button that would 403.
-  const isOwner = useRef<boolean>(
-    edit &&
-      readFragmentSecret(window.location.hash) === null &&
-      getOwnerToken() !== null,
-  );
-  useEffect(() => {
-    if (edit && window.location.hash) {
-      history.replaceState(null, "", window.location.pathname + window.location.search);
-    }
-  }, [edit]);
 
   async function confirmTrash() {
     setTrashBusy(true);
@@ -695,23 +661,9 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       .catch(onSaveError);
   }
 
-  // Resolve the PATCH bearer: the per-device capability token (edit/owner) is
-  // preferred — byte-for-byte today's behavior. When this device has NONE (a grantee
-  // who opened their "Shared with me" row on a second device, EPIC #323) fall back to
-  // the short-lived Clerk JWT; the server's share-grant auth authorizes the edit.
-  async function resolvePatchBearer(): Promise<string> {
-    if (token.current) return token.current;
-    if (clerkActive()) {
-      const jwt = await getClerkToken();
-      if (jwt) return jwt;
-    }
-    return "";
-  }
-
   async function doPatch(body: Record<string, unknown>, ver: number) {
     const res = await patchProjection({
       viewSlug: slug,
-      token: await resolvePatchBearer(),
       version: ver,
       body,
     });
@@ -830,13 +782,7 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   function resolveSaveAsCopy() {
     // The real fork: POST …/duplicate carrying the conflicted edit as {patch}, so the
     // copy is born WITH the user's unsaved change (server-side compute), then land on
-    // it. The copy's fresh edit token is retained on this device so its Share panel can
-    // rebuild the editable link.
-    // C1 (3.2f): /duplicate is OWNER-ONLY. `token.current` resolves to the per-slug
-    // EDIT token (which the owner device stores at create), so sending it 403'd
-    // owner_required on the real owner device. Send the OWNER token; fall back to
-    // token.current only for the (rare) case a device has an owner-capable bearer that
-    // is not in the owner-token slot. The button is disabled when no owner token exists.
+    // it. This project has no authentication (owner decision, 2026-09-13).
     // C2 (3.2f): keep `conflict` + `failedBody` until the fork SUCCEEDS — a failed
     // duplicate (403/429/network) must NOT dismiss the modal or drop the pending edit.
     // w1: a synchronous double-click on Save-as-copy used to mint TWO copies; block the
@@ -845,24 +791,15 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
     resolvingRef.current = true;
     setResolving(true);
     const pending = failedBody ?? undefined;
-    const dupToken = getOwnerToken() ?? token.current ?? "";
     setSaveLabel("Saving…");
-    duplicateProjection(slug, dupToken, pending)
+    duplicateProjection(slug, pending)
       .then((res) => {
-        if (res.edit_token) setEditToken(res.view_slug, res.edit_token);
-        // A capability owner joins their workspace (no owner_token). Only store a
-        // minted one (Clerk/anon) when this device holds none — never clobber the
-        // existing owner token that anchors the owner's other projections.
-        if (res.owner_token && !getOwnerToken()) setOwnerToken(res.owner_token);
         setConflict(null);
         setFailedBody(null);
         setSaveLabel("All changes saved");
         window.history.pushState(null, "", `/p/${res.view_slug}/edit`);
         window.dispatchEvent(new PopStateEvent("popstate"));
       })
-      // The fork failed: leave the modal up + the edit stashed so the owner can retry
-      // or choose Overwrite/Reload instead. (The button is owner-only-gated, so this is
-      // a transient 429/network/5xx, not the edit-token 403 the gate already prevents.)
       .catch(() => setSaveLabel("Save failed — retry"))
       .finally(() => {
         resolvingRef.current = false;
@@ -885,12 +822,6 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
   if (!vm) {
     return <div className="detail detail--loading">Loading…</div>;
   }
-
-  // POST …/duplicate is OWNER-ONLY (an edit token 403s owner_required). Save-as-copy is
-  // therefore only offered when this device holds the owner token; an editor-link holder
-  // sees it disabled with an owner-account tooltip (C1, 3.2f). Read fresh each render so
-  // a just-minted owner token (Clerk/anon fork) flips it on.
-  const canSaveAsCopy = getOwnerToken() != null;
 
   return (
     <div className="detail">
@@ -987,19 +918,17 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
               >
                 <ShareIcon /> Share
               </button>
-              {/* Owner-only: move this projection to Trash (recoverable). Editors who
-                  opened a share link never see this (the server is owner-only too). */}
-              {isOwner.current && (
-                <button
-                  type="button"
-                  className="btn btn--download btn--danger-ghost"
-                  data-testid="trash-projection"
-                  aria-haspopup="dialog"
-                  onClick={() => setConfirmTrashOpen(true)}
-                >
-                  <span aria-hidden="true" className="btn__icon">🗑</span> Delete
-                </button>
-              )}
+              {/* Move this projection to Trash (recoverable). This project has no
+                  authentication (owner decision, 2026-09-13) — anyone can. */}
+              <button
+                type="button"
+                className="btn btn--download btn--danger-ghost"
+                data-testid="trash-projection"
+                aria-haspopup="dialog"
+                onClick={() => setConfirmTrashOpen(true)}
+              >
+                <span aria-hidden="true" className="btn__icon">🗑</span> Delete
+              </button>
             </div>
           </div>
 
@@ -1109,7 +1038,6 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
                   version={version}
                   onPatch={onSettingsPatch}
                   onSaveAsCopy={resolveSaveAsCopy}
-                  canSaveAsCopy={canSaveAsCopy}
                 />
               </div>
             </div>
@@ -1143,19 +1071,15 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
           onReload={resolveReload}
           onOverwrite={resolveOverwrite}
           onSaveAsCopy={resolveSaveAsCopy}
-          canSaveAsCopy={canSaveAsCopy}
           message={conflict.message}
           busy={resolving}
         />
       )}
 
-      {/* EPIC SHARE (Decision 12): the unified Share panel. The read-only link is the
-          view_slug URL (exports authorize by slug alone — recipients pull the .xlsx +
-          .docx with no account). The editable link carries the edit token in the URL
-          FRAGMENT only, and only when this device holds it. */}
-      {shareOpen && (
-        <ShareModal slug={slug} editToken={getEditToken(slug)} onClose={() => setShareOpen(false)} />
-      )}
+      {/* EPIC SHARE (Decision 12): the unified Share panel. This project has no
+          authentication (owner decision, 2026-09-13) — there is only one link, and
+          it's fully editable by anyone who opens it. */}
+      {shareOpen && <ShareModal slug={slug} onClose={() => setShareOpen(false)} />}
 
       {/* Move-to-Trash confirm (soft delete, recoverable). On success we navigate home
           and a toast confirms; the projection can be restored from the Trash view. */}
@@ -1174,9 +1098,9 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       )}
 
       {/* Penny — the LEFT slide-out assistant (apply-immediately + narrate, Spec B
-          §2/§5.1). Mounted only in edit mode (her mutate path needs the owner/edit
-          token); with ?ai=off she degrades to the muted Settings FAB (never a
-          dead-end). Her applied edits flow back through onApplied → refreshViewModel,
+          §2/§5.1). Mounted only in edit mode; with ?ai=off she degrades to the muted
+          Settings FAB (never a dead-end). Her applied edits flow back through
+          onApplied → refreshViewModel,
           which the PE7 diff (above) surfaces as the per-field "recent change / was X
           / undo" affordance on the share cells. */}
       {/* Epic G2 (#42): the standalone right-edge Override Inspector is ELIMINATED.
@@ -1189,7 +1113,6 @@ export function ProjectionDetail({ slug, edit, aiOff = false }: ProjectionDetail
       {edit && (
         <PennyAssistant
           viewSlug={slug}
-          token={token.current ?? ""}
           aiEnabled={!aiOff}
           settingsHref={`/p/${encodeURIComponent(slug)}/edit`}
           onApplied={() => refreshViewModel()}

@@ -72,11 +72,6 @@ def _new_transcript_id() -> str:
     return "pt_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + secrets.token_hex(6)
 
 
-def _new_share_grant_id() -> str:
-    # App-generated, time-ordered string PK (no DB autoincrement; Postgres-portable).
-    return "sg_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + secrets.token_hex(6)
-
-
 # Migrations whose apply step needs runtime logic the static-SQL path cannot express,
 # keyed by migration name -> callable(conn). The runner dispatches to the hook inside
 # the SAME explicit transaction it uses for the DDL + ledger INSERT (so the hook stays
@@ -351,182 +346,23 @@ class SqliteStore:
         ).fetchone()
         return dict(row) if row else None
 
-    def list_by_owner(
-        self, owner_token_hash: str, *, include_trashed: bool = False
-    ) -> list[dict]:
-        # Owner-scoped, NEVER global (DATA_MODEL.md §3.1 / SECURITY.md §1 risk #3).
-        sql = (
-            "SELECT * FROM projections "
-            "WHERE owner_token_hash = ? AND deleted_at IS NULL"
-        )
-        if not include_trashed:
-            sql += " AND status = 'active'"
-        sql += " ORDER BY updated_at DESC"
-        return [dict(r) for r in self._read_conn().execute(sql, (owner_token_hash,))]
+    def list_card_summaries(self, *, include_trashed: bool = False) -> list[dict]:
+        """Global list selecting ONLY the small card columns (#178).
 
-    def list_by_clerk_owner(
-        self, clerk_user_id: str, *, include_trashed: bool = False
-    ) -> list[dict]:
-        """Clerk-owner-scoped list, NEVER global (Override TENANT / PRD §20).
-
-        Mirrors ``list_by_owner`` but keys on the verified Clerk identity. An empty
-        ``clerk_user_id`` matches nothing (the NULL token-owned rows must never leak),
-        so a misconfigured caller can never list across owners.
-        """
-        if not clerk_user_id:
-            return []
-        sql = (
-            "SELECT * FROM projections "
-            "WHERE owner_clerk_user_id = ? AND deleted_at IS NULL"
-        )
-        if not include_trashed:
-            sql += " AND status = 'active'"
-        sql += " ORDER BY updated_at DESC"
-        return [dict(r) for r in self._read_conn().execute(sql, (clerk_user_id,))]
-
-    def list_card_summaries_by_clerk_owner(
-        self, clerk_user_id: str, *, include_trashed: bool = False
-    ) -> list[dict]:
-        """Clerk-owner-scoped card list (small columns only — the #178 fast path)."""
-        if not clerk_user_id:
-            return []
-        sql = (
-            "SELECT view_slug, name, status, version, updated_at, summary_json "
-            "FROM projections WHERE owner_clerk_user_id = ? AND deleted_at IS NULL"
-        )
-        if not include_trashed:
-            sql += " AND status = 'active'"
-        sql += " ORDER BY updated_at DESC"
-        return [dict(r) for r in self._read_conn().execute(sql, (clerk_user_id,))]
-
-    def claim_projections_to_clerk_owner(
-        self, owner_token_hash: str, clerk_user_id: str, org_id: str | None = None
-    ) -> int:
-        """Backfill a verified Clerk owner onto every UNCLAIMED row owned by this
-        capability token hash (the claim/bridge path, SECURITY §2.8).
-
-        ONE atomic conditional UPDATE — never check-then-act (no TOCTOU). The
-        ``owner_clerk_user_id IS NULL`` guard makes it (1) idempotent (a re-claim
-        links 0 more) and (2) anti-takeover (an already-claimed row can NEVER be
-        re-linked to a different Clerk user, even by a caller presenting the same
-        token). It can only touch rows whose ``owner_token_hash`` matches — i.e. the
-        caller must possess the exact owner token (TENANT, PRD §20). Parameterized
-        SQL only. Empty identity/hash is a no-op so a blank can never backfill the
-        NULL token-owned rows. Returns the number of rows linked.
-        """
-        if not owner_token_hash or not clerk_user_id:
-            return 0
-        sql = (
-            "UPDATE projections SET owner_clerk_user_id = ?, owner_org_id = ? "
-            "WHERE owner_token_hash = ? AND owner_clerk_user_id IS NULL"
-        )
-        with self._write_lock:
-            cur = self._conn.execute(sql, (clerk_user_id, org_id, owner_token_hash))
-            self._conn.commit()
-            return cur.rowcount
-
-    # --- share grants (editable shares that follow a Clerk account, #323) -------
-    def create_share_grant(
-        self,
-        projection_id: str,
-        grantee_clerk_user_id: str,
-        *,
-        role: str = "editor",
-        grantee_owner_token_hash: str | None = None,
-    ) -> bool:
-        """Grant ``grantee_clerk_user_id`` editable access to ``projection_id`` (#323).
-
-        Created ONLY from a verified edit-token presentation at the router boundary
-        (``POST …/claim-share``); this method just persists the grant. Idempotent:
-        a portable SELECT-then-INSERT under the single-writer lock (no SQLite-only
-        upsert above the Store interface), with UNIQUE(projection_id, grantee) as the
-        backstop — a re-grant returns ``False`` and inserts nothing. Empty
-        projection/grantee is a no-op (``False``) so a blank can never create a
-        NULL-grantee grant (TENANT). Returns ``True`` only when a NEW grant is written.
-        """
-        if not projection_id or not grantee_clerk_user_id:
-            return False
-        with self._write_lock:
-            existing = self._conn.execute(
-                "SELECT 1 FROM share_grants "
-                "WHERE projection_id = ? AND grantee_clerk_user_id = ?",
-                (projection_id, grantee_clerk_user_id),
-            ).fetchone()
-            if existing is not None:
-                return False
-            self._conn.execute(
-                "INSERT INTO share_grants "
-                "(id, projection_id, role, grantee_clerk_user_id, "
-                "grantee_owner_token_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (_new_share_grant_id(), projection_id, role, grantee_clerk_user_id,
-                 grantee_owner_token_hash, _utcnow()),
-            )
-            self._conn.commit()
-            return True
-
-    def has_share_grant(self, projection_id: str, grantee_clerk_user_id: str) -> bool:
-        """Constant-cost membership check for the PATCH-grant auth path (#323).
-
-        ``True`` iff an editable grant exists for exactly this (projection, grantee).
-        Empty grantee never matches (so a NULL/blank identity can never authorize a
-        write — TENANT, PRD §20)."""
-        if not projection_id or not grantee_clerk_user_id:
-            return False
-        row = self._read_conn().execute(
-            "SELECT 1 FROM share_grants "
-            "WHERE projection_id = ? AND grantee_clerk_user_id = ?",
-            (projection_id, grantee_clerk_user_id),
-        ).fetchone()
-        return row is not None
-
-    def list_shared_card_summaries_by_clerk_owner(
-        self, clerk_user_id: str, *, include_trashed: bool = False
-    ) -> list[dict]:
-        """Grant-scoped "Shared with me" card list (#323), NEVER global (Override
-        TENANT / PRD §20).
-
-        Joins ``share_grants`` (scoped to THIS grantee's grants) to the live
-        projection, returning the same small card columns as the owner list (#178) plus
-        the grant ``role``. An empty ``clerk_user_id`` matches nothing. Excludes
-        purged (``deleted_at``) and, by default, trashed projections, and excludes a
-        row the grantee already OWNS (that belongs to their owner list, not the shared
-        section — no double-listing)."""
-        if not clerk_user_id:
-            return []
-        sql = (
-            "SELECT p.view_slug, p.name, p.status, p.version, p.updated_at, "
-            "p.summary_json, g.role AS grant_role "
-            "FROM share_grants g JOIN projections p ON p.id = g.projection_id "
-            "WHERE g.grantee_clerk_user_id = ? AND p.deleted_at IS NULL "
-            "AND (p.owner_clerk_user_id IS NULL OR p.owner_clerk_user_id != ?)"
-        )
-        if not include_trashed:
-            sql += " AND p.status = 'active'"
-        sql += " ORDER BY p.updated_at DESC"
-        return [
-            dict(r)
-            for r in self._read_conn().execute(sql, (clerk_user_id, clerk_user_id))
-        ]
-
-    def list_card_summaries(
-        self, owner_token_hash: str, *, include_trashed: bool = False
-    ) -> list[dict]:
-        """Owner-scoped list selecting ONLY the small card columns (#178).
-
-        Never SELECTs the heavy JSON blobs (computed_json/inputs_json/...); returns the
-        denormalized ``summary_json`` instead, so the hottest authenticated query stops
-        being O(N rows x ~10KB) read + per-row full-blob parse. Owner-scoped, NEVER
-        global (DATA_MODEL.md §3.1 / SECURITY.md §1 risk #3); the owner index backs the
-        WHERE + ORDER BY.
+        This project has no authentication (owner decision, 2026-09-13): every
+        projection in the database is returned, unfiltered. Never SELECTs the heavy
+        JSON blobs (computed_json/inputs_json/...); returns the denormalized
+        ``summary_json`` instead, so the list query stops being O(N rows x ~10KB)
+        read + per-row full-blob parse.
         """
         sql = (
             "SELECT view_slug, name, status, version, updated_at, summary_json "
-            "FROM projections WHERE owner_token_hash = ? AND deleted_at IS NULL"
+            "FROM projections WHERE deleted_at IS NULL"
         )
         if not include_trashed:
             sql += " AND status = 'active'"
         sql += " ORDER BY updated_at DESC"
-        return [dict(r) for r in self._read_conn().execute(sql, (owner_token_hash,))]
+        return [dict(r) for r in self._read_conn().execute(sql)]
 
     def create_projection(self, p: dict) -> dict:
         # Denormalize the owner-list card summary at write time (#178) so the list
@@ -640,44 +476,6 @@ class SqliteStore:
                     return 0
                 conn.execute(insert_sql, [revision[c] for c in cols])
                 self._prune_revisions(conn, revision["projection_id"])  # bounded (#179)
-                conn.execute("COMMIT")
-                return cur.rowcount
-            except BaseException:
-                conn.execute("ROLLBACK")
-                raise
-            finally:
-                conn.isolation_level = prev
-
-    def rotate_tokens(
-        self, id: str, expected_version: int, new_hashes: dict[str, Any]
-    ) -> int:
-        """Atomic owner/edit/view_slug/role rotation (DATA_MODEL §6.1).
-
-        One version-checked UPDATE re-hashes every shared capability so all prior
-        links die at once, and the indexed ``role_links`` table is rebuilt from the
-        new ``role_tokens_json`` IN THE SAME TRANSACTION (#180) so every old role slug
-        stops resolving. Same 0-rows -> 409 contract as every mutation.
-        """
-        patch = dict(new_hashes)
-        set_cols = ", ".join(f"{k} = ?" for k in patch)
-        update_sql = (
-            "UPDATE projections SET version = version + 1, updated_at = ?"
-            + (", " + set_cols if patch else "")
-            + " WHERE id = ? AND version = ? AND deleted_at IS NULL"
-        )
-        params = [_utcnow(), *patch.values(), id, expected_version]
-        with self._write_lock:
-            conn = self._conn
-            prev = conn.isolation_level
-            conn.isolation_level = None
-            try:
-                conn.execute("BEGIN")
-                cur = conn.execute(update_sql, params)
-                if cur.rowcount == 0:
-                    conn.execute("ROLLBACK")  # 409: nothing rotated
-                    return 0
-                if "role_tokens_json" in patch:
-                    self._sync_role_links(conn, id, patch["role_tokens_json"])
                 conn.execute("COMMIT")
                 return cur.rowcount
             except BaseException:

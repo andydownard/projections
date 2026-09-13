@@ -1,14 +1,15 @@
 """E2E support — the deterministic `example` seed + role-link read (API_SPEC §4.3).
 
-The Playwright flows drive a fixed projection at view_slug `example` (edit token
-`edit-secret`, terms accepted) and a board role link `board-slug`. seed_example()
-makes those deterministic so the gate is reproducible. RED-first.
+The Playwright flows drive a fixed projection at view_slug `example` (terms
+accepted; this project has no authentication, owner decision 2026-09-13) and a
+board role link `board-slug`. seed_example() makes those deterministic so the
+gate is reproducible. RED-first.
 """
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.seed import EXAMPLE_EDIT_TOKEN, EXAMPLE_SLUG, ROLE_SLUG, seed_example
+from app.seed import EXAMPLE_SLUG, ROLE_SLUG, seed_example
 from app.store import get_store
 from app.store.sqlite import SqliteStore
 
@@ -33,15 +34,12 @@ def test_example_projection_is_readable_with_decision(client):
     assert vm["metrics"]["capital"]["display"].startswith("$")
 
 
-def test_example_edit_token_can_patch(client):
+def test_example_can_be_patched_with_no_auth(client):
     get = client.get(f"/api/projections/{EXAMPLE_SLUG}")
     version = get.json()["version"]
     r = client.patch(
         f"/api/projections/{EXAMPLE_SLUG}",
-        headers={
-            "Authorization": f"Bearer {EXAMPLE_EDIT_TOKEN}",
-            "If-Match": str(version),
-        },
+        headers={"If-Match": str(version)},
         json={"name": "Edited by A"},
     )
     assert r.status_code == 200, r.text

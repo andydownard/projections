@@ -15,9 +15,10 @@ version-checked UPDATE commits on its own *before* the separate ``insert_revisio
 so a failed INSERT leaves the version bumped with no snapshot (an unrecoverable hole
 in the restore/audit trail). With the single-transaction method it rolls back.
 
-Covers all three mutation sites (PATCH / restore / rotate). The PATCH path is the
-one Penny converges on via ``apply_projection_patch`` (actor:penny), so the Penny
-write path inherits the same atomicity.
+Covers both remaining mutation sites (PATCH / restore) — rotate-tokens was deleted
+along with the rest of the capability-token model. The PATCH path is the one Penny
+converges on via ``apply_projection_patch`` (actor:penny), so the Penny write path
+inherits the same atomicity.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -93,13 +94,13 @@ def test_patch_version_and_revision_move_together(client, store):
     """Happy path: a successful settle advances version AND writes exactly one
     revision whose seq equals the new version (they are one transaction)."""
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     pid = _pid(store, slug)
 
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["version"] == 2
@@ -111,13 +112,13 @@ def test_patch_version_and_revision_move_together(client, store):
 def test_patch_conflict_writes_neither_version_nor_revision(client, store):
     """409 (stale If-Match): the version stays put and NO revision is written."""
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     pid = _pid(store, slug)
 
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "99"},
+        headers={"If-Match": "99"},
     )
     assert r.status_code == 409, r.text
     assert store.get_projection_by_slug(slug)["version"] == 1
@@ -128,7 +129,7 @@ def test_patch_revision_insert_failure_rolls_back_version(client, store):
     """RED on the old two-call path: if the revision INSERT fails, the version bump
     must roll back with it (no version without a snapshot)."""
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     pid = _pid(store, slug)
     # Force the next revision INSERT (seq == new version == 2) to collide.
     _seed_revision(store, pid, 2)
@@ -136,7 +137,7 @@ def test_patch_revision_insert_failure_rolls_back_version(client, store):
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 500, r.text  # the duplicate-seq backstop fired
     # Atomic: the version did NOT advance and no extra revision landed.
@@ -150,13 +151,13 @@ def test_restore_revision_insert_failure_rolls_back_version(client, store):
     """Restore writes a NEW forward revision; that INSERT and the version bump are
     one transaction. A failed INSERT must not leave the version advanced."""
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     pid = _pid(store, slug)
     # v1 -> v2 (real revision at seq 2 we can restore from)
     client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     target = [rv for rv in store.list_revisions(pid) if rv["seq"] == 2][0]
     # Force the restore's revision INSERT (seq == new version == 3) to collide.
@@ -164,36 +165,8 @@ def test_restore_revision_insert_failure_rolls_back_version(client, store):
 
     r = client.post(
         f"/api/projections/{slug}/revisions/{target['id']}/restore",
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "2"},
+        headers={"If-Match": "2"},
     )
     assert r.status_code == 500, r.text
     assert store.get_projection_by_slug(slug)["version"] == 2  # not advanced to 3
     assert {rv["seq"] for rv in store.list_revisions(pid)} == {2, 3}  # no new row
-
-
-# --------------------------------------------------------------- rotate path
-
-def test_rotate_revision_insert_failure_rolls_back_token_swap(client, store):
-    """Rotate re-hashes every capability AND logs an audit revision in one txn. If
-    the audit INSERT fails the whole rotation rolls back — old links keep working
-    (no version bumped without its snapshot, no half-rotated state)."""
-    created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
-    pid = _pid(store, slug)
-    _seed_revision(store, pid, 2)  # collide the audit revision (seq 2)
-
-    r = client.post(
-        f"/api/projections/{slug}/rotate-tokens",
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
-    )
-    assert r.status_code == 500, r.text
-    # Rolled back: version unchanged and the OLD slug + owner token still resolve.
-    assert store.get_projection_by_slug(slug)["version"] == 1
-    assert client.get(f"/api/projections/{slug}").status_code == 200
-    # The owner token was NOT rotated: it still authorizes the owner-only history
-    # endpoint (a non-mutating proof that owner_token_hash is unchanged).
-    hist = client.get(
-        f"/api/projections/{slug}/revisions",
-        headers={"Authorization": f"Bearer {owner}"},
-    )
-    assert hist.status_code == 200, hist.text

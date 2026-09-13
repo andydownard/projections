@@ -32,7 +32,7 @@ This document is the canonical schema and data-access contract for the projectio
 | `actuals` | many per projection | **Post-launch (M7), schema only in v1.** Monthly forecast-vs-actual + opt-in benchmarks. | §6.3, §24 |
 | `penny_transcripts` | 0..1 per projection | Persisted per-project Penny conversation (Spec B §7). Wizard-draft transcripts (no projection) are **never** persisted. | Spec B §7 |
 | `role_links` | many per projection | Indexed role-share links (board/funder/advisor): slug PK → projection + role, for O(1) exact-match resolution of `/api/r/{slug}` (#180). | §6.2, §20 |
-| `share_grants` | many per projection | Editable shares that FOLLOW a Clerk account (#323): one row per (projection, grantee Clerk sub), minted only from a verified edit-token presentation. Scopes the "Shared with me" list + the grant-based PATCH path. | §20 |
+| `share_grants` | **unused** | Backed a deleted editable-shares-follow-a-Clerk-account feature (#323). This app has no authentication (owner decision, 2026-09-13 — SECURITY.md §2); the table is kept only because migrations are additive-only. | §20 |
 | `schema_migrations` | global | Applied-migration ledger (timpager pattern). | §26 |
 
 ```
@@ -42,7 +42,7 @@ projections ──1:N── revisions
             ──1:N── actuals        (post-launch)
             ──1:1── penny_transcripts  (NULL projection_id => never persisted)
             ──1:N── role_links     (slug PK; indexed role-share resolution)
-            ──1:N── share_grants   (editable shares keyed on the grantee's Clerk sub, #323)
+            ──1:N── share_grants   (unused — SECURITY.md §2)
 research_cache  (independent, global, TTL)
 feedback        (independent, global, no FK to projections)
 schema_migrations (global)
@@ -111,9 +111,9 @@ CREATE TABLE IF NOT EXISTS projections (
 |---|---|---|
 | `id` | TEXT PK | ULID, app-generated. |
 | `view_slug` | TEXT UNIQUE | ≥128-bit URL-safe token, **stored plaintext** because it is the read lookup key (PRD §20, §24). Generated `secrets.token_urlsafe(16)`. Not a secret on its own — read-only access. |
-| `owner_token_hash` | TEXT | SHA-256 hex of the owner bearer token (≥256-bit, `secrets.token_urlsafe(32)`). The raw token lives only in the client `localStorage` (§7). |
-| `edit_token_hash` | TEXT, nullable | SHA-256 of the edit token. Raw token is delivered via URL **fragment** only, never path/query, never logged (PRD §20). Null until an edit link is minted. |
-| `role_tokens_json` | TEXT | JSON map of role-share links (each a read-only capability link with role-emphasis, PRD §6.2), rotated atomically with owner/edit (§7.4). **Canonical role-link storage + resolution moved to the indexed `role_links` table (§3.10, #180); this column is a denormalized mirror kept in sync on every write.** The store's sync parser tolerates BOTH the documented `{ role_name: {slug, token_hash} }` shape and the legacy shipped `{ slug: role_name }` shape. |
+| `owner_token_hash` | TEXT | **Unused (owner decision, 2026-09-13 — SECURITY.md §2).** Kept only because migrations are additive-only and this column is `NOT NULL`; the server writes a random internal value at create time (`app.deps.new_internal_owner_hash()`) that is never returned to a client and never compared against anything. Do not read or write meaning into this column. |
+| `edit_token_hash` | TEXT, nullable | **Unused** — same reason as `owner_token_hash`. New rows leave it `NULL`. |
+| `role_tokens_json` | TEXT | **Unused** — the capability-token model this backed is gone (§2). New rows carry the schema default `'{}'`. The indexed `role_links` table (§3.10) is a separate, still-live feature (read-only board/funder/advisor display links, `app/routers/roles.py`) that is unaffected by this decision except that `rotate-tokens` — the only way this column/table pair used to get populated — no longer exists, so no *new* role links can be minted. |
 | `name` | TEXT | Display name. |
 | `status` | TEXT | `active` \| `trashed`. Trash with restore (PRD §19.1). |
 | `version` | INTEGER | Monotonic per-projection. Every mutation does `SET version = version + 1 ... WHERE id=? AND version=?`; 0 rows → HTTP 409 (§6). |
@@ -132,19 +132,18 @@ CREATE TABLE IF NOT EXISTS projections (
 | `created_at` / `updated_at` | TEXT | App-set ISO-8601 UTC. |
 | `deleted_at` | TEXT, nullable | **Legacy** soft-delete marker (`status='trashed'` is the user-visible soft delete). The hard purge now **DELETEs the row outright** + cascades (§5.4, #202); reads still filter `deleted_at IS NULL` to exclude any legacy soft-deleted rows. |
 | `summary_json` | TEXT | **0008 (#178).** Compact owner-list card summary `{location, basis, y1_revenue, y1_net, capital_required, reco_tag, coords}`, denormalized from `computed_json` at write time. `list_card_summaries` SELECTs only this + the small identity columns so the owner list never `SELECT *` + parses the full ~10KB `computed_json` per row. See §4.10. |
-| `owner_clerk_user_id` | TEXT, nullable | **0010 (Clerk satellite, Override SESSION / [SECURITY.md](./SECURITY.md) §2.8).** The Clerk `sub` (user id) that owns the row when the owner signed in via Clerk (`CLERK_ENABLED`). NULL for the token-owned rows that exist today. v1 keys owner scope on this; `list_by_clerk_owner` / `list_card_summaries_by_clerk_owner` filter on it (never global). A projection is **token-owned OR clerk-owned**; a *claim* path that links a legacy token-owned row to a signed-in Clerk identity is a deliberate **follow-up** (these columns are its additive foundation). |
-| `owner_org_id` | TEXT, nullable | **0010.** The Clerk `org_id` for org-scoped sessions; stored now so org-scoped lists can ship without a second migration. NULL for personal/user-scoped and token-owned rows. |
+| `owner_clerk_user_id` | TEXT, nullable | **Unused (Clerk removed, owner decision 2026-09-13 — SECURITY.md §2).** Was the Clerk `sub` that owned a row under the deleted satellite-login feature. New rows never set it; historical rows may still carry an old value, but nothing reads it. |
+| `owner_org_id` | TEXT, nullable | **Unused** — same reason as `owner_clerk_user_id`. |
 
-**Indexes:**
+**Indexes** (all four now unused — kept because migrations are additive-only, §8):
 ```sql
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projections_view_slug   ON projections(view_slug);
 CREATE INDEX        IF NOT EXISTS idx_projections_owner        ON projections(owner_token_hash, status, updated_at DESC);
 CREATE INDEX        IF NOT EXISTS idx_projections_edit         ON projections(edit_token_hash);
--- 0010: back the Clerk-owner-scoped list (mirrors the token-owner index), never global.
 CREATE INDEX        IF NOT EXISTS idx_projections_clerk_owner  ON projections(owner_clerk_user_id, status, updated_at DESC);
 CREATE INDEX        IF NOT EXISTS idx_projections_clerk_org    ON projections(owner_org_id, status, updated_at DESC);
 ```
-The owner index backs the **owner-scoped list** (`GET /api/projections`) — there is **no global index of projections** (PRD §20). The list query is always `WHERE owner_token_hash = ? AND status = 'active' AND deleted_at IS NULL ORDER BY updated_at DESC`, and (since #178) selects **only** `view_slug, name, status, version, updated_at, summary_json` — never the heavy JSON blobs. **0010 (Clerk satellite):** when `CLERK_ENABLED` and the caller is a verified Clerk owner, the identical query keys on `owner_clerk_user_id` instead (`list_by_clerk_owner` / `list_card_summaries_by_clerk_owner`), backed by `idx_projections_clerk_owner` — still owner-scoped, still never global (Override TENANT).
+`idx_projections_view_slug` is the only one still exercised — every read is `WHERE view_slug = ?`. The list (`GET /api/projections`) is **global** (owner decision, 2026-09-13 — SECURITY.md §2): `list_card_summaries` does a plain `WHERE deleted_at IS NULL [AND status='active'] ORDER BY updated_at DESC`, selecting only `view_slug, name, status, version, updated_at, summary_json` (never the heavy JSON blobs, #178) — with no owner filter of any kind. The other three indexes (`_owner`, `_edit`, `_clerk_owner`, `_clerk_org`) back no live query anymore; they exist only because migrations are additive-only and an index cannot be dropped either.
 
 ### 3.2 `revisions` (append-only snapshots)
 
@@ -170,7 +169,7 @@ CREATE INDEX IF NOT EXISTS idx_revisions_projection ON revisions(projection_id, 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_revisions_projection_seq ON revisions(projection_id, seq);
 ```
 
-A snapshot is written **per autosave settle** and per explicit save / model upgrade / restore (PRD §19.3, §24). **It stores the recoverable inputs only — `inputs_json` / `assumptions_json` / `overrides_json` / `model_version` + metadata.** The compute snapshot (`computed_json`, `monthly_json`) is **NOT persisted** in a revision (`strip_recomputable` blanks it to `'{}'` before insert, #179): restore recomputes the view-model from the inputs and **never reads `rev['computed_json']`**, and `list_revisions` returns metadata only — so storing the full ~10KB blob per revision was pure durable-volume + Litestream write-amplification with no reader. The columns remain `NOT NULL` (additive-only; never dropped) and simply hold `'{}'`. `actor_token_hash` records which capability token authored the change (audit/forensics, PRD §20). The **`actor` enum** (`user | penny | penny_undo | user_undo`, added in migration `0006`, default `'user'`) attributes each revision to its author class so the audit trail distinguishes a Penny edit, a per-field undo, and a manual edit (Spec B §3/§4); it is app-enforced (SQLite has no native enum) and carries to Postgres as the same column. Restore (`POST …/revisions/{id}/restore`) writes a **new** revision rather than rewinding in place. `model_version` is captured so a restored snapshot is never silently recomputed.
+A snapshot is written **per autosave settle** and per explicit save / model upgrade / restore (PRD §19.3, §24). **It stores the recoverable inputs only — `inputs_json` / `assumptions_json` / `overrides_json` / `model_version` + metadata.** The compute snapshot (`computed_json`, `monthly_json`) is **NOT persisted** in a revision (`strip_recomputable` blanks it to `'{}'` before insert, #179): restore recomputes the view-model from the inputs and **never reads `rev['computed_json']`**, and `list_revisions` returns metadata only — so storing the full ~10KB blob per revision was pure durable-volume + Litestream write-amplification with no reader. The columns remain `NOT NULL` (additive-only; never dropped) and simply hold `'{}'`. `actor_token_hash` is **unused** (owner decision, 2026-09-13 — SECURITY.md §2): there is no actor identity to record, so every new revision writes `NULL` here; a pre-decision row may still carry an old value. The **`actor` enum** (`user | penny | penny_undo | user_undo`, added in migration `0006`, default `'user'`) attributes each revision to its author class so the audit trail distinguishes a Penny edit, a per-field undo, and a manual edit (Spec B §3/§4); it is app-enforced (SQLite has no native enum) and carries to Postgres as the same column. Restore (`POST …/revisions/{id}/restore`) writes a **new** revision rather than rewinding in place. `model_version` is captured so a restored snapshot is never silently recomputed.
 
 **Atomic version bump + snapshot (issue #186).** The version-checked UPDATE and its revision snapshot are written in **one transaction** via `update_with_version_check_and_revision` (§9): 0 rows → HTTP 409 and **no** revision is written; otherwise the `projections.version++` and the matching `revisions` row commit together. This closes the crash window where a separate `version++` commit landed but the snapshot commit did not — a version with no recoverable snapshot, a silent hole in the restore/audit trail. The additive **`UNIQUE(projection_id, seq)`** index (migration `0007`) is the DB-level backstop: `seq` integrity no longer rests solely on the app computing `seq = if_match + 1` — a duplicate fails loudly rather than corrupting the list.
 
@@ -262,23 +261,23 @@ CREATE TABLE IF NOT EXISTS feedback (
   github_issue_url TEXT,
   status           TEXT NOT NULL DEFAULT 'open',
   created_at       TEXT NOT NULL,
-  -- 0011 (Clerk satellite, Epic F / decisions #6/#13). SERVER-ONLY creator identity
-  -- read from the verified Clerk session-JWT CLAIMS (NO Clerk Backend API, NO secret).
-  -- All nullable: NULL for anonymous / token-owned feedback (the rows that exist
-  -- today). These PII columns NEVER reach the redacted GitHub issue (see hard rules).
-  creator_email         TEXT,                  -- optional, from JWT claims
-  creator_name          TEXT,                  -- optional, from JWT claims
-  creator_phone         TEXT,                  -- optional, from JWT claims
-  creator_clerk_user_id TEXT                   -- Clerk `sub` of the signed-in filer; NULL if anonymous
+  -- 0011 (Clerk satellite, Epic F / decisions #6/#13). UNUSED — the Clerk satellite
+  -- login these columns supported is deleted entirely (owner decision, 2026-09-13;
+  -- SECURITY.md §2). `app/feedback/creator.py` (the JWT-claims extractor) is gone.
+  -- Every new row leaves all four NULL; kept only because migrations are additive-only.
+  creator_email         TEXT,                  -- unused
+  creator_name          TEXT,                  -- unused
+  creator_phone         TEXT,                  -- unused
+  creator_clerk_user_id TEXT                   -- unused
 );
 ```
 
 **Hard rules (PRD §22, the product's top data-leak risk):**
-- **No `projection_id`, no `view_slug`, no edit/role token, no resolvable projection link** ever stored here or in the GitHub payload. There is intentionally **no foreign key** to `projections`.
+- **No `projection_id`, no `view_slug`, no resolvable projection link** ever stored here or in the GitHub payload. There is intentionally **no foreign key** to `projections`.
 - **No financial fields** in `body` or `context_json`. UI notice: "Don't paste sensitive financial details."
 - `context_json` is non-sensitive only: route, app version, `model_version`, support ID, timestamp.
 - `support_id` is a random user-facing code; only **server-side staff tooling** resolves it to a projection (the mapping is not in this table — it lives in staff-only audit logs, see [`SECURITY.md`](./SECURITY.md)). Safe even if the repo is public.
-- **`creator_*` (0011) and `email` are SERVER-ONLY PII** — recorded next to each other for support follow-up and **never** part of the GitHub-bound payload. The public payload (`support_id`, `type`, redacted `title`/`body`, allowlisted `context`) is assembled by `app.feedback.redact` and carries no creator/email column; a CI test (`app/tests/test_feedback_creator_identity.py`) asserts `creator_*` PII never reaches the sink. When `CLERK_ENABLED` is off (default) and for anonymous feedback, every `creator_*` is NULL (the row is byte-for-byte what it is today — additive + dormant).
+- **`creator_*` (0011) is unused** (SECURITY.md §2) — every row leaves it `NULL`. `email` is still live: a server-only optional reply-to, never part of the GitHub-bound payload. The public payload (`support_id`, `type`, redacted `title`/`body`, allowlisted `context`) is assembled by `app.feedback.redact` and carries no creator/email column.
 
 A CI test asserts the GitHub payload contains none of the forbidden fields (see [`DEFINITION_OF_DONE.md`](./DEFINITION_OF_DONE.md), feedback-redaction test). See [`IDEA_FAB.md`](./IDEA_FAB.md) for the bug/idea → GitHub flow and intent → CRM split.
 
@@ -326,9 +325,9 @@ CREATE TABLE IF NOT EXISTS penny_transcripts (
 CREATE INDEX IF NOT EXISTS idx_penny_transcripts_projection ON penny_transcripts(projection_id);
 ```
 
-Added in migration `0006_penny_transcripts`. One persisted transcript per **saved** projection; the **edit/detail-page** conversation. `projection_id` is a **NULLable** FK by design: a Penny **wizard-draft** conversation has no projection yet, lives only in client state, and is **never written** (Spec B §7) — the Store seam (`create_transcript` / `append_transcript_turn`) **fails closed** (`ValueError`) on a missing/NULL `projection_id` so an ephemeral draft can never be persisted. Owner scoping is enforced at the router: `GET /api/projections/{view_slug}/penny/transcript` resolves the slug under the owner/edit Bearer, then keys on the resolved `projection_id` (no cross-owner read). `turns_json` is opaque `TEXT` ((de)serialized by the app — no JSON1 above the Store interface). **Retention/size cap** (Spec B §7) is applied above the interface on every append (`app/store/penny_retention.py`): keep the most-recent `MAX_TURNS` (200) turns, and truncate the heavy machine payload (`tool_args`, `tool_result_ref`) of `tool` turns older than the most-recent `TOOL_PAYLOAD_RETENTION` (40) window while keeping each turn's human-readable `content` summary. No financial leakage beyond what the projection already holds for that owner.
+Added in migration `0006_penny_transcripts`. One persisted transcript per **saved** projection; the **edit/detail-page** conversation. `projection_id` is a **NULLable** FK by design: a Penny **wizard-draft** conversation has no projection yet, lives only in client state, and is **never written** (Spec B §7) — the Store seam (`create_transcript` / `append_transcript_turn`) **fails closed** (`ValueError`) on a missing/NULL `projection_id` so an ephemeral draft can never be persisted. This app has no authentication (SECURITY.md §2): `GET /api/projections/{view_slug}/penny/transcript` resolves the slug with no bearer at all, then keys on the resolved `projection_id`. `turns_json` is opaque `TEXT` ((de)serialized by the app — no JSON1 above the Store interface). **Retention/size cap** (Spec B §7) is applied above the interface on every append (`app/store/penny_retention.py`): keep the most-recent `MAX_TURNS` (200) turns, and truncate the heavy machine payload (`tool_args`, `tool_result_ref`) of `tool` turns older than the most-recent `TOOL_PAYLOAD_RETENTION` (40) window while keeping each turn's human-readable `content` summary.
 
-The **seven-tool surface** (`app/penny/tools.py`, PE4) that drives mutations is registered into the bounded tool-use loop: every mutate tool converges on the shared `apply_projection_patch` service (the same PATCH/`If-Match` write path the manual UI uses), so each applied Penny edit bumps `version` and writes **one revision tagged `actor='penny'`** (§3.2). The **POST endpoint** (`POST …/penny`) that wires the loop to HTTP and appends transcript turns is a later slice (PE5); v1 of this table ships the data model + owner-scoped read seam only.
+The **seven-tool surface** (`app/penny/tools.py`, PE4) that drives mutations is registered into the bounded tool-use loop: every mutate tool converges on the shared `apply_projection_patch` service (the same PATCH/`If-Match` write path the manual UI uses), so each applied Penny edit bumps `version` and writes **one revision tagged `actor='penny'`** (§3.2). The **POST endpoint** (`POST …/penny`) that wires the loop to HTTP and appends transcript turns is a later slice (PE5); v1 of this table ships the data model + the (now bearer-free) read seam only.
 
 ### 3.10 `role_links` (indexed role-share resolution — #180)
 
@@ -346,10 +345,10 @@ CREATE INDEX IF NOT EXISTS idx_role_links_projection ON role_links(projection_id
 Added in migration `0009_role_links`. This is the **canonical, indexed home** for role-share links and the realization of the documented `{ role_name, slug, token_hash }` shape (§3.1) as a relational table. It replaces the previous resolver, which scanned the whole `projections` table with a leading-wildcard `role_tokens_json LIKE '%"<slug>"%'` — **unindexed, O(table-size) per UNAUTHENTICATED `/api/r/{slug}` request, and non-portable to Postgres `jsonb`** (#180). Resolution (`get_projection_by_role_slug`) is now an **O(1) exact match** on the `slug` primary key joined to the live projection (`deleted_at IS NULL`), identical on Postgres.
 
 - **slug is plaintext** — it is a read-only lookup capability exactly analogous to `view_slug` (§6), delivered in the `/api/r/{slug}` path and stored as the indexed PK. `token_hash = SHA-256(slug)` is also stored as the §6 hashed-at-rest companion (decision: **plaintext lookup key + hashed companion**, resolving the §3.1 / §6 ambiguity for role slugs).
-- **Kept in sync from `role_tokens_json`.** `SqliteStore` rebuilds a projection's `role_links` rows on every write that carries `role_tokens_json` (`create_projection`, `rotate_tokens` — in the **same transaction** as the rotation, so an old role slug stops resolving the moment it rotates), via the tolerant `parse_role_tokens` (both the documented and legacy shapes). A one-time `_backfill_role_links` populates existing rows on the boot that applies `0009`.
+- **Kept in sync from `role_tokens_json`.** `SqliteStore` rebuilds a projection's `role_links` rows on any write that carries `role_tokens_json`, via the tolerant `parse_role_tokens` (both the documented and legacy shapes). A one-time `_backfill_role_links` populates existing rows on the boot that applies `0009`. **`rotate_tokens` — the endpoint that used to mint new role links — is gone (owner decision, 2026-09-13: this project has no authentication, SECURITY.md §2).** No new role link can be created going forward; any that existed before that decision still resolve unaffected (this table and route are unrelated to the removed auth model — it was always a read-only display link, never a write credential).
 - The `idx_role_links_projection` index backs the per-projection cascade erased by the hard purge (§5.4, #202).
 
-### 3.11 `share_grants` (editable shares that follow a Clerk account — #323)
+### 3.11 `share_grants` (unused — #323 feature deleted, owner decision 2026-09-13)
 
 ```sql
 CREATE TABLE IF NOT EXISTS share_grants (
@@ -365,12 +364,7 @@ CREATE INDEX IF NOT EXISTS idx_share_grants_grantee    ON share_grants(grantee_c
 CREATE INDEX IF NOT EXISTS idx_share_grants_projection ON share_grants(projection_id);
 ```
 
-Added in migration `0014_share_grants`. **Owner decision (#323): shared *edit* access FOLLOWS the recipient's Clerk account, not a per-device capability token.** A `share_grant` is the server-side home for that relationship — keyed on the grantee's Clerk `sub` (Override TENANT / PRD §20), it is owner-scoped, never global.
-
-- **Created ONLY from a verified edit-token presentation.** `POST /api/projections/{slug}/claim-share` mints a grant **iff** a signed-in Clerk user presents an edit token whose hash matches **that slug's** `edit_token_hash` (constant-time compare). A wrong/foreign edit token → 403 and **no grant** — possession of some other projection's edit token grants nothing here (the cross-owner wall). The edit token rides the request **body**, never the path/query/log (Regression #10).
-- **Idempotent.** `create_share_grant` does a portable SELECT-then-INSERT under the single-writer lock (no SQLite-only upsert above the `Store` interface), with `UNIQUE(projection_id, grantee_clerk_user_id)` as the backstop — a re-claim writes nothing and returns `{ "granted": false }`.
-- **Scopes two surfaces, both grantee-keyed:** the **"Shared with me"** list (`list_shared_card_summaries_by_clerk_owner` — joins `share_grants` to the live projection, excluding trashed/deleted rows and rows the grantee already owns) and the **grant-based PATCH** path (a Clerk grantee may edit via their JWT on any device — `apply_projection_patch` authorizes when `has_share_grant` is true). `idx_share_grants_grantee` backs the list; `idx_share_grants_projection` backs the per-projection cascade erased by the hard purge (§5.4, #202 — `share_grants` is in the cascade list).
-- **`role`** is `'editor'` in v1 (the only shared-write role). **`grantee_owner_token_hash`** is reserved (nullable, NULL in v1) for a future token-keyed grant (a viewer who has not signed in).
+Added in migration `0014_share_grants` to back an editable-share-follows-the-Clerk-account feature (#323). **This app has no authentication anymore (owner decision, 2026-09-13 — SECURITY.md §2)** — Clerk, `POST …/claim-share`, `has_share_grant`, `create_share_grant`, and the "Shared with me" list are all deleted from the code. This table is kept only because migrations are additive-only and cannot be dropped; it is empty for every row created after the decision and nothing reads or writes it anymore. It still participates in the hard-purge cascade (§5.4, #202) so a purged projection's historical grants, if any, are erased along with it.
 
 ---
 
@@ -699,24 +693,15 @@ The DB never does arithmetic on stored money. The engine computes in cents/`Deci
 
 ---
 
-## 6. Token hashing at rest
+## 6. (removed) Token hashing at rest
 
-(PRD §20; full policy in [`SECURITY.md`](./SECURITY.md).)
+This project used to run a capability-token access model — owner/edit bearer tokens, hashed at rest, plus role-share slugs. **It has no authentication of any kind anymore (owner decision, 2026-09-13 — SECURITY.md §2).** `owner_token_hash`/`edit_token_hash` are vestigial columns (§3.1); `role_links` (§3.10) is a separate, still-live read-only display feature, not a credential. `actor_token_hash` in `revisions` (§3.2) is always `NULL` now — there is no actor identity to record.
 
-| Token | Entropy | Generation | At rest |
-|---|---|---|---|
-| Owner bearer token | ≥256-bit | `secrets.token_urlsafe(32)` | `owner_token_hash` = SHA-256(token), hex. Raw token only in client `localStorage`. |
-| Edit token | ≥128-bit | `secrets.token_urlsafe(24)` | `edit_token_hash`. Raw delivered via URL **fragment** only; never path/query; never logged. |
-| Role slugs (board/funder/advisor) | ≥128-bit | `secrets.token_urlsafe(16)` | **plaintext** `role_links.slug` (the read-only lookup capability, like `view_slug`; delivered in the `/api/r/{slug}` path), plus `role_links.token_hash = SHA-256(slug)` as the hashed-at-rest companion (#180, §3.10). |
-| `view_slug` | ≥128-bit | `secrets.token_urlsafe(16)` | **plaintext** (lookup key, read-only access only). |
+`view_slug` is still `≥128-bit`, plaintext, `secrets.token_urlsafe(16)` — but it is now purely a row lookup key, not a capability: the same row is also reachable through the global list (`GET /api/projections`), so knowing the slug grants nothing a visitor didn't already have.
 
-- **Why SHA-256, not bcrypt/argon2:** these are high-entropy random tokens, not user-chosen passwords; a fast hash is appropriate and constant-time comparison defeats timing attacks. Compare with `hmac.compare_digest` (constant-time) — **never** `==`.
-- **No secrets in URL paths or query strings; no secrets in logs.** The edit/recovery secret travels in the URL fragment, is read client-side, sent as `Authorization: Bearer`, and scrubbed from the URL. `Authorization` headers and fragments are never logged.
-- **One-time recovery code** is shown once at create time; staff **cannot** recover access (only resolve support IDs). Document this to users (key-loss = data-loss is structural — PRD §29).
-- **`actor_token_hash`** in `revisions` records which token authored each change (forensics).
+### 6.1 (removed) Rotate / revoke
 
-### 6.1 Rotate / revoke (`POST …/rotate-tokens`)
-Regenerates owner, edit, view_slug, and all role tokens **atomically in one transaction**, re-hashes them, writes a rotation event into `revisions` (audit), and immediately invalidates all previously-shared links (PRD §20). Must be implemented in v1, not deferred.
+`POST …/rotate-tokens` no longer exists (`404`) — there is nothing left to rotate.
 
 ---
 
@@ -763,20 +748,11 @@ class Store(Protocol):
     # --- projections (root aggregate) ---
     def get_projection_by_slug(self, view_slug: str) -> Projection | None: ...
     def get_projection_by_role_slug(self, role_slug: str) -> Projection | None: ...  # O(1) role_links slug PK (#180)
-    def list_by_owner(self, owner_token_hash: str, *, include_trashed: bool = False) -> list[Projection]: ...
-    def list_card_summaries(self, owner_token_hash: str, *, include_trashed: bool = False) -> list[dict]: ...  # small card cols only (#178)
-    # 0010 Clerk satellite (Override SESSION / §2.8): owner-scope keyed on the verified
-    # Clerk identity instead of the hashed capability token. NEVER global (Override TENANT).
-    def list_by_clerk_owner(self, clerk_user_id: str, *, include_trashed: bool = False) -> list[Projection]: ...
-    def list_card_summaries_by_clerk_owner(self, clerk_user_id: str, *, include_trashed: bool = False) -> list[dict]: ...
-    # 0014 share grants (#323): editable shares that follow a Clerk account. A grant is
-    # minted ONLY from a verified edit-token presentation at the router boundary; these
-    # scope the "Shared with me" list + the grant-based PATCH path. NEVER global (TENANT).
-    def create_share_grant(self, projection_id: str, grantee_clerk_user_id: str, *,
-                           role: str = "editor",
-                           grantee_owner_token_hash: str | None = None) -> bool: ...  # True iff NEW; idempotent
-    def has_share_grant(self, projection_id: str, grantee_clerk_user_id: str) -> bool: ...  # PATCH-grant auth check
-    def list_shared_card_summaries_by_clerk_owner(self, clerk_user_id: str, *, include_trashed: bool = False) -> list[dict]: ...
+    # This app has no authentication (owner decision, 2026-09-13 — SECURITY.md §2): the
+    # list is global, not owner/Clerk-scoped. list_by_owner, list_by_clerk_owner,
+    # list_card_summaries_by_clerk_owner, create_share_grant, has_share_grant, and
+    # list_shared_card_summaries_by_clerk_owner are all deleted from the Protocol.
+    def list_card_summaries(self, *, include_trashed: bool = False) -> list[dict]: ...  # small card cols only (#178), global
     def create_projection(self, p: Projection) -> Projection: ...        # app-generated ULID + view_slug
     def update_with_version_check(self, id: str, expected_version: int,
                                   patch: ProjectionPatch) -> int: ...     # rows-affected; 0 -> 409
@@ -785,8 +761,7 @@ class Store(Protocol):
     def set_status(self, id: str, status: str, expected_version: int) -> int: ...  # trash/restore
     def soft_delete(self, id: str, expected_version: int) -> int: ...     # legacy: sets deleted_at (recoverable)
     def purge_projection(self, id: str, expected_version: int) -> int: ...  # hard DELETE + cascade (#202); 0 -> 409
-    def rotate_tokens(self, id: str, expected_version: int,
-                      new_hashes: TokenBundle) -> int: ...                # atomic, one txn (re-syncs role_links)
+    # rotate_tokens is deleted — there is nothing left to rotate (SECURITY.md §2).
 
     # --- revisions ---
     def insert_revision(self, rev: Revision) -> None: ...
@@ -816,7 +791,7 @@ class Store(Protocol):
     # --- penny transcripts (Spec B §7) ---
     def create_transcript(self, t: Transcript) -> Transcript: ...            # rejects NULL projection_id (wizard drafts never persisted)
     def append_transcript_turn(self, projection_id: str, turn: Turn) -> Transcript: ...  # create-on-demand + retention cap
-    def get_transcript_by_projection(self, projection_id: str) -> Transcript | None: ...  # owner-scoped (projection_id pre-resolved)
+    def get_transcript_by_projection(self, projection_id: str) -> Transcript | None: ...  # keys on the already-resolved projection_id
 ```
 
 **Portability rules enforced by a conformance suite run against BOTH backends:**
@@ -863,9 +838,8 @@ Single-writer SQLite serializes all writes; high autosave write-amplification ac
 
 | Table | Index | Purpose |
 |---|---|---|
-| `projections` | `UNIQUE(view_slug)` | Read lookup by slug. |
-| `projections` | `(owner_token_hash, status, updated_at DESC)` | Owner-scoped list (no global index). |
-| `projections` | `(edit_token_hash)` | Edit-token resolution. |
+| `projections` | `UNIQUE(view_slug)` | Read lookup by slug — the only index still exercised on this table. |
+| `projections` | `(owner_token_hash, status, updated_at DESC)`, `(edit_token_hash)`, `(owner_clerk_user_id, status, updated_at DESC)`, `(owner_org_id, status, updated_at DESC)` | **Unused** — backed the deleted owner/Clerk-scoped list model (owner decision, 2026-09-13 — SECURITY.md §2). The list is global now (a plain `WHERE deleted_at IS NULL` scan). Kept because migrations are additive-only. |
 | `revisions` | `(projection_id, seq DESC)` | Revisions list + restore. |
 | `revisions` | `UNIQUE(projection_id, seq)` | Seq-integrity backstop (0007): a duplicate seq fails loudly, never silently corrupts the trail (#186). On a legacy DB that *already* holds a duplicate, 0007 degrades to a **non-unique** index so boot never fails (§8). |
 | `evidence` | `(projection_id, field)` | Evidence panel per field. |
@@ -875,7 +849,7 @@ Single-writer SQLite serializes all writes; high autosave write-amplification ac
 | `feedback` | PK `(support_id)` | Support-ID resolution (staff). |
 | `penny_transcripts` | PK `(id)`, `(projection_id)` | Per-project transcript read by projection. |
 | `role_links` | PK `(slug)`, `(projection_id)` | O(1) exact-match role-share resolution (0009, #180); per-projection cascade on purge. |
-| `share_grants` | PK `(id)`, `UNIQUE(projection_id, grantee_clerk_user_id)`, `(grantee_clerk_user_id)`, `(projection_id)` | Editable shares that follow a Clerk account (0014, #323): UNIQUE = idempotency; grantee index backs the "Shared with me" list; projection index backs the per-projection cascade on purge. |
+| `share_grants` | PK `(id)`, `UNIQUE(projection_id, grantee_clerk_user_id)`, `(grantee_clerk_user_id)`, `(projection_id)` | **Unused** — backed the deleted editable-shares-follow-a-Clerk-account feature (0014, #323; SECURITY.md §2). The projection index still backs the per-projection cascade on purge. |
 
 ---
 
@@ -1084,13 +1058,16 @@ CREATE INDEX IF NOT EXISTS idx_share_grants_projection ON share_grants(projectio
 > Note: the legacy PRD Appendix B example used `labor_pct: 0.60` and `share_y1: 0.06` without `share_y2`. v1 resolves labor to `0.40` (§4.5) and requires all three explicit shares (§4.3).
 
 ### B.2 Stored `projections` row (abbreviated)
+
+This app has no authentication (owner decision, 2026-09-13 — SECURITY.md §2): `owner_token_hash` is a random internal value with no meaning to any client, `edit_token_hash` is `NULL`, and `role_tokens_json` is the schema default `'{}'` for any row created after the decision.
+
 ```json
 {
   "id": "01J8Z9K3M7QF2V0CWR5T8YH4AB",
   "view_slug": "v_8kQ2m9fLpR3xZ1aW7tB",
   "owner_token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-  "edit_token_hash": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
-  "role_tokens_json": "{\"board\":{\"slug\":\"r_b2L…\",\"token_hash\":\"…\"}}",
+  "edit_token_hash": null,
+  "role_tokens_json": "{}",
   "name": "House of Hope — Longview, TX",
   "status": "active",
   "version": 7,

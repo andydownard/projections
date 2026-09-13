@@ -1,9 +1,10 @@
 """M2 API — PATCH/autosave/concurrency slice (API_SPEC §1.3, §1.4, §4.4).
 
-Every mutation requires Bearer (owner or edit) + If-Match. The server recomputes
-on the merged inputs/assumptions/overrides, bumps version, and writes one revision
-snapshot per settle. Stale If-Match -> 409 with current state; missing -> 428;
-view-only -> 403. RED-first: written before the PATCH endpoint exists.
+This project has no authentication (owner decision, 2026-09-13): every mutation
+requires only If-Match. The server recomputes on the merged inputs/assumptions/
+overrides, bumps version, and writes one revision snapshot per settle. Stale
+If-Match -> 409 with current state; missing -> 428. RED-first: written before the
+PATCH endpoint exists.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -58,11 +59,11 @@ def _pid(store, slug):
 
 def test_patch_autosave_bumps_version_and_recomputes(client, store):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     vm = r.json()
@@ -75,11 +76,11 @@ def test_patch_autosave_bumps_version_and_recomputes(client, store):
 
 def test_patch_stale_if_match_returns_409_with_current_state(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "99"},
+        headers={"If-Match": "99"},
     )
     assert r.status_code == 409, r.text
     body = r.json()["detail"] if "detail" in r.json() else r.json()
@@ -93,55 +94,21 @@ def test_patch_stale_if_match_returns_409_with_current_state(client):
 
 def test_patch_missing_if_match_returns_428(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": f"Bearer {owner}"},
     )
     assert r.status_code == 428, r.text
     body = r.json().get("detail", r.json())
     assert body["error"] == "if_match_required"
 
 
-def test_edit_token_can_patch(client):
-    created = _create(client)
-    slug, edit = created["view_slug"], created["edit_token"]
-    r = client.patch(
-        f"/api/projections/{slug}",
-        json={"name": "Renamed via edit token"},
-        headers={"Authorization": f"Bearer {edit}", "If-Match": "1"},
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["version"] == 2
-    assert r.json()["name"] == "Renamed via edit token"
-
-
-def test_view_only_cannot_patch(client, store):
-    created = _create(client)
-    slug = created["view_slug"]
-    # no bearer at all -> view-only -> 403, version unchanged
-    r = client.patch(
-        f"/api/projections/{slug}",
-        json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"If-Match": "1"},
-    )
-    assert r.status_code == 403, r.text
-    # a wrong/unknown bearer is also rejected
-    r2 = client.patch(
-        f"/api/projections/{slug}",
-        json={"assumptions": {"labor_pct": "0.45"}},
-        headers={"Authorization": "Bearer not-the-token", "If-Match": "1"},
-    )
-    assert r2.status_code == 403, r2.text
-    assert store.get_projection_by_slug(slug)["version"] == 1
-
-
 def test_patch_unknown_slug_404(client):
     r = client.patch(
         "/api/projections/does-not-exist",
         json={"name": "x"},
-        headers={"Authorization": "Bearer whatever", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 404, r.text
 
@@ -151,11 +118,11 @@ def test_patch_labor_pct_nan_string_is_422_not_500(client):
     # InvalidOperation — which is NOT a ValueError, so pydantic used to let it 500.
     # A NaN knob must be rejected at the boundary like any other bad value (422).
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "nan"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 422, r.text
 
@@ -165,15 +132,11 @@ def test_patch_labor_pct_nan_json_float_is_422_not_500(client):
     # json.loads accepts it), which coerces to the string "nan" before the bounds
     # check. Same fail-closed 422 as the string form — never a 500.
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         content='{"assumptions": {"labor_pct": NaN}}',
-        headers={
-            "Authorization": f"Bearer {owner}",
-            "If-Match": "1",
-            "Content-Type": "application/json",
-        },
+        headers={"If-Match": "1", "Content-Type": "application/json"},
     )
     assert r.status_code == 422, r.text
 
@@ -189,22 +152,22 @@ def test_patch_labor_pct_nan_json_float_is_422_not_500(client):
 # NaN AND ±Infinity in both `_require_fraction` and `_require_min`.
 def test_patch_basket_inf_string_is_422_not_500(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"basket": "inf"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 422, r.text
 
 
 def test_patch_basket_negative_inf_string_is_422_not_500(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"basket": "-inf"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 422, r.text
 
@@ -213,11 +176,11 @@ def test_patch_basket_infinity_word_string_is_422_not_500(client):
     # Decimal accepts the spelled-out "Infinity" token too (case-insensitively) —
     # same non-finite value, a different wire spelling.
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"basket": "Infinity"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 422, r.text
 
@@ -226,15 +189,11 @@ def test_patch_basket_inf_json_float_is_422_not_500(client):
     # The bare JSON `Infinity` token (json.loads accepts it) coerces to the string
     # "inf" before the bounds check, same as the NaN-float sibling test above.
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         content='{"assumptions": {"basket": Infinity}}',
-        headers={
-            "Authorization": f"Bearer {owner}",
-            "If-Match": "1",
-            "Content-Type": "application/json",
-        },
+        headers={"If-Match": "1", "Content-Type": "application/json"},
     )
     assert r.status_code == 422, r.text
 
@@ -242,11 +201,11 @@ def test_patch_basket_inf_json_float_is_422_not_500(client):
 def test_patch_utilities_per_sqft_inf_string_is_422_not_500(client):
     # utilities_per_sqft is the other `_require_min` (lower-bound-only) knob.
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"utilities_per_sqft": "inf"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 422, r.text
 
@@ -256,11 +215,11 @@ def test_patch_labor_pct_inf_string_is_422_not_500(client):
     # its upper-bound check even before this fix (inf > hi), but the explicit
     # `is_finite()` guard now rejects it directly too — pin the behavior either way.
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "inf"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 422, r.text
 
@@ -272,15 +231,14 @@ def test_patch_basket_inf_rejected_row_still_readable_after(client):
     # rejected at the boundary (422) BEFORE any write, so the row is untouched and a
     # plain GET afterward is a clean 200 with the original (pre-PATCH) state.
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"basket": "inf"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 422, r.text
-    g = client.get(f"/api/projections/{slug}",
-                    headers={"Authorization": f"Bearer {owner}"})
+    g = client.get(f"/api/projections/{slug}")
     assert g.status_code == 200, g.text
     assert g.json()["version"] == 1, "the rejected PATCH must not have bumped version"
 
@@ -297,18 +255,14 @@ def test_patch_basket_inf_rejected_row_still_readable_after(client):
 # F1 fixes). Proves the persist-path guard, not the field-level one, catches this class.
 def test_patch_cost_schedule_amount_inf_cannot_persist(client, store):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         content=(
             '{"inputs": {"cost_schedule": '
             '[{"category": "Equipment & Fixtures", "month": 1, "amount": Infinity}]}}'
         ),
-        headers={
-            "Authorization": f"Bearer {owner}",
-            "If-Match": "1",
-            "Content-Type": "application/json",
-        },
+        headers={"If-Match": "1", "Content-Type": "application/json"},
     )
     # Fail-closed: never a 200 that silently stored a non-JSON-standard Infinity.
     assert r.status_code != 200, r.text

@@ -10,9 +10,9 @@ import { expect, test } from "@playwright/test";
 //   - Overwrite: force-saves the local edit on top of the server's current state
 //     (a partial PATCH merge — it does NOT clobber the other editor's unrelated
 //     change).
-//   - Save as copy: forks a NEW projection carrying the local edit (owner-only —
-//     POST …/duplicate), landing on it; the new projection shows up in the
-//     owner-scoped list (TENANT — PRD §20).
+//   - Save as copy: forks a NEW projection carrying the local edit (POST …/duplicate,
+//     reachable by anyone — this project has no authentication), landing on it; the
+//     new projection shows up in the global list.
 //
 // Same two-editor race as override-conflict.spec.ts: editor A renames the seeded
 // `example` projection (bumps its version); editor B (a second tab, opened before
@@ -32,8 +32,8 @@ test.describe("409 save-conflict: Reload / Overwrite / Save-as-copy resolution",
   /** Editor A renames (bumps the server version); editor B (opened first, so its
    *  local version is stale) edits the Labor % driver -> a stale PATCH -> 409. */
   async function raceToConflict(page: import("@playwright/test").Page, other: import("@playwright/test").Page) {
-    await page.goto("/p/example/edit#edit-secret");
-    await other.goto("/p/example/edit#edit-secret");
+    await page.goto("/p/example/edit");
+    await other.goto("/p/example/edit");
 
     await page.getByTestId("rename-projection").click();
     await page.getByLabel(/store name/i).fill("Edited by A");
@@ -99,15 +99,8 @@ test.describe("409 save-conflict: Reload / Overwrite / Save-as-copy resolution",
     request,
   }) => {
     const other = await context.newPage();
-    // Save-as-copy is owner-only (POST …/duplicate). The seeded `example` row's
-    // owner token ("owner-secret", app/seed.py EXAMPLE_OWNER_TOKEN) is set in this
-    // tab's localStorage BEFORE navigating -- exactly the realistic case this
-    // button exists for: the OWNER editing their own projection in two tabs. The
-    // edit-token-only case is already covered (canSaveAsCopy=false, disabled with
-    // an explanatory tooltip) and isn't this spec's concern.
-    await other.addInitScript(() => {
-      window.localStorage.setItem("projections.owner_token", "owner-secret");
-    });
+    // This project has no authentication (owner decision, 2026-09-13) — Save-as-copy
+    // (POST …/duplicate) is reachable by anyone who can reach the projection.
     await raceToConflict(page, other);
 
     // Scoped to the modal for the same reason as Reload/Overwrite above.
@@ -127,7 +120,7 @@ test.describe("409 save-conflict: Reload / Overwrite / Save-as-copy resolution",
     expect(res.status()).toBe(200);
     expect((await res.json()).settings.laborPct).toBeCloseTo(0.55, 6);
 
-    // The owner-scoped list (TENANT — PRD §20) shows the copy.
+    // The global list shows the copy.
     await other.goto("/");
     await expect(other.getByTestId(`projection-row-${newSlug}`)).toBeVisible();
   });

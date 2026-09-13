@@ -1,8 +1,9 @@
-"""M2 API — create / read / owner-list slice (API_SPEC §4.1–4.3).
+"""M2 API — create / read / global-list slice (API_SPEC §4.1–4.3).
 
 The server computes via the pure engine and persists the native view-model; reads
-return that snapshot verbatim; lists are owner-scoped by the bearer owner token.
-RED-first: these were written before app/routers/projections.py.
+return that snapshot verbatim; the list is global (this project has no
+authentication, owner decision 2026-09-13). RED-first: these were written before
+app/routers/projections.py.
 """
 import json
 
@@ -85,7 +86,7 @@ def _create(client, body=None):
     return client.post("/api/projections", json=body or VALID_BODY)
 
 
-def test_create_returns_view_model_version_and_one_time_tokens(client):
+def test_create_returns_view_model_and_version_with_no_tokens(client):
     r = _create(client)
     assert r.status_code == 201, r.text
     vm = r.json()
@@ -95,7 +96,8 @@ def test_create_returns_view_model_version_and_one_time_tokens(client):
     assert vm["version"] == 1
     assert vm["reco"]["tag"] in {
         "proceed", "revise", "find_cheaper_rent", "raise_cash", "delay", "do_not_proceed"}
-    assert vm["owner_token"] and vm["edit_token"]
+    # no authentication (owner decision, 2026-09-13): no tokens are ever minted
+    assert "owner_token" not in vm and "edit_token" not in vm
     # canonical 60% labor reflected in settings
     assert abs(vm["settings"]["laborPct"] - 0.60) < 1e-9
 
@@ -206,33 +208,21 @@ def test_read_does_not_flag_upgrade_when_snapshot_is_current(client_store):
     assert got["upgrade_available"] is False
 
 
-def test_list_is_owner_scoped(client):
+def test_list_is_global_with_no_auth(client):
     created = _create(client).json()
-    owner = created["owner_token"]
-    # the owner sees exactly their projection
-    r = client.get("/api/projections", headers={"Authorization": f"Bearer {owner}"})
+    # no authentication (owner decision, 2026-09-13): the list is global, with no
+    # header of any kind required to see it.
+    r = client.get("/api/projections")
     assert r.status_code == 200
     items = r.json()["projections"]
     assert len(items) == 1 and items[0]["view_slug"] == created["view_slug"]
-    # a different owner sees nothing (no global index)
-    other = client.get("/api/projections", headers={"Authorization": "Bearer someone-else"})
-    assert other.json()["projections"] == []
-    # no token -> empty
-    assert client.get("/api/projections").json()["projections"] == []
 
 
-def test_second_create_with_same_owner_token_joins_workspace(client):
-    first = _create(client).json()
-    owner = first["owner_token"]
-    second = client.post(
-        "/api/projections", json=VALID_BODY,
-        headers={"Authorization": f"Bearer {owner}"},
-    ).json()
-    # joining an existing workspace does not mint a new owner token
+def test_second_create_adds_a_second_global_list_entry(client):
+    _create(client).json()
+    second = client.post("/api/projections", json=VALID_BODY).json()
     assert "owner_token" not in second
-    listing = client.get(
-        "/api/projections", headers={"Authorization": f"Bearer {owner}"}
-    ).json()["projections"]
+    listing = client.get("/api/projections").json()["projections"]
     assert len(listing) == 2
 
 
@@ -250,7 +240,6 @@ def test_invalid_inputs_return_422(client):
 # a genuinely-new create is seeded with default_cost_schedule_v3(); every OTHER
 # path (duplicate/PATCH/restore/Penny-edit) stays on the untouched legacy
 # default_cost_schedule() so an existing projection's numbers never silently move.
-from app.deps import hash_token  # noqa: E402
 from engine.model import PRODUCTION_STATION_COST, default_cost_schedule  # noqa: E402
 
 _V3_INCLUDED_CATEGORIES = {
@@ -307,11 +296,11 @@ def test_new_v3_seeded_projection_survives_an_unrelated_patch(client_store):
     through CostScheduleItemIn without 422ing on its own seed data."""
     client, store = client_store
     created = _create(client).json()
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.55"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     # the schedule is untouched by the unrelated patch
@@ -319,7 +308,7 @@ def test_new_v3_seeded_projection_survives_an_unrelated_patch(client_store):
     assert len(stored["cost_schedule"]) == 8
 
 
-def _plant_legacy_projection(store, *, slug, edit_token):
+def _plant_legacy_projection(store, *, slug):
     """Simulate a projection created BEFORE Task 2.1b shipped: a full valid
     ``inputs_json`` with NO ``cost_schedule`` key at all (exactly what every
     pre-existing row looks like -- the v3 seed only ever writes into a NEW create)."""
@@ -329,8 +318,7 @@ def _plant_legacy_projection(store, *, slug, edit_token):
     row = {
         "id": f"id-{slug}",
         "view_slug": slug,
-        "owner_token_hash": hash_token("legacy-owner-token"),
-        "edit_token_hash": hash_token(edit_token),
+        "owner_token_hash": "legacy-owner-hash",
         "name": "Legacy Projection",
         "model_version": MODEL_VERSION,
         "compute_schema_version": "1.8.0",
@@ -352,13 +340,12 @@ def test_patch_on_pre_existing_projection_does_not_gain_v3_schedule_lines(client
     by Task 2.1b, so it still falls back to the OLD 4-line default_cost_schedule(),
     never default_cost_schedule_v3()."""
     client, store = client_store
-    edit_token = "legacy-edit-token"
-    _plant_legacy_projection(store, slug="legacy-slug-1", edit_token=edit_token)
+    _plant_legacy_projection(store, slug="legacy-slug-1")
 
     r = client.patch(
         "/api/projections/legacy-slug-1",
         json={"assumptions": {"labor_pct": "0.62"}},
-        headers={"Authorization": f"Bearer {edit_token}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
 

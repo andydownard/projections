@@ -2,13 +2,13 @@
 
 RED-first. These exercise the three Penny write/loop endpoints with **stubbed
 providers only** (a scripted fake chain — never a real api.anthropic.com /
-api.openai.com call). The behaviours pinned:
+api.openai.com call). This project has no authentication (owner decision,
+2026-09-13); the ``_auth`` helper below is a no-op kept only so call sites don't
+need touching. The behaviours pinned:
 
 - detail `POST …/penny` runs the bounded loop; a mutate tool applies via the
   EXISTING server PATCH path (version++ + one ``actor:penny`` revision) and the
   recomputed view-model diff is relayed in ``applied_revisions``; turns persist;
-- capability-gating: a view-only caller's Penny is answer-only (no mutation, no
-  ``actor:penny`` revision, nothing persisted to the owner's transcript);
 - error contract: ``409 ai_disabled`` makes ZERO provider calls; both providers
   down -> ``503 ai_unavailable``; a rate-limit breach -> ``429`` with
   ``retry_after_seconds`` BEFORE any provider call;
@@ -131,8 +131,10 @@ def _penny_url(slug):
     return f"/api/projections/{slug}/penny"
 
 
-def _auth(tok):
-    return {"Authorization": f"Bearer {tok}"}
+def _auth(tok=None):
+    # This project has no authentication (owner decision, 2026-09-13); a no-op
+    # kept so existing call sites don't need touching.
+    return {}
 
 
 # ============================================================ detail: happy path
@@ -143,7 +145,7 @@ def test_detail_penny_applies_via_patch_and_persists(client, store):
         _text("Done — I lowered the labor assumption; the capital figure updated."),
     ))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "cut labor to 0.55"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["provider"] == "anthropic"
@@ -162,7 +164,7 @@ def test_detail_penny_applies_via_patch_and_persists(client, store):
 
     # turns are persisted to the per-project transcript (read back via GET seam)
     tr = client.get(_penny_url(p["view_slug"]) + "/transcript",
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert tr.status_code == 200
     contents = [t["content"] for t in tr.json()["turns"]]
     assert "cut labor to 0.55" in contents
@@ -177,37 +179,13 @@ def test_detail_penny_unknown_slug_404(client):
     assert r.status_code == 404
 
 
-# ====================================================== capability: answer-only
-def test_view_only_caller_is_answer_only(client, store):
-    p = _create(client)
-    chain = _use_chain(client, ScriptedChain(
-        _tool("set_assumption", {"name": "labor_pct", "value": "0.55"}),
-        _text("I can explain the numbers, but I can't edit from a view-only link."),
-    ))
-    # No Authorization header => view-only caller.
-    r = client.post(_penny_url(p["view_slug"]), json={"message": "cut labor"})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["applied_revisions"] == []
-    assert body["narration"]
-    # nothing mutated, no actor:penny revision, version unchanged
-    row = store.get_projection_by_slug(p["view_slug"])
-    assert row["version"] == 1
-    assert not any(rv["actor"] == "penny" for rv in store.list_revisions(row["id"]))
-    # a random viewer cannot pollute the owner's persisted transcript
-    tr = client.get(_penny_url(p["view_slug"]) + "/transcript",
-                    headers=_auth(p["owner_token"]))
-    assert tr.json()["turns"] == []
-    assert chain.calls, "answer-only still runs the loop"
-
-
 # =============================================================== error contract
 def test_ai_disabled_returns_409_with_zero_provider_calls(client, store):
     p = _create(client)
     _set_ai_opt_out(store, p["view_slug"])
     chain = _use_chain(client, ScriptedChain(_text("should never run")))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 409
     assert r.json()["detail"]["error"] == "ai_disabled"
     assert chain.calls == [], "ai-disabled must make ZERO provider calls"
@@ -218,7 +196,7 @@ def test_no_provider_configured_is_ai_disabled(client):
     # empty chain (no keys) => AI disabled, zero calls
     chain = _use_chain(client, ScriptedChain(_text("x"), providers=()))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 409
     assert chain.calls == []
 
@@ -228,7 +206,7 @@ def test_both_providers_down_returns_503(client):
     _use_chain(client, ScriptedChain(
         AIUnavailableError("anthropic+openai down"), providers=("anthropic", "openai")))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 503
     assert r.json()["detail"]["error"] == "ai_unavailable"
 
@@ -237,9 +215,9 @@ def test_rate_limited_returns_429_with_retry_after(client, monkeypatch):
     p = _create(client)
     chain = _use_chain(client, ScriptedChain(_text("x")))
     monkeypatch.setattr(
-        penny_router, "_check_rate", lambda ip, token, projection_id=None: (False, 30))
+        penny_router, "_check_rate", lambda ip, projection_id=None: (False, 30))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 429
     assert r.json()["detail"]["retry_after_seconds"] == 30
     assert r.headers.get("Retry-After") == "30"
@@ -256,58 +234,33 @@ def _xff(tok, ip):
     return {**_auth(tok), "X-Forwarded-For": f"9.9.9.9, {ip}"}
 
 
-def test_two_different_owners_do_not_share_a_penny_bucket(client, monkeypatch):
-    # Owner A exhausting their budget must NOT 429 owner B. Two distinct clients (two
-    # right-most XFF hops, two tokens, two projections) get INDEPENDENT buckets; the
-    # buggy raw-socket-host keying collapsed them onto the shared proxy IP.
-    monkeypatch.setattr(penny_router, "_PENNY_IP_LIMIT", 2, raising=False)
-    a = _create(client)
-    b = _create(client)
-    _use_chain(client, ScriptedChain(_text("ok")))
-    for _ in range(2):
-        r = client.post(_penny_url(a["view_slug"]), json={"message": "hi"},
-                        headers=_xff(a["owner_token"], "1.1.1.1"))
-        assert r.status_code == 200, r.text
-    # owner A is now capped (their own bucket)...
-    ra = client.post(_penny_url(a["view_slug"]), json={"message": "hi"},
-                     headers=_xff(a["owner_token"], "1.1.1.1"))
-    assert ra.status_code == 429, ra.text
-    # ...but owner B (different token + projection + client IP) is NOT collateral-locked.
-    rb = client.post(_penny_url(b["view_slug"]), json={"message": "hi"},
-                     headers=_xff(b["owner_token"], "2.2.2.2"))
-    assert rb.status_code == 200, rb.text
-
-
-def test_single_owner_projection_is_still_capped_with_retry_after(client, monkeypatch):
-    # The primary per-token brake must still fire: one owner over their cap -> 429 +
-    # retry_after_seconds, BEFORE any provider call (Spec §6.1 / API_SPEC §6.6).
-    monkeypatch.setattr(penny_router, "_PENNY_TOKEN_LIMIT", 3, raising=False)
+def test_single_projection_is_still_capped_with_retry_after(client, monkeypatch):
+    # The primary per-projection brake must still fire: one projection over its cap
+    # -> 429 + retry_after_seconds, BEFORE any provider call (Spec §6.1 / API_SPEC §6.6).
+    monkeypatch.setattr(penny_router, "_PENNY_PROJECTION_LIMIT", 3, raising=False)
     p = _create(client)
     _use_chain(client, ScriptedChain(_text("ok")))
     for _ in range(3):
-        r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
-                        headers=_auth(p["owner_token"]))
+        r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"})
         assert r.status_code == 200, r.text
-    r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
-                    headers=_auth(p["owner_token"]))
+    r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"})
     assert r.status_code == 429, r.text
     assert r.json()["detail"]["error"] == "rate_limited"
     assert r.json()["detail"]["retry_after_seconds"] >= 1
     assert int(r.headers["Retry-After"]) >= 1
 
 
-def test_anonymous_penny_is_capped_per_projection_not_globally(client, monkeypatch):
-    # Worst case from #189: an anonymous (view-only, no-token) turn skips the token
-    # scope, so WITHOUT a per-projection key it falls back to the single shared-IP
-    # bucket. Two different projections must NOT share an anonymous bucket.
+def test_penny_is_capped_per_projection_not_globally(client, monkeypatch):
+    # #189: without a per-projection key, every caller falls back to the single
+    # shared-IP bucket. Two different projections must NOT share a bucket.
     monkeypatch.setattr(penny_router, "_PENNY_PROJECTION_LIMIT", 2, raising=False)
     a = _create(client)
     b = _create(client)
     _use_chain(client, ScriptedChain(_text("ok")))
-    for _ in range(2):  # no Authorization header => view-only / answer-only
+    for _ in range(2):
         assert client.post(_penny_url(a["view_slug"]),
                            json={"message": "hi"}).status_code == 200
-    # projection A's anonymous bucket is capped...
+    # projection A's bucket is capped...
     ra = client.post(_penny_url(a["view_slug"]), json={"message": "hi"})
     assert ra.status_code == 429, ra.text
     # ...projection B is an independent bucket.
@@ -315,58 +268,21 @@ def test_anonymous_penny_is_capped_per_projection_not_globally(client, monkeypat
     assert rb.status_code == 200, rb.text
 
 
-def test_penny_rate_limit_keys_on_hashed_token_not_raw(client):
-    # The bearer is a capability SECRET: it must never become a limiter key verbatim
-    # (no plaintext token in process memory keys / any future log). Reuse the at-rest
-    # SHA-256 digest (SECURITY §2.3 / §10.1).
-    from app import ratelimit
-    from app.deps import hash_token
-    p = _create(client)
-    _use_chain(client, ScriptedChain(_text("ok")))
-    tok = p["owner_token"]
-    r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
-                    headers=_auth(tok))
-    assert r.status_code == 200, r.text
-    token_keys = [k for (_endpoint, scope, k) in ratelimit._hits if scope == "token"]
-    assert token_keys, "a per-token bucket must exist for an authorized caller"
-    assert tok not in token_keys, "the RAW capability token must never be a limiter key"
-    assert hash_token(tok) in token_keys, "the bucket must key on the SHA-256 token hash"
-
-
-def test_draft_two_different_tokens_do_not_share_a_bucket(client, monkeypatch):
-    # /penny/draft has no projection, so the per-token (hashed) key is the SOLE primary
-    # brake. Two different edit bearers must NOT share a bucket (no shared-IP collapse).
-    monkeypatch.setattr(penny_router, "_PENNY_TOKEN_LIMIT", 2, raising=False)
-    monkeypatch.setattr(penny_router, "_PENNY_IP_LIMIT", 1000, raising=False)
-    _use_chain(client, ScriptedChain(_text("ok")))
-    body = {"message": "tweak", "draft_state": {"inputs": {"city": "Longview, Texas"}}}
-    for _ in range(2):
-        assert client.post("/api/penny/draft", headers=_auth("tok-A"),
-                           json=body).status_code == 200
-    # tok-A has spent its budget...
-    assert client.post("/api/penny/draft", headers=_auth("tok-A"),
-                       json=body).status_code == 429
-    # ...tok-B is an independent bucket.
-    assert client.post("/api/penny/draft", headers=_auth("tok-B"),
-                       json=body).status_code == 200
-
-
 def test_penny_per_ip_coarse_bound_still_caps_a_single_real_ip(client, monkeypatch):
-    # The per-IP cap is DEMOTED to a coarse bound, not removed: a genuine flood from
-    # ONE real client IP (same right-most XFF hop) still trips 429 even as the caller
-    # rotates tokens/projections to dodge the per-token/per-projection brakes (#189).
+    # The per-IP cap is a coarse bound: a genuine flood from ONE real client IP
+    # (same right-most XFF hop) still trips 429 even across distinct projections.
     monkeypatch.setattr(penny_router, "_PENNY_IP_LIMIT", 2, raising=False)
     a = _create(client)
     b = _create(client)
     _use_chain(client, ScriptedChain(_text("ok")))
-    # two distinct tokens + projections, but the SAME real client IP
+    # two distinct projections, but the SAME real client IP
     assert client.post(_penny_url(a["view_slug"]), json={"message": "hi"},
-                       headers=_xff(a["owner_token"], "5.5.5.5")).status_code == 200
+                       headers=_xff(None, "5.5.5.5")).status_code == 200
     assert client.post(_penny_url(b["view_slug"]), json={"message": "hi"},
-                       headers=_xff(b["owner_token"], "5.5.5.5")).status_code == 200
-    # the shared real IP has hit the coarse bound -> 429 despite a fresh token/projection
+                       headers=_xff(None, "5.5.5.5")).status_code == 200
+    # the shared real IP has hit the coarse bound -> 429 despite a fresh projection
     r = client.post(_penny_url(a["view_slug"]), json={"message": "hi"},
-                    headers=_xff(a["owner_token"], "5.5.5.5"))
+                    headers=_xff(None, "5.5.5.5"))
     assert r.status_code == 429, r.text
 
 
@@ -390,12 +306,6 @@ def test_draft_mutates_supplied_draft_and_persists_nothing(client, store):
     n_proj = store._conn.execute("SELECT COUNT(*) FROM projections").fetchone()[0]
     assert n_proj == 0
     assert chain.calls
-
-
-def test_draft_requires_bearer(client):
-    _use_chain(client, ScriptedChain(_text("x")))
-    r = client.post("/api/penny/draft", json={"message": "hi", "draft_state": {}})
-    assert r.status_code == 403
 
 
 # =============================================================== proposal upload
@@ -440,12 +350,6 @@ def test_proposal_blocks_ssrf_source_url(client):
                     headers=_auth("tok"))
     assert r.status_code == 422
     assert r.json()["detail"]["error"] == "ssrf_blocked"
-
-
-def test_proposal_requires_bearer(client):
-    r = client.post("/api/penny/proposal?filename=plan.pdf", content=_pdf(8),
-                    headers={"Content-Type": "application/pdf"})
-    assert r.status_code == 403
 
 
 def test_proposal_empty_body_is_422(client):
@@ -512,7 +416,7 @@ def test_kill_switch_disables_penny(client, monkeypatch):
     monkeypatch.setenv("AI_DISABLED", "1")
     chain = _use_chain(client, ScriptedChain(_text("x")))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "hi"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 409
     assert r.json()["detail"]["error"] == "ai_disabled"
     assert chain.calls == []
@@ -523,26 +427,12 @@ def test_input_too_large_is_422(client):
     _use_chain(client, ScriptedChain(_text("x")))
     huge = "x" * 600_000  # exceeds the loop's max_input_tokens cap (~120k tokens)
     r = client.post(_penny_url(p["view_slug"]), json={"message": huge},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 422
     assert r.json()["detail"]["error"] == "input_too_large"
 
 
-# ============================================== detail: capability + edit path
-def test_edit_token_can_mutate_as_penny(client, store):
-    p = _create(client)
-    _use_chain(client, ScriptedChain(
-        _tool("set_assumption", {"name": "labor_pct", "value": "0.55"}),
-        _text("Lowered labor."),
-    ))
-    r = client.post(_penny_url(p["view_slug"]), json={"message": "cut labor"},
-                    headers=_auth(p["edit_token"]))
-    assert r.status_code == 200, r.text
-    assert r.json()["applied_revisions"][0]["actor"] == "penny"
-    row = store.get_projection_by_slug(p["view_slug"])
-    assert row["version"] == 2
-
-
+# ====================================================== detail: more loop coverage
 def test_multi_tool_turn_produces_one_revision_per_edit(client, store):
     p = _create(client)
     _use_chain(client, ScriptedChain(
@@ -551,7 +441,7 @@ def test_multi_tool_turn_produces_one_revision_per_edit(client, store):
         _text("Adjusted two assumptions."),
     ))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "tune both"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 200, r.text
     versions = [a["version"] for a in r.json()["applied_revisions"]]
     assert versions == [2, 3], versions  # each edit bumps version + writes a revision
@@ -569,7 +459,7 @@ def test_computed_figure_in_mutate_arg_is_stripped_not_applied(client, store):
         _text("I can only apply a raw number, not a computed figure."),
     ))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "set labor to $5,000"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 200, r.text
     assert r.json()["applied_revisions"] == []  # figure-strip => nothing applied
     row = store.get_projection_by_slug(p["view_slug"])
@@ -584,7 +474,7 @@ def test_non_pinnable_node_is_relayed_not_applied(client, store):
         _text("That total can't be pinned directly."),
     ))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "pin net profit"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 200, r.text
     assert r.json()["applied_revisions"] == []  # 422 relayed to the model, no mutation
     row = store.get_projection_by_slug(p["view_slug"])
@@ -598,7 +488,7 @@ def test_read_only_tool_does_not_mutate(client, store):
         _text("Your capital required is in the current model."),
     ))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "what's my capital?"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 200
     assert r.json()["applied_revisions"] == []
     assert store.get_projection_by_slug(p["view_slug"])["version"] == 1
@@ -608,12 +498,12 @@ def test_transcript_accumulates_across_turns(client, store):
     p = _create(client)
     _use_chain(client, ScriptedChain(_text("First answer.")))
     client.post(_penny_url(p["view_slug"]), json={"message": "turn one"},
-                headers=_auth(p["owner_token"]))
+                headers=_auth())
     _use_chain(client, ScriptedChain(_text("Second answer.")))
     client.post(_penny_url(p["view_slug"]), json={"message": "turn two"},
-                headers=_auth(p["owner_token"]))
+                headers=_auth())
     tr = client.get(_penny_url(p["view_slug"]) + "/transcript",
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     contents = [t["content"] for t in tr.json()["turns"]]
     assert "turn one" in contents and "turn two" in contents
     assert "First answer." in contents and "Second answer." in contents
@@ -744,7 +634,7 @@ def test_detail_set_input_applies_as_penny(client, store):
         _text("Updated the city."),
     ))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "move to Tyler"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 200, r.text
     assert r.json()["applied_revisions"][0]["actor"] == "penny"
     assert store.get_projection_by_slug(p["view_slug"])["version"] == 2
@@ -757,7 +647,7 @@ def test_detail_turns_appended_link_applied_revision(client):
         _text("Done."),
     ))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "cut labor"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     turns = r.json()["turns_appended"]
     tool_turns = [t for t in turns if t["role"] == "tool"]
     assert len(tool_turns) == 1
@@ -774,7 +664,7 @@ def test_detail_parse_proposal_extracts_only_document_figures(client):
     ))
     r = client.post(_penny_url(p["view_slug"]),
                     json={"message": "read the proposal", "proposal_ref": "prop_x"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 200
     # extract-only: no mutation results from reading a proposal
     assert r.json()["applied_revisions"] == []
@@ -783,7 +673,7 @@ def test_detail_parse_proposal_extracts_only_document_figures(client):
 def test_detail_missing_message_is_422(client):
     p = _create(client)
     _use_chain(client, ScriptedChain(_text("x")))
-    r = client.post(_penny_url(p["view_slug"]), json={}, headers=_auth(p["owner_token"]))
+    r = client.post(_penny_url(p["view_slug"]), json={}, headers=_auth())
     assert r.status_code == 422
 
 
@@ -812,7 +702,7 @@ def test_detail_edit_cost_schedule_applies_as_penny(client, store):
         _text("Added a build-out cost in month 2."),
     ))
     r = client.post(_penny_url(p["view_slug"]), json={"message": "add build-out"},
-                    headers=_auth(p["owner_token"]))
+                    headers=_auth())
     assert r.status_code == 200, r.text
     assert r.json()["applied_revisions"][0]["version"] == 2
     row = store.get_projection_by_slug(p["view_slug"])

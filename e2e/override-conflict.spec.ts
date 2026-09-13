@@ -20,9 +20,7 @@ test.describe("override + 409 optimistic-concurrency", () => {
   });
 
   test("editing a settings slider recomputes via the server (no client math)", async ({ page }) => {
-    await page.goto("/p/example/edit#edit-secret");
-    // Fragment secret is scrubbed from the URL after read (SECURITY.md §2.5).
-    await expect(page).not.toHaveURL(/#edit-secret/);
+    await page.goto("/p/example/edit");
     const capitalBefore = await page.getByTestId("metric-capital").textContent();
     // Epic G (#41): Settings is MERGED into the KPIs tab (no standalone Settings
     // page); the KPI strip + the driver fields both live there. D11: the driver is a
@@ -46,9 +44,9 @@ test.describe("override + 409 optimistic-concurrency", () => {
   });
 
   test("a stale PATCH surfaces the 409 save-conflict modal", async ({ page, context }) => {
-    await page.goto("/p/example/edit#edit-secret");
+    await page.goto("/p/example/edit");
     const other = await context.newPage();
-    await other.goto("/p/example/edit#edit-secret");
+    await other.goto("/p/example/edit");
 
     // D1 / Decision 13: the always-on "Store name" input is replaced by an inline
     // pencil-to-rename — reveal the input first, then edit. Editor A saves first
@@ -66,7 +64,7 @@ test.describe("override + 409 optimistic-concurrency", () => {
   });
 
   test("pinning a derived/total row is rejected (non-pinnable)", async ({ page }) => {
-    await page.goto("/p/example/edit#edit-secret");
+    await page.goto("/p/example/edit");
     // Net income is a derived total — the cell is not editable (non-pinnable, §14).
     const netCell = page.getByTestId("row-net_income-y1");
     await expect(netCell).toHaveAttribute("aria-disabled", "true");
@@ -77,7 +75,7 @@ test.describe("override + 409 optimistic-concurrency", () => {
   // audit + justification capture now live ONLY in Penny's drawer. The forensic
   // FAB/panel must no longer exist; Penny remains the only side panel.
   test("the standalone Override Inspector is gone; Penny is the only side panel", async ({ page }) => {
-    await page.goto("/p/example/edit#edit-secret");
+    await page.goto("/p/example/edit");
     await expect(page.getByTestId("penny-fab")).toBeVisible();
     await expect(page.getByTestId("inspector-fab")).toHaveCount(0);
     await expect(page.getByTestId("inspector-panel")).toHaveCount(0);

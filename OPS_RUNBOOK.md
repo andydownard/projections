@@ -10,7 +10,7 @@ This document is **build/spec only**. No product code is defined here. It is sel
 - [`DATA_MODEL.md`](./DATA_MODEL.md) — SQLite schema (PRD §24)
 - [`API_SPEC.md`](./API_SPEC.md) — endpoint surface (PRD §25), `If-Match`/409 concurrency
 - [`ENGINE_CONTRACT.md`](./ENGINE_CONTRACT.md) — math authority, golden-test gate (PRD §13/§18)
-- [`SECURITY.md`](./SECURITY.md) — capability tokens, CSP, SSRF, sanitization (PRD §20/§21)
+- [`SECURITY.md`](./SECURITY.md) — no-auth model, CSP, SSRF, sanitization (PRD §20/§21)
 - [`BUILD_PLAN.md`](./BUILD_PLAN.md) — milestone sequencing (PRD §28)
 - [`DEFINITION_OF_DONE.md`](./DEFINITION_OF_DONE.md) — release gates
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md), [`CLAUDE.md`](./CLAUDE.md), [`AGENTS.md`](./AGENTS.md) — build process
@@ -148,7 +148,7 @@ The detail page autosaves on a debounce (PRD §19.3): each settle issues one `PA
 
 These are application invariants but they have direct operational consequences (lost updates, restore confusion), so they belong in the runbook.
 
-- **Every mutating request requires `Authorization: Bearer <token>` + `If-Match: <version>`** (PRD §25). The `UPDATE` is `SET version = version + 1, ... WHERE id = ? AND version = ?`. A 0-row result returns **HTTP 409** with the current server state in the body so the UI can offer reload / overwrite / save-as-copy (PRD §19.4). The new version is returned in the body and as an `ETag`-style header.
+- **Every mutating request requires `If-Match: <version>`** (PRD §25; this app has no authentication, SECURITY.md §2). The `UPDATE` is `SET version = version + 1, ... WHERE id = ? AND version = ?`. A 0-row result returns **HTTP 409** with the current server state in the body so the UI can offer reload / overwrite / save-as-copy (PRD §19.4). The new version is returned in the body and as an `ETag`-style header.
 - **The version bump and its revision snapshot are one transaction** (`update_with_version_check_and_revision`, issue #186): 409 → no revision; success → `version++` and the snapshot commit together. No crash can leave a bumped version with no recoverable snapshot. A `UNIQUE(projection_id, seq)` index (migration `0007`) makes a duplicate/miscomputed `seq` fail loudly rather than silently corrupt the restore/audit trail.
 - **One writer connection, a reader connection per thread** (issue #177). All writes serialize on a single primary connection under a write lock; reads use a per-thread reader so WAL delivers concurrent reads and a slow query can never head-of-line-block another request — including the `/api/health` probe, whose stall could otherwise trip Railway's healthcheck into a restart loop.
 - **Version-locked compute** (PRD §13): `computed_json` is persisted with the `model_version` that produced it. On read, if the stored `model_version` differs from the current engine, the server returns the **stored snapshot verbatim** and surfaces an "upgrade available" flag. **Never silently recompute.** `POST …/upgrade-model` writes a **new revision** (the prior is preserved). Track **two** versions: `model_version` (the math) and `compute_schema_version` (the shape of `computed_json` / view-model) so a renderer change is never mistaken for a math change.
@@ -319,18 +319,9 @@ This is the **single source of truth** for ops; it MUST be mirrored 1:1 by a cod
 | Litestream replica prefix | `LITESTREAM_PATH` | **set at M0** | Path PREFIX inside the R2 bucket (e.g. `projections.db`); `litestream.yml` substitutes it so a shared bucket can't collide. |
 | Litestream retention/cadence | (none) | n/a | `litestream.yml` hardcodes `retention: 720h` (30-day purge limit, PRD §21) and `sync-interval: 1s` (RPO < 10 s). There is **no `snapshot-interval`/`validation-interval`** and no env override for these — change them in `litestream.yml`, not via env. |
 
-### 5.2a Clerk satellite — conditionally required (only when `CLERK_ENABLED=1`)
+### 5.2a (removed) Clerk satellite
 
-The Clerk satellite ships **dark**; none of these are required while `CLERK_ENABLED` is off (the default), and the app boots and behaves exactly as today. When `CLERK_ENABLED=1` in prod, the verify-side set is required (fail-closed) and the two Clerk **secrets** are forbidden. Single source: `app/config.py` (`CLERK_REQUIRED_WHEN_ENABLED`, `CLERK_FORBIDDEN_SECRETS`). The full go-live procedure + values are in **§9b**.
-
-| Var | When required | Notes |
-|---|---|---|
-| `CLERK_ENABLED` | n/a (the switch) | Truthy (`1`/`true`/`yes`/`on`) turns the satellite on; read at request time. |
-| `VITE_CLERK_PUBLISHABLE_KEY` | **build-time**, for go-live | Baked into the SPA bundle; a value change needs a **rebuild**. Public, not a secret. |
-| `CLERK_PUBLISHABLE_KEY` | when `CLERK_ENABLED=1` | Same `pk_live_…` as the build-time key. Boot refuses if unset. |
-| `CLERK_JWT_ISSUER` | when `CLERK_ENABLED=1` | `https://clerk.rallytasks.com` (the **primary** issuer, JWKS verify). Boot refuses if unset. |
-| `CLERK_AUTHORIZED_PARTIES` | when `CLERK_ENABLED=1` | CSV `azp` allowlist. Boot refuses if unset. |
-| `CLERK_SECRET_KEY` / `CLERK_WEBHOOK_SIGNING_SECRET` | **never set** | Forbidden — a satellite holds no Clerk secret (finding C1). Boot **refuses if present**, on or off. |
+This app used to run an optional Clerk satellite login. It is deleted entirely (owner decision, 2026-09-13 — this app has no authentication of any kind, SECURITY.md §2). There is no `CLERK_ENABLED`, no Clerk env var, and no Clerk code path left anywhere. The go-live procedure that used to live in §9b is gone with it.
 
 ### 5.3 Boot-refuse policy (no fallback chains)
 
@@ -531,35 +522,9 @@ The free-vs-paid business-model gate (PRD §3, [`API_SPEC.md`](./API_SPEC.md) §
 
 ---
 
-## 9b. Turn the Clerk satellite on (go-live)
+## 9b. (removed) Clerk satellite go-live
 
-projections is a **cross-apex Clerk satellite** of the `rallytasks.com` primary (SECURITY.md §2.8). It ships **dark**: with `CLERK_ENABLED` unset the app is byte-for-byte the capability-token app it is today (the strict CSP in §11 stands, no Clerk var is required, no Clerk code path runs). Going live is an env change **plus a rebuild** (the publishable key is baked into the SPA at build time). **Prereqs (one-time, already done by the owner):** the `thriftly.com` satellite is registered in the Clerk dashboard and the `clerk.thriftly.com` Frontend-API **CNAME** is created and certified.
-
-### The exact go-live env (Railway prod service variables)
-
-| Var | Value | Scope | Notes |
-|---|---|---|---|
-| `VITE_CLERK_PUBLISHABLE_KEY` | the rally **`pk_live_…`** (same instance as rallytasks.com) | **BUILD-TIME** | Baked into the SPA bundle by Vite. It must be present **at image build**, so a value change requires a **rebuild + redeploy**, not just a restart. Public (browser-exposed) — it is not a secret. |
-| `CLERK_PUBLISHABLE_KEY` | the **same** rally `pk_live_…` | runtime | Required by the boot-refuse gate when `CLERK_ENABLED=1`. |
-| `CLERK_JWT_ISSUER` | `https://clerk.rallytasks.com` | runtime | The **primary** issuer — JWKS verification pins this. Note this is a **different host** from the browser-side FAPI (`clerk.thriftly.com`) **by design** (satellite: issuer ≠ FAPI). |
-| `CLERK_AUTHORIZED_PARTIES` | `https://thriftly.com,https://projections.thriftly.com` | runtime | CSV `azp` allowlist enforced on every verified JWT. |
-| `CLERK_ENABLED` | `1` | runtime | The kill switch. Read at request time — flipping it (CSP widening + auth dep accepting Clerk JWTs) takes effect on the next request with **no restart** (but the SPA still needs the build-time key to mount the provider). |
-
-**NEVER set on projections:** `CLERK_SECRET_KEY` or `CLERK_WEBHOOK_SIGNING_SECRET`. projections is a satellite and holds **no Clerk secret** (finding C1) — the boot-refuse gate (§5.3) **refuses to boot in prod if either is present**, on or off.
-
-**Boot-refuse interplay:** with `CLERK_ENABLED=1` in prod, boot **refuses** unless all three of `CLERK_JWT_ISSUER`, `CLERK_PUBLISHABLE_KEY`, `CLERK_AUTHORIZED_PARTIES` are set (no fallback chains). With `CLERK_ENABLED` off, none are required.
-
-### Verify the handshake (after build + deploy)
-
-1. **Build carried the key.** Confirm `VITE_CLERK_PUBLISHABLE_KEY` was set for the build that produced the live image (not just on the running service) — otherwise the SPA boots dark even with `CLERK_ENABLED=1`. Grep the deployed bundle / check the build log.
-2. **App is healthy on the new SHA.** `curl -s $PROD_URL/api/health` → `200`, `build_sha` == the just-pushed SHA, `db == "connected"`.
-3. **CSP widened.** `curl -sI $PROD_URL/ | grep -i content-security-policy` includes `https://clerk.thriftly.com`, `https://*.clerk.accounts.dev`, `https://*.clerk.com`, `https://img.clerk.com https://images.clerk.dev`, and `https://challenges.cloudflare.com` (SECURITY.md §8.2). With `CLERK_ENABLED` off it must be the strict `'self'`-only baseline.
-4. **clerk-js loads with no CSP violations.** Open `https://projections.thriftly.com` in a browser; the console shows **no** `Content-Security-Policy` blocked-resource errors and clerk-js initializes.
-5. **Cross-apex sign-in round-trips.** Use the owner sign-in affordance → it bounces to the **primary** (`rallytasks.com/sign-in`, via `clerk.buildSignInUrl()`, Clerk appends `__clerk_synced`) → returns to projections signed in. Owner API calls now carry `Authorization: Bearer <short-lived Clerk JWT>`; a protected `GET` succeeds.
-6. **Cookie-blind invariant holds (Regression #11).** A request with **only** the Clerk `__session` cookie and **no** `Authorization` header resolves as **anonymous** — the API never trusts a cookie, so there is still no CSRF.
-7. **Viewers unaffected.** A `view_slug` share link still opens read-only with **no** login prompt.
-
-**Rollback:** set `CLERK_ENABLED=0` (or unset) — the CSP reverts to strict and the auth dep stops accepting Clerk JWTs on the next request (owner falls back to the localStorage bearer token, byte-for-byte as before). No rebuild needed to turn it **off**.
+This section documented turning on the Clerk satellite login. That feature — and all authentication in this app — is deleted (owner decision, 2026-09-13; SECURITY.md §2). There is nothing left to go live with.
 
 ---
 
@@ -578,8 +543,8 @@ projections is a **cross-apex Clerk satellite** of the `rallytasks.com` primary 
 | **Railway cold start** | Brief 502s | Auto-recovery (`restartPolicyType="always"`); WAL recovers an unclean shutdown | Momentary, self-heals |
 | **Recalc gate flake in CI** | `recalc.py` error dict / timeout | Confirm pinned `soffice` + `timeout` present in image; re-run; do **not** override a real failure | (No prod impact; blocks deploy) |
 | **Replication stalled** | `last_push_seconds_ago` high; alert fires | Check `LITESTREAM_*` creds + R2 reachability; restart Litestream supervisor; verify a fresh restore | (Backups at risk — fix before next write-heavy period) |
-| **Leaked edit fragment** | Unexpected edits; audit shows foreign actor | `POST …/rotate-tokens` (invalidates shared links atomically; PRD §20); review access log; advise owner | Old links stop working; owner re-shares |
-| **Key-loss = data-loss** | User lost owner token + recovery code | **Staff CANNOT recover access** (no login; PRD §29). Staff can only resolve a `support_id` to a projection record — not grant access. Set user expectations accordingly. | Projection is effectively orphaned; one-time recovery code shown at create time is the only mitigation |
+| **Unwanted public edits** | A projection is edited by someone the owner didn't intend | There is no rotation or lock to fall back on — this app has no authentication (owner decision, 2026-09-13; SECURITY.md §2) and every projection is fully public and editable by anyone who can reach it. The only mitigation is restoring a prior revision (§ Revisions & restore) or, for a truly unwanted projection, trashing/purging it. Set owner expectations accordingly. | None available beyond revision restore / delete |
+| **`METRICS_TOKEN` compromised** | Ops metrics endpoint accessed unexpectedly | Rotate `METRICS_TOKEN` in the Railway env (no code deploy needed) — the new value takes effect on the next request. This is the one remaining secret in the app (SECURITY.md §4.5). | Old token stops working immediately |
 
 ---
 
@@ -587,7 +552,7 @@ projections is a **cross-apex Clerk satellite** of the `rallytasks.com` primary 
 
 These are enforced in code and verified in CI; listed here so the operator knows what "secure by deploy" means.
 
-- **Enforcing CSP from day one** (greenfield SPA, no inline-script debt): `default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'` (provider origins were dropped in #167 — `connect-src` is `'self'`-only; the browser never talks to Places/Census/GitHub/CRM/R2 directly, those are server-side only). **Clerk widening is gated on `CLERK_ENABLED`** (SECURITY.md §8.2, §9b above): off ⇒ this strict baseline byte-for-byte; on ⇒ `script`/`connect`/`img`/`frame`/`worker-src` widen to the Clerk FAPI origins (`clerk.thriftly.com`, `*.clerk.accounts.dev`, `*.clerk.com`, `img.clerk.com`/`images.clerk.dev`, Turnstile).
+- **Enforcing CSP from day one** (greenfield SPA, no inline-script debt): `default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'` (provider origins were dropped in #167 — `connect-src` is `'self'`-only; the browser never talks to Places/Census/GitHub/CRM/R2 directly, those are server-side only). This is the **only** CSP this app ever sends now — the Clerk widening that used to gate on `CLERK_ENABLED` is deleted along with Clerk itself (SECURITY.md §8.2).
 - **CORS locked to `PLATFORM_URL`**; **`X-Robots-Tag: noindex`** + `robots.txt` disallow on every response (PRD §20).
 - **SSRF guard** on the research fetcher: block private/link-local/loopback/metadata ranges (`10/8`, `172.16/12`, `192.168/16`, `127/8`, `169.254/16`, `::1`, `fc00::/7`) and disallow redirects into them — the fetcher pulls attacker-influenceable web pages from inside Railway's network (PRD §16.1).
 - **Server-side allowlist sanitization** of narrative `body_md` and any user rich text before storage and render — closes the stored-XSS → token-theft path inherent to `localStorage` bearer tokens (PRD §20/§24).

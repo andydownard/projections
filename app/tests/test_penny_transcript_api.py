@@ -1,9 +1,8 @@
 """PE2 — GET /api/projections/{view_slug}/penny/transcript (Spec §7/§12; #121).
 
-A read seam (the POST tool-use loop is PE5). Owner/edit Bearer scoped: the auth
-quad — owner 200, this projection's edit token 200, view-only/no-token 403, a
-different owner's token 403, unknown slug 404. No cross-owner leakage. Returns the
-persisted transcript turns verbatim (server is the one shape authority).
+This project has no authentication (owner decision, 2026-09-13): the slug alone
+grants read; unknown slug -> 404. Returns the persisted transcript turns verbatim
+(server is the one shape authority).
 """
 from __future__ import annotations
 
@@ -62,40 +61,15 @@ def _url(view_slug):
     return f"/api/projections/{view_slug}/penny/transcript"
 
 
-# ----------------------------------------------------------- auth quad
-def test_owner_can_read_transcript(client):
+def test_can_read_transcript_with_no_auth(client):
     p = _create(client)
-    r = client.get(_url(p["view_slug"]),
-                   headers={"Authorization": f"Bearer {p['owner_token']}"})
+    r = client.get(_url(p["view_slug"]))
     assert r.status_code == 200, r.text
     assert r.json()["turns"] == []
 
 
-def test_edit_token_can_read_transcript(client):
-    p = _create(client)
-    r = client.get(_url(p["view_slug"]),
-                   headers={"Authorization": f"Bearer {p['edit_token']}"})
-    assert r.status_code == 200, r.text
-
-
-def test_view_only_no_token_is_forbidden(client):
-    p = _create(client)
-    r = client.get(_url(p["view_slug"]))
-    assert r.status_code == 403
-    assert r.json()["detail"]["error"] == "forbidden"
-
-
-def test_other_owner_token_is_forbidden(client):
-    p1 = _create(client)
-    p2 = _create(client)  # a different projection / different owner token
-    r = client.get(_url(p1["view_slug"]),
-                   headers={"Authorization": f"Bearer {p2['owner_token']}"})
-    assert r.status_code == 403
-
-
 def test_unknown_slug_is_404(client):
-    r = client.get(_url("does-not-exist"),
-                   headers={"Authorization": "Bearer whatever"})
+    r = client.get(_url("does-not-exist"))
     assert r.status_code == 404
 
 
@@ -105,8 +79,7 @@ def test_returns_persisted_turns(client):
     _seed_turn(client, p["view_slug"], role="user", content="Set Y1 share to 8%")
     _seed_turn(client, p["view_slug"], role="assistant", content="Done — now 8%.",
                provider="anthropic")
-    r = client.get(_url(p["view_slug"]),
-                   headers={"Authorization": f"Bearer {p['owner_token']}"})
+    r = client.get(_url(p["view_slug"]))
     assert r.status_code == 200
     turns = r.json()["turns"]
     assert [t["content"] for t in turns] == ["Set Y1 share to 8%", "Done — now 8%."]
@@ -115,8 +88,7 @@ def test_returns_persisted_turns(client):
 
 def test_empty_transcript_returns_empty_turns(client):
     p = _create(client)
-    r = client.get(_url(p["view_slug"]),
-                   headers={"Authorization": f"Bearer {p['owner_token']}"})
+    r = client.get(_url(p["view_slug"]))
     assert r.status_code == 200
     assert r.json()["turns"] == []
 
@@ -125,7 +97,6 @@ def test_no_cross_projection_leak(client):
     p1 = _create(client)
     p2 = _create(client)
     _seed_turn(client, p2["view_slug"], content="P2-secret")
-    r = client.get(_url(p1["view_slug"]),
-                   headers={"Authorization": f"Bearer {p1['owner_token']}"})
+    r = client.get(_url(p1["view_slug"]))
     assert r.status_code == 200
     assert "P2-secret" not in r.text

@@ -845,8 +845,6 @@ export function PennyDrawer({
 export interface PennyAssistantProps {
   /** The saved projection's view_slug (the POST …/penny path key). */
   viewSlug: string;
-  /** The caller's owner/edit Bearer token (header only — never the URL/log). */
-  token: string;
   /** AI opt-out / no key → muted FAB + Settings deep-link (never a dead-end). */
   aiEnabled?: boolean;
   /** Provider seam (accepted for back-compat; no longer surfaced in the header). */
@@ -916,7 +914,6 @@ function isAbortError(e: unknown): boolean {
 
 export function PennyAssistant({
   viewSlug,
-  token,
   aiEnabled = true,
   settingsHref,
   onOpenSettings,
@@ -961,7 +958,6 @@ export function PennyAssistant({
       try {
         const res = await sendPennyMessage({
           viewSlug,
-          token,
           message,
           proposalRef: proposal?.ref,
           signal: controller.signal,
@@ -1008,7 +1004,7 @@ export function PennyAssistant({
         abortRef.current = null;
       }
     },
-    [viewSlug, token, pending, muted, proposal, onApplied, localId],
+    [viewSlug, pending, muted, proposal, onApplied, localId],
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
@@ -1073,7 +1069,6 @@ export function PennyAssistant({
           onStop={stop}
           extraAffordance={
             <ProposalUpload
-              token={token}
               disabled={pending}
               attachedName={proposal?.name ?? null}
               onUploaded={(ref, name) => {
@@ -1215,9 +1210,6 @@ function LiveComposer({
 // ============================================================================
 
 export interface PennyDraftAssistantProps {
-  /** Ephemeral session Bearer for /penny/draft (a rate-limit id only — there is no
-   *  projection yet and NOTHING is persisted; never the URL/log). */
-  token: string;
   /** Snapshot the current wizard draft as the server `draft_state` to send. */
   buildDraftState: () => PennyDraftState;
   /** Map Penny's mutated draft back into the wizard (the HOST owns the field mapping
@@ -1260,7 +1252,6 @@ function changeText(v: unknown): string {
 }
 
 export function PennyDraftAssistant({
-  token,
   buildDraftState,
   onApplyDraft,
   onRevertField,
@@ -1301,7 +1292,6 @@ export function PennyDraftAssistant({
       abortRef.current = controller;
       try {
         const res: PennyDraftResponse = await sendPennyDraftMessage({
-          token,
           message,
           draftState: sent,
           signal: controller.signal,
@@ -1385,7 +1375,7 @@ export function PennyDraftAssistant({
         abortRef.current = null;
       }
     },
-    [token, pending, muted, buildDraftState, onApplyDraft, labelField, localId],
+    [pending, muted, buildDraftState, onApplyDraft, labelField, localId],
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);

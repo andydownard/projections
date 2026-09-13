@@ -33,48 +33,8 @@ class PostgresStore:
     def get_projection_by_slug(self, view_slug: str) -> dict | None:
         self._stub("get_projection_by_slug")
 
-    def list_by_owner(self, owner_token_hash: str, *, include_trashed: bool = False) -> list[dict]:
-        self._stub("list_by_owner")
-
-    def list_card_summaries(
-        self, owner_token_hash: str, *, include_trashed: bool = False
-    ) -> list[dict]:
+    def list_card_summaries(self, *, include_trashed: bool = False) -> list[dict]:
         self._stub("list_card_summaries")
-
-    def list_by_clerk_owner(
-        self, clerk_user_id: str, *, include_trashed: bool = False
-    ) -> list[dict]:
-        self._stub("list_by_clerk_owner")
-
-    def list_card_summaries_by_clerk_owner(
-        self, clerk_user_id: str, *, include_trashed: bool = False
-    ) -> list[dict]:
-        self._stub("list_card_summaries_by_clerk_owner")
-
-    def claim_projections_to_clerk_owner(
-        self, owner_token_hash: str, clerk_user_id: str, org_id: str | None = None
-    ) -> int:
-        self._stub("claim_projections_to_clerk_owner")
-
-    def create_share_grant(
-        self,
-        projection_id: str,
-        grantee_clerk_user_id: str,
-        *,
-        role: str = "editor",
-        grantee_owner_token_hash: str | None = None,
-    ) -> bool:
-        self._stub("create_share_grant")
-
-    def has_share_grant(
-        self, projection_id: str, grantee_clerk_user_id: str
-    ) -> bool:
-        self._stub("has_share_grant")
-
-    def list_shared_card_summaries_by_clerk_owner(
-        self, clerk_user_id: str, *, include_trashed: bool = False
-    ) -> list[dict]:
-        self._stub("list_shared_card_summaries_by_clerk_owner")
 
     def create_projection(self, p: dict) -> dict:
         self._stub("create_projection")
@@ -88,11 +48,6 @@ class PostgresStore:
         self, id: str, expected_version: int, patch: dict[str, Any], revision: dict
     ) -> int:
         self._stub("update_with_version_check_and_revision")
-
-    def rotate_tokens(
-        self, id: str, expected_version: int, new_hashes: dict[str, Any]
-    ) -> int:
-        self._stub("rotate_tokens")
 
     def set_status(self, id: str, status: str, expected_version: int) -> int:
         self._stub("set_status")

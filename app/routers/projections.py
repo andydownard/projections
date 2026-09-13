@@ -1,16 +1,17 @@
-"""app/routers/projections.py — M2 projections API: create / read / owner-list.
+"""app/routers/projections.py — projections API: create / read / global-list / edit.
 
 The server is the single math authority (CLAUDE.md): every create runs the pure
 engine (`engine.compute`) and persists its native Appendix-D view-model as
 `computed_json`. Reads return that stored snapshot verbatim — never a silent
-recompute (PRD §13). Lists are owner-scoped via the SHA-256 hash of the bearer
-owner token (SECURITY.md §2). Capability tokens are minted with a CSPRNG and
-returned exactly once; only their hashes are stored.
+recompute (PRD §13).
 
-This slice is create/read/list + PATCH (autosave). Every mutation requires a Bearer
-owner/edit token + If-Match: <version>; recompute is server-side; optimistic
-concurrency yields HTTP 409 with current state on a stale If-Match; one revision
-snapshot is written per settle. The .xlsx export lands in a later slice.
+This project has no authentication or authorization of any kind (owner decision,
+2026-09-13): every projection is public, the list endpoint returns every row in the
+database, and every mutation is reachable with no bearer at all. What remains is
+optimistic concurrency — every mutation still requires If-Match: <version>;
+recompute is server-side; a stale If-Match yields HTTP 409 with current state; one
+revision snapshot is written per settle — and per-IP rate limiting (abuse/DoS
+protection, unrelated to identity).
 """
 from __future__ import annotations
 
@@ -28,19 +29,13 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional, get_args, get_origin
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.background import BackgroundTask
 
 from app import config, narrative_provider, ratelimit
-from app.deps import (
-    CapabilityBearer,
-    ClerkOwner,
-    hash_token,
-    parse_if_match,
-    resolve_bearer_identity,
-)
+from app.deps import new_internal_owner_hash, parse_if_match
 from app.geo.client import GeoUpstreamError, static_map_bytes
 from app.jsonutil import dumps_finite, loads_obj
 from app.narrative import (
@@ -53,10 +48,7 @@ from app.narrative import (
     validate_grounding,
 )
 from app.packet import build_packet, render_packet_docx, render_packet_md
-from app.routers.common import bearer as _bearer
 from app.routers.common import client_ip as _client_ip
-from app.routers.common import is_editor as _is_editor
-from app.routers.common import is_owner as _is_owner
 from app.routers.common import utcnow as _utcnow
 from app.store import Store, get_store
 from engine import dag
@@ -90,78 +82,58 @@ XLSX_CONTENT_TYPE = (
 # Preview is a read-only dry-run on the read bucket (API_SPEC §2.3): generous,
 # since it backs a debounced "what-if" surface, but still capped against abuse.
 _PREVIEW_IP_LIMIT = 600
-_PREVIEW_TOKEN_LIMIT = 600
 _PREVIEW_WINDOW_SECONDS = 300
 
-# Cost-DoS caps (SECURITY.md §10; issues #164/#168). create is UNAUTHENTICATED and
-# each call mints tokens + runs the engine + a durable write -> 20/hr/IP per §10.1
-# (per-token is "—" since the flood is anonymous). The export surfaces are reachable
-# with only the public view_slug: xlsx/packet rebuild an uncached workbook/packet on
-# every call (CPU), staticmap proxies the billed Google Static Maps API (bytes are
-# cached per location, so the Google-bill blast radius is first-fetch-per-location).
+# Cost-DoS caps (SECURITY.md §10; issues #164/#168): this project has no
+# authentication (owner decision, 2026-09-13), so every cap below is per-IP only.
+# create mints an internal row + runs the engine + a durable write -> 20/hr/IP. The
+# export surfaces are reachable with only the public view_slug: xlsx/packet rebuild
+# an uncached workbook/packet on every call (CPU), staticmap proxies the billed
+# Google Static Maps API (bytes are cached per location, so the Google-bill blast
+# radius is first-fetch-per-location).
 _CREATE_IP_LIMIT = 20
 _CREATE_WINDOW_SECONDS = 3600
-# claim is authenticated (a verified Clerk JWT) but still runs a durable write, and
-# JWT verification is crypto work — cap per IP so a flood is rejected before either.
-_CLAIM_IP_LIMIT = 60
-_CLAIM_WINDOW_SECONDS = 3600
-# claim-share (editable shares follow a Clerk account, #323) verifies a JWT, does a
-# constant-time edit-token compare, and a durable write — all crypto/DB work, so it
-# carries the Mutation Safety Quad's (d) per-IP + per-token cap (own bucket).
-_CLAIM_SHARE_IP_LIMIT = 60
-_CLAIM_SHARE_TOKEN_LIMIT = 120
-_CLAIM_SHARE_WINDOW_SECONDS = 3600
-# autosave PATCH (incl. the grant-based edit path, #323) is the shared write surface
-# (manual + Penny). Generous caps — autosave settles are debounced — but the
-# Mutation Safety Quad's (d) per-IP + per-token brake on the abuse path is real.
+# autosave PATCH is the shared write surface (manual + Penny). Generous — autosave
+# settles are debounced — but the Mutation Safety Quad's (d) per-IP brake on the
+# abuse path is real.
 _PATCH_IP_LIMIT = 600
-_PATCH_TOKEN_LIMIT = 600
 _PATCH_WINDOW_SECONDS = 300
 _EXPORT_IP_LIMIT = 30  # xlsx + packet, per IP
-_EXPORT_TOKEN_LIMIT = 60  # xlsx + packet, per token when a bearer is presented
 _EXPORT_WINDOW_SECONDS = 3600
-# duplicate mirrors create's cost profile (mints tokens + runs the engine + a durable
-# write + one revision), so it reuses create's per-IP budget; it is authenticated
-# (owner-only), so a per-token cap is also meaningful (a compromised owner token
-# cannot fork-flood past 20/hr either).
+# duplicate mirrors create's cost profile (runs the engine + a durable write + one
+# revision), so it reuses create's per-IP budget.
 _DUPLICATE_IP_LIMIT = _CREATE_IP_LIMIT
-_DUPLICATE_TOKEN_LIMIT = _CREATE_IP_LIMIT
 _DUPLICATE_WINDOW_SECONDS = _CREATE_WINDOW_SECONDS
 _STATICMAP_IP_LIMIT = 120  # cached per (lat,lng,kind); per IP only (view-capability)
 _STATICMAP_WINDOW_SECONDS = 3600
 # Narrative writes (SECURITY.md §10.1). ``narrative:regenerate`` calls a PAID LLM, so
-# it carries the tightest cap on THREE axes: per IP + per token (hourly) AND a
-# per-projection DAILY ceiling, so a single compromised owner/edit token cannot burn a
-# day of provider spend re-drafting one board packet. PUT narrative is a local
-# sanitize + numeric-grounding write (no provider call), so a coarse per-token/hr cap
-# is enough. All are emitted BEFORE the provider/compute (the cheapest rejection).
+# it carries the tightest cap on TWO axes: per IP (hourly) AND a per-projection DAILY
+# ceiling, so no single flood can burn a day of provider spend re-drafting one board
+# packet. PUT narrative is a local sanitize + numeric-grounding write (no provider
+# call), so a coarse per-IP/hr cap is enough. All are emitted BEFORE the
+# provider/compute (the cheapest rejection).
 _REGEN_IP_LIMIT = 10
-_REGEN_TOKEN_LIMIT = 20
 _REGEN_WINDOW_SECONDS = 3600
 _REGEN_PROJECTION_DAILY_LIMIT = 50
 _REGEN_DAY_SECONDS = 86400
 _NARRATIVE_PUT_IP_LIMIT = 120
-_NARRATIVE_PUT_TOKEN_LIMIT = 120
 _NARRATIVE_PUT_WINDOW_SECONDS = 3600
-# Mutation-Safety-Quad leg (d): a COARSE per-IP+token abuse cap on every mutating
-# endpoint (SECURITY.md §10.1; CLAUDE.md "Mutation Safety Quad"). PATCH is the hot
-# autosave path — a 350 ms client debounce means worst-case ~170 legit saves/hr, so
-# 240/hr is generous headroom yet still bounds a runaway/compromised writer and the
-# revision-row growth each save appends. The owner-only lifecycle mutations (rotate /
-# revisions-restore / trash / restore / delete) are rare + heavier, so they carry a
-# tighter 60/hr. Compute itself stays cheap + AI-free; this is the abuse brake, not a
-# per-keystroke throttle. Emitted BEFORE the merge/recompute/write (cheapest rejection).
+# Mutation-Safety-Quad leg (d): a COARSE per-IP abuse cap on every mutating endpoint
+# (SECURITY.md §10.1; CLAUDE.md "Mutation Safety Quad"). PATCH is the hot autosave
+# path — a 350 ms client debounce means worst-case ~170 legit saves/hr, so 240/hr is
+# generous headroom yet still bounds a flood and the revision-row growth each save
+# appends. The lifecycle mutations (revisions-restore / trash / restore / delete)
+# are rare + heavier, so they carry a tighter 60/hr. Compute itself stays cheap +
+# AI-free; this is the abuse brake, not a per-keystroke throttle. Emitted BEFORE the
+# merge/recompute/write (cheapest rejection).
 _PATCH_IP_LIMIT = 240
-_PATCH_TOKEN_LIMIT = 240
 _PATCH_WINDOW_SECONDS = 3600
 _MUTATION_IP_LIMIT = 60
-_MUTATION_TOKEN_LIMIT = 60
 _MUTATION_WINDOW_SECONDS = 3600
-# Owner lifecycle ops (trash / restore / purge): owner-authenticated and infrequent,
-# but each is a destructive state change, so they carry the Mutation Safety Quad's
-# (d) per-IP + per-token cap (each route has its OWN bucket). SECURITY.md §10.
+# Lifecycle ops (trash / restore / purge): infrequent, but each is a destructive
+# state change, so they carry the Mutation Safety Quad's (d) per-IP cap (each route
+# has its OWN bucket). SECURITY.md §10.
 _LIFECYCLE_IP_LIMIT = 60
-_LIFECYCLE_TOKEN_LIMIT = 120
 _LIFECYCLE_WINDOW_SECONDS = 3600
 
 router = APIRouter(prefix="/api/projections", tags=["projections"])
@@ -208,19 +180,16 @@ def _rate_limited(
 
 
 def _mutation_rate_limited(
-    endpoint: str, request: Request, authorization: Optional[str],
+    endpoint: str, request: Request,
 ) -> Optional[JSONResponse]:
-    """Quad leg (d) for the owner-only lifecycle mutations (rotate-tokens /
-    revisions-restore / trash / restore / delete): a coarse 60/hr per-IP + per-token
-    abuse cap, keyed on the hashed bearer. Called right after the ``_require_owner``
-    check (so a non-owner still gets 403, not a leaked 429) and before any state
-    read/write — the cheapest rejection. Each endpoint gets its own named bucket."""
-    token = _bearer(authorization)
+    """Quad leg (d) for the lifecycle mutations (revisions-restore / trash / restore /
+    delete): a coarse per-IP abuse cap. Called before any state read/write — the
+    cheapest rejection. Each endpoint gets its own named bucket. No per-token
+    dimension anymore (this project has no authentication, owner decision
+    2026-09-13)."""
     return _rate_limited(
         endpoint, request,
         ip_limit=_MUTATION_IP_LIMIT,
-        token=hash_token(token) if token else None,
-        token_limit=_MUTATION_TOKEN_LIMIT,
         window_seconds=_MUTATION_WINDOW_SECONDS,
     )
 
@@ -267,7 +236,7 @@ def _raise_version_conflict(store: Store, row: dict, if_match: int) -> None:
 
 
 def _narrative_version_bump(
-    store: Store, row: dict, token: str, if_match: int, change_summary: str,
+    store: Store, row: dict, if_match: int, change_summary: str,
 ) -> int:
     """Advance the projection version + snapshot a revision for a narrative write.
 
@@ -288,7 +257,7 @@ def _narrative_version_bump(
         "monthly_json": "{}",
         "computed_json": row.get("computed_json") or "{}",
         "model_version": row.get("model_version") or "",
-        "actor_token_hash": hash_token(token),
+        "actor_token_hash": None,
         "change_summary": change_summary,
         "created_at": _utcnow(),
     }
@@ -306,69 +275,12 @@ def _new_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + secrets.token_hex(8)
 
 
-def _clerk_owns(row: dict, ident: ClerkOwner) -> bool:
-    """A verified Clerk identity owns this row when its user (or org) id matches the
-    stamped owner column. NULL columns (token-owned rows) never match (the empty
-    string / None guards prevent a NULL == NULL cross-owner leak)."""
-    uid = row.get("owner_clerk_user_id")
-    if uid and ident.clerk_user_id and uid == ident.clerk_user_id:
-        return True
-    oid = row.get("owner_org_id")
-    if oid and ident.org_id and oid == ident.org_id:
-        return True
-    return False
-
-
-def _resolve_owner_columns(
-    authorization: Optional[str],
-) -> tuple[str, Optional[str], dict[str, Any]]:
-    """Resolve (owner_token_hash, minted_owner_or_None, clerk_columns) for a NEW row.
-
-    Cookie-blind (Authorization header only). A verified Clerk owner stamps the
-    identity + mints a capability owner token (the schema requires owner_token_hash;
-    it is the recovery/claim seam); a capability bearer JOINS that token's workspace
-    (no new mint — the copy/second-create lands beside its siblings); anonymous mints
-    a fresh ~256-bit owner. Shared by create AND duplicate so the two mint paths can
-    never drift. ``minted_owner`` is the one-time plaintext to return (None when a
-    capability bearer joined an existing workspace)."""
-    identity = resolve_bearer_identity(authorization)
-    minted_owner = None
-    clerk_cols: dict[str, Any] = {}
-    if isinstance(identity, ClerkOwner):
-        presented_owner = secrets.token_urlsafe(32)
-        minted_owner = presented_owner
-        clerk_cols["owner_clerk_user_id"] = identity.clerk_user_id
-        if identity.org_id:
-            clerk_cols["owner_org_id"] = identity.org_id
-    elif isinstance(identity, CapabilityBearer):
-        presented_owner = identity.token  # join that token's workspace (unchanged)
-    else:  # Anonymous
-        presented_owner = secrets.token_urlsafe(32)  # ~256-bit
-        minted_owner = presented_owner
-    return hash_token(presented_owner), minted_owner, clerk_cols
-
-
-def _require_owner(store: Store, view_slug: str, authorization: Optional[str]) -> dict:
-    """Load the projection and assert the bearer is the OWNER (owner-only routes).
-
-    Owner identity is a verified Clerk JWT (when ``CLERK_ENABLED``) OR the hashed
-    capability owner token — resolved COOKIE-BLIND from the Authorization header
-    only. Edit/view tokens get 403 owner_required (rotate/trash/restore/delete/
-    revisions are owner-scoped — API_SPEC §1.2). Unknown slug -> 404 (never reveal
-    existence beyond what the slug already grants).
-    """
+def _require_row(store: Store, view_slug: str) -> dict:
+    """Load the projection or 404. No auth of any kind (owner decision, 2026-09-13)."""
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
-    identity = resolve_bearer_identity(authorization)
-    if isinstance(identity, ClerkOwner) and _clerk_owns(row, identity):
-        return row
-    token = _bearer(authorization)
-    if _is_owner(token, row):
-        return row
-    if _is_editor(token, row):
-        raise HTTPException(status_code=403, detail={"error": "owner_required"})
-    raise HTTPException(status_code=403, detail={"error": "forbidden"})
+    return row
 
 
 # ----------------------------------------------------------------- request body
@@ -1105,15 +1017,14 @@ def create_projection(
     body: CreateProjectionIn,
     request: Request,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
 ):
-    """Create: compute server-side, persist, return the view-model + one-time tokens.
+    """Create: compute server-side, persist, return the view-model.
 
-    If a valid owner bearer token is presented the projection joins that workspace;
-    otherwise a new owner token is minted and returned exactly once.
+    This project has no authentication (owner decision, 2026-09-13) — every
+    projection is public from the moment it is created.
     """
-    # §10.1: create is unauthenticated and mints tokens + runs the engine + a durable
-    # write on every call, so cap it per-IP BEFORE any compute/insert (#164).
+    # §10.1: create runs the engine + a durable write on every call, so cap it
+    # per-IP BEFORE any compute/insert (#164).
     limited = _rate_limited(
         "create_projection", request,
         ip_limit=_CREATE_IP_LIMIT, window_seconds=_CREATE_WINDOW_SECONDS,
@@ -1128,14 +1039,7 @@ def create_projection(
         ) from exc
     _enrich_view_model(vm, body.location.model_dump(), body.trade_area.model_dump())
 
-    # Resolve the caller COOKIE-BLIND: a verified Clerk owner (when CLERK_ENABLED),
-    # an opaque capability owner token, or anonymous. With Clerk off this is
-    # byte-for-byte today's behavior (every bearer is a capability token). Shared with
-    # duplicate so the two mint paths can never drift.
-    owner_hash, minted_owner, clerk_cols = _resolve_owner_columns(authorization)
-
-    view_slug = secrets.token_urlsafe(16)  # ~128-bit
-    edit_token = secrets.token_urlsafe(32)
+    view_slug = secrets.token_urlsafe(16)  # a row lookup key, not a secret
     pid = _new_id()
     now = _utcnow()
     name = body.name or body.inputs.org_name or "Untitled projection"
@@ -1178,8 +1082,10 @@ def create_projection(
     row = {
         "id": pid,
         "view_slug": view_slug,
-        "owner_token_hash": owner_hash,
-        "edit_token_hash": hash_token(edit_token),
+        # `owner_token_hash` is a vestigial NOT NULL column (migrations are
+        # additive-only and cannot drop it); this value is never returned or
+        # compared against anything.
+        "owner_token_hash": new_internal_owner_hash(),
         "name": name,
         "model_version": vm.get("model_version", ""),
         "compute_schema_version": vm.get("compute_schema_version", ""),
@@ -1195,21 +1101,16 @@ def create_projection(
         "terms_accepted_at": now if body.terms_accepted else None,
         "created_at": now,
         "updated_at": now,
-        **clerk_cols,
         **_schedule_columns(inputs_dump),
     }
     store.create_projection(row)
 
-    out = {
+    return {
         **vm,
         "view_slug": view_slug,
         "version": 1,
         "name": name,
-        "edit_token": edit_token,  # one-time
     }
-    if minted_owner is not None:
-        out["owner_token"] = minted_owner  # one-time; client stores in localStorage
-    return out
 
 
 class DuplicateIn(BaseModel):
@@ -1231,16 +1132,12 @@ def duplicate_projection(
     request: Request,
     body: Optional[DuplicateIn] = None,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
 ):
     """Server-side copy into a FRESH row — the real "Save as copy" (API_SPEC §4.5).
 
-    Owner-only (``_require_owner``): edit/view/anonymous -> 403, exactly like
-    rotate/trash/delete (capability routes have no 401 path). The copy is a NEW
-    projection — new id / view_slug / edit token, FRESH revision — and NEVER reuses
-    the source's secrets (a shared slug/edit token would leak the source). The caller
-    is the owner, so the copy JOINS the owner's workspace (mirrors create's
-    identity-join: no new owner token when a capability owner presents one).
+    This project has no authentication (owner decision, 2026-09-13) — anyone who can
+    reach a projection can duplicate it. The copy is a NEW projection — new id /
+    view_slug, FRESH revision.
 
     Duplicate creates a row and never version-mutates the source, so it carries no
     If-Match (like create). The optional ``patch`` flows through the SAME
@@ -1248,19 +1145,18 @@ def duplicate_projection(
     validation, AssumptionsIn/InputsIn bounds, and fixed_annual ACCUMULATION are
     therefore identical, so save-as-copy carries the conflicted edit faithfully.
     """
-    # §10.1: mirror create's cost-DoS brake — cap per IP (and per owner token) BEFORE
-    # the auth read + compute + durable write.
-    _dup_token = _bearer(authorization)
+    # §10.1: mirror create's cost-DoS brake — cap per IP BEFORE the read + compute +
+    # durable write.
     limited = _rate_limited(
         "duplicate_projection", request,
-        ip_limit=_DUPLICATE_IP_LIMIT,
-        token=hash_token(_dup_token) if _dup_token else None,
-        token_limit=_DUPLICATE_TOKEN_LIMIT, window_seconds=_DUPLICATE_WINDOW_SECONDS,
+        ip_limit=_DUPLICATE_IP_LIMIT, window_seconds=_DUPLICATE_WINDOW_SECONDS,
     )
     if limited is not None:
         return limited
 
-    row = _require_owner(store, view_slug, authorization)
+    row = store.get_projection_by_slug(view_slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
 
     # Resolve the copy's editable surface. With a patch, run the EXACT PATCH merge/
     # validation path against the SOURCE row (fixed_annual accumulates over the
@@ -1295,9 +1191,7 @@ def duplicate_projection(
     location_d = loads_obj(row.get("location_json"))
     _enrich_view_model(vm, location_d, trade_d)
 
-    owner_hash, minted_owner, clerk_cols = _resolve_owner_columns(authorization)
-    view_slug_new = secrets.token_urlsafe(16)  # ~128-bit — FRESH, never the source's
-    edit_token = secrets.token_urlsafe(32)      # FRESH edit capability
+    view_slug_new = secrets.token_urlsafe(16)  # FRESH, never the source's
     pid = _new_id()
     now = _utcnow()
     copy_name = f"{name} (copy)"
@@ -1305,8 +1199,7 @@ def duplicate_projection(
     copy_row = {
         "id": pid,
         "view_slug": view_slug_new,
-        "owner_token_hash": owner_hash,
-        "edit_token_hash": hash_token(edit_token),
+        "owner_token_hash": new_internal_owner_hash(),
         "name": copy_name,
         "model_version": vm.get("model_version", ""),
         "compute_schema_version": vm.get("compute_schema_version", ""),
@@ -1323,7 +1216,6 @@ def duplicate_projection(
         "terms_accepted_at": row.get("terms_accepted_at"),
         "created_at": now,
         "updated_at": now,
-        **clerk_cols,
         **_schedule_columns(inputs_d),
     }
     store.create_projection(copy_row)
@@ -1340,169 +1232,24 @@ def duplicate_projection(
         "monthly_json": "{}",
         "computed_json": copy_row["computed_json"],
         "model_version": copy_row["model_version"],
-        "actor_token_hash": hash_token(_dup_token) if _dup_token else None,
+        "actor_token_hash": None,
         "actor": "user",
         "change_summary": "duplicated",
         "created_at": now,
     })
 
-    out = {
+    return {
         **vm,
         "view_slug": view_slug_new,
         "version": 1,
         "name": copy_name,
-        "edit_token": edit_token,  # one-time
     }
-    if minted_owner is not None:
-        out["owner_token"] = minted_owner  # one-time (Clerk/anon owner only)
-    return out
 
 
-class ClaimIn(BaseModel):
-    """The capability owner token to link onto the signed-in Clerk identity."""
-    owner_token: str = Field(min_length=1)
-
-    model_config = ConfigDict(extra="forbid")
-
-
-@router.post("/claim")
-def claim_projections(
-    body: ClaimIn,
-    request: Request,
-    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
-):
-    """Link a signed-in Clerk owner's EXISTING token-owned projections onto their
-    verified Clerk identity (the claim/bridge path — SECURITY §2.8, API_SPEC §4.9).
-
-    Once the owner signs in, the owner list keys on the Clerk ``sub`` (not the
-    hashed token), so without this bridge the projections they created before
-    signing in would silently vanish from their list. This backfills
-    ``owner_clerk_user_id`` (and ``owner_org_id`` when org-scoped) onto every
-    UNCLAIMED row owned by the presented capability token, in ONE atomic conditional
-    UPDATE (no check-then-act).
-
-    Guarantees:
-      - **Auth (Mutation Quad a):** the Bearer MUST resolve to a verified
-        ``ClerkOwner``; ``Anonymous`` or a capability-token-only caller → **401**. A
-        capability token alone can NEVER claim — possession of a token grants access
-        to that workspace, not the right to bind it to an arbitrary Clerk identity.
-      - **Tenant (b):** only rows whose ``owner_token_hash`` matches the presented
-        token are touched, and the ``owner_clerk_user_id IS NULL`` guard means an
-        already-claimed row can never be re-linked/stolen (TENANT, PRD §20).
-      - **Idempotency (c):** a re-claim links 0 more (``IS NULL`` excludes the
-        already-stamped rows) and returns ``{"linked": 0}``.
-      - **Rate limit (d):** per-IP cap (§10.1) BEFORE the JWT verify + the write.
-      - **Ship dark:** with ``CLERK_ENABLED`` off the path does not exist → **404**.
+def _list_item(r: dict) -> dict:
+    """One list-card item from a denormalized summary row (#178). The server emits
+    {raw, display} and the client renders display verbatim (no client math — PRD §13).
     """
-    # Ship-dark: with Clerk off there is no Clerk identity to claim onto. The feature
-    # simply does not exist (404), never a crash.
-    if not config.clerk_enabled():
-        raise HTTPException(status_code=404, detail={"error": "not_found"})
-
-    # §10.1: cap per IP BEFORE the JWT verify (crypto) and the durable write.
-    limited = _rate_limited(
-        "claim_projections", request,
-        ip_limit=_CLAIM_IP_LIMIT, window_seconds=_CLAIM_WINDOW_SECONDS,
-    )
-    if limited is not None:
-        return limited
-
-    # Cookie-blind: identity resolves from the Authorization header only. A capability
-    # token (or no bearer) cannot claim — only a verified Clerk owner.
-    identity = resolve_bearer_identity(authorization)
-    if not isinstance(identity, ClerkOwner):
-        raise HTTPException(status_code=401, detail={"error": "clerk_identity_required"})
-
-    linked = store.claim_projections_to_clerk_owner(
-        hash_token(body.owner_token), identity.clerk_user_id, identity.org_id)
-    return {"linked": linked}
-
-
-class ClaimShareIn(BaseModel):
-    """The edit token a recipient presents to claim editable access (#323).
-
-    The token rides the BODY, never the path/query/log (Regression #10) — the path
-    carries only the public ``view_slug``."""
-    edit_token: str = Field(min_length=1)
-
-    class Config:
-        extra = "forbid"
-
-
-@router.post("/{view_slug}/claim-share")
-def claim_share(
-    view_slug: str,
-    body: ClaimShareIn,
-    request: Request,
-    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
-):
-    """Bind editable access to a signed-in Clerk account from a verified edit-token
-    presentation (the OWNER decision: shared edit FOLLOWS the account — epic #323).
-
-    A recipient who opened a share link (``/p/<slug>/edit#<edit-token>``) signs in and
-    calls this once per shared projection. When the presented edit token matches THIS
-    slug's ``edit_token_hash`` (constant-time), a ``share_grant`` is written on their
-    Clerk ``sub``. From then on the projection shows in their "Shared with me" list and
-    they may edit it via their JWT on ANY device (the PATCH-grant path) — no edit token
-    in localStorage required.
-
-    Mutation Safety Quad (each its own test):
-      - **(a) auth:** the Bearer MUST resolve to a verified ``ClerkOwner``; an opaque
-        capability token or no bearer → **401**. A capability token cannot bind a grant
-        to an arbitrary Clerk identity.
-      - **(b) verified-token-only:** the grant is created ONLY from a VALID edit token
-        for THIS slug — an unknown slug → **404**, a wrong/foreign edit token → **403**;
-        NEVER a grant (no cross-owner leak). The edit token is in the BODY, never the
-        path/query/log.
-      - **(c) idempotency:** ``UNIQUE(projection_id, grantee)`` + insert-or-ignore — a
-        second claim returns ``{"granted": false}`` and writes no duplicate.
-      - **(d) rate limit:** per-IP + per-token cap (own bucket) BEFORE the JWT verify +
-        the constant-time compare + the write.
-      - **Ship dark:** with ``CLERK_ENABLED`` off the path does not exist → **404**.
-    """
-    # Ship-dark: with Clerk off there is no Clerk identity for a grant to follow.
-    if not config.clerk_enabled():
-        raise HTTPException(status_code=404, detail={"error": "not_found"})
-
-    # §10/Quad(d): cap per IP + per presented edit token BEFORE the JWT verify (crypto),
-    # the constant-time compare, and the durable write.
-    limited = _rate_limited(
-        "claim_share", request,
-        ip_limit=_CLAIM_SHARE_IP_LIMIT,
-        token=hash_token(body.edit_token),
-        token_limit=_CLAIM_SHARE_TOKEN_LIMIT,
-        window_seconds=_CLAIM_SHARE_WINDOW_SECONDS,
-    )
-    if limited is not None:
-        return limited
-
-    # Cookie-blind: identity resolves from the Authorization header only. Only a
-    # verified Clerk owner may claim a share onto their account.
-    identity = resolve_bearer_identity(authorization)
-    if not isinstance(identity, ClerkOwner):
-        raise HTTPException(status_code=401, detail={"error": "clerk_identity_required"})
-
-    row = store.get_projection_by_slug(view_slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail={"error": "not_found"})
-
-    # The grant is minted ONLY from a VALID edit token for THIS slug (constant-time;
-    # a row with no edit token, or a wrong/foreign token, never grants → 403). This is
-    # the cross-owner wall: possession of some other projection's edit token grants
-    # nothing here.
-    if not _is_editor(body.edit_token, row):
-        raise HTTPException(status_code=403, detail={"error": "invalid_edit_token"})
-
-    granted = store.create_share_grant(row["id"], identity.clerk_user_id)
-    return {"granted": granted, "view_slug": view_slug, "role": "editor"}
-
-
-def _list_item(r: dict, *, owner: bool, shared: bool, editable: bool) -> dict:
-    """One list-card item from a denormalized summary row (#178), tagged with its
-    relationship to the caller (owner vs shared). The server emits {raw, display} and
-    the client renders display verbatim (no client math — PRD §13)."""
     summary = loads_obj(r.get("summary_json"))
     return {
         "view_slug": r["view_slug"],
@@ -1510,12 +1257,6 @@ def _list_item(r: dict, *, owner: bool, shared: bool, editable: bool) -> dict:
         "status": r.get("status") or "active",
         "version": r["version"],
         "updated_at": r["updated_at"],
-        # Relationship tags (#323): owner rows keep owner:true; a "Shared with me" row
-        # is shared:true + editable:true + owner:false (owner-only affordances —
-        # trash/rotate/delete — are server-side owner-only regardless of this flag).
-        "owner": owner,
-        "shared": shared,
-        "editable": editable,
         # card fields denormalized at write time (build_card_summary)
         "location": summary.get("location", ""),
         "basis": summary.get("basis", ""),
@@ -1538,49 +1279,20 @@ def _list_item(r: dict, *, owner: bool, shared: bool, editable: bool) -> dict:
 @router.get("")
 def list_projections(
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
     trashed: bool = False,
 ):
-    """Owner-scoped list (never global). No/invalid token -> empty list.
+    """Global list — every projection in the database (owner decision, 2026-09-13:
+    this project has no authentication, so there is no owner to scope a list to).
 
-    Owner identity is resolved COOKIE-BLIND from the Authorization header — a
-    verified Clerk owner (when CLERK_ENABLED) lists by ``owner_clerk_user_id``;
-    an opaque owner token lists by its hash (today's path); anything else is empty.
-
-    ``?trashed=true`` returns ONLY this owner's trashed projections (the Trash view,
-    API_SPEC §4.1/§4.8); the default (active) list excludes them. Owner-scoped in
-    both modes — the store query is always keyed on the owner, never global.
-
-    For a verified Clerk owner the active list ALSO UNIONs their "Shared with me"
-    rows (#323) — projections another owner granted them editable access to, scoped
-    STRICTLY to the caller's grants (never global, Override TENANT / PRD §20) and
-    tagged ``{shared:true, editable:true, owner:false}``. Trash stays owner-only.
+    ``?trashed=true`` returns every trashed projection; the default (active) list
+    excludes them.
     """
-    identity = resolve_bearer_identity(authorization)
     # #178: read the small denormalized card columns (summary_json) only — the store
-    # never SELECTs or parses the full ~10KB computed_json per row for the owner list.
-    if isinstance(identity, ClerkOwner):
-        rows = store.list_card_summaries_by_clerk_owner(
-            identity.clerk_user_id, include_trashed=trashed)
-    elif isinstance(identity, CapabilityBearer):
-        rows = store.list_card_summaries(
-            hash_token(identity.token), include_trashed=trashed)
-    else:  # Anonymous
-        return {"projections": []}
-    # include_trashed=True returns active + trashed; the Trash view wants trashed-only.
+    # never SELECTs or parses the full ~10KB computed_json per row for the list.
+    rows = store.list_card_summaries(include_trashed=trashed)
     if trashed:
         rows = [r for r in rows if (r.get("status") or "active") == "trashed"]
-    items = [_list_item(r, owner=True, shared=False, editable=True) for r in rows]
-    # "Shared with me" (#323): a Clerk owner's active list UNIONs the rows granted to
-    # them. Owner-scoped to the caller's Clerk sub via the grant join — never global,
-    # and never on the owner-only Trash view.
-    if isinstance(identity, ClerkOwner) and not trashed:
-        shared_rows = store.list_shared_card_summaries_by_clerk_owner(
-            identity.clerk_user_id)
-        items += [
-            _list_item(r, owner=False, shared=True, editable=True) for r in shared_rows
-        ]
-    return {"projections": items}
+    return {"projections": [_list_item(r) for r in rows]}
 
 
 @router.get("/{view_slug}")
@@ -1661,15 +1373,15 @@ def export_xlsx(
     request: Request,
     variant: Optional[str] = None,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
 ):
     """Formula-driven .xlsx export (API_SPEC §6.3).
 
-    Owner/edit/view may download (the slug already grants read). Terms acceptance
-    is required first (§21) -> 403 terms_required. The workbook is rendered from
-    the SAME resolved node values as computed_json (one math surface): blue inputs,
-    live formulas, orange overrides + audit comment, guarded IF divisions, monthly
-    tab. Written to a server-controlled temp file, streamed, then deleted.
+    This project has no authentication (owner decision, 2026-09-13); the slug alone
+    grants read. Terms acceptance is required first (§21) -> 403 terms_required. The
+    workbook is rendered from the SAME resolved node values as computed_json (one
+    math surface): blue inputs, live formulas, orange overrides + audit comment,
+    guarded IF divisions, monthly tab. Written to a server-controlled temp file,
+    streamed, then deleted.
 
     ``variant`` (Model v3 Phase 3, Task 3.1): ``None``/``"internal"`` (default) is
     this UNCHANGED formula-driven workbook. ``"client"`` renders the terse,
@@ -1677,13 +1389,10 @@ def export_xlsx(
     engine math differs between the two, only the rendering.
     """
     # §10/#168: an uncached workbook rebuild on every call, reachable with just the
-    # public slug -> cap per IP (and per token when a bearer is presented) FIRST.
-    _xlsx_token = _bearer(authorization)
+    # public slug -> cap per IP FIRST.
     limited = _rate_limited(
         "export_xlsx", request,
-        ip_limit=_EXPORT_IP_LIMIT,
-        token=hash_token(_xlsx_token) if _xlsx_token else None,
-        token_limit=_EXPORT_TOKEN_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
+        ip_limit=_EXPORT_IP_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
     )
     if limited is not None:
         return limited
@@ -1741,26 +1450,22 @@ def export_cashflow_csv(
     view_slug: str,
     request: Request,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
 ):
     """Monthly cash-flow CSV export (spec §4.5).
 
-    Mirrors the sibling ``/xlsx`` and ``/packet`` view-slug exports: the slug alone
-    grants read, terms acceptance is required first (§21) -> 403 terms_required, and
-    the per-IP (+ per-token when a bearer is presented) rate-limit legs fire FIRST.
-    UNLIKE ``/xlsx``, the CSV is served from the STORED ``computed_json`` monthly[]
-    VERBATIM — a read is never a recompute (Regression #12). The four money columns
-    are RAW SIGNED INTEGERS so a spreadsheet can sum them (the ``($23,973)`` display
-    string imports as text and breaks the sum); reformatting is not the CSV's job.
+    This project has no authentication (owner decision, 2026-09-13); the slug alone
+    grants read. Terms acceptance is required first (§21) -> 403 terms_required, and
+    the per-IP rate-limit leg fires FIRST. UNLIKE ``/xlsx``, the CSV is served from
+    the STORED ``computed_json`` monthly[] VERBATIM — a read is never a recompute
+    (Regression #12). The four money columns are RAW SIGNED INTEGERS so a
+    spreadsheet can sum them (the ``($23,973)`` display string imports as text and
+    breaks the sum); reformatting is not the CSV's job.
     """
     # §10/#168: an uncached CSV render on every call, reachable with just the public
-    # slug -> cap per IP (and per token when a bearer is presented) FIRST.
-    _csv_token = _bearer(authorization)
+    # slug -> cap per IP FIRST.
     limited = _rate_limited(
         "export_cashflow_csv", request,
-        ip_limit=_EXPORT_IP_LIMIT,
-        token=hash_token(_csv_token) if _csv_token else None,
-        token_limit=_EXPORT_TOKEN_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
+        ip_limit=_EXPORT_IP_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
     )
     if limited is not None:
         return limited
@@ -1902,32 +1607,25 @@ def put_narrative(
     request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
     """Save user-edited prose. body_md is allowlist-sanitized BEFORE storage.
 
-    Sanitization is the stored-XSS -> localStorage-token-theft defense
-    (SECURITY.md §5). Owner/edit only; view-only is 403. Optimistic concurrency:
-    ``If-Match`` is compared to the live version and a stale value is a 409
-    (shape identical to PATCH's); a successful save BUMPS the version and snapshots
-    a revision, so a second editor conflicts instead of silently clobbering the
-    board-packet prose. Coarse per-token/hr rate-limited (a local write, no provider).
+    Sanitization is the stored-XSS defense (SECURITY.md §5). This project has no
+    authentication (owner decision, 2026-09-13). Optimistic concurrency: ``If-Match``
+    is compared to the live version and a stale value is a 409 (shape identical to
+    PATCH's); a successful save BUMPS the version and snapshots a revision, so a
+    second editor conflicts instead of silently clobbering the board-packet prose.
+    Coarse per-IP rate-limited (a local write, no provider).
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
-    token = _bearer(authorization)
-    if not (_is_owner(token, row) or _is_editor(token, row)):
-        raise HTTPException(status_code=403, detail={"error": "forbidden"})
-    assert token is not None  # the 403 guard rejects a None token (never owner/editor)
 
-    # §10.1: coarse per-token/hr cap (the hashed token is the bucket key, never plaintext).
+    # §10.1: coarse per-IP/hr cap.
     limited = _rate_limited(
         "put_narrative", request,
-        ip_limit=_NARRATIVE_PUT_IP_LIMIT,
-        token=hash_token(token), token_limit=_NARRATIVE_PUT_TOKEN_LIMIT,
-        window_seconds=_NARRATIVE_PUT_WINDOW_SECONDS,
+        ip_limit=_NARRATIVE_PUT_IP_LIMIT, window_seconds=_NARRATIVE_PUT_WINDOW_SECONDS,
     )
     if limited is not None:
         return limited
@@ -1953,7 +1651,7 @@ def put_narrative(
     # racing editor at the same version is rejected here even if it slipped the check
     # above. Persist the prose ONLY after the bump succeeds.
     new_version = _narrative_version_bump(
-        store, row, token, if_match, "narrative_edit")
+        store, row, if_match, "narrative_edit")
     store.upsert_narrative(row["id"], {
         "body_md": clean,
         "edited": 1,
@@ -1975,10 +1673,11 @@ def regenerate_narrative(
     response: Response,
     confirm: bool = False,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
-    """Regenerate grounded prose from current computed_json (owner/edit only).
+    """Regenerate grounded prose from current computed_json.
+
+    This project has no authentication (owner decision, 2026-09-13).
 
     N6: provider is Anthropic primary -> OpenAI fallback; the response ``provider``
     field reflects the ACTUAL provider used. Both providers failing -> 503
@@ -1989,27 +1688,21 @@ def regenerate_narrative(
     discarded: regenerating over ``edit_origin == 'human'`` without ``?confirm=true``
     -> 409 edited_confirm_required (confirm-before-discard gate).
 
-    Cost containment (audit P0): this is a PAID-LLM surface, so it is capped per IP +
-    per token (hourly) AND per projection (daily), and a stale ``If-Match`` is a 409,
-    ALL of them BEFORE the provider call — a rejected request never spends LLM budget.
-    A successful regenerate BUMPS the version and snapshots a revision.
+    Cost containment (audit P0): this is a PAID-LLM surface, so it is capped per IP
+    (hourly) AND per projection (daily), and a stale ``If-Match`` is a 409, ALL of
+    them BEFORE the provider call — a rejected request never spends LLM budget. A
+    successful regenerate BUMPS the version and snapshots a revision.
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
-    token = _bearer(authorization)
-    if not (_is_owner(token, row) or _is_editor(token, row)):
-        raise HTTPException(status_code=403, detail={"error": "forbidden"})
-    assert token is not None  # the 403 guard rejects a None token (never owner/editor)
 
-    # §10.1 cost containment: cap the PAID regenerate BEFORE the provider call — per IP +
-    # per token (hourly) AND a per-projection DAILY ceiling. A rejected request never
-    # spends a token of LLM budget.
+    # §10.1 cost containment: cap the PAID regenerate BEFORE the provider call — per IP
+    # (hourly) AND a per-projection DAILY ceiling. A rejected request never spends a
+    # token of LLM budget.
     limited = _rate_limited(
         "regenerate_narrative", request,
-        ip_limit=_REGEN_IP_LIMIT,
-        token=hash_token(token), token_limit=_REGEN_TOKEN_LIMIT,
-        window_seconds=_REGEN_WINDOW_SECONDS,
+        ip_limit=_REGEN_IP_LIMIT, window_seconds=_REGEN_WINDOW_SECONDS,
     )
     if limited is not None:
         return limited
@@ -2057,7 +1750,7 @@ def regenerate_narrative(
     # Version-checked bump + revision (0 rows -> 409) BEFORE persisting the new prose,
     # so a regenerate that raced a concurrent edit is rejected, not silently applied.
     new_version = _narrative_version_bump(
-        store, row, token, if_match, "narrative_regenerate")
+        store, row, if_match, "narrative_regenerate")
     store.upsert_narrative(row["id"], {
         "body_md": clean,
         "edited": 0,
@@ -2081,7 +1774,6 @@ def export_packet(
     format: str = "md",
     variant: Optional[str] = None,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
 ):
     """Board / Funder / Advisor packet (API_SPEC §6.4).
 
@@ -2097,13 +1789,10 @@ def export_packet(
     ``variant`` param) — no engine math differs, only the rendering.
     """
     # §10/#168: an uncached packet render on every call, reachable with just the
-    # public slug -> cap per IP (and per token when a bearer is presented) FIRST.
-    _pkt_token = _bearer(authorization)
+    # public slug -> cap per IP FIRST.
     limited = _rate_limited(
         "export_packet", request,
-        ip_limit=_EXPORT_IP_LIMIT,
-        token=hash_token(_pkt_token) if _pkt_token else None,
-        token_limit=_EXPORT_TOKEN_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
+        ip_limit=_EXPORT_IP_LIMIT, window_seconds=_EXPORT_WINDOW_SECONDS,
     )
     if limited is not None:
         return limited
@@ -2159,52 +1848,25 @@ def apply_projection_patch(
     row: dict,
     body: PatchProjectionIn,
     store: Store,
-    token: Optional[str],
     if_match: int,
     actor: str = "user",
     change_summary: str = "autosave",
-    clerk_identity: Optional[ClerkOwner] = None,
 ) -> tuple[dict[str, Any], int, str]:
     """The single server-authoritative mutation/recompute write path (API_SPEC §4.4).
 
     Shared by the manual autosave PATCH (``actor='user'``) AND the Penny tool loop
     (``actor='penny'``, Spec B §4/§6.2): there is NO parallel writer and NO
-    privileged Penny path. Auth, override-DAG validation, cost-schedule validation,
+    privileged Penny path. Override-DAG validation, cost-schedule validation,
     optimistic concurrency, recompute, and the one-revision-per-write audit are
     therefore IDENTICAL for an AI edit and a human edit — Penny carries intents
     through exactly the same wall the manual UI hits.
 
-    Auth (COOKIE-BLIND, from the Authorization Bearer only — never ``request.cookies``):
-    the caller must be one of —
-      - the OWNER or this projection's EDIT token (the capability path, unchanged), OR
-      - a verified Clerk identity that OWNS the row (``_clerk_owns``), OR
-      - a verified Clerk identity holding a ``share_grant`` for the row (editable
-        shares that FOLLOW the account, #323).
-    Anyone else (view-only / no usable bearer / a Clerk user with no grant) -> 403
-    forbidden. Raises HTTPException(403 forbidden | 422 node_not_pinnable | 422
+    This project has no authentication (owner decision, 2026-09-13) — anyone who can
+    reach the row can mutate it. Raises HTTPException(422 node_not_pinnable | 422
     invalid_inputs | 409 version_conflict) exactly as the manual PATCH does. Returns
     ``(view_model, new_version, name)`` and writes ONE revision tagged ``actor``
     (DATA_MODEL §4: the revision ``actor`` enum — user | penny | …).
     """
-    is_capability = _is_owner(token, row) or _is_editor(token, row)
-    clerk_authorized = clerk_identity is not None and (
-        _clerk_owns(row, clerk_identity)
-        or store.has_share_grant(row["id"], clerk_identity.clerk_user_id)
-    )
-    if not (is_capability or clerk_authorized):
-        # view-only (no/invalid token) cannot mutate (SECURITY.md §2; API_SPEC §4.4).
-        # A Penny mutate tool gates on capability first, but this is the real wall.
-        raise HTTPException(status_code=403, detail={"error": "forbidden"})
-    # Audit actor: the presented capability token's hash on the capability path; the
-    # Clerk sub's hash on the grant/clerk-owner path (a JWT bearer is NOT a stable
-    # actor key). One of the two branches is always taken (the 403 above guarantees it).
-    if is_capability:
-        assert token is not None  # _is_owner/_is_editor are False for a None token
-        actor_hash = hash_token(token)
-    else:
-        assert clerk_identity is not None  # clerk_authorized implies a clerk identity
-        actor_hash = hash_token(clerk_identity.clerk_user_id)
-
     # Merge the partial onto the stored source-of-truth, then recompute.
     try:
         inputs_d, assumptions_d, demand_d, trade_d, overrides_d, name = _merge_patch(
@@ -2252,7 +1914,7 @@ def apply_projection_patch(
         "monthly_json": "{}",
         "computed_json": patch["computed_json"],
         "model_version": patch["model_version"],
-        "actor_token_hash": actor_hash,
+        "actor_token_hash": None,
         "actor": actor,
         "change_summary": change_summary,
         "created_at": _utcnow(),
@@ -2271,42 +1933,31 @@ def patch_projection(
     request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
     """Autosave (API_SPEC §4.4): merge patch -> recompute server-side -> persist.
 
-    Requires Authorization: Bearer (the owner OR this projection's edit token OR — when
-    ``CLERK_ENABLED`` — a verified Clerk owner/grantee of the row, #323) and
+    This project has no authentication (owner decision, 2026-09-13). Requires
     If-Match: <version>. Optimistic concurrency: a stale version writes 0 rows and
     returns HTTP 409 with the current server state. One revision snapshot per settle.
-    A per-IP + per-token cap (Mutation Safety Quad (d), 240/hr) brakes the abuse path
-    before the recompute + write. The merge/recompute/persist/audit body lives in
+    A per-IP cap (Mutation Safety Quad (d), 240/hr) brakes the abuse path before the
+    recompute + write. The merge/recompute/persist/audit body lives in
     :func:`apply_projection_patch` so the Penny tool loop converges on the exact same
-    write path (actor:penny); the auth (403) + If-Match (409) legs live there.
+    write path (actor:penny); the If-Match (409) leg lives there.
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
 
-    token = _bearer(authorization)
-    # Quad (d): cap per IP + per presented token BEFORE the recompute + durable write.
+    # Quad (d): cap per IP BEFORE the recompute + durable write.
     limited = _rate_limited(
         "patch_projection", request,
-        ip_limit=_PATCH_IP_LIMIT,
-        token=hash_token(token) if token else None,
-        token_limit=_PATCH_TOKEN_LIMIT, window_seconds=_PATCH_WINDOW_SECONDS,
+        ip_limit=_PATCH_IP_LIMIT, window_seconds=_PATCH_WINDOW_SECONDS,
     )
     if limited is not None:
         return limited
-    # Cookie-blind: a verified Clerk identity (owner or grantee, #323) is resolved from
-    # the Authorization header only — never request.cookies (Regression #11). With
-    # Clerk off this is None and the capability path is byte-for-byte unchanged.
-    identity = resolve_bearer_identity(authorization)
-    clerk_identity = identity if isinstance(identity, ClerkOwner) else None
     vm, new_version, name = apply_projection_patch(
-        row=row, body=body, store=store, token=token, if_match=if_match,
-        clerk_identity=clerk_identity)
+        row=row, body=body, store=store, if_match=if_match)
     response.headers["ETag"] = str(new_version)
     return {**vm, "view_slug": view_slug, "version": new_version, "name": name}
 
@@ -2317,32 +1968,24 @@ def preview_projection(
     body: PatchProjectionIn,
     request: Request,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
 ):
     """Dry-run /preview (epic-N N1): merge -> recompute -> diff, READ-ONLY.
 
-    Bearer owner/edit, NO If-Match. It MUST NOT persist, MUST NOT bump version, and
-    MUST NOT write a revision — it only recomputes the merged editable surface in
-    memory and returns {before, after, changed[], reco_before, reco_after}. Same
-    422 rejections as PATCH (invalid input, non-pinnable node). Rate-limited on the
-    read bucket (it backs a debounced "what-if" surface). The provable read-only
-    invariant is a CI gate (test_ai_safety / test_projections_preview).
+    This project has no authentication (owner decision, 2026-09-13), NO If-Match. It
+    MUST NOT persist, MUST NOT bump version, and MUST NOT write a revision — it only
+    recomputes the merged editable surface in memory and returns {before, after,
+    changed[], reco_before, reco_after}. Same 422 rejections as PATCH (invalid input,
+    non-pinnable node). Rate-limited on the read bucket (it backs a debounced
+    "what-if" surface). The provable read-only invariant is a CI gate
+    (test_ai_safety / test_projections_preview).
     """
     row = store.get_projection_by_slug(view_slug)
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
 
-    token = _bearer(authorization)
-    if not (_is_owner(token, row) or _is_editor(token, row)):
-        # view-only (no/invalid token) cannot preview (SECURITY.md §2).
-        raise HTTPException(status_code=403, detail={"error": "forbidden"})
-
     limited = _rate_limited(
         "preview", request,
-        ip_limit=_PREVIEW_IP_LIMIT,
-        token=hash_token(token) if token else None,
-        token_limit=_PREVIEW_TOKEN_LIMIT,
-        window_seconds=_PREVIEW_WINDOW_SECONDS,
+        ip_limit=_PREVIEW_IP_LIMIT, window_seconds=_PREVIEW_WINDOW_SECONDS,
     )
     if limited is not None:
         return limited
@@ -2377,104 +2020,16 @@ def preview_projection(
     }
 
 
-# ---------------------------------------------------- rotate / share (owner-only)
-@router.post("/{view_slug}/rotate-tokens")
-def rotate_tokens(
-    view_slug: str,
-    request: Request,
-    response: Response,
-    store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
-    if_match: int = Depends(parse_if_match),
-):
-    """Rotate owner/edit/view_slug + every role link in ONE transaction (API_SPEC §4.7).
-
-    Owner-only. Immediately invalidates every previously-shared link (compromise
-    response, SECURITY.md §3): the old owner/edit tokens and the old view_slug all
-    die at once. Writes a rotation event to the audit/revision log. The new secrets
-    are returned exactly once (never re-derivable from the server). Quad leg (d): a
-    coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1).
-    """
-    row = _require_owner(store, view_slug, authorization)
-    limited = _mutation_rate_limited("rotate_tokens", request, authorization)
-    if limited is not None:
-        return limited
-
-    new_owner = secrets.token_urlsafe(32)   # ~256-bit
-    new_edit = secrets.token_urlsafe(32)
-    new_slug = secrets.token_urlsafe(16)    # ~128-bit
-
-    # Re-mint role links keeping role NAMES, replacing slugs/hashes (atomic).
-    old_roles = loads_obj(row.get("role_tokens_json"))
-    new_role_secrets: dict[str, str] = {}
-    new_role_map: dict[str, str] = {}
-    for _old_slug, role_name in old_roles.items():
-        rs = secrets.token_urlsafe(16)
-        new_role_map[rs] = role_name
-        new_role_secrets[role_name] = rs
-
-    new_hashes = {
-        "owner_token_hash": hash_token(new_owner),
-        "edit_token_hash": hash_token(new_edit),
-        "view_slug": new_slug,
-        # Plain dumps (not dumps_finite) is intentional here, not an oversight
-        # (batch3-review finding A / Minor 4): new_role_map is built entirely from
-        # secrets.token_urlsafe() slugs -> role-name strings, no numerics, so there
-        # is no float for allow_nan=False to guard against.
-        "role_tokens_json": json.dumps(new_role_map),
-    }
-    # The capability re-hash (same version-checked UPDATE as rotate_tokens) and its
-    # audit revision commit in ONE transaction (#186): 0 rows -> 409 with neither;
-    # else both land together, so a rotation can never half-apply (tokens swapped but
-    # no audit row, or vice versa).
-    new_version = if_match + 1
-    revision = {
-        "id": _new_id(),
-        "projection_id": row["id"],
-        "seq": new_version,
-        "inputs_json": row.get("inputs_json") or "{}",
-        "assumptions_json": row.get("assumptions_json") or "{}",
-        "overrides_json": row.get("overrides_json") or "{}",
-        "monthly_json": row.get("monthly_json") or "{}",
-        "computed_json": row.get("computed_json") or "{}",
-        "model_version": row.get("model_version") or "",
-        "actor_token_hash": hash_token(new_owner),
-        "change_summary": "tokens_rotated",
-        "created_at": _utcnow(),
-    }
-    affected = store.update_with_version_check_and_revision(
-        row["id"], if_match, new_hashes, revision)
-    if affected == 0:
-        raise HTTPException(status_code=409, detail={
-            "error": "version_conflict", "your_version": if_match,
-            "recovery": "reload | overwrite | save_as_copy"})
-
-    response.headers["ETag"] = str(new_version)
-    return {
-        "view_slug": new_slug,
-        "version": new_version,
-        "tokens": {
-            "owner_token": new_owner,
-            "edit_token": new_edit,
-            "view_slug": new_slug,
-            "roles": new_role_secrets,
-        },
-    }
-
-
-# --------------------------------------------------------- revisions (owner-only)
+# --------------------------------------------------------------------- revisions
 @router.get("/{view_slug}/revisions")
 def list_revisions(
     view_slug: str,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
 ):
-    """Owner-scoped revision history (API_SPEC §5.1).
-
-    Metadata + change_summary only — snapshot bodies are not inlined. Edit/view
-    tokens cannot browse history (owner_required).
-    """
-    row = _require_owner(store, view_slug, authorization)
+    """Revision history (API_SPEC §5.1). Metadata + change_summary only — snapshot
+    bodies are not inlined. This project has no authentication (owner decision,
+    2026-09-13) — the slug alone grants read."""
+    row = _require_row(store, view_slug)
     revs = store.list_revisions(row["id"])
     return {"revisions": [
         {
@@ -2498,17 +2053,16 @@ def restore_revision(
     request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
     """Restore a snapshot as a NEW forward revision (API_SPEC §5.2).
 
-    Owner-only. Appends rather than rewinds history: the snapshot's
-    inputs/assumptions/overrides are recomputed and persisted at the next version.
-    Quad leg (d): a coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1).
+    This project has no authentication (owner decision, 2026-09-13). Appends rather
+    than rewinds history: the snapshot's inputs/assumptions/overrides are recomputed
+    and persisted at the next version. Quad leg (d): a coarse 60/hr per-IP abuse cap.
     """
-    row = _require_owner(store, view_slug, authorization)
-    limited = _mutation_rate_limited("restore_revision", request, authorization)
+    row = _require_row(store, view_slug)
+    limited = _mutation_rate_limited("restore_revision", request)
     if limited is not None:
         return limited
     rev = store.get_revision(revision_id)
@@ -2542,7 +2096,6 @@ def restore_revision(
     # transaction (#186): 0 rows -> 409 with neither; else both land together, so a
     # restore can never bump the version without writing its snapshot.
     new_version = if_match + 1
-    token = _bearer(authorization)
     revision = {
         "id": _new_id(),
         "projection_id": row["id"],
@@ -2553,7 +2106,7 @@ def restore_revision(
         "monthly_json": "{}",
         "computed_json": patch["computed_json"],
         "model_version": patch["model_version"],
-        "actor_token_hash": hash_token(token) if token else None,
+        "actor_token_hash": None,
         "change_summary": f"restore from v{rev['seq']}",
         "created_at": _utcnow(),
     }
@@ -2590,19 +2143,12 @@ def _set_status_and_respond(store, row, view_slug, response, if_match, status):
             "name": row["name"], "status": status}
 
 
-def _lifecycle_rate_limit(
-    endpoint: str, request: Request, authorization: Optional[str]
-) -> Optional[JSONResponse]:
-    """Mutation Safety Quad (d) for the owner lifecycle routes: a per-IP + per-token
-    429 (its own bucket per endpoint), emitted AFTER the owner check so it never
-    leaks existence to a non-owner but BEFORE the state change."""
-    token = _bearer(authorization)
+def _lifecycle_rate_limit(endpoint: str, request: Request) -> Optional[JSONResponse]:
+    """Mutation Safety Quad (d) for the lifecycle routes: a per-IP 429 (its own
+    bucket per endpoint), emitted BEFORE the state change."""
     return _rate_limited(
         endpoint, request,
-        ip_limit=_LIFECYCLE_IP_LIMIT,
-        token=hash_token(token) if token else None,
-        token_limit=_LIFECYCLE_TOKEN_LIMIT,
-        window_seconds=_LIFECYCLE_WINDOW_SECONDS,
+        ip_limit=_LIFECYCLE_IP_LIMIT, window_seconds=_LIFECYCLE_WINDOW_SECONDS,
     )
 
 
@@ -2612,13 +2158,13 @@ def trash_projection(
     request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
-    """Soft delete (API_SPEC §4.8): status -> trashed. Owner-only, If-Match required.
-    Quad leg (d): a coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1)."""
-    row = _require_owner(store, view_slug, authorization)
-    limited = _lifecycle_rate_limit("trash", request, authorization)
+    """Soft delete (API_SPEC §4.8): status -> trashed. This project has no
+    authentication (owner decision, 2026-09-13); If-Match is still required. Quad
+    leg (d): a coarse 60/hr per-IP abuse cap."""
+    row = _require_row(store, view_slug)
+    limited = _lifecycle_rate_limit("trash", request)
     if limited is not None:
         return limited
     return _set_status_and_respond(store, row, view_slug, response, if_match, "trashed")
@@ -2630,13 +2176,13 @@ def restore_projection(
     request: Request,
     response: Response,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
-    """Restore from trash (API_SPEC §4.8): status -> active. Owner-only. Quad leg (d):
-    a coarse 60/hr abuse cap after the owner check (SECURITY.md §10.1)."""
-    row = _require_owner(store, view_slug, authorization)
-    limited = _lifecycle_rate_limit("restore", request, authorization)
+    """Restore from trash (API_SPEC §4.8): status -> active. This project has no
+    authentication (owner decision, 2026-09-13). Quad leg (d): a coarse 60/hr per-IP
+    abuse cap."""
+    row = _require_row(store, view_slug)
+    limited = _lifecycle_rate_limit("restore", request)
     if limited is not None:
         return limited
     return _set_status_and_respond(store, row, view_slug, response, if_match, "active")
@@ -2647,17 +2193,17 @@ def delete_projection(
     view_slug: str,
     request: Request,
     store: Store = Depends(get_store),  # noqa: B008  FastAPI dependency default (accepted pattern)
-    authorization: Optional[str] = Header(default=None),
     if_match: int = Depends(parse_if_match),
 ):
-    """Hard delete / purge (API_SPEC §4.8). Owner-only; permitted ONLY when the
-    projection is already trashed (else 409 not_trashed). Irreversible: hard-DELETEs
-    the projection AND cascades to every child it owns (revisions, narratives,
-    evidence, penny_transcripts, actuals, role links) so the confidential financials
-    and Penny conversation are actually ERASED, not merely hidden (#202, DATA_MODEL
-    §5.4). Quad leg (d): a coarse 60/hr abuse cap after the owner check (SECURITY §10.1)."""
-    row = _require_owner(store, view_slug, authorization)
-    limited = _lifecycle_rate_limit("purge", request, authorization)
+    """Hard delete / purge (API_SPEC §4.8). This project has no authentication (owner
+    decision, 2026-09-13); permitted ONLY when the projection is already trashed
+    (else 409 not_trashed). Irreversible: hard-DELETEs the projection AND cascades
+    to every child it owns (revisions, narratives, evidence, penny_transcripts,
+    actuals, role links) so the confidential financials and Penny conversation are
+    actually ERASED, not merely hidden (#202, DATA_MODEL §5.4). Quad leg (d): a
+    coarse 60/hr per-IP abuse cap."""
+    row = _require_row(store, view_slug)
+    limited = _lifecycle_rate_limit("purge", request)
     if limited is not None:
         return limited
     if row.get("status") != "trashed":

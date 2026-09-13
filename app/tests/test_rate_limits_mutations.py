@@ -1,10 +1,11 @@
 """Mutation-Safety-Quad leg (d) — rate limits on EVERY mutating endpoint.
 
-CLAUDE.md's Mutation Safety Quad requires a per-IP + per-token abuse cap on every
-PATCH/POST/DELETE (SECURITY.md §10.1). Task 3.2 covered create/duplicate/exports and
-4.1 the narrative writes; this closes the remaining mutations: the hot autosave
-`PATCH` (240/hr) and the owner-only lifecycle mutations — rotate-tokens,
-revisions/restore, trash, restore, delete (60/hr each).
+CLAUDE.md's Mutation Safety Quad requires a per-IP abuse cap on every PATCH/POST/
+DELETE (SECURITY.md §10.1). This project has no authentication (owner decision,
+2026-09-13), so there is no per-token dimension anymore — every cap below is
+per-IP only. This covers the hot autosave `PATCH` (240/hr) and the lifecycle
+mutations — revisions/restore, trash, restore, delete (60/hr each). (rotate-tokens
+was deleted along with the rest of the capability-token model.)
 
 Over the cap → `429 {"error":"rate_limited","retry_after_seconds":…}` + `Retry-After`,
 emitted BEFORE the merge/recompute/write. The limiter is process-global; the conftest
@@ -20,12 +21,10 @@ from app.tests.conftest import create_projection
 # ------------------------------------------------------------ documented caps
 def test_mutation_default_caps_documented():
     # PATCH is the hot autosave path (350 ms debounce ⇒ ~170/hr worst-case legit),
-    # capped generously at 240/hr; the rarer owner-only lifecycle mutations at 60/hr.
+    # capped generously at 240/hr; the rarer lifecycle mutations at 60/hr.
     assert P._PATCH_IP_LIMIT == 240
-    assert P._PATCH_TOKEN_LIMIT == 240
     assert P._PATCH_WINDOW_SECONDS == 3600
     assert P._MUTATION_IP_LIMIT == 60
-    assert P._MUTATION_TOKEN_LIMIT == 60
     assert P._MUTATION_WINDOW_SECONDS == 3600
 
 
@@ -38,7 +37,7 @@ def _assert_429(r):
 
 # --------------------------------------------------------------------- PATCH
 def test_patch_over_cap_returns_429(client, monkeypatch):
-    slug, owner, _v, _b = create_projection(client)
+    slug, _v, _b = create_projection(client)
     monkeypatch.setattr(P, "_PATCH_IP_LIMIT", 3, raising=False)
 
     # Stale If-Match ⇒ each attempt 409s (no state change); the limiter counts BEFORE
@@ -47,7 +46,7 @@ def test_patch_over_cap_returns_429(client, monkeypatch):
         return client.patch(
             f"/api/projections/{slug}",
             json={"assumptions": {"labor_pct": "0.45"}},
-            headers={"Authorization": f"Bearer {owner}", "If-Match": "99"},
+            headers={"If-Match": "99"},
         )
 
     for _ in range(3):
@@ -55,37 +54,9 @@ def test_patch_over_cap_returns_429(client, monkeypatch):
     _assert_429(_patch())
 
 
-def test_patch_over_token_cap_returns_429_across_distinct_ips(client, monkeypatch):
-    # F5 (batch1 review): every test above monkeypatches only `_PATCH_IP_LIMIT`, so
-    # the independently-enforced TOKEN leg (verified in code — `patch_projection`
-    # passes both `ip_limit` and `token_limit` to `ratelimit.check`, which checks each
-    # scope independently) has no regression coverage: a future change passing
-    # `token=None` would sail through the whole suite untouched. Drive the SAME token
-    # from THREE DISTINCT client IPs (via X-Forwarded-For, matching the repo's XFF-spoof
-    # convention in test_penny_endpoints.py) so the per-IP bucket (240/hr default,
-    # untouched here) never fills — only the per-token bucket can produce the 429.
-    slug, owner, _v, _b = create_projection(client)
-    monkeypatch.setattr(P, "_PATCH_TOKEN_LIMIT", 3, raising=False)
-
-    def _patch(ip):
-        return client.patch(
-            f"/api/projections/{slug}",
-            json={"assumptions": {"labor_pct": "0.45"}},
-            headers={
-                "Authorization": f"Bearer {owner}",
-                "If-Match": "99",
-                "X-Forwarded-For": ip,
-            },
-        )
-
-    for i in range(3):
-        assert _patch(f"10.0.0.{i}").status_code != 429
-    _assert_429(_patch("10.0.0.99"))
-
-
 def test_patch_bypassed_under_e2e_seed_flag(client, monkeypatch):
     # The Playwright autosave path (E2E_SEED=1, non-prod) must never trip the cap.
-    slug, owner, _v, _b = create_projection(client)
+    slug, _v, _b = create_projection(client)
     monkeypatch.setattr(P, "_PATCH_IP_LIMIT", 2, raising=False)
     monkeypatch.setenv("E2E_SEED", "1")
     monkeypatch.setenv("APP_ENV", "dev")
@@ -93,38 +64,21 @@ def test_patch_bypassed_under_e2e_seed_flag(client, monkeypatch):
         r = client.patch(
             f"/api/projections/{slug}",
             json={"name": f"n{i}"},
-            headers={"Authorization": f"Bearer {owner}", "If-Match": str(i + 1)},
+            headers={"If-Match": str(i + 1)},
         )
         assert r.status_code == 200, r.text
 
 
-# -------------------------------------------------------------- rotate-tokens
-def test_rotate_over_cap_returns_429(client, monkeypatch):
-    slug, owner, _v, _b = create_projection(client)
-    monkeypatch.setattr(P, "_MUTATION_IP_LIMIT", 3, raising=False)
-
-    # Stale If-Match ⇒ 409 (no rotation), so the slug/owner token survive every call.
-    def _rotate():
-        return client.post(
-            f"/api/projections/{slug}/rotate-tokens",
-            headers={"Authorization": f"Bearer {owner}", "If-Match": "99"},
-        )
-
-    for _ in range(3):
-        assert _rotate().status_code != 429
-    _assert_429(_rotate())
-
-
 # ---------------------------------------------------------- revisions/restore
 def test_restore_revision_over_cap_returns_429(client, monkeypatch):
-    slug, owner, _v, _b = create_projection(client)
+    slug, _v, _b = create_projection(client)
     monkeypatch.setattr(P, "_MUTATION_IP_LIMIT", 3, raising=False)
 
     # A bogus revision id ⇒ 404 (after the cap check), so nothing is restored.
     def _restore():
         return client.post(
             f"/api/projections/{slug}/revisions/nope/restore",
-            headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+            headers={"If-Match": "1"},
         )
 
     for _ in range(3):
@@ -134,13 +88,13 @@ def test_restore_revision_over_cap_returns_429(client, monkeypatch):
 
 # ---------------------------------------------------------------------- trash
 def test_trash_over_cap_returns_429(client, monkeypatch):
-    slug, owner, _v, _b = create_projection(client)
+    slug, _v, _b = create_projection(client)
     monkeypatch.setattr(P, "_LIFECYCLE_IP_LIMIT", 3, raising=False)
 
     def _trash():
         return client.post(
             f"/api/projections/{slug}/trash",
-            headers={"Authorization": f"Bearer {owner}", "If-Match": "99"},
+            headers={"If-Match": "99"},
         )
 
     for _ in range(3):
@@ -150,13 +104,13 @@ def test_trash_over_cap_returns_429(client, monkeypatch):
 
 # -------------------------------------------------------------------- restore
 def test_restore_over_cap_returns_429(client, monkeypatch):
-    slug, owner, _v, _b = create_projection(client)
+    slug, _v, _b = create_projection(client)
     monkeypatch.setattr(P, "_LIFECYCLE_IP_LIMIT", 3, raising=False)
 
     def _restore():
         return client.post(
             f"/api/projections/{slug}/restore",
-            headers={"Authorization": f"Bearer {owner}", "If-Match": "99"},
+            headers={"If-Match": "99"},
         )
 
     for _ in range(3):
@@ -166,7 +120,7 @@ def test_restore_over_cap_returns_429(client, monkeypatch):
 
 # --------------------------------------------------------------------- delete
 def test_delete_over_cap_returns_429(client, monkeypatch):
-    slug, owner, _v, _b = create_projection(client)
+    slug, _v, _b = create_projection(client)
     monkeypatch.setattr(P, "_LIFECYCLE_IP_LIMIT", 3, raising=False)
 
     # The projection is active (not trashed) ⇒ 409 not_trashed (after the cap check),
@@ -174,35 +128,9 @@ def test_delete_over_cap_returns_429(client, monkeypatch):
     def _delete():
         return client.delete(
             f"/api/projections/{slug}",
-            headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+            headers={"If-Match": "1"},
         )
 
     for _ in range(3):
         assert _delete().status_code != 429
     _assert_429(_delete())
-
-
-# ------------------------------------------------------- IMP-3(7): token-cap leg
-def test_trash_over_token_cap_returns_429_across_distinct_ips(client, monkeypatch):
-    # `_mutation_rate_limited` derives + passes the token bucket internally for ALL
-    # FIVE lifecycle mutations (rotate-tokens / restore_revision / trash / restore /
-    # delete) via the exact same call shape — only PATCH's analogous helper had a
-    # same-token-across-IPs test (above). Lock the shared helper via trash; the
-    # other four are wired identically.
-    slug, owner, _v, _b = create_projection(client)
-    monkeypatch.setattr(P, "_LIFECYCLE_TOKEN_LIMIT", 3, raising=False)
-
-    # Stale If-Match ⇒ 409 (no state mutation), same trick as the IP-cap test above.
-    def _trash(ip):
-        return client.post(
-            f"/api/projections/{slug}/trash",
-            headers={
-                "Authorization": f"Bearer {owner}",
-                "If-Match": "99",
-                "X-Forwarded-For": ip,
-            },
-        )
-
-    for i in range(3):
-        assert _trash(f"10.0.3.{i}").status_code != 429
-    _assert_429(_trash("10.0.3.99"))

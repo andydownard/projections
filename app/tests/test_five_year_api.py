@@ -83,14 +83,14 @@ def test_donations_per_household_driver_is_patchable(client):
     # whole donation chain (donations -> retail -> revenue), so the setting AND the
     # Year-1 revenue must both move.
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     base_rev = created["kpis"][0]["value"]["raw"]
     assert created["settings"]["donationsPerHouseholdPerYear"] == 3
 
     r = client.patch(
         f"/api/projections/{slug}",
         json={"assumptions": {"labor_pct": "0.40", "donations_per_hh": 5}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     vm = r.json()
@@ -101,11 +101,11 @@ def test_donations_per_household_driver_is_patchable(client):
 
 def test_donation_value_and_basket_drivers_are_patchable(client):
     created = _create(client)
-    slug, owner = created["view_slug"], created["owner_token"]
+    slug = created["view_slug"]
     r = client.patch(
         f"/api/projections/{slug}",
         json={"inputs": {"donation_value": "90"}, "assumptions": {"basket": "20"}},
-        headers={"Authorization": f"Bearer {owner}", "If-Match": "1"},
+        headers={"If-Match": "1"},
     )
     assert r.status_code == 200, r.text
     s = r.json()["settings"]
@@ -143,8 +143,7 @@ def test_list_endpoint_carries_v2_list_columns(client):
     # and breakeven on every item — these power the v2 list column set.
     # No client math: the list renders display strings verbatim (PRD §13).
     created = _create(client)
-    owner = created["owner_token"]
-    r = client.get("/api/projections", headers={"Authorization": f"Bearer {owner}"})
+    r = client.get("/api/projections")
     assert r.status_code == 200, r.text
     items = r.json()["projections"]
     assert len(items) == 1

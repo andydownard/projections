@@ -4,27 +4,18 @@
 // active route. The shell renders the server view-model; it computes NO
 // projection math (PRD §13). Routes: / (home), /wizard, /p/<slug>[/edit],
 // /r/<slug>.
-import { lazy, Suspense, useEffect, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 import { TopBar } from "./components/TopBar";
 import { PennyGeneralAssistant } from "./components/PennyDrawer";
-import { parseRoute, readFragmentSecret, type Route } from "./router/route";
+import { parseRoute, type Route } from "./router/route";
 import { ListPage } from "./pages/ListPage";
 import { CreateProjectionPage } from "./pages/CreateProjectionPage";
 import { ProjectionDetail } from "./pages/ProjectionDetail";
 import { RoleView } from "./pages/RoleView";
 import { TrashPage } from "./pages/TrashPage";
-import { clerkActive } from "./auth/clerkToken";
-import { capturePostSignInRedirect } from "./auth/postSignInRedirect";
-import { setEditToken } from "./api/projections";
 import { useDetailHeader } from "./state/detailHeader";
 import "./tokens.css";
-
-// The forced owner sign-in gate (Phase 0 B2) is lazy-loaded so the ship-dark path
-// (no VITE_CLERK_PUBLISHABLE_KEY ⇒ clerkActive() false) NEVER executes the Clerk
-// import. @clerk/clerk-react stays code-split out of the booted bundle, exactly as
-// ClerkAuthProvider / OwnerAuthControls do.
-const ClerkOwnerGate = lazy(() => import("./auth/ClerkOwnerGate"));
 
 // Subscribe to history changes so the SPA re-renders on navigation without a
 // router dependency.
@@ -51,23 +42,6 @@ export function appProvidesGeneralPenny(route: Route): boolean {
   return false;
 }
 
-/**
- * Whether a route is an OWNER surface that the forced sign-in gate covers (Phase 0
- * B2 — owner Decision 1 = REQUIRE login on owner surfaces). OWNER surfaces: the
- * list (home), the create wizard, and the EDITABLE detail page. VIEWER surfaces are
- * NEVER gated and stay login-free — the role share (`/r/<slug>`), the read-only
- * detail (`/p/<slug>`), and not-found — so capability share-links keep working with
- * no login. The gate only ever engages when clerkActive() is true (see App); with
- * Clerk off this classification is inert.
- */
-export function isOwnerSurface(route: Route): boolean {
-  if (route.kind === "home") return true;
-  if (route.kind === "wizard") return true;
-  if (route.kind === "trash") return true;
-  if (route.kind === "detail" && route.edit) return true;
-  return false;
-}
-
 export function App() {
   useSyncExternalStore(subscribe, getSnapshot);
   const route = parseRoute(window.location.pathname, window.location.search);
@@ -79,30 +53,6 @@ export function App() {
   // anywhere (#38) — it stays on computed_json; only the display is gone.
   const detailHeader = useDetailHeader();
   const isDetail = route.kind === "detail";
-
-  // Capture the edit-token from the URL fragment BEFORE the Clerk gate can show the
-  // sign-in screen. On the first visit to /p/<slug>/edit#<token> the Clerk lazy-load
-  // means the "Sign in" button is not yet in the DOM when this effect fires, so there
-  // is no race. The token is saved to localStorage (keyed by slug) and the fragment
-  // is scrubbed with replaceState so the secret never lands in browser history or
-  // server logs (SECURITY.md §2.5 / Regression #10). On the post-sign-in return the
-  // fragment is absent; ProjectionDetail's getEditToken(slug) fallback retrieves it.
-  const editSlug = route.kind === "detail" && route.edit ? route.slug : "";
-  useEffect(() => {
-    if (!editSlug) return;
-    const secret = readFragmentSecret(window.location.hash);
-    if (!secret) return;
-    setEditToken(editSlug, secret);
-    // Shared deep link (#323): a recipient arriving with an edit-token fragment is the
-    // ONLY case we auto-redirect after sign-in. Capture the destination path (NOT the
-    // fragment secret — already saved to localStorage above) so the forced owner gate
-    // can return the recipient here once they sign in. A signed-in recipient never
-    // round-trips, so the captured path is harmlessly consumed as a no-op.
-    if (clerkActive()) {
-      capturePostSignInRedirect(window.location.pathname + window.location.search);
-    }
-    history.replaceState(null, "", window.location.pathname + window.location.search);
-  }, [editSlug]);
 
   // General-help Penny is openable on home + the read-only detail view; the wizard
   // and detail-edit pages mount their own (#264). With ?ai=off she degrades to the
@@ -126,42 +76,21 @@ export function App() {
     </>
   );
 
-  // The persistent chrome. When the gate is active these are handed INTO
-  // ClerkOwnerGate so the signed-IN branch renders today's chrome verbatim and the
-  // signed-OUT branch renders the minimal sign-in page WITHOUT Penny (SIGNIN-1).
   const topBar = <TopBar saveState={isDetail ? detailHeader.saveState : "idle"} />;
   const penny = generalPenny ? <PennyGeneralAssistant aiEnabled={!aiOff} /> : null;
 
-  // Forced owner sign-in gate (Phase 0 B2). Only on OWNER surfaces, and only when
-  // the Clerk satellite is active — otherwise (ship dark / local / CI / tests) the
-  // content renders directly, byte-for-byte as today, and the Clerk import path is
-  // never touched. ClerkOwnerGate itself renders the content for a signed-in owner,
-  // so a signed-in owner is never trapped (fail-safe).
-  const gated = clerkActive() && isOwnerSurface(route);
-
-  // When gated, App renders ONLY the gate (it owns the chrome for both branches).
-  // The skip-link + .app shell stay constant so #main is always a valid target.
-  // With Clerk off, the else branch is byte-for-byte today's shell.
+  // This project has no authentication (owner decision, 2026-09-13) — every route
+  // renders directly, no sign-in gate.
   return (
     <div className="app">
       <a className="skip-link" href="#main">
         Skip to content
       </a>
-      {gated ? (
-        <Suspense fallback={null}>
-          <ClerkOwnerGate topBar={topBar} penny={penny}>
-            {content}
-          </ClerkOwnerGate>
-        </Suspense>
-      ) : (
-        <>
-          {topBar}
-          <main id="main" className="app__main" tabIndex={-1}>
-            {content}
-          </main>
-          {penny}
-        </>
-      )}
+      {topBar}
+      <main id="main" className="app__main" tabIndex={-1}>
+        {content}
+      </main>
+      {penny}
     </div>
   );
 }
