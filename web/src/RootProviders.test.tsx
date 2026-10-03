@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { RootProviders } from "./RootProviders";
+import { clerkEnabledForHost, RootProviders } from "./RootProviders";
 
 // WAVE 2 — the satellite is SHIP-DARK. RootProviders wraps the app in the Clerk
 // satellite <ClerkProvider> ONLY when VITE_CLERK_PUBLISHABLE_KEY is set; when it
@@ -44,12 +44,43 @@ describe("RootProviders — ship dark", () => {
     expect(screen.queryByTestId("clerk-provider")).not.toBeInTheDocument();
   });
 
-  it("wraps the app in the Clerk satellite provider when the publishable key is set", async () => {
+  it("wraps the app in the Clerk provider when the publishable key is set and the host is allowed", async () => {
     vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_abc");
+    vi.stubGlobal("location", { ...window.location, hostname: "projections.rallytasks.com" });
     renderRoot();
     const provider = await screen.findByTestId("clerk-provider");
     expect(provider).toHaveAttribute("data-pk", "pk_test_abc");
     // The app still renders inside the provider — viewers are never gated.
     expect(screen.getByTestId("app-child")).toBeInTheDocument();
+  });
+
+  it("does NOT mount Clerk on a host outside the allowlist, even with the key set (#projections.thriftly.com must never re-gain Clerk from a rallytasks.com-targeted build)", () => {
+    vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_abc");
+    vi.stubGlobal("location", { ...window.location, hostname: "projections.thriftly.com" });
+    renderRoot();
+    expect(screen.getByTestId("app-child")).toBeInTheDocument();
+    expect(screen.queryByTestId("clerk-provider")).not.toBeInTheDocument();
+  });
+});
+
+describe("clerkEnabledForHost", () => {
+  it("allows the production rallytasks.com host", () => {
+    expect(clerkEnabledForHost("projections.rallytasks.com")).toBe(true);
+  });
+
+  it("allows localhost for local dev", () => {
+    expect(clerkEnabledForHost("localhost")).toBe(true);
+  });
+
+  it("rejects the old thriftly.com satellite host", () => {
+    expect(clerkEnabledForHost("projections.thriftly.com")).toBe(false);
+  });
+
+  it("rejects an unrelated host", () => {
+    expect(clerkEnabledForHost("evil.example.com")).toBe(false);
+  });
+
+  it("does not match a lookalike host via naive substring (e.g. a host that merely ends with the allowed suffix without a dot boundary)", () => {
+    expect(clerkEnabledForHost("notprojections.rallytasks.com.evil.com")).toBe(false);
   });
 });
