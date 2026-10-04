@@ -31,18 +31,19 @@ CSP = (
     "form-action 'self'"
 )
 
-# --- Clerk satellite CSP widening (SECURITY.md §8.2, gated on CLERK_ENABLED) ----
-# When the Clerk satellite is ON, clerk-js must load from and talk to the satellite
-# Frontend API (`https://clerk.thriftly.com`, the registered `clerk.thriftly.com`
-# CNAME), Clerk dev instances (`*.clerk.accounts.dev`), Clerk's clerk-js host
-# (`*.clerk.com`), and — when bot-protection is on — Cloudflare Turnstile. Avatars
-# come from img.clerk.com / images.clerk.dev; the cross-domain session-sync iframe is
-# framed from the FAPI; clerk-js spins a `blob:` worker. jsdelivr is intentionally
-# NOT allowlisted: @clerk/clerk-react v5 is Vite-bundled and loads clerk-js from the
-# FAPI host, not a public CDN; the cross-apex handshake to the primary (rallytasks.com)
-# is a top-level navigation, not a subresource, so the primary's origins are not
-# needed in script/connect/frame-src either.
-_CLERK_FAPI = "https://clerk.thriftly.com"  # the registered satellite FAPI CNAME
+# --- Clerk CSP widening (SECURITY.md §8.2, gated on CLERK_ENABLED) -------------
+# When Clerk is ON, clerk-js must load from and talk to the Clerk Frontend API
+# (`https://clerk.rallytasks.com` — the same instance's FAPI used by every Rally
+# product, decoded from the publishable key; projections.rallytasks.com shares
+# that apex, so no cross-apex satellite CNAME is needed, unlike the old
+# projections.thriftly.com integration whose custom `clerk.thriftly.com` CNAME
+# hung and caused a full-site outage, 2026-10-02), Clerk dev instances
+# (`*.clerk.accounts.dev`), Clerk's clerk-js host (`*.clerk.com`), and — when
+# bot-protection is on — Cloudflare Turnstile. Avatars come from img.clerk.com /
+# images.clerk.dev; clerk-js spins a `blob:` worker. jsdelivr is intentionally NOT
+# allowlisted: @clerk/clerk-react v5 is Vite-bundled and loads clerk-js from the
+# FAPI host, not a public CDN.
+_CLERK_FAPI = "https://clerk.rallytasks.com"  # the shared Rally Clerk instance's FAPI
 _CLERK_ACCOUNTS_DEV = "https://*.clerk.accounts.dev"  # Clerk dev instances
 _CLERK_JS = "https://*.clerk.com"  # clerk-js host
 _TURNSTILE = "https://challenges.cloudflare.com"  # Clerk bot-check (Turnstile)

@@ -1,9 +1,9 @@
-"""CLERK_ENABLED-gated CSP widening for the Clerk satellite FAPI (SECURITY.md §8.2).
+"""CLERK_ENABLED-gated CSP widening for the Clerk Frontend API (SECURITY.md §8.2).
 
 projections ships an enforcing, ``'self'``-only, no-inline CSP (SECURITY.md §8.1).
-Turning the Clerk satellite on requires widening ``script-src``/``connect-src``/
-``img-src``/``frame-src``/``worker-src`` to the Clerk Frontend-API origins so
-clerk-js can load and run — a named, signed-off relaxation that is **gated on the
+Turning Clerk on requires widening ``script-src``/``connect-src``/``img-src``/
+``frame-src``/``worker-src`` to the Clerk Frontend-API origins so clerk-js can
+load and run — a named, signed-off relaxation that is **gated on the
 ``CLERK_ENABLED`` kill switch**. With Clerk OFF (the default) the CSP must stay
 **byte-for-byte** the strict baseline it is today (no relaxation, no new surface).
 
@@ -14,8 +14,11 @@ from fastapi.testclient import TestClient
 
 from app.middleware import CSP, build_csp
 
-# The exact Clerk origins the widening must allow (SECURITY.md §8.2, plan §2A.3).
-SATELLITE_FAPI = "https://clerk.thriftly.com"
+# The exact Clerk origins the widening must allow (SECURITY.md §8.2). The shared
+# Rally Clerk instance's FAPI — projections.rallytasks.com shares its apex, so no
+# cross-apex satellite CNAME is needed (unlike the old, now-retired
+# clerk.thriftly.com satellite setup).
+CLERK_FAPI = "https://clerk.rallytasks.com"
 CLERK_ACCOUNTS_DEV = "https://*.clerk.accounts.dev"
 CLERK_JS_CDN = "https://*.clerk.com"
 TURNSTILE = "https://challenges.cloudflare.com"
@@ -24,7 +27,7 @@ IMG_CLERK_DEV = "https://images.clerk.dev"
 
 # Every Clerk/Turnstile origin token — none may appear when the switch is off.
 ALL_CLERK_ORIGINS = (
-    "clerk.thriftly.com",
+    "clerk.rallytasks.com",
     "clerk.accounts.dev",
     "*.clerk.com",
     "img.clerk.com",
@@ -91,7 +94,7 @@ def test_build_csp_on_widens_script_src_for_clerk_js():
     d = _directives(build_csp({"CLERK_ENABLED": "1"}))
     script = d["script-src"]
     assert "'self'" in script
-    assert SATELLITE_FAPI in script
+    assert CLERK_FAPI in script
     assert CLERK_ACCOUNTS_DEV in script
     assert CLERK_JS_CDN in script
     assert TURNSTILE in script  # Turnstile bot-check script
@@ -101,7 +104,7 @@ def test_build_csp_on_widens_connect_src_for_fapi():
     d = _directives(build_csp({"CLERK_ENABLED": "1"}))
     connect = d["connect-src"]
     assert "'self'" in connect  # our own API is still same-origin
-    assert SATELLITE_FAPI in connect
+    assert CLERK_FAPI in connect
     assert CLERK_ACCOUNTS_DEV in connect
     assert CLERK_JS_CDN in connect
 
@@ -119,7 +122,7 @@ def test_build_csp_on_adds_frame_src_for_fapi_and_turnstile():
     d = _directives(build_csp({"CLERK_ENABLED": "1"}))
     assert "frame-src" in d
     frame = d["frame-src"]
-    assert SATELLITE_FAPI in frame
+    assert CLERK_FAPI in frame
     assert TURNSTILE in frame
 
 
@@ -158,7 +161,7 @@ def test_response_header_on_includes_clerk_origins(monkeypatch):
     client = _client(monkeypatch, CLERK_ENABLED="1")
     csp = client.get("/api/health").headers.get("content-security-policy", "")
     assert csp != CSP  # it really did widen
-    assert SATELLITE_FAPI in csp
+    assert CLERK_FAPI in csp
     assert CLERK_ACCOUNTS_DEV in csp
     assert CLERK_JS_CDN in csp
     assert IMG_CLERK in csp
@@ -181,7 +184,7 @@ def test_kill_switch_flips_without_restart(monkeypatch):
     assert off == CSP
     monkeypatch.setenv("CLERK_ENABLED", "1")
     on = client.get("/api/health").headers["content-security-policy"]
-    assert SATELLITE_FAPI in on
+    assert CLERK_FAPI in on
     monkeypatch.setenv("CLERK_ENABLED", "0")
     back = client.get("/api/health").headers["content-security-policy"]
     assert back == CSP
