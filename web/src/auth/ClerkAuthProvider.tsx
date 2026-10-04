@@ -12,7 +12,7 @@
 // This is the ONLY module that imports @clerk/clerk-react at the top level, and it
 // is lazy-loaded by RootProviders so the import runs ONLY when
 // VITE_CLERK_PUBLISHABLE_KEY is set AND the host is on the Clerk-enabled allowlist
-// (see RootProviders.clerkEnabledForHost — projections.thriftly.com must never
+// (see auth/clerkToken.ts's clerkActive/clerkEnabledForHost — projections.thriftly.com must never
 // re-gain Clerk from this same build).
 import { ClerkProvider } from "@clerk/clerk-react";
 import type { ReactNode } from "react";
