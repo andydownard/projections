@@ -10,17 +10,20 @@
 // primary, so no satellite/cross-apex config is needed at all, see
 // ClerkAuthProvider.tsx) and projections.thriftly.com (left exactly as the
 // no-Clerk stopgap it was fixed to be, 2026-10-02 — its old cross-apex satellite
-// CNAME, clerk.thriftly.com, was the cause of a full-site outage: ClerkOwnerGate
-// blocked the whole app behind a Clerk script load that hung forever).
+// CNAME, clerk.thriftly.com, was the cause of a full-site outage).
 //
-// A single Vite build bakes in one global VITE_CLERK_PUBLISHABLE_KEY for every
-// visitor regardless of which domain they're on, so key-presence ALONE is not
-// enough to gate Clerk — it must also be paired with a runtime hostname check,
-// or enabling Clerk for the new domain would silently re-enable it on
-// thriftly.com too and risk recreating the exact outage this just fixed.
+// The mount gate below uses clerkActive() from auth/clerkToken.ts — the SAME
+// single source of truth every other Clerk-aware consumer (App.tsx, TopBar.tsx,
+// authHeader.ts, ProjectionDetail.tsx) already imports. It is NOT reimplemented
+// here: a second, independent "is Clerk on" check that only this file knew about
+// once caused exactly the bug this consolidation prevents — App.tsx's
+// ClerkOwnerGate stayed key-only-gated while this file alone learned the
+// hostname rule, so ClerkOwnerGate mounted with no <ClerkProvider> ancestor on a
+// disallowed host and hung the page (2026-10-03).
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { lazy, StrictMode, Suspense, type ReactNode } from "react";
 
+import { clerkActive } from "./auth/clerkToken";
 import { ToastProvider } from "./components/Toast";
 
 // lazy(() => import(...)) does NOT execute the import until the component renders,
@@ -32,21 +35,6 @@ export function clerkPublishableKey(): string | undefined {
   return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || undefined;
 }
 
-// Exact-match or proper-subdomain match only (never a naive substring check —
-// "notprojections.rallytasks.com.evil.com" must NOT match "rallytasks.com").
-const CLERK_ALLOWED_HOSTS = ["projections.rallytasks.com", "localhost", "127.0.0.1"];
-
-function hostMatches(hostname: string, allowed: string): boolean {
-  return hostname === allowed || hostname.endsWith(`.${allowed}`);
-}
-
-/** Whether Clerk should mount for the given hostname (defaults to the real one). */
-export function clerkEnabledForHost(
-  hostname: string = typeof window !== "undefined" ? window.location.hostname : "",
-): boolean {
-  return CLERK_ALLOWED_HOSTS.some((allowed) => hostMatches(hostname, allowed));
-}
-
 export function RootProviders({
   queryClient,
   children,
@@ -55,7 +43,6 @@ export function RootProviders({
   children: ReactNode;
 }) {
   const publishableKey = clerkPublishableKey();
-  const clerkActive = Boolean(publishableKey) && clerkEnabledForHost();
   const tree = <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 
   // ToastProvider wraps the outermost tree so any page — wizard, detail, list —
@@ -65,7 +52,7 @@ export function RootProviders({
   return (
     <StrictMode>
       <ToastProvider>
-        {clerkActive && publishableKey ? (
+        {clerkActive() && publishableKey ? (
           <Suspense fallback={null}>
             <ClerkAuthProvider publishableKey={publishableKey}>{tree}</ClerkAuthProvider>
           </Suspense>
