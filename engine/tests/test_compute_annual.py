@@ -186,13 +186,15 @@ def test_legacy_default_key_numbers_are_pinned():
     # Re-pinned at 3.1.0 (owner 2026-10-08: monthly net never drops): Year 1 is eased
     # under Year 2's average monthly net, so every Year-1 month is a loss; the launch
     # trough is the Year-1 close -(238,500 + 65,068.07) and capital = that + $25,000
-    # reserve = $328,568.07 (3.0.0: $354,596.65). Break-even month 8 -> None. Annual
-    # Y1 net is unchanged.
+    # reserve = $328,568.07 (3.0.0: $354,596.65). Annual Y1 net is unchanged.
+    # Then the owner's "Full 60 months" call (2026-10-08): capital covers the lowest
+    # cash point in the WHOLE series (-$345,580.28 at month 36, since Years 2-3 still
+    # lose money) = $370,580.28, and break-even searches all 60 months -> Month 37.
     res = _hoh()  # canonical 60% labor, no schedule (the seeded legacy default)
     assert D(str(res.startup_total)) == Decimal("238500")
     assert D(str(res.annual[1].net)) == Decimal("-65068.0692501021077283372365")
-    assert D(str(res.decision.startup_capital_required)) == Decimal("328568.0692501021077283372366")
-    assert res.decision.break_even_month is None
+    assert D(str(res.decision.startup_capital_required)) == Decimal("370580.2770004084309133489467")
+    assert res.decision.break_even_month == 37
     assert res.decision.payback_month is None  # never recovered in the horizon
 
 

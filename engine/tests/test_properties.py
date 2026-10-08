@@ -152,14 +152,9 @@ def test_year1_annual_equals_sum_of_twelve_operating_months(case):
 @given(case=cases())
 def test_capital_is_trough_plus_reserve_no_startup_double_count(case):
     result, inputs, assumptions = _run(case)
-    # Capital is scoped to the LAUNCH window (months <= G+11) — the same window the
-    # engine uses (decision.build_decision) and sibling test #1 uses. Under the fused
-    # 60-month monthly[] (was 12), the whole-timeline min would drift a later-year
-    # operating dip into the launch-capital headline; the launch-window min is the
-    # engine's byte-identical Year-1 anchoring (invariant unchanged, not weakened).
-    g = int(inputs.opening_month_number)
-    launch = [D(str(m.cumulative_cash)) for m in result.monthly if m.index <= g + 11]
-    trough = min(launch) if launch else Decimal("0")
+    # Capital covers the lowest cumulative cash over the WHOLE series (owner decision
+    # 2026-10-08, "Full 60 months") — the same rule decision.build_decision uses.
+    trough = min((D(str(m.cumulative_cash)) for m in result.monthly), default=Decimal("0"))
     # The trough already embeds the timed startup outflow; capital adds ONLY the
     # reserve buffer on top (never startup a second time — the §6.1 bug).
     expected = abs(min(Decimal("0"), trough)) + D(assumptions.reserve_buffer)

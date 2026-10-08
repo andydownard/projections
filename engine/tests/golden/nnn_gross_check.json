@@ -91,8 +91,8 @@
       "label": "Capital required",
       "sub": "incl. reserve",
       "value": {
-        "display": "$366,068",
-        "raw": 366068.0692501021
+        "display": "$512,120",
+        "raw": 512120.2472924665
       }
     },
     {
@@ -157,8 +157,8 @@
       "raw": null
     },
     "capital": {
-      "display": "$366,068",
-      "raw": 366068.0692501021
+      "display": "$512,120",
+      "raw": 512120.2472924665
     },
     "cashGap": {
       "display": "($341,068)",
@@ -2307,8 +2307,8 @@
     "base": {
       "breakeven": null,
       "capital": {
-        "display": "$366,068",
-        "raw": 366068.0692501021
+        "display": "$512,120",
+        "raw": 512120.2472924665
       },
       "net": {
         "display": "($95,068)",
@@ -2319,8 +2319,8 @@
     "downside": {
       "breakeven": null,
       "capital": {
-        "display": "$437,701",
-        "raw": 437701.05193757656
+        "display": "$914,525",
+        "raw": 914525.3712193499
       },
       "net": {
         "display": "($157,326)",

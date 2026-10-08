@@ -49,16 +49,16 @@ def test_canonical_is_a_loss_case():
 def test_canonical_reco_text_consistent_with_breakeven_metric():
     # #142 regression guard at the FROZEN-FIXTURE layer: the reco text and the
     # break-even metric can never disagree. From 3.1.0 (owner 2026-10-08: monthly net
-    # never drops) the canonical base case has NO Year-1 break-even (Year 2 still
-    # loses money overall), so the metric is N/A and the verdict is do_not_proceed;
-    # an honest "not reached" message is then allowed. (2.7.0-2.9.0: raise_cash with a
-    # Month-8 break-even.)
+    # never drops) plus the owner's "Full 60 months" call, the canonical base case
+    # breaks even at Month 37 but the downside never does: do_not_proceed, and the
+    # text must scope the failure to the downside, never claim the base is unreached.
+    # (2.7.0-2.9.0: raise_cash with a Month-8 break-even.)
     from engine.tests.test_decision import assert_breakeven_text_consistent
     vm = _load("house_of_hope_canonical_60.json")
-    assert vm["metrics"]["breakeven"]["raw"] is None
+    assert vm["metrics"]["breakeven"]["raw"] == 37
     assert vm["reco"]["tag"] == "do_not_proceed"
     assert_breakeven_text_consistent(vm)
-    assert "not reached" in vm["metrics"]["reasonBreakeven"].lower()
+    assert "downside" in vm["metrics"]["reasonBreakeven"].lower()
 
 
 def test_design_parity_reproduces_headline(design_parity_result):
@@ -76,10 +76,11 @@ def test_design_parity_reproduces_headline(design_parity_result):
     # deepen the operating loss before the startup subtraction.
     assert round(next(r for r in vm["rows"] if r["label"] == "Net income")["y1"]["raw"]) == -209642
     # 3.1.0 (owner 2026-10-08: monthly net never drops): the eased Year 1 breaks even
-    # at month 4 (was 6), but the eased DOWNSIDE never breaks even inside Year 1, so
-    # the reco flips raise_cash -> do_not_proceed (OWNER-VISIBLE).
+    # at month 4 (was 6) and its capital drops under the $300k funds.
     assert vm["breakevenMonth"] == 4                            # OPERATING (eased Y1)
-    assert vm["reco"]["tag"] == "do_not_proceed"
+    # "Full 60 months" (owner 2026-10-08): the downside breaks even at month 25, so
+    # the verdict is proceed.
+    assert vm["reco"]["tag"] == "proceed"
     # Month-N payback recomputes over the 60-month series. Model v3's extra cost lines
     # push the crossing from Month 32 (2.9.0) to Month 34; the 3.1.0 ease moves cash
     # within years, not across them, so it stays Month 34.

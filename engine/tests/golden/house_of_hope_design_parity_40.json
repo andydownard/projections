@@ -161,7 +161,7 @@
       "display": "($244,366)",
       "raw": -244365.5300901692
     },
-    "reasonBreakeven": "Base case reaches break-even at Month 4, but the downside scenario (rent +25% / donations -25%) never does \u2014 the plan is not robust to a tougher market.",
+    "reasonBreakeven": "First month operating net turns and stays non-negative.",
     "reasonCapital": "Worst-case cumulative cash trough (already includes one-time startup) plus reserve.",
     "reasonGap": "Most-negative cumulative cash across the first year."
   },
@@ -1565,9 +1565,9 @@
   ],
   "overrides": [],
   "reco": {
-    "headline": "Do not proceed.",
-    "sub": "Base case reaches break-even at Month 4, but the downside scenario (rent +25% / donations -25%) never does \u2014 the plan is not robust to a tougher market.",
-    "tag": "do_not_proceed"
+    "headline": "Proceed.",
+    "sub": "Positive Year-1 cash trajectory; capital need within funds; ratios in band.",
+    "tag": "proceed"
   },
   "rows": [
     {
@@ -2313,10 +2313,10 @@
     },
     "delta": 0.25,
     "downside": {
-      "breakeven": null,
+      "breakeven": 25,
       "capital": {
-        "display": "$320,381",
-        "raw": 320381.3223823766
+        "display": "$326,023",
+        "raw": 326023.08555887867
       },
       "net": {
         "display": "($49,381)",

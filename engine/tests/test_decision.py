@@ -36,9 +36,13 @@ def test_capital_required_is_peak_shortfall_plus_reserve(canonical_result):
     # The monthly trough already embeds the M0 startup outflow, so capital required
     # = |peak cash shortfall| + reserve buffer — startup is NOT added a second time
     # (regression guard for the §6.1 double-count). startup_total must NOT appear.
+    # 3.1.0 ("Full 60 months"): the trough is the lowest cumulative cash over the
+    # WHOLE series, which for canonical sits in Year 3, below the first-year gap.
     dec = canonical_result.decision
-    peak_shortfall = abs(min(Decimal("0"), D(str(dec.first_year_cash_gap))))
+    trough = min(D(str(m.cumulative_cash)) for m in canonical_result.monthly)
+    peak_shortfall = abs(min(Decimal("0"), trough))
     assert D(str(dec.startup_capital_required)) == peak_shortfall + Decimal("25000")
+    assert trough < D(str(dec.first_year_cash_gap))
     # And the doubled value is strictly larger — prove we are not emitting it.
     doubled = D(str(canonical_result.startup_total)) + peak_shortfall + Decimal("25000")
     assert D(str(dec.startup_capital_required)) < doubled
@@ -55,13 +59,14 @@ def test_design_parity_capital_matches_appendix_d_headline(design_parity_result)
     # the eased (flatter) Year-1 shape starts less deep, so the base trough is
     # shallower (capital ~$269,366, under the funds; break-even month 6 -> 4). But the
     # DOWNSIDE (rent +25% / donations -25%) loses money in every eased Year-1 month,
-    # and break-even is only searched inside Year 1, so the reco flips
-    # raise_cash -> do_not_proceed (the downside first breaks even at month 25).
+    # and break-even was only searched inside Year 1, so the reco flipped to
+    # do_not_proceed. The owner's "Full 60 months" call (2026-10-08) searches all 60
+    # months: the downside breaks even at month 25, so the verdict is proceed.
     cap = D(str(design_parity_result.decision.startup_capital_required))
     assert Decimal("265000") <= cap < Decimal("300000")
     assert design_parity_result.decision.break_even_month == 4
-    assert design_parity_result.decision.sensitivity["downside"]["breakeven"] is None
-    assert design_parity_result.decision.reco_tag == "do_not_proceed"
+    assert design_parity_result.decision.sensitivity["downside"]["breakeven"] == 25
+    assert design_parity_result.decision.reco_tag == "proceed"
 
 
 def test_payback_null_when_y1_net_not_positive(canonical_result):
@@ -301,12 +306,14 @@ def test_canonical_reco_is_do_not_proceed_after_the_ease(canonical_result):
     # longer end on a profitable stretch that Year 2 then gives back, the base case
     # never breaks even inside Year 1 and the verdict moves raise_cash ->
     # do_not_proceed. (2.7.0-2.9.0: raise_cash, base break-even month 8, downside 12,
-    # capital $347,854.) Any future regression that flips this verdict must trip THIS
-    # assertion loudly.
+    # capital $347,854.) Under the owner's "Full 60 months" call (2026-10-08) the base
+    # case breaks even at Month 37 but the downside never does, so the verdict stays
+    # do_not_proceed, now for the downside reason. Any future regression that flips
+    # this verdict must trip THIS assertion loudly.
     dec = canonical_result.decision
     assert dec.reco_tag == "do_not_proceed"
     assert "breakeven" in dec.reco_reasons
-    assert dec.sensitivity["base"]["breakeven"] is None
+    assert dec.sensitivity["base"]["breakeven"] == 37
     assert dec.sensitivity["downside"]["breakeven"] is None
 
 
@@ -449,7 +456,7 @@ def test_payback_na_with_reason_when_unreached():
 def test_break_even_na_with_reason_when_unreached():
     # A deep loss case never turns net positive -> break-even N/A with reason.
     res = _opening_at(1, labor="0.60", share_y1="0.005",
-                      share_y2="0.005", share_y3="0.005", share_y4="0.11", share_y5="0.12")
+                      share_y2="0.005", share_y3="0.005", share_y4="0.005", share_y5="0.005")
     assert res.decision.break_even_month is None
     assert res.flags.get("break_even_month", "").startswith("N/A")
 
@@ -458,17 +465,16 @@ def test_break_even_na_with_reason_when_unreached():
 def test_capital_accumulates_from_pre_opening_costs():
     # Opening at month 6 with a cost on each pre-opening month: the cumulative
     # deficit begins accumulating before opening, so capital includes them.
+    # (Deep-loss rows below hold EVERY year at 0.5%: break-even now searches all 60
+    # months, so a strong Year 4/5 would legitimately break even there.)
     schedule = tuple(
         {"category": f"Pre {m}", "month": m, "amount": 40000} for m in range(1, 6)
     )
     res = _opening_at(6, cost_schedule=schedule)
     # Trough is at least the sum of the five pre-opening outflows plus the opening
-    # lease deposit (all spent before any operating revenue offsets them). capital is
-    # scoped to the LAUNCH window (months <= g+11, decision.py) so a later-year
-    # operating dip (Model v3's added cost lines can push Year 2 below Year 1 in a
-    # loss case) never leaks into it — scope the comparison trough the same way.
-    g = res.decision.grand_opening_month
-    trough = min(D(str(m.cumulative_cash)) for m in res.monthly if m.index <= g + 11)
+    # lease deposit (all spent before any operating revenue offsets them). Capital
+    # covers the lowest point of the WHOLE series (owner 2026-10-08, "Full 60 months").
+    trough = min(D(str(m.cumulative_cash)) for m in res.monthly)
     assert trough <= Decimal("-200000")
     peak = abs(min(Decimal("0"), trough))
     assert D(str(res.decision.startup_capital_required)) == peak + Decimal("25000")
@@ -506,7 +512,9 @@ def test_aggressive_share_guardrail_fires_at_canonical_labor():
     # Independent of labor, the 15% Y1 share is out of the <=8% advisory band.
     inputs = Inputs(
         org_name="Aggressive", city="x", opening_status="pre_launch",
-        share_y1="0.15", share_y2="0.20", share_y3="0.25", share_y4="0.11", share_y5="0.12",
+        # Y4/Y5 keep growing (as in the aggressive fixture): break-even now searches all
+        # 60 months, and a Year-4 collapse to 11% would push this case into losses.
+        share_y1="0.15", share_y2="0.20", share_y3="0.25", share_y4="0.26", share_y5="0.27",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="800000",
     )
@@ -741,31 +749,30 @@ def assert_breakeven_text_consistent(vm) -> None:
                 f"{be['display']!r} (reached in the base case): {text!r}")
 
 
-def test_reco_text_and_breakeven_metric_cannot_disagree_grace(grace_result):
-    # #142: Grace Mission reaches operating break-even at month 12 in the BASE case
-    # (metrics.breakeven = Month 12; month 9 at 3.0.0, before the 3.1.0 ease), yet is
-    # do_not_proceed because the DOWNSIDE never
-    # breaks even. The reco text must say *that*, not flatly claim "break-even is
-    # not reached" — which contradicts the Month-9 metric on screen.
-    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
+def test_reco_text_and_breakeven_metric_cannot_disagree_canonical(canonical_result):
+    # #142: canonical reaches operating break-even at Month 37 in the BASE case, yet is
+    # do_not_proceed because the DOWNSIDE never breaks even. The reco text must say
+    # *that*, not flatly claim "break-even is not reached" — which would contradict
+    # the Month-37 metric on screen. (Re-homed from Grace at 3.1.0: under the 60-month
+    # rule Grace slips back into losses after Year 1, so it has no break-even.)
     from engine.viewmodel import to_view_model
-    vm = to_view_model(grace_result)
+    vm = to_view_model(canonical_result)
     assert vm["reco"]["tag"] == "do_not_proceed"
-    assert vm["metrics"]["breakeven"]["raw"] == 12
+    assert vm["metrics"]["breakeven"]["raw"] == 37
     assert_breakeven_text_consistent(vm)
 
 
-def test_reco_text_names_base_and_downside_when_base_breaks_even(grace_result):
+def test_reco_text_names_base_and_downside_when_base_breaks_even(canonical_result):
     # #142/#145: the honest, consistent message surfaces WHY the verdict is
-    # do_not_proceed — the base case reaches break-even (Month 12) but the downside
+    # do_not_proceed — the base case reaches break-even (Month 37) but the downside
     # scenario (rent +25% / donations -25%) does not, so the plan is not robust.
-    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
+    # (re-homed from Grace to canonical at 3.1.0, "Full 60 months")
     from engine.viewmodel import to_view_model
-    vm = to_view_model(grace_result)
+    vm = to_view_model(canonical_result)
     for text in (vm["reco"]["sub"].lower(), vm["metrics"]["reasonBreakeven"].lower()):
         assert "base case" in text, text
         assert "downside" in text, text
-        assert "month 12" in text, text
+        assert "month 37" in text, text
 
 
 def test_reco_text_consistent_for_deep_loss_base_unreached():
@@ -773,19 +780,19 @@ def test_reco_text_consistent_for_deep_loss_base_unreached():
     # message is allowed (metrics.breakeven is N/A, so there is no contradiction).
     from engine.viewmodel import to_view_model
     res = _opening_at(1, labor="0.60", share_y1="0.005",
-                      share_y2="0.005", share_y3="0.005", share_y4="0.11", share_y5="0.12")
+                      share_y2="0.005", share_y3="0.005", share_y4="0.005", share_y5="0.005")
     vm = to_view_model(res)
     assert vm["metrics"]["breakeven"]["raw"] is None  # base never reaches break-even
     assert vm["reco"]["tag"] == "do_not_proceed"
     assert_breakeven_text_consistent(vm)  # must not raise
 
 
-def test_decision_reason_names_base_breakeven_month(grace_result):
+def test_decision_reason_names_base_breakeven_month(canonical_result):
     # At the engine layer (before the view-model), the do_not_proceed break-even
     # reason already carries the base-case month and the downside scenario — the
     # view-model formatting layer adds nothing the engine didn't assert.
-    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
-    dec = grace_result.decision
+    # (re-homed from Grace to canonical at 3.1.0, "Full 60 months")
+    dec = canonical_result.decision
     assert dec.reco_tag == "do_not_proceed"
     reason = dec.reco_reasons["breakeven"]
     assert f"Month {dec.break_even_month}" in reason
@@ -801,7 +808,7 @@ def test_base_unreached_reason_is_honest_not_viable():
     # viable (and the downside fails too) — it does NOT name a base break-even month
     # (there is none), and the break-even metric is the N/A sentinel.
     res = _opening_at(1, labor="0.60", share_y1="0.005",
-                      share_y2="0.005", share_y3="0.005", share_y4="0.11", share_y5="0.12")
+                      share_y2="0.005", share_y3="0.005", share_y4="0.005", share_y5="0.005")
     dec = res.decision
     assert dec.reco_tag == "do_not_proceed"
     assert dec.break_even_month is None
@@ -814,13 +821,13 @@ def test_base_unreached_reason_is_honest_not_viable():
 def test_do_not_proceed_message_differs_between_base_fail_and_downside_fail():
     # The two do_not_proceed stories must read differently: a base that reaches
     # break-even (downside-driven verdict) vs a base that never does (non-viable).
-    # (downside-driven arm re-homed from canonical to Grace after the 6.2 monthly
-    # split — see task-6.1-6.2-report; canonical is now raise_cash)
-    from engine.tests.conftest import build_grace_result
-    downside_driven = build_grace_result().decision.reco_reasons["breakeven"]
+    # (downside-driven arm re-homed from Grace back to canonical at 3.1.0: under the
+    # 60-month rule canonical is the base-reaches / downside-fails case, Month 37)
+    from engine.tests.conftest import build_canonical_result
+    downside_driven = build_canonical_result().decision.reco_reasons["breakeven"]
     base_failed = _opening_at(
         1, labor="0.60", share_y1="0.005", share_y2="0.005",
-        share_y3="0.005", share_y4="0.11", share_y5="0.12").decision.reco_reasons["breakeven"]
+        share_y3="0.005", share_y4="0.005", share_y5="0.005").decision.reco_reasons["breakeven"]
     assert downside_driven != base_failed
     assert "reaches break-even" in downside_driven
     assert "reaches break-even" not in base_failed
@@ -961,7 +968,7 @@ def test_breakeven_consistency_invariant_holds_across_a_scenario_sweep():
     # 3.1.0: with Year 1 eased, the downside only breaks even inside Year 1 when the
     # later years grow enough, so the 7/10/12/13/14% row keeps `proceed` reachable.
     for labor in ("0.40", "0.50", "0.60"):
-        for shares in (("0.005", "0.005", "0.005", "0.11", "0.12"),
+        for shares in (("0.005", "0.005", "0.005", "0.005", "0.005"),
                        ("0.04", "0.04", "0.04", "0.11", "0.12"),
                        ("0.06", "0.08", "0.10", "0.11", "0.12"),
                        ("0.07", "0.10", "0.12", "0.13", "0.14"),
@@ -1035,3 +1042,43 @@ def test_leadership_coverage_advisory_flag_present_only_in_coverage_mode():
     assert flag is not None
     assert flag["requires_note"] is False
     assert flag["open_hours_per_week"] == 60.0
+
+
+# ------------------------------------------- owner decision 2026-10-08: "Full 60 months"
+# With monthly net rising (3.1.0), a store that turns profitable in Year 2-5 must show a
+# real break-even month, and capital must cover the TRUE cash low point, wherever in the
+# 60-month horizon it lands. (The first-year cash gap stays Year-1 scoped by definition.)
+_FIXTURES_60 = ["canonical_result", "design_parity_result", "aggressive_result",
+                "grace_result", "nnn_gross_check_result"]
+
+
+def _expected_breakeven_60(res):
+    g = res.decision.grand_opening_month
+    ops = [m for m in res.monthly if g <= m.index <= g + 59]
+    nets = [D(str(m.net)) for m in ops]
+    for i in range(len(nets)):
+        if all(n >= 0 for n in nets[i:]):
+            return ops[i].index
+    return None
+
+
+@pytest.mark.parametrize("fixture_name", _FIXTURES_60)
+def test_break_even_searches_all_60_operating_months(fixture_name, request):
+    res = request.getfixturevalue(fixture_name)
+    assert res.decision.break_even_month == _expected_breakeven_60(res)
+
+
+@pytest.mark.parametrize("fixture_name", _FIXTURES_60)
+def test_capital_covers_the_lowest_cash_point_in_the_whole_series(fixture_name, request):
+    res = request.getfixturevalue(fixture_name)
+    low = min(D(str(m.cumulative_cash)) for m in res.monthly)
+    expected = abs(min(Decimal("0"), low)) + Decimal("25000")
+    assert D(str(res.decision.startup_capital_required)) == expected
+    # the base sensitivity scenario uses the SAME rule, to the penny
+    assert D(str(res.decision.sensitivity["base"]["capital"])) == expected
+
+
+def test_canonical_breaks_even_after_year_1_under_the_60_month_rule(canonical_result):
+    # The case that motivated the owner call: canonical net crosses zero after Year 1.
+    be = canonical_result.decision.break_even_month
+    assert be is not None and be > 12

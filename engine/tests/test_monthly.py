@@ -217,17 +217,17 @@ def test_startup_outflow_drives_a_negative_trough(canonical_result):
 
 
 def test_break_even_month_is_first_sustained_nonneg_net(canonical_result):
-    # Break-even is computed over the YEAR-1 operating window only (so it is byte-
-    # identical to the 12-month model and a later-year operating dip can never erase a
-    # real Year-1 break-even). Assert the invariant over the Year-1 operating months.
+    # Owner decision 2026-10-08 ("Full 60 months"): break-even is the first operating
+    # month whose net >= 0 and stays >= 0 through the end of the 60 operating months.
     be = canonical_result.monthly_breakeven
     g = canonical_result.decision.grand_opening_month
-    y1_ops = [m for m in canonical_result.monthly
-              if m.kind == "operating" and g <= m.index <= g + 11]
-    if be is not None:
-        target = next(m for m in y1_ops if m.index == be)
-        assert target.net >= 0
-        assert all(m.net >= 0 for m in y1_ops if m.index >= be)
+    ops = [m for m in canonical_result.monthly
+           if m.kind == "operating" and g <= m.index <= g + 59]
+    assert be == 37  # canonical turns profitable in Year 4
+    target = next(m for m in ops if m.index == be)
+    assert target.net >= 0
+    assert all(m.net >= 0 for m in ops if m.index >= be)
+    assert all(m.net < 0 for m in ops if m.index == be - 1)
 
 
 # ----------------------------------------------- Task 6.2: fixed/variable/payroll split
@@ -319,18 +319,22 @@ def test_canonical_trough_capital_and_breakeven_after_the_ease(canonical_result)
     # every Year-1 month is a loss, break-even is None, and the launch-window trough
     # is the Year-1 close: -(startup $238,500 + operating loss $65,068) = -$303,568,
     # so capital = $303,568 + $25,000 reserve = $328,568. (3.0.0: trough -$329,597 at
-    # month 7, capital $354,597, break-even month 8.) Scoped to the launch window,
-    # same as decision.py (#182).
+    # month 7, capital $354,597, break-even month 8.)
+    # Then the owner's "Full 60 months" call (2026-10-08): Years 2-3 still lose money,
+    # so cash keeps falling to -$345,580 at month 36; capital covers that true low
+    # point ($370,580) and break-even is Month 37. The first-year cash gap stays the
+    # Year-1 close (-$303,568).
     from engine.money import round_dollars
-    g = canonical_result.decision.grand_opening_month
-    launch = [(m.index, D(str(m.cumulative_cash)))
-              for m in canonical_result.monthly if m.index <= g + 11]
-    trough_month, trough = min(launch, key=lambda t: t[1])
-    assert trough_month == 12
-    assert round_dollars(trough) == Decimal("-303568")
+    trough_month, trough = min(
+        ((m.index, D(str(m.cumulative_cash))) for m in canonical_result.monthly),
+        key=lambda t: t[1])
+    assert trough_month == 36
+    assert round_dollars(trough) == Decimal("-345580")
     cap = D(str(canonical_result.decision.startup_capital_required))
-    assert round_dollars(cap) == Decimal("328568")
-    assert canonical_result.decision.break_even_month is None
+    assert round_dollars(cap) == Decimal("370580")
+    assert round_dollars(D(str(canonical_result.decision.first_year_cash_gap))) == \
+        Decimal("-303568")
+    assert canonical_result.decision.break_even_month == 37
 
 
 # ------------------------------------------------ owner request, 2026-10-08 (3.1.0):
@@ -614,9 +618,9 @@ def test_build_monthly_signature_takes_inputs_not_opening_month_number(canonical
     startup_by_month = startup_outflows_by_month(inputs, assumptions, occupancy[1])
     rows, breakeven = build_monthly(years, assumptions, inputs, startup_by_month)
     assert rows
-    # 3.1.0: the eased canonical Year 1 has no profitable month (Year 2 still loses
-    # money overall), so break-even is None; the call shape is what this pins.
-    assert breakeven is None
+    # 3.1.0 + "Full 60 months": canonical turns profitable for good at Month 37; the
+    # call shape is what this pins.
+    assert breakeven == 37
 
 
 

@@ -1,11 +1,12 @@
 {
-  "breakevenMonth": 12,
+  "breakevenMonth": null,
   "compute_schema_version": "1.9.0",
   "confidence": {
     "ramp": "low"
   },
   "evidence": [],
   "flags": {
+    "break_even_month": "N/A \u2014 operating net never turns sustainably positive within the horizon",
     "model_upgrade_available": false,
     "occupancy_ratio_out_of_band": {
       "band": "\u2264 ~20%",
@@ -80,8 +81,8 @@
       "label": "Capital required",
       "sub": "incl. reserve",
       "value": {
-        "display": "$296,241",
-        "raw": 296240.79029859486
+        "display": "$460,374",
+        "raw": 460374.30635381734
       }
     },
     {
@@ -89,8 +90,8 @@
       "label": "Break-even month",
       "sub": "operating net",
       "value": {
-        "display": "Month 12",
-        "raw": 12
+        "display": "N/A",
+        "raw": null
       }
     },
     {
@@ -142,25 +143,26 @@
   ],
   "metrics": {
     "breakeven": {
-      "display": "Month 12",
-      "raw": 12
+      "display": "N/A",
+      "raw": null
     },
     "capital": {
-      "display": "$296,241",
-      "raw": 296240.79029859486
+      "display": "$460,374",
+      "raw": 460374.30635381734
     },
     "cashGap": {
       "display": "($271,241)",
       "raw": -271240.79029859486
     },
-    "reasonBreakeven": "Base case reaches break-even at Month 12, but the downside scenario (rent +25% / donations -25%) never does \u2014 the plan is not robust to a tougher market.",
+    "reasonBreakeven": "Break-even is not reached within the horizon under the base case (and the downside scenario fails as well) \u2014 the plan is not viable as configured.",
     "reasonCapital": "Worst-case cumulative cash trough (already includes one-time startup) plus reserve.",
     "reasonGap": "Most-negative cumulative cash across the first year."
   },
   "milestones": {
     "breakEven": {
-      "display": "Month 12",
-      "raw": 12
+      "display": "N/A",
+      "raw": null,
+      "reason": "N/A \u2014 operating net never turns sustainably positive within the horizon"
     },
     "grandOpening": {
       "display": "Month 1",
@@ -1579,7 +1581,7 @@
   ],
   "reco": {
     "headline": "Do not proceed.",
-    "sub": "Base case reaches break-even at Month 12, but the downside scenario (rent +25% / donations -25%) never does \u2014 the plan is not robust to a tougher market.",
+    "sub": "Break-even is not reached within the horizon under the base case (and the downside scenario fails as well) \u2014 the plan is not viable as configured.",
     "tag": "do_not_proceed"
   },
   "rows": [
@@ -2314,10 +2316,10 @@
   ],
   "sensitivity": {
     "base": {
-      "breakeven": 12,
+      "breakeven": null,
       "capital": {
-        "display": "$296,241",
-        "raw": 296240.79029859486
+        "display": "$460,374",
+        "raw": 460374.30635381734
       },
       "net": {
         "display": "($40,581)",
@@ -2328,8 +2330,8 @@
     "downside": {
       "breakeven": null,
       "capital": {
-        "display": "$371,231",
-        "raw": 371230.78583138174
+        "display": "$711,364",
+        "raw": 711364.433785363
       },
       "net": {
         "display": "($111,481)",
@@ -2337,7 +2339,7 @@
       }
     },
     "upside": {
-      "breakeven": 4,
+      "breakeven": 37,
       "capital": {
         "display": "$256,081",
         "raw": 256081.26694379392

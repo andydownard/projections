@@ -325,7 +325,9 @@ def test_breakeven_milestone_is_na_with_reason_when_unreached():
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     inputs = Inputs(
         org_name="Deep loss", city="x", opening_status="pre_launch",
-        share_y1="0.005", share_y2="0.005", share_y3="0.005", share_y4="0.11", share_y5="0.12",
+        # every year deep (break-even now searches all 60 months, so a strong Year 4/5
+        # would legitimately break even there)
+        share_y1="0.005", share_y2="0.005", share_y3="0.005", share_y4="0.005", share_y5="0.005",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="300000",
     )
@@ -432,13 +434,14 @@ def test_do_not_proceed_sub_equals_reason_breakeven(grace_result):
     assert vm["reco"]["sub"] == vm["metrics"]["reasonBreakeven"]
 
 
-def test_do_not_proceed_reason_month_matches_breakeven_metric(grace_result):
+def test_do_not_proceed_reason_month_matches_breakeven_metric(canonical_result):
     # The Month-N named in the reason text is exactly the base-case break-even month
     # rendered in metrics.breakeven — they are derived from the same value, so the
     # words and the number can never disagree.
-    # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
+    # (re-homed to canonical at 3.1.0: Grace no longer breaks even under the 60-month
+    # rule; canonical is now the base-reaches / downside-fails case, Month 37)
     from engine.viewmodel import to_view_model
-    vm = to_view_model(grace_result)
+    vm = to_view_model(canonical_result)
     be = vm["metrics"]["breakeven"]
     assert be["raw"] is not None
     assert f"Month {be['raw']}" in vm["reco"]["sub"]

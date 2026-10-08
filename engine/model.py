@@ -12,7 +12,9 @@ MODEL_VERSION = "3.1.0"          # math change => bump. 3.1.0 (owner 2026-10-08)
 # glide) is eased toward its own flat average by the smallest amount that keeps its
 # LAST month at or below the NEXT year's monthly average (`engine.monthly._ease_weight`),
 # which makes a rising path possible. Annual totals are unchanged; Year 1's monthly
-# shape is flatter, so capital / break-even / first-year cash gap move. Years 2-5 now
+# shape is flatter, so capital / break-even / first-year cash gap move. Owner decision
+# the same day ("Full 60 months"): break-even searches all 60 operating months and
+# capital covers the lowest cumulative cash of the WHOLE series. Years 2-5 now
 # shape Net directly; monthly expense = revenue - net. (Built as 2.10.0 on the 2.9.0
 # engine, rebased onto 3.0.0 before it shipped.)
 #

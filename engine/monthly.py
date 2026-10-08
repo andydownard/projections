@@ -25,10 +25,11 @@ year's 12 operating months, so the annual P&L and the monthly model can never di
 months by weights that sum to exactly 1, in Decimal, with the **last month absorbing the
 rounding residual**, so the sum of monthly values is bit-identical to the annual value.
 
-The 60-month horizon exists so PAYBACK (the first project-month where cumulative cash
-returns to >= 0 after going negative) can resolve across years. The Year-1-anchored
-metrics (capital, break-even, first-year cash gap) are scoped to the Year-1 window in
-``engine.decision`` and are therefore byte-unchanged by the extension.
+The 60-month horizon lets PAYBACK (the first project-month where cumulative cash
+returns to >= 0 after going negative) resolve across years. Since 3.1.0 (owner
+decision 2026-10-08, "Full 60 months") break-even and capital also read the whole
+series; only the first-year cash gap stays scoped to the Year-1 window
+(``engine.decision``).
 
 Cash terms: cumulative cash starts at 0 and is decremented by timed one-time startup
 outflows (which begin accumulating in pre-opening) on top of operating net, so the
@@ -315,10 +316,9 @@ def build_monthly(annual, assumptions, inputs, startup_by_month):
     `startup_by_month` maps a project-month int -> one-time outflow Decimal; the sum of
     its values is the total startup (placed by the schedule, never double-counted).
 
-    `breakeven_month` is the first **Year-1** operating month (>= G) whose net >= 0 and
-    stays non-negative through the Year-1 ramp, numbered in **project months** (None if
-    never). It is computed over the Year-1 operating window ONLY, so it is byte-identical
-    to the 12-month model and is unaffected by a later-year operating dip.
+    `breakeven_month` is the first operating month (G..G+59) whose net >= 0 and stays
+    non-negative through the end of the 60 operating months, numbered in **project
+    months** (None if never, including when net slips back below zero later).
 
     The timeline runs to ``N = max(G + 59, last scheduled month)`` so a support cost
     beyond the 60-month operating window is still placed on its month (the trough and
@@ -365,7 +365,7 @@ def build_monthly(annual, assumptions, inputs, startup_by_month):
 
     rows = []
     cumulative = Decimal("0")
-    y1_op_nets = []  # Year-1 operating nets (for break-even; byte-identical to today)
+    op_nets = []  # (project month, net) for the 60 operating months (break-even)
 
     for month in range(1, n + 1):
         outflow = D(str(startup_by_month.get(month, Decimal("0"))))
@@ -386,8 +386,7 @@ def build_monthly(annual, assumptions, inputs, startup_by_month):
             exp = exp_parts[wi]
             net = net_parts[wi]
             kind = "operating"
-            if y == 1:
-                y1_op_nets.append(net)
+            op_nets.append((month, net))
             # Production-station module (Task 1.2): rescale this month's revenue
             # back to retail, then down the items-sold -> items-produced ->
             # production-hours -> stations-staffed chain, each zero-guarded.
@@ -418,14 +417,15 @@ def build_monthly(annual, assumptions, inputs, startup_by_month):
             stations_staffed=stations_staffed,
         ))
 
-    # break-even month: first Year-1 operating month with net>=0 that stays non-negative
-    # through the Year-1 ramp, numbered in project months (g + offset). Scoped to the
-    # Year-1 window so a later-year operating dip can never erase a real Year-1 break-even
-    # (and so the metric is byte-identical to the pre-60-month model).
+    # break-even month (owner decision 2026-10-08, "Full 60 months"): the first
+    # operating month whose net >= 0 AND stays >= 0 through the end of the 60-month
+    # horizon, numbered in project months. With monthly net rising (3.1.0), a store that
+    # turns profitable in Year 2-5 gets a real month; one that slips back into losses
+    # later (e.g. a year whose total falls) is not "broken even".
     breakeven = None
-    for i in range(len(y1_op_nets)):
-        if y1_op_nets[i] >= 0 and all(net_ >= 0 for net_ in y1_op_nets[i:]):
-            breakeven = g + i
+    for i, (month_i, net_i) in enumerate(op_nets):
+        if net_i >= 0 and all(net_ >= 0 for _, net_ in op_nets[i:]):
+            breakeven = month_i
             break
 
     return rows, breakeven
