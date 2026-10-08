@@ -177,7 +177,8 @@ def test_version_stamps(canonical_result):
     # Model v3 (3.0.0): card fees' two-term formula, production-station module,
     # optional linear share ramp, labor_mode coverage, and three new lines (POS
     # platform, Production software, Workers' comp, Contributions revenue).
-    assert vm["model_version"] == "3.0.0"
+    # 3.1.0 (owner 2026-10-08): monthly Net/Revenue never drop after opening.
+    assert vm["model_version"] == "3.1.0"
     # 1.9.0: cost-schedule rows gain treatment (Model v3 Phase 2, Task 2.2).
     assert vm["compute_schema_version"] == "1.9.0"
     assert "utilitiesPerSqft" in vm["settings"]
@@ -286,13 +287,15 @@ def _recovered_payback_result():
                    TradeArea(basis="city", households="31798"))
 
 
-def test_milestones_block_has_three_dual_value_milestones(canonical_result):
+def test_milestones_block_has_three_dual_value_milestones(design_parity_result):
+    # Uses the 40% twin: from 3.1.0 the canonical fixture has no break-even month.
+    canonical_result = design_parity_result
     vm = to_view_model(canonical_result)
     ms = vm["milestones"]
     assert set(ms) == {"grandOpening", "breakEven", "payback"}
     # grand opening = the input G (month 1 default); always reached, dual-value.
     assert ms["grandOpening"] == {"raw": 1, "display": "Month 1"}
-    # break-even is a real project month for the canonical fixture (month 8).
+    # break-even is a real project month for the 40% twin (month 3).
     assert ms["breakEven"]["raw"] == canonical_result.decision.break_even_month
     assert ms["breakEven"]["display"] == f"Month {canonical_result.decision.break_even_month}"
 
@@ -465,13 +468,15 @@ def test_proceed_case_keeps_default_breakeven_reason_and_is_consistent():
     # design-parity SHAPE with adequate funding (source_of_funds > its $302,238 capital
     # need) — at the 2.7.0 990-grounded basis the design-parity fixture's own $300k
     # funds now yields raise_cash (capital crosses funds by $2,238), so a dedicated
-    # proceed case is constructed here to keep this branch covered.
+    # proceed case is constructed here to keep this branch covered. 3.1.0: the eased
+    # Year 1 needs the later years to grow faster for the DOWNSIDE to break even
+    # inside Year 1, so the shares climb 7/10/12/13/14%.
     from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
     from engine.tests.test_decision import assert_breakeven_text_consistent
     from engine.viewmodel import to_view_model
     inputs = Inputs(
         org_name="House of Hope", city="Longview, Texas", opening_status="pre_launch",
-        share_y1="0.06", share_y2="0.08", share_y3="0.10", share_y4="0.11", share_y5="0.12",
+        share_y1="0.07", share_y2="0.10", share_y3="0.12", share_y4="0.13", share_y5="0.14",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
         occupancy_annual="120000", lease_type="nnn", source_of_funds="400000",
     )

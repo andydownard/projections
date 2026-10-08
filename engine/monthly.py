@@ -9,13 +9,15 @@ exactly the scheduled one-time costs landing that month (a real monthly loss). M
 ``G..N`` carry the operating ramp **plus** any scheduled costs that land on them.
 
 Operating months map to years: offset ``oi = month - G`` (0..59) -> year ``oi // 12 +
-1`` (1..5), within-year slice ``oi % 12``. Year 1 keeps the launch **S-curve** weights
-byte-for-byte; Years 2-5 GLIDE from the prior year's own last month toward that year's
+1`` (1..5), within-year slice ``oi % 12``. Year 1 starts from the launch **S-curve**
+weights; Years 2-5 GLIDE from the prior year's own last month toward that year's
 flat steady-state average over `_BLEND_MONTHS` months, then hold flat (owner defect
 fix, 2026-07-05 — an instant flat-jump at the Year N -> N+1 seam read as an
 unexplained one-month cliff on the chart) — the intra-year shape for Years 2-5 affects
-only the EXACT payback month by a few positions, never the annual totals, capital,
-break-even, or cash gap.
+only the EXACT payback month by a few positions, never the annual totals. From 3.1.0
+(owner 2026-10-08) every year's shape is also EASED toward its own flat average just
+enough that monthly Net and Revenue never drop while the annual totals grow (see
+`_ease_weight`); that flattens Year 1 and so DOES move capital and break-even.
 
 The model is monthly-first: for EVERY year, the annual totals are the *roll-up* of that
 year's 12 operating months, so the annual P&L and the monthly model can never disagree
@@ -35,7 +37,7 @@ trough reflects the real cash low point that sets the capital requirement.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 
 from engine.money import D
 
@@ -122,13 +124,10 @@ def _flat_monthly(total: Decimal, months: int = 12):
 # Owner defect fix (2026-07-05): "net should never fall month-over-month unless a
 # startup expense forces it" — the Year1->Year2 seam (and every later year boundary)
 # used to jump INSTANTLY from Year N's S-curve/ramp exit rate to Year N+1's flat
-# annual average, an artificial one-month cliff with no cost event behind it. A full
-# mathematical guarantee that NO month ever decreases is not achievable while Year 1's
-# S-curve keeps its deliberate dramatic recovery shape (proof: in any non-decreasing
-# 12-month sequence summing to a fixed annual total, the LAST month is always >= the
-# flat average — Year 1's S-curve intentionally ends well ABOVE its own flat average,
-# which a following, much-lower-growth year cannot always sustain even at ITS OWN flat
-# average). What IS fixed here: the artificial INSTANT jump. Years 2-5 now GLIDE from
+# annual average, an artificial one-month cliff with no cost event behind it. The glide
+# below removes the INSTANT jump; the 3.1.0 ease (`_ease_weight`, further down) then
+# removes the remaining dip by keeping each year's exit at or below the next year's
+# monthly average. Years 2-5 now GLIDE from
 # the prior year's actual exit value over `_BLEND_MONTHS` months into a flat level
 # held for the rest of the year, instead of snapping straight to the flat average in
 # month one -- one smooth arithmetic progression, no second jump at the blend/flat
@@ -172,8 +171,50 @@ def _blend_then_flat(total: Decimal, prev_last: Decimal, months: int = 12,
     return parts
 
 
-def _year_slices(annual_year, year, *, prev_rev_last=None, prev_exp_last=None,
-                  revenue_weights=None):
+# Owner request (2026-10-08, model 3.1.0): "net income or revenue should only go up —
+# no dip after Year 1." A rising path is only possible if each year's LAST month is no
+# higher than the NEXT year's monthly average (the next year has to start at or above
+# it and still sum to its own total). Year 1's S-curve, and the front-loaded payroll
+# ramp, exit well above Year 2's average, so each year's shape is eased toward its own
+# flat average by the smallest amount that brings its exit under that cap. The ease is
+# a blend of two rising series (the year's own shape and a flat line), so the result
+# still rises and still sums to the annual total. When the next year FALLS, no rising
+# path exists; the shape is left alone and the dip is honest.
+_EASE_STEP = Decimal("0.000001")
+
+
+def _ease_weight(parts, total: Decimal, cap):
+    """Share (0..1) of `parts`' own shape to keep so the eased last month is <= `cap`.
+
+    1 means untouched: no cap (Year 5), the exit already fits, or the next year falls
+    (`cap` below this year's own average). Rounded DOWN so the eased exit never
+    overshoots the cap by a rounding hair.
+    """
+    if cap is None:
+        return Decimal("1")
+    avg = total / len(parts)
+    last = parts[-1]
+    if last <= cap or cap < avg:
+        return Decimal("1")
+    return ((cap - avg) / (last - avg)).quantize(_EASE_STEP, rounding=ROUND_DOWN)
+
+
+def _ease(parts, total: Decimal, weight: Decimal, months: int = 12):
+    """Blend `parts` toward the flat average: ``weight*part + (1-weight)*total/months``.
+
+    The last month absorbs the Decimal residual, so the result sums to `total` exactly
+    (Regression #15).
+    """
+    if weight == 1:
+        return list(parts)
+    avg = total / months
+    out = [weight * parts[i] + (1 - weight) * avg for i in range(months - 1)]
+    out.append(total - sum(out, Decimal("0")))
+    return out
+
+
+def _year_slices(annual_year, year, *, prev_rev_last=None, prev_net_last=None,
+                 next_year=None, revenue_weights=None):
     """The 12 monthly (revenue, operating-expense, net) slices for one annual year.
 
     Every line's slices sum to that year's annual line to the penny (residual in the last
@@ -212,8 +253,12 @@ def _year_slices(annual_year, year, *, prev_rev_last=None, prev_exp_last=None,
     ``=B−C−D`` anyway, so the workbook and the engine still reconcile.
     """
     total_rev = D(str(annual_year.total_rev))
+    total_exp = D(str(annual_year.total_exp))
+    net_annual = D(str(annual_year.net))
+    # Caps for the ease: the next year's monthly averages (None for Year 5).
+    rev_cap = D(str(next_year.total_rev)) / 12 if next_year is not None else None
+    net_cap = D(str(next_year.net)) / 12 if next_year is not None else None
     if year == 1:
-        total_exp = D(str(annual_year.total_exp))
         exp_by_label = annual_year.expenses
         pct_annual = sum((D(str(v)) for k, v in exp_by_label.items()
                           if k in _PCT_OF_REVENUE_LABELS), Decimal("0"))
@@ -228,11 +273,29 @@ def _year_slices(annual_year, year, *, prev_rev_last=None, prev_exp_last=None,
         fixed_parts = _flat_monthly(fixed_annual)
         exp_parts = [pct_parts[i] + payroll_parts[i] + fixed_parts[i] for i in range(12)]
         net_parts = [rev_parts[i] - exp_parts[i] for i in range(12)]
-        return rev_parts, exp_parts, net_parts
-    total_exp = D(str(annual_year.total_exp))
-    net_annual = D(str(annual_year.net))
-    rev_parts = _blend_then_flat(total_rev, prev_rev_last)
-    exp_parts = _blend_then_flat(total_exp, prev_exp_last)
+        # ONE weight for the whole year, so revenue and expense ease together and the
+        # eased net is exactly the same blend of the three-stream net.
+        weight = min(_ease_weight(rev_parts, total_rev, rev_cap),
+                     _ease_weight(net_parts, net_annual, net_cap))
+        if weight == 1:
+            return rev_parts, exp_parts, net_parts
+        rev_parts = _ease(rev_parts, total_rev, weight)
+        exp_parts = _ease(exp_parts, total_exp, weight)
+    else:
+        # Years 2-5: revenue and net each glide from the prior year's own last month
+        # (`_blend_then_flat`), eased under the next year's cap; expense is what is
+        # left (revenue - net), footed to the annual total in the last month.
+        rev_parts = _blend_then_flat(total_rev, prev_rev_last)
+        rev_parts = _ease(rev_parts, total_rev,
+                          _ease_weight(rev_parts, total_rev, rev_cap))
+        shaped_net = _blend_then_flat(net_annual, prev_net_last)
+        shaped_net = _ease(shaped_net, net_annual,
+                           _ease_weight(shaped_net, net_annual, net_cap))
+        exp_parts = [rev_parts[i] - shaped_net[i] for i in range(11)]
+        exp_parts.append(total_exp - sum(exp_parts, Decimal("0")))
+    # Two independently footed splits leave a ~1e-22 residual in the per-month
+    # ``rev - exp`` sum; the 12th month's net absorbs it so all three lines foot
+    # EXACTLY (the xlsx Net column recomputes ``=B-C-D`` anyway).
     net_parts = [rev_parts[i] - exp_parts[i] for i in range(11)]
     net_parts.append(net_annual - sum(net_parts, Decimal("0")))
     return rev_parts, exp_parts, net_parts
@@ -291,11 +354,13 @@ def build_monthly(annual, assumptions, inputs, startup_by_month):
     # Per-year monthly slices, computed SEQUENTIALLY so each of Years 2-5 can anchor
     # its glide on the prior year's own last month (Year 1 = the unchanged 6.2
     # three-stream split).
-    slices = {1: _year_slices(annual[1], 1, revenue_weights=revenue_weights)}
+    slices = {1: _year_slices(annual[1], 1, next_year=annual[2],
+                              revenue_weights=revenue_weights)}
     for y in (2, 3, 4, 5):
-        prev_rev_last, prev_exp_last = slices[y - 1][0][-1], slices[y - 1][1][-1]
+        prev_rev_last, prev_net_last = slices[y - 1][0][-1], slices[y - 1][2][-1]
         slices[y] = _year_slices(
-            annual[y], y, prev_rev_last=prev_rev_last, prev_exp_last=prev_exp_last,
+            annual[y], y, prev_rev_last=prev_rev_last, prev_net_last=prev_net_last,
+            next_year=annual.get(y + 1),
         )
 
     rows = []

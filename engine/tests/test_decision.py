@@ -22,10 +22,13 @@ def test_first_year_cash_gap_is_most_negative_cumulative(canonical_result):
     # this loss case), so the correct invariant compares against the Y1-window
     # troughs only, not the global min across the full 60-month series.
     dec = canonical_result.decision
+    # Scoped to the Year-1 operating window (G..G+11). From 3.1.0 the canonical cash
+    # keeps falling into Year 2 (Year 2 still loses money), so the whole-series low is
+    # later and deeper; the first-year gap is, by definition, the Year-1 low.
     g = dec.grand_opening_month
-    y1_troughs = [D(str(m.cumulative_cash)) for m in canonical_result.monthly
-                  if g <= m.index <= g + 11]
-    assert D(str(dec.first_year_cash_gap)) == min(y1_troughs)
+    troughs = [D(str(m.cumulative_cash)) for m in canonical_result.monthly
+               if g <= m.index <= g + 11]
+    assert D(str(dec.first_year_cash_gap)) == min(troughs)
     assert D(str(dec.first_year_cash_gap)) <= 0
 
 
@@ -47,14 +50,18 @@ def test_design_parity_capital_matches_appendix_d_headline(design_parity_result)
     # screenshots ~$277,990 -> ~$299,168 (6.2 monthly split) -> $302,238.41 (6.4
     # 990-grounded payroll tax 8% + Insurance $10k) -> $306,349.23 (Model v3 3.0.0:
     # card fees' two-term formula + Workers' comp + POS platform/Production software
-    # deepen the trough further). capital keeps crossing the design-parity/seed
-    # source_of_funds ($300,000), now by ~$6,349 (was $2,238 at 2.9.0), so the
-    # rules-as-written reco stays raise_cash (Year-1 net is still positive, +$28,858
-    # operating, and margins stay in band — it is the capital>funds gate, not a
-    # health problem). Flagged for the whole-branch reviewer / owner.
+    # deepen the trough further), crossing the $300,000 source_of_funds -> raise_cash.
+    # *** OWNER-VISIBLE FLIP (3.1.0, owner 2026-10-08: monthly net never drops): ***
+    # the eased (flatter) Year-1 shape starts less deep, so the base trough is
+    # shallower (capital ~$269,366, under the funds; break-even month 6 -> 4). But the
+    # DOWNSIDE (rent +25% / donations -25%) loses money in every eased Year-1 month,
+    # and break-even is only searched inside Year 1, so the reco flips
+    # raise_cash -> do_not_proceed (the downside first breaks even at month 25).
     cap = D(str(design_parity_result.decision.startup_capital_required))
-    assert Decimal("305000") < cap <= Decimal("310000")
-    assert design_parity_result.decision.reco_tag == "raise_cash"
+    assert Decimal("265000") <= cap < Decimal("300000")
+    assert design_parity_result.decision.break_even_month == 4
+    assert design_parity_result.decision.sensitivity["downside"]["breakeven"] is None
+    assert design_parity_result.decision.reco_tag == "do_not_proceed"
 
 
 def test_payback_null_when_y1_net_not_positive(canonical_result):
@@ -288,22 +295,19 @@ def test_canonical_60_labor_is_not_proceed(canonical_result):
     assert canonical_result.decision.reco_tag != "proceed"
 
 
-def test_canonical_reco_is_raise_cash_after_monthly_split(canonical_result):
-    # Pins the canonical verdict under the 6.2 monthly distribution change (fixed
-    # costs charged flat, payroll taxes on the payroll ramp): the downside scenario
-    # reaches break-even within the horizon, so the do_not_proceed rule no longer
-    # fires, and the binding constraint is capital > source of funds ($300,000) ->
-    # raise_cash. Re-pinned at the 2.7.0 regen (Task 6.4): the 990-grounded constants
-    # deepen the trough (capital $342,403 -> $347,853.76) and push the downside
-    # break-even from month 11 to month 12 (still inside the horizon). The verdict is
-    # UNCHANGED (raise_cash) — the owner-visible 6.2 flip (owner decision #345) holds.
-    # Any future regression that flips this verdict must trip THIS assertion loudly.
+def test_canonical_reco_is_do_not_proceed_after_the_ease(canonical_result):
+    # *** OWNER-VISIBLE FLIP (3.1.0, owner 2026-10-08: monthly net never drops). ***
+    # Year 2 still loses money overall (about -$1,877 a month), so once Year 1 can no
+    # longer end on a profitable stretch that Year 2 then gives back, the base case
+    # never breaks even inside Year 1 and the verdict moves raise_cash ->
+    # do_not_proceed. (2.7.0-2.9.0: raise_cash, base break-even month 8, downside 12,
+    # capital $347,854.) Any future regression that flips this verdict must trip THIS
+    # assertion loudly.
     dec = canonical_result.decision
-    assert dec.reco_tag == "raise_cash"
-    assert "capital" in dec.reco_reasons
-    # The two facts the verdict is built from:
-    assert dec.sensitivity["downside"]["breakeven"] == 12   # downside DOES break even
-    assert D(str(dec.startup_capital_required)) > D(canonical_result.inputs.source_of_funds)
+    assert dec.reco_tag == "do_not_proceed"
+    assert "breakeven" in dec.reco_reasons
+    assert dec.sensitivity["base"]["breakeven"] is None
+    assert dec.sensitivity["downside"]["breakeven"] is None
 
 
 def test_aggressive_fixture_triggers_margin_guardrail():
@@ -341,11 +345,16 @@ def test_find_cheaper_rent_when_occupancy_is_the_binding_constraint():
     # net, while BOTH the base and the (rent +25% / donations -25%) downside still
     # reach monthly break-even and capital stays within funds — so the verdict is
     # neither do_not_proceed nor raise_cash, and occupancy is the binding constraint.
+    # 3.1.0: shares must GROW into Year 2 for a Year-1 break-even to exist at all
+    # (monthly net never drops, so Year 1 can only end profitable if Year 2 is
+    # profitable on average). Flat 7/7/7% (the 2.9.0 inputs) now flattens Year 1.
+    # Model v3's added cost lines then kept the eased DOWNSIDE from breaking even at
+    # 7%/$110k, so Year 1 is 5% (rent share still ~25%) at $90k gross rent.
     inputs = Inputs(
         org_name="High Rent", city="x", opening_status="pre_launch",
-        share_y1="0.07", share_y2="0.07", share_y3="0.07", share_y4="0.11", share_y5="0.12",
+        share_y1="0.05", share_y2="0.14", share_y3="0.14", share_y4="0.14", share_y5="0.15",
         donation_value="74", building_sqft="10000", salesfloor_pct="0.70",
-        occupancy_annual="110000", lease_type="gross", source_of_funds="900000",
+        occupancy_annual="90000", lease_type="gross", source_of_funds="900000",
     )
     res = compute(inputs, Assumptions(labor_pct="0.60"), DemandDrivers(),
                   TradeArea(basis="city", households="31798"), overrides={})
@@ -733,31 +742,30 @@ def assert_breakeven_text_consistent(vm) -> None:
 
 
 def test_reco_text_and_breakeven_metric_cannot_disagree_grace(grace_result):
-    # #142: Grace Mission reaches operating break-even at month 9 in the BASE case
-    # (metrics.breakeven = Month 9 — Model v3's added cost lines push this one month
-    # later than 2.9.0's Month 8), yet is do_not_proceed because the DOWNSIDE never
+    # #142: Grace Mission reaches operating break-even at month 12 in the BASE case
+    # (metrics.breakeven = Month 12; month 9 at 3.0.0, before the 3.1.0 ease), yet is
+    # do_not_proceed because the DOWNSIDE never
     # breaks even. The reco text must say *that*, not flatly claim "break-even is
     # not reached" — which contradicts the Month-9 metric on screen.
     # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
     vm = to_view_model(grace_result)
     assert vm["reco"]["tag"] == "do_not_proceed"
-    assert vm["metrics"]["breakeven"]["raw"] == 9
+    assert vm["metrics"]["breakeven"]["raw"] == 12
     assert_breakeven_text_consistent(vm)
 
 
 def test_reco_text_names_base_and_downside_when_base_breaks_even(grace_result):
     # #142/#145: the honest, consistent message surfaces WHY the verdict is
-    # do_not_proceed — the base case reaches break-even (Month 9 at Model v3, was
-    # Month 8 at 2.9.0) but the downside scenario (rent +25% / donations -25%) does
-    # not, so the plan is not robust.
+    # do_not_proceed — the base case reaches break-even (Month 12) but the downside
+    # scenario (rent +25% / donations -25%) does not, so the plan is not robust.
     # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
     from engine.viewmodel import to_view_model
     vm = to_view_model(grace_result)
     for text in (vm["reco"]["sub"].lower(), vm["metrics"]["reasonBreakeven"].lower()):
         assert "base case" in text, text
         assert "downside" in text, text
-        assert "month 9" in text, text
+        assert "month 12" in text, text
 
 
 def test_reco_text_consistent_for_deep_loss_base_unreached():
@@ -950,15 +958,18 @@ def test_breakeven_consistency_invariant_holds_across_a_scenario_sweep():
     # reaches/downside-fails case (its downside now breaks even), but 0.04 shares at
     # 0.50/0.60 labor still do — so the sweep cannot go vacuous on that branch.
     # (re-homed from canonical after 6.2 monthly split — see task-6.1-6.2-report)
+    # 3.1.0: with Year 1 eased, the downside only breaks even inside Year 1 when the
+    # later years grow enough, so the 7/10/12/13/14% row keeps `proceed` reachable.
     for labor in ("0.40", "0.50", "0.60"):
-        for shares in (("0.005", "0.005", "0.005"),
-                       ("0.04", "0.04", "0.04"),
-                       ("0.06", "0.08", "0.10"),
-                       ("0.15", "0.20", "0.25")):
+        for shares in (("0.005", "0.005", "0.005", "0.11", "0.12"),
+                       ("0.04", "0.04", "0.04", "0.11", "0.12"),
+                       ("0.06", "0.08", "0.10", "0.11", "0.12"),
+                       ("0.07", "0.10", "0.12", "0.13", "0.14"),
+                       ("0.15", "0.20", "0.25", "0.11", "0.12")):
             for g in (1, 4):
                 res = _opening_at(
-                    g, labor=labor, share_y1=shares[0],
-                    share_y2=shares[1], share_y3=shares[2])
+                    g, labor=labor, share_y1=shares[0], share_y2=shares[1],
+                    share_y3=shares[2], share_y4=shares[3], share_y5=shares[4])
                 vm = to_view_model(res)
                 # The invariant must hold for every single configuration.
                 assert_breakeven_text_consistent(vm)

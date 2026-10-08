@@ -37,7 +37,7 @@ def test_canonical_is_a_loss_case():
     # Cash-based Net margin display negative (parentheses) and reco is not proceed.
     assert vm["rows"][-1]["y1"]["display"].startswith("(")
     assert vm["reco"]["tag"] != "proceed"
-    assert vm["model_version"] == "3.0.0"
+    assert vm["model_version"] == "3.1.0"
     # Model v3 (3.0.0): the displayed Year-1 Net income subtracts the one-time
     # startup. Card fees' two-term formula + Workers' comp + POS platform/Production
     # software push the operating loss deeper, so the cash Y1 net moves from
@@ -47,20 +47,18 @@ def test_canonical_is_a_loss_case():
 
 
 def test_canonical_reco_text_consistent_with_breakeven_metric():
-    # #142 regression guard at the FROZEN-FIXTURE layer: the shipped default output can
-    # never encode a "break-even not reached" reco next to a real Month-N break-even
-    # metric. At 2.7.0 the canonical verdict is raise_cash — the base case reaches
-    # break-even (Month 8) and the binding constraint is capital > the $300k funds — so
-    # the break-even reason stays the plain positive statement and the verdict sub names
-    # the CAPITAL constraint; no field may contradict the Month-8 metric.
+    # #142 regression guard at the FROZEN-FIXTURE layer: the reco text and the
+    # break-even metric can never disagree. From 3.1.0 (owner 2026-10-08: monthly net
+    # never drops) the canonical base case has NO Year-1 break-even (Year 2 still
+    # loses money overall), so the metric is N/A and the verdict is do_not_proceed;
+    # an honest "not reached" message is then allowed. (2.7.0-2.9.0: raise_cash with a
+    # Month-8 break-even.)
     from engine.tests.test_decision import assert_breakeven_text_consistent
     vm = _load("house_of_hope_canonical_60.json")
-    assert vm["metrics"]["breakeven"]["raw"] is not None
-    assert vm["reco"]["tag"] == "raise_cash"
-    assert_breakeven_text_consistent(vm)  # break-even IS reached -> no "unreached" claim
-    # The verdict is capital-driven; the break-even reason never claims "not reached".
-    assert "capital" in vm["reco"]["sub"].lower()
-    assert "not reached" not in vm["metrics"]["reasonBreakeven"].lower()
+    assert vm["metrics"]["breakeven"]["raw"] is None
+    assert vm["reco"]["tag"] == "do_not_proceed"
+    assert_breakeven_text_consistent(vm)
+    assert "not reached" in vm["metrics"]["reasonBreakeven"].lower()
 
 
 def test_design_parity_reproduces_headline(design_parity_result):
@@ -77,10 +75,14 @@ def test_design_parity_reproduces_headline(design_parity_result):
     # card-fee two-term formula + Workers' comp + POS platform/Production software
     # deepen the operating loss before the startup subtraction.
     assert round(next(r for r in vm["rows"] if r["label"] == "Net income")["y1"]["raw"]) == -209642
-    assert vm["breakevenMonth"] == 6                            # OPERATING (6.2 Y1 distribution)
-    assert vm["reco"]["tag"] == "raise_cash"                    # OPERATING-driven (capital > funds)
-    # Month-N payback recomputes over the 60-month series on the 6.2 Y1 window. Model v3's
-    # extra cost lines push the crossing from Month 32 (2.9.0) to Month 34.
+    # 3.1.0 (owner 2026-10-08: monthly net never drops): the eased Year 1 breaks even
+    # at month 4 (was 6), but the eased DOWNSIDE never breaks even inside Year 1, so
+    # the reco flips raise_cash -> do_not_proceed (OWNER-VISIBLE).
+    assert vm["breakevenMonth"] == 4                            # OPERATING (eased Y1)
+    assert vm["reco"]["tag"] == "do_not_proceed"
+    # Month-N payback recomputes over the 60-month series. Model v3's extra cost lines
+    # push the crossing from Month 32 (2.9.0) to Month 34; the 3.1.0 ease moves cash
+    # within years, not across them, so it stays Month 34.
     assert vm["milestones"]["payback"]["raw"] == 34
     op_margin = float(design_parity_result.annual[1].margin)
     assert 0.06 < op_margin < 0.08                              # ~6.8% operating (Model v3)
@@ -116,7 +118,7 @@ def test_aggressive_triggers_the_two_named_guardrail_flags():
     # The late-year (steady-state) margin is above the ~30% band; verdict is "revise".
     assert vm["rows"][-1]["y4"]["raw"] > 0.30
     assert vm["reco"]["tag"] == "revise"
-    assert vm["model_version"] == "3.0.0"
+    assert vm["model_version"] == "3.1.0"
 
 
 # ------------------------------------------------------------- Grace Mission
@@ -142,7 +144,7 @@ def test_grace_is_a_loss_case_with_payback_na_and_one_pinned_payroll():
     assert ov["node"] == "Payroll" and ov["year"] == 1
     assert ov["value"]["raw"] == 110000.0
     assert ov["calculated"]["raw"] != ov["value"]["raw"]  # calc-vs-override, no back-solve
-    assert vm["model_version"] == "3.0.0"
+    assert vm["model_version"] == "3.1.0"
 
 
 # --------------------------------------------------------- NNN gross-check
@@ -165,4 +167,4 @@ def test_nnn_resolution_escalates_and_deposits_on_resolved_occupancy():
                    if c["category"].startswith("Lease Deposit"))
     assert deposit["amount"]["raw"] == 37500.0
     assert deposit["amount"]["display"] == "$37,500"
-    assert vm["model_version"] == "3.0.0"
+    assert vm["model_version"] == "3.1.0"

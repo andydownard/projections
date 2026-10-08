@@ -180,15 +180,19 @@ def test_legacy_default_key_numbers_are_pinned():
     # Literal regression anchor for the migration default (#120): the legacy lump
     # numbers are frozen so a future engine change cannot silently move them.
     # Re-pinned at Model v3 (3.0.0): the card-fee two-term formula + Workers' comp +
-    # POS platform/Production software deepen the Y1 loss and the cash trough, so Y1
-    # net = -$65,068.07 (was -$53,713.72 at 2.9.0) and capital = $354,596.65 (was
-    # $347,853.76 at 2.9.0). Break-even stays month 8. startup_total (one-time) is
-    # unchanged — these are all operating lines, not startup lines.
+    # POS platform/Production software deepen the Y1 loss, so Y1 net = -$65,068.07
+    # (was -$53,713.72 at 2.9.0). startup_total (one-time) is unchanged — these are
+    # all operating lines, not startup lines.
+    # Re-pinned at 3.1.0 (owner 2026-10-08: monthly net never drops): Year 1 is eased
+    # under Year 2's average monthly net, so every Year-1 month is a loss; the launch
+    # trough is the Year-1 close -(238,500 + 65,068.07) and capital = that + $25,000
+    # reserve = $328,568.07 (3.0.0: $354,596.65). Break-even month 8 -> None. Annual
+    # Y1 net is unchanged.
     res = _hoh()  # canonical 60% labor, no schedule (the seeded legacy default)
     assert D(str(res.startup_total)) == Decimal("238500")
     assert D(str(res.annual[1].net)) == Decimal("-65068.0692501021077283372365")
-    assert D(str(res.decision.startup_capital_required)) == Decimal("354596.6531797550800936768150")
-    assert res.decision.break_even_month == 8
+    assert D(str(res.decision.startup_capital_required)) == Decimal("328568.0692501021077283372366")
+    assert res.decision.break_even_month is None
     assert res.decision.payback_month is None  # never recovered in the horizon
 
 

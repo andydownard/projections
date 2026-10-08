@@ -1,5 +1,5 @@
 {
-  "breakevenMonth": 9,
+  "breakevenMonth": 12,
   "compute_schema_version": "1.9.0",
   "confidence": {
     "ramp": "low"
@@ -80,8 +80,8 @@
       "label": "Capital required",
       "sub": "incl. reserve",
       "value": {
-        "display": "$305,789",
-        "raw": 305788.94675409835
+        "display": "$296,241",
+        "raw": 296240.79029859486
       }
     },
     {
@@ -89,8 +89,8 @@
       "label": "Break-even month",
       "sub": "operating net",
       "value": {
-        "display": "Month 9",
-        "raw": 9
+        "display": "Month 12",
+        "raw": 12
       }
     },
     {
@@ -142,25 +142,25 @@
   ],
   "metrics": {
     "breakeven": {
-      "display": "Month 9",
-      "raw": 9
+      "display": "Month 12",
+      "raw": 12
     },
     "capital": {
-      "display": "$305,789",
-      "raw": 305788.94675409835
+      "display": "$296,241",
+      "raw": 296240.79029859486
     },
     "cashGap": {
-      "display": "($280,789)",
-      "raw": -280788.94675409835
+      "display": "($271,241)",
+      "raw": -271240.79029859486
     },
-    "reasonBreakeven": "Base case reaches break-even at Month 9, but the downside scenario (rent +25% / donations -25%) never does \u2014 the plan is not robust to a tougher market.",
+    "reasonBreakeven": "Base case reaches break-even at Month 12, but the downside scenario (rent +25% / donations -25%) never does \u2014 the plan is not robust to a tougher market.",
     "reasonCapital": "Worst-case cumulative cash trough (already includes one-time startup) plus reserve.",
     "reasonGap": "Most-negative cumulative cash across the first year."
   },
   "milestones": {
     "breakEven": {
-      "display": "Month 9",
-      "raw": 9
+      "display": "Month 12",
+      "raw": 12
     },
     "grandOpening": {
       "display": "Month 1",
@@ -172,25 +172,25 @@
       "reason": "N/A \u2014 startup costs are not recovered within the projection horizon"
     }
   },
-  "model_version": "3.0.0",
+  "model_version": "3.1.0",
   "monthly": [
     {
       "cumulativeCash": {
-        "display": "($243,185)",
-        "raw": -243184.71191100703
+        "display": "($238,033)",
+        "raw": -238033.23294613583
       },
       "expenses": {
-        "display": "$22,636",
-        "raw": 22635.751911007024
+        "display": "$22,333",
+        "raw": 22332.75294613583
       },
       "month": 1,
       "net": {
-        "display": "($243,185)",
-        "raw": -243184.71191100703
+        "display": "($238,033)",
+        "raw": -238033.23294613583
       },
       "revenue": {
-        "display": "$8,951",
-        "raw": 8951.04
+        "display": "$13,800",
+        "raw": 13799.52
       },
       "scheduledCosts": {
         "display": "$229,500",
@@ -199,21 +199,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($254,631)",
-        "raw": -254631.4342997658
+        "display": "($245,447)",
+        "raw": -245447.47113114755
       },
       "expenses": {
-        "display": "$22,636",
-        "raw": 22635.52238875878
+        "display": "$22,333",
+        "raw": 22332.63818501171
       },
       "month": 2,
       "net": {
-        "display": "($11,447)",
-        "raw": -11446.722388758782
+        "display": "($7,414)",
+        "raw": -7414.23818501171
       },
       "revenue": {
-        "display": "$11,189",
-        "raw": 11188.8
+        "display": "$14,918",
+        "raw": 14918.4
       },
       "scheduledCosts": {
         "display": "$0",
@@ -222,21 +222,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($263,477)",
-        "raw": -263477.16716627637
+        "display": "($251,561)",
+        "raw": -251561.21455503514
       },
       "expenses": {
-        "display": "$22,272",
-        "raw": 22272.29286651054
+        "display": "$22,151",
+        "raw": 22151.02342388759
       },
       "month": 3,
       "net": {
-        "display": "($8,846)",
-        "raw": -8845.732866510538
+        "display": "($6,114)",
+        "raw": -6113.743423887588
       },
       "revenue": {
-        "display": "$13,427",
-        "raw": 13426.56
+        "display": "$16,037",
+        "raw": 16037.28
       },
       "scheduledCosts": {
         "display": "$0",
@@ -245,21 +245,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($270,841)",
-        "raw": -270840.90527166275
+        "display": "($256,934)",
+        "raw": -256933.96059836066
       },
       "expenses": {
-        "display": "$21,909",
-        "raw": 21909.178105386418
+        "display": "$21,969",
+        "raw": 21969.466043325527
       },
       "month": 4,
       "net": {
-        "display": "($7,364)",
-        "raw": -7363.7381053864165
+        "display": "($5,373)",
+        "raw": -5372.746043325527
       },
       "revenue": {
-        "display": "$14,545",
-        "raw": 14545.44
+        "display": "$16,597",
+        "raw": 16596.72
       },
       "scheduledCosts": {
         "display": "$0",
@@ -268,21 +268,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($275,967)",
-        "raw": -275966.6538548009
+        "display": "($261,188)",
+        "raw": -261187.71188056207
       },
       "expenses": {
-        "display": "$21,909",
-        "raw": 21908.94858313817
+        "display": "$21,969",
+        "raw": 21969.351282201405
       },
       "month": 5,
       "net": {
-        "display": "($5,126)",
-        "raw": -5125.748583138174
+        "display": "($4,254)",
+        "raw": -4253.751282201405
       },
       "revenue": {
-        "display": "$16,783",
-        "raw": 16783.2
+        "display": "$17,716",
+        "raw": 17715.6
       },
       "scheduledCosts": {
         "display": "$0",
@@ -291,21 +291,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($278,612)",
-        "raw": -278612.41291569086
+        "display": "($264,201)",
+        "raw": -264201.4684016394
       },
       "expenses": {
-        "display": "$21,667",
-        "raw": 21666.71906088993
+        "display": "$21,848",
+        "raw": 21848.236521077284
       },
       "month": 6,
       "net": {
-        "display": "($2,646)",
-        "raw": -2645.75906088993
+        "display": "($3,014)",
+        "raw": -3013.756521077283
       },
       "revenue": {
-        "display": "$19,021",
-        "raw": 19020.96
+        "display": "$18,834",
+        "raw": 18834.48
       },
       "scheduledCosts": {
         "display": "$0",
@@ -314,21 +314,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($280,260)",
-        "raw": -280260.1772154567
+        "display": "($266,716)",
+        "raw": -266716.22754215455
       },
       "expenses": {
-        "display": "$21,788",
-        "raw": 21787.604299765808
+        "display": "$21,909",
+        "raw": 21908.67914051522
       },
       "month": 7,
       "net": {
-        "display": "($1,648)",
-        "raw": -1647.764299765808
+        "display": "($2,515)",
+        "raw": -2514.7591405152225
       },
       "revenue": {
-        "display": "$20,140",
-        "raw": 20139.84
+        "display": "$19,394",
+        "raw": 19393.92
       },
       "scheduledCosts": {
         "display": "$0",
@@ -337,21 +337,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($280,789)",
-        "raw": -280788.94675409835
+        "display": "($268,671)",
+        "raw": -268671.4893021077
       },
       "expenses": {
-        "display": "$21,787",
-        "raw": 21787.489538641687
+        "display": "$21,909",
+        "raw": 21908.621759953163
       },
       "month": 8,
       "net": {
-        "display": "($529)",
-        "raw": -528.7695386416862
+        "display": "($1,955)",
+        "raw": -1955.2617599531616
       },
       "revenue": {
-        "display": "$21,259",
-        "raw": 21258.72
+        "display": "$19,953",
+        "raw": 19953.36
       },
       "scheduledCosts": {
         "display": "$0",
@@ -360,21 +360,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($280,078)",
-        "raw": -280077.72153161594
+        "display": "($270,007)",
+        "raw": -270006.7536814988
       },
       "expenses": {
-        "display": "$21,666",
-        "raw": 21666.374777517565
+        "display": "$21,848",
+        "raw": 21848.0643793911
       },
       "month": 9,
       "net": {
-        "display": "$711",
-        "raw": 711.2252224824356
+        "display": "($1,335)",
+        "raw": -1335.2643793911006
       },
       "revenue": {
-        "display": "$22,378",
-        "raw": 22377.6
+        "display": "$20,513",
+        "raw": 20512.8
       },
       "scheduledCosts": {
         "display": "$0",
@@ -383,21 +383,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($278,369)",
-        "raw": -278368.50154800934
+        "display": "($270,843)",
+        "raw": -270843.02068032784
       },
       "expenses": {
-        "display": "$21,787",
-        "raw": 21787.260016393444
+        "display": "$21,909",
+        "raw": 21908.50699882904
       },
       "month": 10,
       "net": {
-        "display": "$1,709",
-        "raw": 1709.2199836065574
+        "display": "($836)",
+        "raw": -836.2669988290398
       },
       "revenue": {
-        "display": "$23,496",
-        "raw": 23496.48
+        "display": "$21,072",
+        "raw": 21072.24
       },
       "scheduledCosts": {
         "display": "$0",
@@ -406,21 +406,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($275,782)",
-        "raw": -275782.28680327866
+        "display": "($271,241)",
+        "raw": -271240.79029859486
       },
       "expenses": {
         "display": "$22,029",
-        "raw": 22029.145255269323
+        "raw": 22029.44961826698
       },
       "month": 11,
       "net": {
-        "display": "$2,586",
-        "raw": 2586.2147447306793
+        "display": "($398)",
+        "raw": -397.7696182669789
       },
       "revenue": {
-        "display": "$24,615",
-        "raw": 24615.36
+        "display": "$21,632",
+        "raw": 21631.68
       },
       "scheduledCosts": {
         "display": "$0",
@@ -433,17 +433,17 @@
         "raw": -270081.04777517566
       },
       "expenses": {
-        "display": "$22,271",
-        "raw": 22270.760971896954
+        "display": "$22,150",
+        "raw": 22150.257476580795
       },
       "month": 12,
       "net": {
-        "display": "$5,701",
-        "raw": 5701.239028103045
+        "display": "$1,160",
+        "raw": 1159.7425234192037
       },
       "revenue": {
-        "display": "$27,972",
-        "raw": 27972.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -452,21 +452,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($267,362)",
-        "raw": -267361.50822460133
+        "display": "($270,605)",
+        "raw": -270605.4342993755
       },
       "expenses": {
-        "display": "$23,920",
-        "raw": 23920.46044942567
+        "display": "$23,834",
+        "raw": 23834.386524199843
       },
       "month": 13,
       "net": {
-        "display": "$2,720",
-        "raw": 2719.539550574328
+        "display": "($524)",
+        "raw": -524.3865241998438
       },
       "revenue": {
-        "display": "$26,640",
-        "raw": 26640.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -475,21 +475,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($267,624)",
-        "raw": -267623.6681515557
+        "display": "($272,814)",
+        "raw": -272813.9498711944
       },
       "expenses": {
-        "display": "$25,570",
-        "raw": 25570.159926954388
+        "display": "$25,519",
+        "raw": 25518.51557181889
       },
       "month": 14,
       "net": {
-        "display": "($262)",
-        "raw": -262.1599269543883
+        "display": "($2,209)",
+        "raw": -2208.5155718188917
       },
       "revenue": {
-        "display": "$25,308",
-        "raw": 25308.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -498,21 +498,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($270,868)",
-        "raw": -270867.5275560388
+        "display": "($276,707)",
+        "raw": -276706.5944906323
       },
       "expenses": {
-        "display": "$27,220",
-        "raw": 27219.859404483104
+        "display": "$27,203",
+        "raw": 27202.64461943794
       },
       "month": 15,
       "net": {
-        "display": "($3,244)",
-        "raw": -3243.8594044831048
+        "display": "($3,893)",
+        "raw": -3892.644619437939
       },
       "revenue": {
-        "display": "$23,976",
-        "raw": 23976.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -521,21 +521,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($277,093)",
-        "raw": -277093.0864380506
+        "display": "($282,283)",
+        "raw": -282283.3681576893
       },
       "expenses": {
-        "display": "$28,870",
-        "raw": 28869.55888201182
+        "display": "$28,887",
+        "raw": 28886.773667056987
       },
       "month": 16,
       "net": {
-        "display": "($6,226)",
-        "raw": -6225.558882011821
+        "display": "($5,577)",
+        "raw": -5576.773667056987
       },
       "revenue": {
-        "display": "$22,644",
-        "raw": 22644.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -544,21 +544,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($283,319)",
-        "raw": -283318.64532006247
+        "display": "($287,860)",
+        "raw": -287860.1418247463
       },
       "expenses": {
-        "display": "$28,870",
-        "raw": 28869.55888201182
+        "display": "$28,887",
+        "raw": 28886.773667056987
       },
       "month": 17,
       "net": {
-        "display": "($6,226)",
-        "raw": -6225.558882011821
+        "display": "($5,577)",
+        "raw": -5576.773667056987
       },
       "revenue": {
-        "display": "$22,644",
-        "raw": 22644.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -567,21 +567,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($289,544)",
-        "raw": -289544.20420207427
+        "display": "($293,437)",
+        "raw": -293436.91549180326
       },
       "expenses": {
-        "display": "$28,870",
-        "raw": 28869.55888201182
+        "display": "$28,887",
+        "raw": 28886.773667056987
       },
       "month": 18,
       "net": {
-        "display": "($6,226)",
-        "raw": -6225.558882011821
+        "display": "($5,577)",
+        "raw": -5576.773667056987
       },
       "revenue": {
-        "display": "$22,644",
-        "raw": 22644.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -590,21 +590,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($295,770)",
-        "raw": -295769.76308408607
+        "display": "($299,014)",
+        "raw": -299013.68915886024
       },
       "expenses": {
-        "display": "$28,870",
-        "raw": 28869.55888201182
+        "display": "$28,887",
+        "raw": 28886.773667056987
       },
       "month": 19,
       "net": {
-        "display": "($6,226)",
-        "raw": -6225.558882011821
+        "display": "($5,577)",
+        "raw": -5576.773667056987
       },
       "revenue": {
-        "display": "$22,644",
-        "raw": 22644.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -613,21 +613,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($301,995)",
-        "raw": -301995.3219660979
+        "display": "($304,590)",
+        "raw": -304590.46282591723
       },
       "expenses": {
-        "display": "$28,870",
-        "raw": 28869.55888201182
+        "display": "$28,887",
+        "raw": 28886.773667056987
       },
       "month": 20,
       "net": {
-        "display": "($6,226)",
-        "raw": -6225.558882011821
+        "display": "($5,577)",
+        "raw": -5576.773667056987
       },
       "revenue": {
-        "display": "$22,644",
-        "raw": 22644.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -636,21 +636,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($308,221)",
-        "raw": -308220.8808481097
+        "display": "($310,167)",
+        "raw": -310167.2364929742
       },
       "expenses": {
-        "display": "$28,870",
-        "raw": 28869.55888201182
+        "display": "$28,887",
+        "raw": 28886.773667056987
       },
       "month": 21,
       "net": {
-        "display": "($6,226)",
-        "raw": -6225.558882011821
+        "display": "($5,577)",
+        "raw": -5576.773667056987
       },
       "revenue": {
-        "display": "$22,644",
-        "raw": 22644.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -659,21 +659,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($314,446)",
-        "raw": -314446.4397301216
+        "display": "($315,744)",
+        "raw": -315744.0101600312
       },
       "expenses": {
-        "display": "$28,870",
-        "raw": 28869.55888201182
+        "display": "$28,887",
+        "raw": 28886.773667056987
       },
       "month": 22,
       "net": {
-        "display": "($6,226)",
-        "raw": -6225.558882011821
+        "display": "($5,577)",
+        "raw": -5576.773667056987
       },
       "revenue": {
-        "display": "$22,644",
-        "raw": 22644.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -682,21 +682,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($320,672)",
-        "raw": -320671.9986121334
+        "display": "($321,321)",
+        "raw": -321320.7838270882
       },
       "expenses": {
-        "display": "$28,870",
-        "raw": 28869.55888201182
+        "display": "$28,887",
+        "raw": 28886.773667056987
       },
       "month": 23,
       "net": {
-        "display": "($6,226)",
-        "raw": -6225.558882011821
+        "display": "($5,577)",
+        "raw": -5576.773667056987
       },
       "revenue": {
-        "display": "$22,644",
-        "raw": 22644.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -709,17 +709,17 @@
         "raw": -326897.5574941452
       },
       "expenses": {
-        "display": "$28,870",
-        "raw": 28869.55888201182
+        "display": "$28,887",
+        "raw": 28886.773667056987
       },
       "month": 24,
       "net": {
-        "display": "($6,226)",
-        "raw": -6225.558882011821
+        "display": "($5,577)",
+        "raw": -5576.773667056987
       },
       "revenue": {
-        "display": "$22,644",
-        "raw": 22644.0
+        "display": "$23,310",
+        "raw": 23310.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -728,21 +728,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($332,450)",
-        "raw": -332449.9903066004
+        "display": "($331,987)",
+        "raw": -331986.57229591836
       },
       "expenses": {
-        "display": "$29,719",
-        "raw": 29718.718526740908
+        "display": "$29,731",
+        "raw": 29731.01480177317
       },
       "month": 25,
       "net": {
-        "display": "($5,552)",
-        "raw": -5552.432812455193
+        "display": "($5,089)",
+        "raw": -5089.014801773168
       },
       "revenue": {
-        "display": "$24,166",
-        "raw": 24166.285714285714
+        "display": "$24,642",
+        "raw": 24642.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -751,21 +751,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($337,329)",
-        "raw": -337329.29704949894
+        "display": "($336,588)",
+        "raw": -336587.82823240774
       },
       "expenses": {
-        "display": "$30,568",
-        "raw": 30567.878171469994
+        "display": "$30,575",
+        "raw": 30575.25593648935
       },
       "month": 26,
       "net": {
-        "display": "($4,879)",
-        "raw": -4879.306742898564
+        "display": "($4,601)",
+        "raw": -4601.25593648935
       },
       "revenue": {
-        "display": "$25,689",
-        "raw": 25688.571428571428
+        "display": "$25,974",
+        "raw": 25974.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -774,21 +774,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($341,535)",
-        "raw": -341535.4777228409
+        "display": "($340,701)",
+        "raw": -340701.32530361327
       },
       "expenses": {
-        "display": "$31,417",
-        "raw": 31417.037816199077
+        "display": "$31,419",
+        "raw": 31419.497071205533
       },
       "month": 27,
       "net": {
-        "display": "($4,206)",
-        "raw": -4206.180673341936
+        "display": "($4,113)",
+        "raw": -4113.497071205531
       },
       "revenue": {
-        "display": "$27,211",
-        "raw": 27210.85714285714
+        "display": "$27,306",
+        "raw": 27306.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -797,21 +797,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($345,069)",
-        "raw": -345068.5323266262
+        "display": "($344,327)",
+        "raw": -344327.063509535
       },
       "expenses": {
-        "display": "$32,266",
-        "raw": 32266.197460928164
+        "display": "$32,264",
+        "raw": 32263.738205921713
       },
       "month": 28,
       "net": {
-        "display": "($3,533)",
-        "raw": -3533.0546037853082
+        "display": "($3,626)",
+        "raw": -3625.738205921713
       },
       "revenue": {
-        "display": "$28,733",
-        "raw": 28733.14285714286
+        "display": "$28,638",
+        "raw": 28638.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -820,21 +820,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($348,602)",
-        "raw": -348601.5869304115
+        "display": "($347,953)",
+        "raw": -347952.80171545665
       },
       "expenses": {
-        "display": "$32,266",
-        "raw": 32266.197460928164
+        "display": "$32,264",
+        "raw": 32263.738205921713
       },
       "month": 29,
       "net": {
-        "display": "($3,533)",
-        "raw": -3533.0546037853082
+        "display": "($3,626)",
+        "raw": -3625.738205921713
       },
       "revenue": {
-        "display": "$28,733",
-        "raw": 28733.14285714286
+        "display": "$28,638",
+        "raw": 28638.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -843,21 +843,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($352,135)",
-        "raw": -352134.6415341968
+        "display": "($351,579)",
+        "raw": -351578.53992137837
       },
       "expenses": {
-        "display": "$32,266",
-        "raw": 32266.197460928164
+        "display": "$32,264",
+        "raw": 32263.738205921713
       },
       "month": 30,
       "net": {
-        "display": "($3,533)",
-        "raw": -3533.0546037853082
+        "display": "($3,626)",
+        "raw": -3625.738205921713
       },
       "revenue": {
-        "display": "$28,733",
-        "raw": 28733.14285714286
+        "display": "$28,638",
+        "raw": 28638.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -866,21 +866,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($355,668)",
-        "raw": -355667.69613798213
+        "display": "($355,204)",
+        "raw": -355204.2781273001
       },
       "expenses": {
-        "display": "$32,266",
-        "raw": 32266.197460928164
+        "display": "$32,264",
+        "raw": 32263.738205921713
       },
       "month": 31,
       "net": {
-        "display": "($3,533)",
-        "raw": -3533.0546037853082
+        "display": "($3,626)",
+        "raw": -3625.738205921713
       },
       "revenue": {
-        "display": "$28,733",
-        "raw": 28733.14285714286
+        "display": "$28,638",
+        "raw": 28638.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -889,21 +889,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($359,201)",
-        "raw": -359200.7507417674
+        "display": "($358,830)",
+        "raw": -358830.0163332218
       },
       "expenses": {
-        "display": "$32,266",
-        "raw": 32266.197460928164
+        "display": "$32,264",
+        "raw": 32263.738205921713
       },
       "month": 32,
       "net": {
-        "display": "($3,533)",
-        "raw": -3533.0546037853082
+        "display": "($3,626)",
+        "raw": -3625.738205921713
       },
       "revenue": {
-        "display": "$28,733",
-        "raw": 28733.14285714286
+        "display": "$28,638",
+        "raw": 28638.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -912,21 +912,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($362,734)",
-        "raw": -362733.80534555274
+        "display": "($362,456)",
+        "raw": -362455.7545391435
       },
       "expenses": {
-        "display": "$32,266",
-        "raw": 32266.197460928164
+        "display": "$32,264",
+        "raw": 32263.738205921713
       },
       "month": 33,
       "net": {
-        "display": "($3,533)",
-        "raw": -3533.0546037853082
+        "display": "($3,626)",
+        "raw": -3625.738205921713
       },
       "revenue": {
-        "display": "$28,733",
-        "raw": 28733.14285714286
+        "display": "$28,638",
+        "raw": 28638.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -935,21 +935,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($366,267)",
-        "raw": -366266.8599493381
+        "display": "($366,081)",
+        "raw": -366081.49274506525
       },
       "expenses": {
-        "display": "$32,266",
-        "raw": 32266.197460928164
+        "display": "$32,264",
+        "raw": 32263.738205921713
       },
       "month": 34,
       "net": {
-        "display": "($3,533)",
-        "raw": -3533.0546037853082
+        "display": "($3,626)",
+        "raw": -3625.738205921713
       },
       "revenue": {
-        "display": "$28,733",
-        "raw": 28733.14285714286
+        "display": "$28,638",
+        "raw": 28638.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -958,21 +958,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($369,800)",
-        "raw": -369799.91455312335
+        "display": "($369,707)",
+        "raw": -369707.23095098697
       },
       "expenses": {
-        "display": "$32,266",
-        "raw": 32266.197460928164
+        "display": "$32,264",
+        "raw": 32263.738205921713
       },
       "month": 35,
       "net": {
-        "display": "($3,533)",
-        "raw": -3533.0546037853082
+        "display": "($3,626)",
+        "raw": -3625.738205921713
       },
       "revenue": {
-        "display": "$28,733",
-        "raw": 28733.14285714286
+        "display": "$28,638",
+        "raw": 28638.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -985,17 +985,17 @@
         "raw": -373332.9691569087
       },
       "expenses": {
-        "display": "$32,266",
-        "raw": 32266.197460928164
+        "display": "$32,264",
+        "raw": 32263.738205921713
       },
       "month": 36,
       "net": {
-        "display": "($3,533)",
-        "raw": -3533.0546037853082
+        "display": "($3,626)",
+        "raw": -3625.738205921713
       },
       "revenue": {
-        "display": "$28,733",
-        "raw": 28733.14285714286
+        "display": "$28,638",
+        "raw": 28638.0
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1004,21 +1004,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($376,717)",
-        "raw": -376716.8696264353
+        "display": "($376,783)",
+        "raw": -376783.0721993898
       },
       "expenses": {
-        "display": "$33,232",
-        "raw": 33231.57393891434
+        "display": "$33,230",
+        "raw": 33229.817328195444
       },
       "month": 37,
       "net": {
-        "display": "($3,384)",
-        "raw": -3383.900469526586
+        "display": "($3,450)",
+        "raw": -3450.103042481161
       },
       "revenue": {
-        "display": "$29,848",
-        "raw": 29847.673469387755
+        "display": "$29,780",
+        "raw": 29779.714285714286
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1027,21 +1027,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($379,952)",
-        "raw": -379951.6159617031
+        "display": "($380,058)",
+        "raw": -380057.54007843044
       },
       "expenses": {
-        "display": "$34,197",
-        "raw": 34196.950416900516
+        "display": "$34,196",
+        "raw": 34195.89645046918
       },
       "month": 38,
       "net": {
-        "display": "($3,235)",
-        "raw": -3234.746335267864
+        "display": "($3,274)",
+        "raw": -3274.467879040609
       },
       "revenue": {
-        "display": "$30,962",
-        "raw": 30962.20408163265
+        "display": "$30,921",
+        "raw": 30921.428571428572
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1050,21 +1050,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($383,037)",
-        "raw": -383037.2081627123
+        "display": "($383,156)",
+        "raw": -383156.37279403047
       },
       "expenses": {
         "display": "$35,162",
-        "raw": 35162.32689488669
+        "raw": 35161.975572742915
       },
       "month": 39,
       "net": {
-        "display": "($3,086)",
-        "raw": -3085.592201009142
+        "display": "($3,099)",
+        "raw": -3098.8327156000573
       },
       "revenue": {
-        "display": "$32,077",
-        "raw": 32076.73469387755
+        "display": "$32,063",
+        "raw": 32063.14285714286
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1073,21 +1073,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($385,974)",
-        "raw": -385973.6462294627
+        "display": "($386,080)",
+        "raw": -386079.57034619
       },
       "expenses": {
         "display": "$36,128",
-        "raw": 36127.70337287287
+        "raw": 36128.054695016646
       },
       "month": 40,
       "net": {
-        "display": "($2,936)",
-        "raw": -2936.4380667504206
+        "display": "($2,923)",
+        "raw": -2923.1975521595054
       },
       "revenue": {
-        "display": "$33,191",
-        "raw": 33191.26530612245
+        "display": "$33,205",
+        "raw": 33204.857142857145
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1096,21 +1096,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($388,910)",
-        "raw": -388910.0842962131
+        "display": "($389,003)",
+        "raw": -389002.7678983495
       },
       "expenses": {
         "display": "$36,128",
-        "raw": 36127.70337287287
+        "raw": 36128.054695016646
       },
       "month": 41,
       "net": {
-        "display": "($2,936)",
-        "raw": -2936.4380667504206
+        "display": "($2,923)",
+        "raw": -2923.1975521595054
       },
       "revenue": {
-        "display": "$33,191",
-        "raw": 33191.26530612245
+        "display": "$33,205",
+        "raw": 33204.857142857145
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1119,21 +1119,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($391,847)",
-        "raw": -391846.52236296353
+        "display": "($391,926)",
+        "raw": -391925.965450509
       },
       "expenses": {
         "display": "$36,128",
-        "raw": 36127.70337287287
+        "raw": 36128.054695016646
       },
       "month": 42,
       "net": {
-        "display": "($2,936)",
-        "raw": -2936.4380667504206
+        "display": "($2,923)",
+        "raw": -2923.1975521595054
       },
       "revenue": {
-        "display": "$33,191",
-        "raw": 33191.26530612245
+        "display": "$33,205",
+        "raw": 33204.857142857145
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1142,21 +1142,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($394,783)",
-        "raw": -394782.96042971394
+        "display": "($394,849)",
+        "raw": -394849.16300266853
       },
       "expenses": {
         "display": "$36,128",
-        "raw": 36127.70337287287
+        "raw": 36128.054695016646
       },
       "month": 43,
       "net": {
-        "display": "($2,936)",
-        "raw": -2936.4380667504206
+        "display": "($2,923)",
+        "raw": -2923.1975521595054
       },
       "revenue": {
-        "display": "$33,191",
-        "raw": 33191.26530612245
+        "display": "$33,205",
+        "raw": 33204.857142857145
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1165,21 +1165,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($397,719)",
-        "raw": -397719.39849646436
+        "display": "($397,772)",
+        "raw": -397772.360554828
       },
       "expenses": {
         "display": "$36,128",
-        "raw": 36127.70337287287
+        "raw": 36128.054695016646
       },
       "month": 44,
       "net": {
-        "display": "($2,936)",
-        "raw": -2936.4380667504206
+        "display": "($2,923)",
+        "raw": -2923.1975521595054
       },
       "revenue": {
-        "display": "$33,191",
-        "raw": 33191.26530612245
+        "display": "$33,205",
+        "raw": 33204.857142857145
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1188,21 +1188,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($400,656)",
-        "raw": -400655.8365632148
+        "display": "($400,696)",
+        "raw": -400695.5581069875
       },
       "expenses": {
         "display": "$36,128",
-        "raw": 36127.70337287287
+        "raw": 36128.054695016646
       },
       "month": 45,
       "net": {
-        "display": "($2,936)",
-        "raw": -2936.4380667504206
+        "display": "($2,923)",
+        "raw": -2923.1975521595054
       },
       "revenue": {
-        "display": "$33,191",
-        "raw": 33191.26530612245
+        "display": "$33,205",
+        "raw": 33204.857142857145
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1211,21 +1211,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($403,592)",
-        "raw": -403592.2746299652
+        "display": "($403,619)",
+        "raw": -403618.75565914705
       },
       "expenses": {
         "display": "$36,128",
-        "raw": 36127.70337287287
+        "raw": 36128.054695016646
       },
       "month": 46,
       "net": {
-        "display": "($2,936)",
-        "raw": -2936.4380667504206
+        "display": "($2,923)",
+        "raw": -2923.1975521595054
       },
       "revenue": {
-        "display": "$33,191",
-        "raw": 33191.26530612245
+        "display": "$33,205",
+        "raw": 33204.857142857145
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1234,21 +1234,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($406,529)",
-        "raw": -406528.7126967156
+        "display": "($406,542)",
+        "raw": -406541.95321130654
       },
       "expenses": {
         "display": "$36,128",
-        "raw": 36127.70337287287
+        "raw": 36128.054695016646
       },
       "month": 47,
       "net": {
-        "display": "($2,936)",
-        "raw": -2936.4380667504206
+        "display": "($2,923)",
+        "raw": -2923.1975521595054
       },
       "revenue": {
-        "display": "$33,191",
-        "raw": 33191.26530612245
+        "display": "$33,205",
+        "raw": 33204.857142857145
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1262,16 +1262,16 @@
       },
       "expenses": {
         "display": "$36,128",
-        "raw": 36127.70337287287
+        "raw": 36128.054695016646
       },
       "month": 48,
       "net": {
-        "display": "($2,936)",
-        "raw": -2936.4380667504206
+        "display": "($2,923)",
+        "raw": -2923.1975521595054
       },
       "revenue": {
-        "display": "$33,191",
-        "raw": 33191.26530612245
+        "display": "$33,205",
+        "raw": 33204.857142857145
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1280,21 +1280,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($412,179)",
-        "raw": -412179.49118234374
+        "display": "($412,170)",
+        "raw": -412170.03367192164
       },
       "expenses": {
-        "display": "$37,078",
-        "raw": 37078.38706610803
+        "display": "$37,079",
+        "raw": 37078.63801049645
       },
       "month": 49,
       "net": {
-        "display": "($2,714)",
-        "raw": -2714.340418877712
+        "display": "($2,705)",
+        "raw": -2704.8829084556296
       },
       "revenue": {
-        "display": "$34,364",
-        "raw": 34364.04664723032
+        "display": "$34,374",
+        "raw": 34373.755102040814
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1303,21 +1303,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($414,672)",
-        "raw": -414671.73395334877
+        "display": "($414,657)",
+        "raw": -414656.60193667345
       },
       "expenses": {
         "display": "$38,029",
-        "raw": 38029.070759343194
+        "raw": 38029.22132597624
       },
       "month": 50,
       "net": {
-        "display": "($2,492)",
-        "raw": -2492.2427710050033
+        "display": "($2,487)",
+        "raw": -2486.568264751754
       },
       "revenue": {
-        "display": "$35,537",
-        "raw": 35536.82798833819
+        "display": "$35,543",
+        "raw": 35542.65306122449
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1326,21 +1326,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($416,942)",
-        "raw": -416941.87907648104
+        "display": "($416,925)",
+        "raw": -416924.8555577213
       },
       "expenses": {
         "display": "$38,980",
-        "raw": 38979.75445257836
+        "raw": 38979.804641456045
       },
       "month": 51,
       "net": {
-        "display": "($2,270)",
-        "raw": -2270.145123132295
+        "display": "($2,268)",
+        "raw": -2268.2536210478784
       },
       "revenue": {
-        "display": "$36,710",
-        "raw": 36709.609329446066
+        "display": "$36,712",
+        "raw": 36711.551020408166
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1349,21 +1349,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($418,990)",
-        "raw": -418989.9265517406
+        "display": "($418,975)",
+        "raw": -418974.7945350653
       },
       "expenses": {
         "display": "$39,930",
-        "raw": 39930.438145813525
+        "raw": 39930.38795693584
       },
       "month": 52,
       "net": {
-        "display": "($2,048)",
-        "raw": -2048.0474752595865
+        "display": "($2,050)",
+        "raw": -2049.938977344003
       },
       "revenue": {
-        "display": "$37,882",
-        "raw": 37882.390670553934
+        "display": "$37,880",
+        "raw": 37880.448979591834
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1372,21 +1372,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($421,038)",
-        "raw": -421037.97402700025
+        "display": "($421,025)",
+        "raw": -421024.7335124093
       },
       "expenses": {
         "display": "$39,930",
-        "raw": 39930.438145813525
+        "raw": 39930.38795693584
       },
       "month": 53,
       "net": {
-        "display": "($2,048)",
-        "raw": -2048.0474752595865
+        "display": "($2,050)",
+        "raw": -2049.938977344003
       },
       "revenue": {
-        "display": "$37,882",
-        "raw": 37882.390670553934
+        "display": "$37,880",
+        "raw": 37880.448979591834
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1395,21 +1395,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($423,086)",
-        "raw": -423086.0215022598
+        "display": "($423,075)",
+        "raw": -423074.67248975334
       },
       "expenses": {
         "display": "$39,930",
-        "raw": 39930.438145813525
+        "raw": 39930.38795693584
       },
       "month": 54,
       "net": {
-        "display": "($2,048)",
-        "raw": -2048.0474752595865
+        "display": "($2,050)",
+        "raw": -2049.938977344003
       },
       "revenue": {
-        "display": "$37,882",
-        "raw": 37882.390670553934
+        "display": "$37,880",
+        "raw": 37880.448979591834
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1418,21 +1418,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($425,134)",
-        "raw": -425134.0689775194
+        "display": "($425,125)",
+        "raw": -425124.6114670973
       },
       "expenses": {
         "display": "$39,930",
-        "raw": 39930.438145813525
+        "raw": 39930.38795693584
       },
       "month": 55,
       "net": {
-        "display": "($2,048)",
-        "raw": -2048.0474752595865
+        "display": "($2,050)",
+        "raw": -2049.938977344003
       },
       "revenue": {
-        "display": "$37,882",
-        "raw": 37882.390670553934
+        "display": "$37,880",
+        "raw": 37880.448979591834
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1441,21 +1441,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($427,182)",
-        "raw": -427182.116452779
+        "display": "($427,175)",
+        "raw": -427174.5504444413
       },
       "expenses": {
         "display": "$39,930",
-        "raw": 39930.438145813525
+        "raw": 39930.38795693584
       },
       "month": 56,
       "net": {
-        "display": "($2,048)",
-        "raw": -2048.0474752595865
+        "display": "($2,050)",
+        "raw": -2049.938977344003
       },
       "revenue": {
-        "display": "$37,882",
-        "raw": 37882.390670553934
+        "display": "$37,880",
+        "raw": 37880.448979591834
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1464,21 +1464,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($429,230)",
-        "raw": -429230.16392803856
+        "display": "($429,224)",
+        "raw": -429224.48942178534
       },
       "expenses": {
         "display": "$39,930",
-        "raw": 39930.438145813525
+        "raw": 39930.38795693584
       },
       "month": 57,
       "net": {
-        "display": "($2,048)",
-        "raw": -2048.0474752595865
+        "display": "($2,050)",
+        "raw": -2049.938977344003
       },
       "revenue": {
-        "display": "$37,882",
-        "raw": 37882.390670553934
+        "display": "$37,880",
+        "raw": 37880.448979591834
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1487,21 +1487,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($431,278)",
-        "raw": -431278.21140329813
+        "display": "($431,274)",
+        "raw": -431274.4283991293
       },
       "expenses": {
         "display": "$39,930",
-        "raw": 39930.438145813525
+        "raw": 39930.38795693584
       },
       "month": 58,
       "net": {
-        "display": "($2,048)",
-        "raw": -2048.0474752595865
+        "display": "($2,050)",
+        "raw": -2049.938977344003
       },
       "revenue": {
-        "display": "$37,882",
-        "raw": 37882.390670553934
+        "display": "$37,880",
+        "raw": 37880.448979591834
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1510,21 +1510,21 @@
     },
     {
       "cumulativeCash": {
-        "display": "($433,326)",
-        "raw": -433326.25887855777
+        "display": "($433,324)",
+        "raw": -433324.3673764733
       },
       "expenses": {
         "display": "$39,930",
-        "raw": 39930.438145813525
+        "raw": 39930.38795693584
       },
       "month": 59,
       "net": {
-        "display": "($2,048)",
-        "raw": -2048.0474752595865
+        "display": "($2,050)",
+        "raw": -2049.938977344003
       },
       "revenue": {
-        "display": "$37,882",
-        "raw": 37882.390670553934
+        "display": "$37,880",
+        "raw": 37880.448979591834
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1538,16 +1538,16 @@
       },
       "expenses": {
         "display": "$39,930",
-        "raw": 39930.438145813525
+        "raw": 39930.38795693584
       },
       "month": 60,
       "net": {
-        "display": "($2,048)",
-        "raw": -2048.0474752595865
+        "display": "($2,050)",
+        "raw": -2049.938977344003
       },
       "revenue": {
-        "display": "$37,882",
-        "raw": 37882.390670553934
+        "display": "$37,880",
+        "raw": 37880.448979591834
       },
       "scheduledCosts": {
         "display": "$0",
@@ -1579,7 +1579,7 @@
   ],
   "reco": {
     "headline": "Do not proceed.",
-    "sub": "Base case reaches break-even at Month 9, but the downside scenario (rent +25% / donations -25%) never does \u2014 the plan is not robust to a tougher market.",
+    "sub": "Base case reaches break-even at Month 12, but the downside scenario (rent +25% / donations -25%) never does \u2014 the plan is not robust to a tougher market.",
     "tag": "do_not_proceed"
   },
   "rows": [
@@ -2314,10 +2314,10 @@
   ],
   "sensitivity": {
     "base": {
-      "breakeven": 9,
+      "breakeven": 12,
       "capital": {
-        "display": "$305,789",
-        "raw": 305788.94675409835
+        "display": "$296,241",
+        "raw": 296240.79029859486
       },
       "net": {
         "display": "($40,581)",
@@ -2337,10 +2337,10 @@
       }
     },
     "upside": {
-      "breakeven": 5,
+      "breakeven": 4,
       "capital": {
-        "display": "$272,862",
-        "raw": 272862.4615895785
+        "display": "$256,081",
+        "raw": 256081.26694379392
       },
       "net": {
         "display": "$30,319",
@@ -2434,7 +2434,7 @@
     "raw": 229500.0
   },
   "stationsInstalled": 2,
-  "version": "3.0.0",
+  "version": "3.1.0",
   "year5Income": {
     "display": "($25,909)",
     "raw": -25909.15559035129
