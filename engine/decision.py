@@ -111,13 +111,10 @@ def _scenario_net(inputs, assumptions, demand, trade, overrides, rent_mult, dona
         new_inputs, assumptions, demand, trade, stressed_overrides)
     startup_by_month = startup_outflows_by_month(new_inputs, assumptions, occupancy[1])
     rows, be = build_monthly(years, assumptions, new_inputs, startup_by_month)
-    # Scope the trough to the launch window (months <= G+11) — the SAME scoping as the
-    # headline `capital` in build_decision — so the 60-month extension cannot drift a
-    # later-year operating dip into the launch-capital figure (and so base-scenario
-    # capital equals startup_capital_required to the penny).
-    g2 = int(new_inputs.opening_month_number)
-    launch = [D(str(m.cumulative_cash)) for m in rows if m.index <= g2 + 11]
-    trough = min(launch, default=Decimal("0"))
+    # The trough is the lowest cumulative cash over the WHOLE series — the SAME rule as
+    # the headline `capital` in build_decision (owner 2026-10-08, "Full 60 months"), so
+    # base-scenario capital equals startup_capital_required to the penny.
+    trough = min((D(str(m.cumulative_cash)) for m in rows), default=Decimal("0"))
     peak = abs(min(Decimal("0"), trough))
     # `peak` already embeds the timed startup outflow (monthly.py) — do NOT add
     # startup_total again (that double-count is the §6.1 capital bug).
@@ -148,15 +145,13 @@ def build_decision(result, inputs, assumptions, demand, trade, overrides, flags)
     monthly = result.monthly
     g = int(inputs.opening_month_number)
 
-    # Capital required: peak cumulative cash deficit over the LAUNCH window (months
-    # <= G+11 — pre-opening accumulation through the Year-1 operating window). The trough
-    # already embeds the timed startup outflows, so startup_total is NEVER added again
-    # (the ~$518k-vs-$277,990 §6.1 double-count bug). Scoped to the launch window so the
-    # 60-month horizon (added for payback) cannot drift a later-year operating dip into
-    # the launch-capital headline; for the canonical G=1 fixtures this is byte-identical
-    # to the prior whole-timeline min (the 12-month model was exactly this window).
-    launch_cumulative = [D(str(m.cumulative_cash)) for m in monthly if m.index <= g + 11]
-    trough = min(launch_cumulative) if launch_cumulative else Decimal("0")
+    # Capital required: the peak cumulative cash deficit over the WHOLE series (owner
+    # decision 2026-10-08, "Full 60 months"). With monthly net rising (3.1.0), cash can
+    # keep falling after Year 1 when Year 2+ still lose money; capital must cover that
+    # true low point, not just the Year-1 one. The trough already embeds the timed
+    # startup outflows, so startup_total is NEVER added again (the ~$518k-vs-$277,990
+    # §6.1 double-count bug).
+    trough = min((D(str(m.cumulative_cash)) for m in monthly), default=Decimal("0"))
     peak_shortfall = abs(min(Decimal("0"), trough))
     capital = peak_shortfall + D(assumptions.reserve_buffer)
 

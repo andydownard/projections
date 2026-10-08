@@ -6,7 +6,19 @@ the point of use; these module constants name the *default* assumption values.
 """
 from __future__ import annotations
 
-MODEL_VERSION = "3.0.0"          # math change => bump. 3.0.0 = MODEL V3 (owner
+MODEL_VERSION = "3.1.0"          # math change => bump. 3.1.0 (owner 2026-10-08): monthly
+# Net and Revenue never drop after opening while the annual totals grow. Each year's
+# monthly shape (Year 1's S-curve or linear share ramp + payroll ramp; Years 2-5's
+# glide) is eased toward its own flat average by the smallest amount that keeps its
+# LAST month at or below the NEXT year's monthly average (`engine.monthly._ease_weight`),
+# which makes a rising path possible. Annual totals are unchanged; Year 1's monthly
+# shape is flatter, so capital / break-even / first-year cash gap move. Owner decision
+# the same day ("Full 60 months"): break-even searches all 60 operating months and
+# capital covers the lowest cumulative cash of the WHOLE series. Years 2-5 now
+# shape Net directly; monthly expense = revenue - net. (Built as 2.10.0 on the 2.9.0
+# engine, rebased onto 3.0.0 before it shipped.)
+#
+# 3.0.0 = MODEL V3 (owner
 # session 2026-08-03): four Year-1-affecting cost/revenue formula replacements plus
 # three new lines, bundled under one bump. (1) Credit card fees moves from a flat
 # 2%-of-revenue line to a two-term formula: card_share x (card_rate x retail +

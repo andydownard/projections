@@ -260,16 +260,15 @@ def test_xlsx_only_year1_subtracts_startup_years_two_to_five_are_operating(
         assert f"B{su}" not in formula and f"{col}{su}" not in formula, col
 
 
-def test_capital_required_is_the_launch_trough_plus_reserve_not_the_cash_net(
+def test_capital_required_is_the_series_trough_plus_reserve_not_the_cash_net(
         canonical_result, design_parity_result):
-    # (capital unchanged) The cash-net display change does NOT touch capital required: it
-    # is still |launch-window cumulative-cash trough| + reserve buffer, reconstructed here
-    # straight from the monthly series (which is unchanged), for BOTH fixtures.
+    # The cash-net display does NOT feed capital required: it is |cumulative-cash
+    # trough| + reserve buffer, reconstructed straight from the monthly series, for BOTH
+    # fixtures. 3.1.0 (owner 2026-10-08, "Full 60 months"): the trough is over the WHOLE
+    # series, not just the Year-1 launch window.
     for res in (canonical_result, design_parity_result):
-        g = res.decision.grand_opening_month
         reserve = D(str(res.assumptions.reserve_buffer))
-        launch = [D(str(m.cumulative_cash)) for m in res.monthly if m.index <= g + 11]
-        trough = min(launch)
+        trough = min(D(str(m.cumulative_cash)) for m in res.monthly)
         peak_shortfall = abs(min(Decimal("0"), trough))
         expected_capital = peak_shortfall + reserve
         assert D(str(res.decision.startup_capital_required)) == expected_capital

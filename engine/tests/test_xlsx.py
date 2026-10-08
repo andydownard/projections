@@ -435,15 +435,13 @@ def test_operating_months_carry_revenue_and_expenses(tmp_path):
     assert operating  # there are operating months
     for month in operating:
         r = rowmap[month]
-        # Model v3 (3.0.0): the production-station/payroll-grouping math produces
-        # longer Decimal expansions, so an openpyxl-round-tripped cell value and a
-        # freshly-converted float can differ in the 11th+ decimal place (real, but
-        # far below a millionth of a cent) — exact float `==` is the wrong tool here
-        # (the golden gate itself uses a $0.50 tolerance for exactly this reason).
+        # approx, not ==: the workbook round-trips a float and the eased months carry
+        # long Decimal expansions (sub-millionth-of-a-cent differences are real but
+        # irrelevant; the golden gate itself uses a $0.50 tolerance).
         assert float(ws.cell(row=r, column=rev_col).value) == pytest.approx(
-            float(by_month[month].revenue))
+            float(by_month[month].revenue), abs=1e-6)
         assert float(ws.cell(row=r, column=exp_col).value) == pytest.approx(
-            float(by_month[month].expenses))
+            float(by_month[month].expenses), abs=1e-6)
     # at least one operating month has positive revenue (the ramp is non-trivial)
     assert any(float(by_month[m].revenue) > 0 for m in operating)
 

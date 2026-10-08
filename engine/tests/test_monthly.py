@@ -11,7 +11,7 @@ import pytest
 
 from engine.compute import Assumptions, DemandDrivers, Inputs, TradeArea, compute
 from engine.money import D
-from engine.monthly import _BLEND_MONTHS, _blend_then_flat, _year_slices
+from engine.monthly import _BLEND_MONTHS, _blend_then_flat, _ease, _ease_weight, _year_slices
 
 _PENNY = Decimal("0.01")
 
@@ -217,17 +217,17 @@ def test_startup_outflow_drives_a_negative_trough(canonical_result):
 
 
 def test_break_even_month_is_first_sustained_nonneg_net(canonical_result):
-    # Break-even is computed over the YEAR-1 operating window only (so it is byte-
-    # identical to the 12-month model and a later-year operating dip can never erase a
-    # real Year-1 break-even). Assert the invariant over the Year-1 operating months.
+    # Owner decision 2026-10-08 ("Full 60 months"): break-even is the first operating
+    # month whose net >= 0 and stays >= 0 through the end of the 60 operating months.
     be = canonical_result.monthly_breakeven
     g = canonical_result.decision.grand_opening_month
-    y1_ops = [m for m in canonical_result.monthly
-              if m.kind == "operating" and g <= m.index <= g + 11]
-    if be is not None:
-        target = next(m for m in y1_ops if m.index == be)
-        assert target.net >= 0
-        assert all(m.net >= 0 for m in y1_ops if m.index >= be)
+    ops = [m for m in canonical_result.monthly
+           if m.kind == "operating" and g <= m.index <= g + 59]
+    assert be == 37  # canonical turns profitable in Year 4
+    target = next(m for m in ops if m.index == be)
+    assert target.net >= 0
+    assert all(m.net >= 0 for m in ops if m.index >= be)
+    assert all(m.net < 0 for m in ops if m.index == be - 1)
 
 
 # ----------------------------------------------- Task 6.2: fixed/variable/payroll split
@@ -293,6 +293,18 @@ def test_expense_streams_split_fixed_payroll_and_pct_of_revenue(canonical_result
     pay_parts = _distribute(pay, _PAYROLL_WEIGHTS)
     fix_parts = _flat_monthly(fix)
     expected = [pct_parts[i] + pay_parts[i] + fix_parts[i] for i in range(12)]
+    # 3.1.0: the three-stream shape is then eased toward flat by ONE weight (the
+    # smallest ease that keeps month 12 under Year 2's monthly average), so the
+    # canonical expense months are that same blend of the three streams.
+    from engine.monthly import _REVENUE_WEIGHTS as _rw
+    rev = D(str(y1.total_rev))
+    rev_parts = _distribute(rev, _rw)
+    net_parts = [rev_parts[i] - expected[i] for i in range(12)]
+    y2 = canonical_result.annual[2]
+    w = min(_ease_weight(rev_parts, rev, D(str(y2.total_rev)) / 12),
+            _ease_weight(net_parts, D(str(y1.net)), D(str(y2.net)) / 12))
+    assert w < 1  # the canonical fixture DOES need easing (its exit beat Year 2)
+    expected = _ease(expected, D(str(y1.total_exp)), w)
     # Year-1 operating months only (fused monthly[] spans 60 months; the three-stream
     # split is a Year-1 property).
     ops = [m for m in canonical_result.monthly if m.kind == "operating"][:12]
@@ -301,92 +313,124 @@ def test_expense_streams_split_fixed_payroll_and_pct_of_revenue(canonical_result
     assert _penny(sum((D(str(m.expenses)) for m in ops), Decimal("0"))) == _penny(y1.total_exp)
 
 
-def test_canonical_trough_capital_and_breakeven_shift_with_flat_fixed_costs(canonical_result):
-    # Charging fixed costs flat (front-loaded vs the back-loaded revenue S-curve) and
-    # payroll taxes on the payroll ramp deepens the early cash trough. Re-pinned at
-    # Model v3 (3.0.0 — card fees' two-term formula + Workers' comp + POS
-    # platform/Production software deepen it further): the canonical LAUNCH-WINDOW
-    # trough (months <= g+11, decision.py's actual capital basis) is ≈ -$329,597 at
-    # project month 7, capital ≈ $354,597, operating break-even month 8. (2.9.0:
-    # -$322,854 / $347,854 / month 8.) Scope the trough search to the launch window,
-    # same as decision.py — Model v3's added cost lines now push the GLOBAL 60-month
-    # minimum into a later-year dip (Year 2, around month 27), which must NOT leak
-    # into this launch-capital headline (#182).
+def test_canonical_trough_capital_and_breakeven_after_the_ease(canonical_result):
+    # Re-pinned at 3.1.0 (owner 2026-10-08: net never drops after opening). Year 2
+    # loses money overall, so an eased Year 1 can no longer show a profitable month:
+    # every Year-1 month is a loss, break-even is None, and the launch-window trough
+    # is the Year-1 close: -(startup $238,500 + operating loss $65,068) = -$303,568,
+    # so capital = $303,568 + $25,000 reserve = $328,568. (3.0.0: trough -$329,597 at
+    # month 7, capital $354,597, break-even month 8.)
+    # Then the owner's "Full 60 months" call (2026-10-08): Years 2-3 still lose money,
+    # so cash keeps falling to -$345,580 at month 36; capital covers that true low
+    # point ($370,580) and break-even is Month 37. The first-year cash gap stays the
+    # Year-1 close (-$303,568).
     from engine.money import round_dollars
-    g = canonical_result.decision.grand_opening_month
-    troughs = [(m.index, D(str(m.cumulative_cash))) for m in canonical_result.monthly
-               if m.index <= g + 11]
-    trough_month, trough = min(troughs, key=lambda t: t[1])
-    assert trough_month == 7
-    assert round_dollars(trough) == Decimal("-329597")
+    trough_month, trough = min(
+        ((m.index, D(str(m.cumulative_cash))) for m in canonical_result.monthly),
+        key=lambda t: t[1])
+    assert trough_month == 36
+    assert round_dollars(trough) == Decimal("-345580")
     cap = D(str(canonical_result.decision.startup_capital_required))
-    assert round_dollars(cap) == Decimal("354597")
-    assert canonical_result.decision.break_even_month == 8
+    assert round_dollars(cap) == Decimal("370580")
+    assert round_dollars(D(str(canonical_result.decision.first_year_cash_gap))) == \
+        Decimal("-303568")
+    assert canonical_result.decision.break_even_month == 37
 
 
-# ------------------------------------------------ owner defect fix, 2026-07-05:
-# "net should never fall month-over-month unless a startup expense forces it" — the
-# instant flat-jump at each Year N -> N+1 seam (an artificial one-month cliff with no
-# cost event behind it) is replaced by a multi-month glide (`_blend_then_flat`). A
-# full "net never decreases" guarantee is NOT mathematically achievable while Year 1
-# keeps its deliberate dramatic S-curve shape (in any non-decreasing 12-month
-# sequence summing to a fixed annual total, the last month is always >= the flat
-# average — Year 1's S-curve intentionally ends well above its own average, which a
-# much-slower-growth following year cannot always sustain even at ITS OWN flat
-# average). What these tests lock in is the part that IS fully fixed: no more
-# INSTANT one-month cliff at a year seam, and no INTRA-year-2-5 dip untouched by the
-# glide window.
-@pytest.mark.parametrize("fixture_name", [
+# ------------------------------------------------ owner request, 2026-10-08 (3.1.0):
+# "net income or revenue should only go up — no dip after Year 1." The 2.9.0 glide
+# only softened the Year 1 -> 2 seam; Year 1's S-curve still exited ABOVE Year 2's
+# own monthly average, so the Net bars fell for months. Year 1 (and each later year)
+# is now EASED toward its flat average just enough that its last month never exceeds
+# the next year's monthly average, which makes a non-decreasing path feasible.
+_ALL_FIXTURES = [
     "canonical_result", "design_parity_result", "aggressive_result",
     "grace_result", "nnn_gross_check_result",
-])
-def test_no_instant_flat_jump_at_a_year_seam(fixture_name, request):
-    # The seam month (13, 25, 37, 49) must NOT equal the naive flat 1/12 average — it
-    # sits partway through the glide from the prior year's exit toward the SOLVED
-    # flat level (which generally differs from the naive average — see
-    # _blend_then_flat's derivation).
+]
+
+
+def _op_series(res, attr):
+    ops = [m for m in res.monthly if m.kind == "operating"]
+    return [D(str(getattr(m, attr))) for m in ops]
+
+
+# sub-cent slack: the last month of each year absorbs the Decimal residual.
+_CENT_SLACK = Decimal("0.01")
+
+
+@pytest.mark.parametrize("fixture_name", _ALL_FIXTURES)
+@pytest.mark.parametrize("series,annual_attr", [("net", "net"), ("revenue", "total_rev")])
+def test_monthly_net_and_revenue_never_drop_when_the_years_grow(
+        fixture_name, series, annual_attr, request):
+    # Year 1 always rises within itself. Each later year (its seam month included)
+    # must rise whenever its annual total is at least the prior year's; a year whose
+    # total FALLS (e.g. Grace Mission's Year 2 net) may glide down, which is honest.
     res = request.getfixturevalue(fixture_name)
-    months = {m.index: m for m in res.monthly}
-    for y in (2, 3, 4, 5):
-        seam = 12 * (y - 1) + 1
-        if seam not in months:
+    vals = _op_series(res, series)
+    assert len(vals) == 60
+    totals = {y: D(str(getattr(res.annual[y], annual_attr))) for y in (1, 2, 3, 4, 5)}
+    checked = 0
+    for y in (1, 2, 3, 4, 5):
+        if y > 1 and totals[y] < totals[y - 1]:
             continue
-        flat_avg_net = D(str(res.annual[y].net)) / 12
-        seam_net = D(str(months[seam].net))
-        # A pure flat-jump design would land the seam month within a fraction of a
-        # cent of the naive average; the glide instead starts near the PRIOR month.
-        assert abs(seam_net - flat_avg_net) > Decimal("0.01"), (y, seam_net, flat_avg_net)
+        first = 12 * (y - 1) - (1 if y > 1 else 0)  # include the seam step into year y
+        for i in range(first, 12 * y - 1):
+            assert vals[i + 1] >= vals[i] - _CENT_SLACK, (
+                fixture_name, series, y, i + 1, vals[i], vals[i + 1])
+            checked += 1
+    assert checked >= 11
 
 
-@pytest.mark.parametrize("fixture_name", [
-    "canonical_result", "design_parity_result", "aggressive_result",
-    "grace_result", "nnn_gross_check_result",
-])
-def test_no_month_over_month_drop_in_years_2_5_exceeds_the_old_seam_cliff(fixture_name, request):
-    # CAUGHT IN REVIEW: an earlier version of this fix passed a test that only
-    # checked the SEAM month, while a naive-average flat tail hid a SECOND, larger
-    # cliff at the blend/flat boundary a few months later. Assert over EVERY
-    # month-over-month step across the full Years 2-5 span (not just the seam): none
-    # may exceed what the OLD instant flat-jump would have produced at that year's
-    # own seam — the fix must never introduce a drop worse than the bug it replaces,
-    # anywhere in the year, not just on day one.
+def test_canonical_year1_exit_net_no_longer_exceeds_year2_average(canonical_result):
+    # The exact defect the owner saw: month 12 net was +$13,153 while Year 2's
+    # monthly average is about -$1,877, so the bars fell for four months.
+    nets = _op_series(canonical_result, "net")
+    y2_avg = D(str(canonical_result.annual[2].net)) / 12
+    assert nets[11] <= y2_avg + _CENT_SLACK
+    assert nets[12] >= nets[11] - _CENT_SLACK
+
+
+@pytest.mark.parametrize("fixture_name", _ALL_FIXTURES)
+def test_easing_keeps_every_year_footing_to_the_penny(fixture_name, request):
+    # Regression #15 survives the easing: each year's 12 months roll up exactly.
     res = request.getfixturevalue(fixture_name)
     ops = [m for m in res.monthly if m.kind == "operating"]
-    nets = [D(str(m.net)) for m in ops]
-    old_seam_drops = []
-    for y in (2, 3, 4, 5):
-        seam_idx = 12 * (y - 1)  # 0-based index of the seam month among operating months
-        if seam_idx <= 0 or seam_idx >= len(nets):
-            continue
-        old_flat_net = D(str(res.annual[y].net)) / 12
-        old_seam_drops.append(max(Decimal("0"), nets[seam_idx - 1] - old_flat_net))
-    if not old_seam_drops:
-        return
-    worst_old_drop = max(old_seam_drops)
-    for i in range(len(nets) - 1):
-        if 12 <= i < 48:  # scope to the Years 2-5 span this fix touches
-            actual_drop = nets[i] - nets[i + 1]
-            assert actual_drop <= worst_old_drop + Decimal("0.01"), (i, actual_drop, worst_old_drop)
+    for y in (1, 2, 3, 4, 5):
+        yr = ops[12 * (y - 1): 12 * y]
+        a = res.annual[y]
+        assert sum((D(str(m.revenue)) for m in yr), Decimal("0")) == D(str(a.total_rev))
+        assert sum((D(str(m.expenses)) for m in yr), Decimal("0")) == D(str(a.total_exp))
+        assert sum((D(str(m.net)) for m in yr), Decimal("0")) == D(str(a.net))
+
+
+def test_ease_weight_is_one_when_the_exit_already_fits():
+    parts = [Decimal(v) for v in ("1", "2", "3")]
+    assert _ease_weight(parts, Decimal("6"), Decimal("5")) == 1
+
+
+def test_ease_weight_is_one_when_next_year_falls():
+    # A falling next year cannot be met by any rising path; keep the shape, the dip
+    # is honest (annual totals drop) rather than flattening Year 1 for nothing.
+    parts = [Decimal(v) for v in ("1", "2", "9")]
+    assert _ease_weight(parts, Decimal("12"), Decimal("3")) == 1
+
+
+def test_ease_weight_caps_the_eased_exit_at_the_next_year_average():
+    parts = [Decimal(v) for v in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "18")]
+    total = sum(parts, Decimal("0"))           # 84, avg 7
+    cap = Decimal("10")
+    w = _ease_weight(parts, total, cap)
+    eased = _ease(parts, total, w)
+    assert 0 < w < 1
+    assert sum(eased, Decimal("0")) == total
+    assert eased[-1] <= cap
+    assert all(eased[i + 1] >= eased[i] for i in range(11))
+
+
+def test_ease_with_weight_zero_is_flat():
+    parts = [Decimal(v) for v in ("1", "2", "3", "6")]
+    eased = _ease(parts, Decimal("12"), Decimal("0"), months=4)
+    assert eased == [Decimal("3")] * 4
 
 
 def test_blend_then_flat_feet_exactly_and_is_one_smooth_progression():
@@ -479,12 +523,13 @@ def test_build_monthly_chains_years_2_5_off_each_other_not_just_year_1(aggressiv
     # consistent. Reconstruct Year 2's exit revenue/expense directly and confirm
     # Year 3's month-25 (its first month) sits on the SAME glide chain implied by
     # that exact anchor, to the penny.
-    rev1, exp1, _ = _year_slices(aggressive_result.annual[1], 1)
-    rev2, exp2, _ = _year_slices(
-        aggressive_result.annual[2], 2, prev_rev_last=rev1[-1], prev_exp_last=exp1[-1],
+    a = aggressive_result.annual
+    rev1, _, net1 = _year_slices(a[1], 1, next_year=a[2])
+    rev2, _, net2 = _year_slices(
+        a[2], 2, prev_rev_last=rev1[-1], prev_net_last=net1[-1], next_year=a[3],
     )
     rev3, exp3, _ = _year_slices(
-        aggressive_result.annual[3], 3, prev_rev_last=rev2[-1], prev_exp_last=exp2[-1],
+        a[3], 3, prev_rev_last=rev2[-1], prev_net_last=net2[-1], next_year=a[4],
     )
     month25 = next(m for m in aggressive_result.monthly if m.index == 25)
     assert D(str(month25.revenue)) == rev3[0]
@@ -492,17 +537,32 @@ def test_build_monthly_chains_years_2_5_off_each_other_not_just_year_1(aggressiv
 
 
 # ------------------------------------------- Task 1.3: within-year share ramp (linear)
+def _assert_eased_from(actual, raw, total):
+    """`actual` is `raw` blended toward the flat average by ONE weight (the 3.1.0 ease).
+
+    Month 1 fixes the weight; every month through 11 must match that blend (the 12th
+    absorbs the footing residual). A weight of 1 means the shape was left untouched.
+    """
+    avg = total / 12
+    w = (actual[0] - avg) / (raw[0] - avg)
+    assert Decimal("0") < w <= Decimal("1"), w
+    for i in range(11):
+        assert abs(actual[i] - (w * raw[i] + (1 - w) * avg)) < Decimal("1e-9"), i
+    assert sum(actual, Decimal("0")) == total
+
+
 def test_share_ramp_unset_is_byte_identical(canonical_result):
     # canonical_result's Inputs leave share_m1/share_m12 at their None default, so
-    # Year-1 revenue must still ride the S-curve (_REVENUE_WEIGHTS) byte-for-byte —
-    # the new optional linear ramp must not perturb existing behavior when unset.
+    # Year-1 revenue must still ride the S-curve (_REVENUE_WEIGHTS) — the new optional
+    # linear ramp must not perturb existing behavior when unset. From 3.1.0 the
+    # S-curve is then eased toward flat (one weight), so check it is the S-curve's
+    # blend, not the raw split.
     from engine.monthly import _REVENUE_WEIGHTS, _distribute
 
-    y1 = canonical_result.annual[1]
-    expected_rev_parts = _distribute(D(str(y1.total_rev)), _REVENUE_WEIGHTS)
+    y1 = D(str(canonical_result.annual[1].total_rev))
+    raw = _distribute(y1, _REVENUE_WEIGHTS)
     ops = [m for m in canonical_result.monthly if m.kind == "operating"][:12]
-    for i in range(12):
-        assert D(str(ops[i].revenue)) == expected_rev_parts[i], i
+    _assert_eased_from([D(str(m.revenue)) for m in ops], raw, y1)
 
 
 def test_share_ramp_linear_when_set(canonical_inputs):
@@ -518,12 +578,12 @@ def test_share_ramp_linear_when_set(canonical_inputs):
     ramped = replace(inputs, share_m1="0.04", share_m12="0.16")
     result = compute(ramped, assumptions, demand, trade, overrides={})
 
-    y1 = result.annual[1]
+    y1 = D(str(result.annual[1].total_rev))
     weights = _linear_share_weights(D("0.04"), D("0.16"))
-    expected_rev_parts = _distribute(D(str(y1.total_rev)), weights)
+    raw = _distribute(y1, weights)
     ops = [m for m in result.monthly if m.kind == "operating"][:12]
-    for i in range(12):
-        assert D(str(ops[i].revenue)) == expected_rev_parts[i], i
+    # 3.1.0: the linear split is eased toward flat by one weight, like the S-curve.
+    _assert_eased_from([D(str(m.revenue)) for m in ops], raw, y1)
     # share_m1 (0.04) < share_m12 (0.16) => month 1 revenue must be the smallest
     # share and month 12 the largest — the ramp is monotonically increasing.
     assert ops[0].revenue < ops[-1].revenue
@@ -558,7 +618,9 @@ def test_build_monthly_signature_takes_inputs_not_opening_month_number(canonical
     startup_by_month = startup_outflows_by_month(inputs, assumptions, occupancy[1])
     rows, breakeven = build_monthly(years, assumptions, inputs, startup_by_month)
     assert rows
-    assert breakeven is not None
+    # 3.1.0 + "Full 60 months": canonical turns profitable for good at Month 37; the
+    # call shape is what this pins.
+    assert breakeven == 37
 
 
 

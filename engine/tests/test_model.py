@@ -10,7 +10,9 @@ def test_model_versions_stamped():
     # and three new lines (POS platform, Production software, Workers' comp,
     # Contributions revenue) — bundled under one bump. See model.py's history comment
     # and DECISIONS.md's 3.0.0 entry.
-    assert model.MODEL_VERSION == "3.0.0"
+    # 3.1.0 (owner 2026-10-08): monthly Net/Revenue never drop after opening while
+    # the annual totals grow (each year's shape eased under the next year's average).
+    assert model.MODEL_VERSION == "3.1.0"
     # 1.9.0: cost-schedule rows gain a treatment (included|separate|contingent)
     # enum + note (Model v3 Phase 2, Task 2.2) — see model.py's
     # COMPUTE_SCHEMA_VERSION history comment for the full list.

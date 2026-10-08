@@ -114,15 +114,17 @@ def test_year4_net_margin_guardrail_fires_above_thirty_percent():
     assert res.flags["net_margin_y5_out_of_band"]["requires_note"] is True
 
 
-# ------------------------------------ decision metrics are Year-1-anchored (invariant)
-def test_decision_metrics_are_independent_of_year4_year5_inputs():
-    # Capital / break-even / first-year cash gap come from the monthly Year-1 model,
-    # so wildly different Year 4/5 share inputs must NOT move them by a cent.
+# --------------------------- first-year cash gap stays Year-1-anchored (invariant)
+def test_first_year_cash_gap_is_independent_of_year4_year5_inputs():
+    # The first-year cash gap comes from the Year-1 window only, so wildly different
+    # Year 4/5 share inputs must NOT move it by a cent. (Capital and break-even DO now
+    # read the whole 60 months — owner decision 2026-10-08, "Full 60 months" — so a
+    # collapsing Year 4 can push break-even out and capital up.)
     base = _compute(share_y4="0.11", share_y5="0.12")
     moved = _compute(share_y4="0.01", share_y5="0.40")
-    assert base.decision.startup_capital_required == moved.decision.startup_capital_required
     assert base.decision.first_year_cash_gap == moved.decision.first_year_cash_gap
-    assert base.decision.break_even_month == moved.decision.break_even_month
+    assert base.decision.break_even_month == 4
+    assert moved.decision.break_even_month > 12   # Year 4 collapses -> later break-even
     # ...but the CAGR (Y1->Y5) DOES move, because it reads Year 5 revenue.
     assert base.decision.revenue_cagr != moved.decision.revenue_cagr
 
