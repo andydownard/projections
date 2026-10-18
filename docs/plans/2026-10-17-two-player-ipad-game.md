@@ -47,13 +47,31 @@ The artboards are 16:9 at 1600 x 900. The 13" iPad is nearly 4:3, so it would sh
 
 Decision: **landscape only.** The battle scenes are wide. In portrait, show a "turn your iPad" screen.
 
+## Base builder (new screen, owner request 2026-10-17)
+
+The owner described this by voice. It sits in "Upgrade Your Base" and must come before the battle. Today the Upgrade artboards are a shop only (buy upgrades with gold, wood, stone or credits). They have no building and no saved bases.
+
+What the owner asked for:
+- **Build as creatively as you like.** Looks do not matter. Nobody judges.
+- **Drag bricks with a finger** from a tray and drop them on the build plot.
+- **Turn bricks** (rotate) before or after placing, and place them on walls too, not only on the ground.
+- **Buy stuff, use stuff you already bought, and build.** Owned pieces show in the tray. Locked pieces show a price.
+- **Up to three saved bases per player.** Pick one before a battle.
+
+Design notes and open questions:
+- Touch first: a drag handle at least 48 px, a rotate button (and a two-finger twist), snap to a grid with a "free place" toggle, undo, clear. No hover.
+- Does the built base take hits in the battle (bricks have health and fall out when hit)? Recommendation: yes. It ties the builder to the new hit and fall effects. Needs owner confirmation.
+- Past side builds a castle from stone and wood. Future side builds a base from panels. Same tools, different pieces.
+- Saved bases belong to the child profile (Phase 3) and sync to both iPads before a match (Phase 4).
+- Add two artboards to the canvas: "Base Builder (Past)" and "Base Builder (Future)", and a "Pick a base (1 of 3)" row on Setup.
+
 ## Phases
 
 ### Phase 0: Decisions
 Settle the five decisions above. Pick the stack. Recommendation: React + TypeScript + Vite as an add-to-home-screen web app (PWA), with a small Python or Node server for accounts, matches and the question bank.
 
 ### Phase 1: Build the one-device game from the canvas
-Turn the 12 artboards into a working game: Setup, Loading, Battle, Math, Reading, Forge, Upgrade, Base Destroyed. Question engine by grade. Hot-seat mode first. This is the base for everything else.
+Turn the artboards (and the new Base Builder) into a working game: Setup, Loading, Battle, Math, Reading, Forge, Upgrade, Base Destroyed. Question engine by grade. Hot-seat mode first. This is the base for everything else.
 Done when two kids can play a whole battle on one iPad.
 
 ### Phase 2: iPad layouts
