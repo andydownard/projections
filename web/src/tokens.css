@@ -4567,3 +4567,45 @@ td.cell-wrap {
   margin: 0.25rem 0;
   background: var(--line);
 }
+
+/* Explosion effect (components/Explosion.tsx) */
+.explosion {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  color: var(--warning);
+}
+.explosion__flash {
+  position: absolute;
+  width: var(--boom-size);
+  height: var(--boom-size);
+  margin: calc(var(--boom-size) / -2) 0 0 calc(var(--boom-size) / -2);
+  border-radius: 50%;
+  background: radial-gradient(circle, currentColor 0%, transparent 70%);
+  animation: explosion-flash var(--boom-ms) ease-out forwards;
+}
+.explosion__particle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: explosion-fly var(--boom-ms) cubic-bezier(0.1, 0.7, 0.3, 1) forwards;
+}
+.explosion--still .explosion__flash {
+  animation: explosion-fade 250ms linear forwards;
+}
+@keyframes explosion-flash {
+  from { transform: scale(0.2); opacity: 0.9; }
+  to { transform: scale(1); opacity: 0; }
+}
+@keyframes explosion-fly {
+  from { transform: translate(0, 0) scale(1); opacity: 1; }
+  to { transform: translate(var(--dx), var(--dy)) scale(0.2); opacity: 0; }
+}
+@keyframes explosion-fade {
+  from { opacity: 0.6; }
+  to { opacity: 0; }
+}
