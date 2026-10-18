@@ -25,6 +25,16 @@ Both orientations work. iPhone works as a bonus, not a target.
 4. **Age range.** Under 13 means COPPA (US). Recommendation: design for 8 to 12, require a parent account, collect no child PII.
 5. **Classroom mode.** Join codes for a teacher? Out of scope for v1 unless the owner wants it.
 
+### Explosions (rules sheet input, owner request 2026-10-17)
+
+Explosions are the game's big feedback moment. Proposed rules for the Phase 0 sheet:
+
+- **Triggers:** a "Blowout Sale" (a very large sale day), a bankrupt store at season end, and a "price bomb" event card that hits both players.
+- **Tone:** cartoon pops and confetti-style bursts. Nothing is hurt. It is shown for a store, never at a person.
+- **Safety:** no more than 3 flashes per second (WCAG 2.3.1). Reduced-motion users get a short fade with no moving parts. The effect is decorative (`aria-hidden`); the outcome is always also stated in text.
+- **No effect on math:** the server decides outcomes. The client only plays the animation after the result arrives.
+- **Built:** a reusable `Explosion` component (branch `feat/explosion-effect`). Sound is out of scope for now.
+
 ## Principles
 
 - **Server-authoritative** (`SERVER`, `NO-CLIENT-MATH`). The client sends choices. The server runs the engine and returns results. Same rule as the main app.
