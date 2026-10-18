@@ -65,6 +65,12 @@ Design notes and open questions:
 - Saved bases belong to the child profile (Phase 3) and sync to both iPads before a match (Phase 4).
 - Add two artboards to the canvas: "Base Builder (Past)" and "Base Builder (Future)", and a "Pick a base (1 of 3)" row on Setup.
 
+## Done so far (2026-10-17)
+
+- **Hits and falls:** new canvas artboard "3b Battle Hits". Shots land with a burst of fire or light, a health bar loses a pip with a "-1", the character tumbles and ends up in a silly pose with spinning stars, and a speech bubble gives a funny line. Reduced motion shows the end pose with no movement.
+- **Question bank:** 540 original questions in `~/projects/time-clash/content/questions/` (grades K to 8, math and reading, 30 each). A validator checks the math answers and bans any question that needs hearing. The files live in a local `time-clash` folder, not in this repo.
+- **Voice spec and funny lines:** `content/voice/VOICE.md` and `content/barks.json` in the same folder.
+
 ## Phases
 
 ### Phase 0: Decisions
