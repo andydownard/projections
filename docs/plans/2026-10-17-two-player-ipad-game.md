@@ -1,109 +1,92 @@
-# Two-player iPad game: plan
+# Time Clash: two-player iPad plan
 
-**Date:** 2026-10-17
-**Status:** draft for owner review. Nothing here is built. Open decisions are listed first.
+**Date:** 2026-10-17 (rewritten the same day after the owner shared the real game)
+**Status:** draft for owner review. Nothing here is built.
 
-## What we are building
+> The first draft of this plan assumed a thrift store sim. That was wrong. The game is **Time Clash**, and it stays as designed. This plan only adds real two-player play on two iPads, accounts, matching and a bot.
 
-A head-to-head thrift store game. Two players each run a pretend store for a short "season" (12 rounds, one per month). Both make choices each round (prices, staff, hours, marketing, which donations to take). The existing engine decides what happens. Best cash at the end wins. It must run on iPads, be safe for kids, and always have someone to play: a friend, a stranger, or a bot.
+## What Time Clash is today
 
-Devices to support (CSS pixels, portrait):
+Source: the "Time Clash UI & Environment Suite" Design canvas (12 artboards, each 1600 x 900, landscape). It is a design prototype only. There is no game code yet.
 
-| Device | Width x height |
-|---|---|
-| iPad mini | 744 x 1133 |
-| iPad Pro 11" | 834 x 1194 |
-| iPad Pro 13" (largest) | 1032 x 1376 |
+- A kids' battle game: a past castle side (Player 1) against a future base side (Player 2), with a hoverboard, a repair bot and knights.
+- Before each shot a player answers a **Math** or **Reading** question for their grade (K to 8). Two shots per turn. Right answers load the shot.
+- Between fights: a **Forge** (weapons, past and future versions) and **Upgrade Base**.
+- A battle ends with **Base Destroyed**. The copy says nobody is hurt, the building just blows up. Explosions already exist on that screen.
+- **Setup** takes two names and two grades on one screen. Today both players share one device ("hot seat").
 
-Both orientations work. iPhone works as a bonus, not a target.
+## What changes
 
-## Open decisions (need the owner before any build)
+Each player uses their own iPad. The game rules, art and screens stay as they are. Each iPad shows its own player's side, and the other player's turn shows as "waiting", which the Math and Reading screens already draw.
 
-1. **Game design.** The request did not say what the game is. This plan assumes the sim described above, with the engine as referee. If the owner has a different game in mind, phases 1 and 2 still hold. Phases 3 and 4 change.
-2. **Where it lives.** Recommendation: a separate deployable (new Railway service, new repo or `apps/game/`) that imports `engine/`. Reason: `AGENTS.md` scopes this repo to first-store nonprofit operators and a board-ready financial case. A kids' game adds child-data law (COPPA), realtime load, and a different tone. Mixing them raises risk for the paid product. Engine reuse keeps one math authority.
-3. **Auth.** The 2026-10-02 Rally auth spec (email + password, open signup) is approved but not built, and Clerk host-gating is live today. Kids usually have no email. Needs a decision on whether players are child profiles under a parent account (recommended) and whether to build on the Rally auth work.
-4. **Age range.** Under 13 means COPPA (US). Recommendation: design for 8 to 12, require a parent account, collect no child PII.
-5. **Classroom mode.** Join codes for a teacher? Out of scope for v1 unless the owner wants it.
+## Open decisions (need the owner)
 
-### Explosions (rules sheet input, owner request 2026-10-17)
-
-Explosions are the game's big feedback moment. Proposed rules for the Phase 0 sheet:
-
-- **Triggers:** a "Blowout Sale" (a very large sale day), a bankrupt store at season end, and a "price bomb" event card that hits both players.
-- **Tone:** cartoon pops and confetti-style bursts. Nothing is hurt. It is shown for a store, never at a person.
-- **Safety:** no more than 3 flashes per second (WCAG 2.3.1). Reduced-motion users get a short fade with no moving parts. The effect is decorative (`aria-hidden`); the outcome is always also stated in text.
-- **No effect on math:** the server decides outcomes. The client only plays the animation after the result arrives.
-- **Built:** a reusable `Explosion` component (branch `feat/explosion-effect`). Sound is out of scope for now.
+1. **Where the code lives.** Recommendation: a new repo for Time Clash. The `projections` repo is a thrift store financial tool for nonprofit boards. They share nothing, and a kids' game brings child-data law with it. The issues filed on 2026-10-17 as #396 to #402 are in the wrong repo and should move once the new repo exists.
+2. **Is there any game code yet,** beyond the canvas? If not, Phase 1 builds it.
+3. **Question bank.** Where do the grade K to 8 math and reading questions come from? Written by hand, generated and reviewed, or licensed? They need to be original and checked for age fit.
+4. **Fairness across grades.** Each player gets questions at their own grade, so a 2nd grader can fairly beat a 6th grader. Confirm this is wanted.
+5. **Age range and consent.** Under 13 means COPPA (US). Recommendation: a parent account is required and the child profile holds no personal data.
 
 ## Principles
 
-- **Server-authoritative** (`SERVER`, `NO-CLIENT-MATH`). The client sends choices. The server runs the engine and returns results. Same rule as the main app.
-- **Fair.** Both players get the same seeded random events each round.
-- **Honest bots.** A bot is always labeled as a bot (`AI` rule: never pose as a human).
-- **No free text between players.** No chat, no usernames typed by kids. Fixed emotes only. This removes most moderation and safety work.
-- **Minimal data.** Parent email is the only personal data. Kids have a generated display name and an avatar.
+- **The server is the referee.** The iPad sends answers. The server holds the questions' correct answers, scores shots and decides outcomes. A kid cannot read the answer out of the page.
+- **Same moment on both iPads.** Hits, the Base Destroyed explosion and results play from a server signal so both players see them together.
+- **No typed names, no chat.** Names come from the child profile. Players can send fixed emotes only.
+- **Honest bots.** A bot is always labeled.
+- **Reduced motion and flashing.** Explosions follow the existing reduced-motion rules and stay under 3 flashes a second.
+
+## Devices
+
+| Device | Landscape size (CSS px) |
+|---|---|
+| iPad mini | 1133 x 744 |
+| iPad Pro 11" | 1194 x 834 |
+| iPad Pro 13" (largest) | 1376 x 1032 |
+
+The artboards are 16:9 at 1600 x 900. The 13" iPad is nearly 4:3, so it would show bars. The mini scales the art to about 0.71, which would shrink the 16 px labels to about 11 px. So the screens need a real responsive pass, not just scale to fit.
+
+Decision: **landscape only.** The battle scenes are wide. In portrait, show a "turn your iPad" screen.
 
 ## Phases
 
-### Phase 0: Decisions and game design (blocks everything)
-Settle the open decisions. Write a one-page rules sheet: round structure, choices, scoring, event deck, season length (target 8 to 10 minutes). Pin the scoring to engine outputs.
-Done when: owner signs off on the rules sheet and the three decisions above.
+### Phase 0: Decisions
+Settle the five decisions above. Pick the stack. Recommendation: React + TypeScript + Vite as an add-to-home-screen web app (PWA), with a small Python or Node server for accounts, matches and the question bank.
 
-### Phase 1: iPad and mobile shell (ships on its own value, and also helps the existing app)
-- Responsive layout tuned at 744, 834, 1032 and 375 widths, portrait and landscape.
-- Touch rules: tap targets 48px minimum for the game (kids), `touch-action: manipulation`, no hover-only controls, safe-area insets, `100dvh` not `100vh`.
-- PWA: web manifest, standalone display, home-screen icon, so it launches full screen with no App Store.
-- Tests: Playwright WebKit with iPad mini, iPad Pro 11 and an iPad gen 7 descriptor, plus a 13" custom viewport. Screenshots at each size reviewed by eye before any deploy (per the visual-review rule).
-- A real-device pass on the owner's two iPads before shipping.
-Done when: the main app and a stub game screen render cleanly at all four widths in both orientations, and the manual iPad pass is signed off.
+### Phase 1: Build the one-device game from the canvas
+Turn the 12 artboards into a working game: Setup, Loading, Battle, Math, Reading, Forge, Upgrade, Base Destroyed. Question engine by grade. Hot-seat mode first. This is the base for everything else.
+Done when two kids can play a whole battle on one iPad.
 
-### Phase 2: Player accounts with kid-friendly passwords
-- **Parent account:** email + password with email verification (reuse the Rally auth design). Parent creates up to N child profiles and can reset a child's password, rename, or delete a child (full data deletion).
-- **Child login:** pick avatar, then enter a picture password: choose 3 pictures in order from a grid of 12. Alternative for readers: a three-word phrase from a curated, filtered word list (for example `blue-tiger-pizza`). Both give roughly 30+ bits, which is fine with the lockout below.
-- **Abuse limits:** per-IP and per-account rate limit, lockout with a parent-reset path, argon2id hashing, constant-time compare, server-side revocable sessions.
-- **Display names:** generated from adjective + animal lists. Kids never type a public name.
-- **Consent:** parent confirms consent at signup. Privacy notice in plain English (`STYLE`).
-- Mutation Safety Quad on every write, negative cross-account tests (`TENANT`: a child can never see another child's data).
-Done when: a parent can create two kids, each kid can log in on a different iPad, and the cross-account tests pass.
+### Phase 2: iPad layouts
+Responsive landscape layouts for the three iPad sizes, minimum text size of 16 px on device, 48 px touch targets, no hover-only controls, safe-area insets, rotate-to-landscape screen, PWA manifest. Playwright WebKit tests with iPad mini, Pro 11 and a 13" viewport. Screenshots reviewed by eye. A real-device pass on the owner's two iPads.
 
-### Phase 3: Two-player match engine and friend codes
-- Match record with a state machine: waiting, active, finished, abandoned. Stored in SQLite on `/data`.
-- Realtime by WebSocket on one FastAPI instance, with a polling fallback. Actions carry an idempotency key and the match version (`If-Match` style, 409 on stale), so a double tap or a retry never duplicates a move.
-- Simultaneous rounds with a timer (about 30 seconds). If a player misses the timer, the last choice repeats.
-- Reconnect handling for iPad Safari, which drops sockets when the screen sleeps: resume by match id, 60 second grace, then a bot takes over the seat.
-- **Friend code first:** a 4-symbol emoji code so two iPads in one room can pair in seconds. This is the main use for the owner's two iPads, so it ships before open matchmaking.
-- Engine call per round reuses `engine/` with a new thin "season" adapter. Any math change bumps `model_version` and goldens as usual.
-Done when: two iPads pair with a code and finish a full season, with a forced disconnect and rejoin mid-match.
+### Phase 3: Accounts and kid-friendly passwords
+- A parent account (email, verified) creates child profiles. A profile has a generated display name, an avatar and a grade.
+- A child signs in with a picture password (3 pictures in order from a grid of 12) or a three-word phrase.
+- argon2id hashing, per-IP and per-account rate limits, lockout with a parent reset, parent-controlled deletion, tests that one child can never see another's data.
+- Replaces typed names on the Setup screen.
 
-### Phase 4: The bot
-- Same engine, same rules, same event deck. The bot only chooses actions.
-- Start with a rules-based policy at three difficulty levels. No LLM needed, which keeps it cheap, deterministic and testable.
-- Difficulty follows the player's rating, so it feels close.
-- Always labeled ("Robo Rae, practice bot"). Bot games count for practice stats, not the ranked rating.
-Done when: a bot finishes a season against a scripted player, and a simulated 1,000-season run shows each difficulty's win rate is in the intended range.
+### Phase 4: Two iPads, one battle
+- A match with a server-held state: waiting, active, finished, abandoned.
+- Pairing by a short emoji code, so two iPads in the same room join in seconds. This is the first time the owner can play on two iPads.
+- WebSocket sync of turns, answers, shots and the destroyed animation. Each action carries an id so a double tap or a retry never counts twice.
+- Reconnect handling for iPad Safari, which drops connections when the screen sleeps: 60 second grace, then the seat is handed to a bot.
 
-### Phase 5: Matchmaking queue
-- "Play" adds the kid to a queue. Match the closest rating within a widening window.
-- Wait up to about 15 seconds, then offer a bot ("No one is free. Play Robo Rae?"). Never silently swap in a bot.
-- Simple rating (Elo) per child, human games only.
-- Atomic claim of queue entries (no check-then-act race, `MUTATION`).
-Done when: with 2 queued players they match each other, with 1 they get the bot offer, and a race test shows no player lands in two matches.
+### Phase 5: The bot
+A labeled opponent ("Robo Knight") that uses the same rules. It answers questions at a believable rate for the player's grade, with a human-like delay, and aims for close games. Tuned by simulating thousands of battles.
 
-### Phase 6: Hardening and launch
-- Load test with simulated matches on one instance. Decide whether SQLite and a single instance hold, or whether Postgres is needed (the `Store` interface already keeps that open).
-- Accessibility pass (WCAG AA, VoiceOver order, reduced motion).
-- Security review of auth, WebSocket origin checks, rate limits (`/cso`).
-- Privacy review for COPPA with counsel before any public launch.
-- Restore drill for the match database.
-Done when: all review lenses are green with evidence in the PR.
+### Phase 6: Matchmaking
+"Play" joins a queue. Match players close in grade and skill. After about 15 seconds with no match, offer the bot. Never swap one in silently. Bot games are practice and do not count toward ranking.
+
+### Phase 7: Hardening and launch
+Load test, accessibility pass (VoiceOver, contrast, reduced motion), security review of sign-in and the WebSocket, counsel review of child-data handling before any public launch, backup and restore drill.
 
 ## Risks
 
-1. Child data law. A mistake here is serious and slow to fix. Mitigation: parent-gated accounts, no child PII, counsel review before launch.
-2. Realtime on iPad Safari (sleeping sockets, background tabs). Mitigation: resume protocol and bot takeover from day one.
-3. Scope. This is a new product. Phase 0 exists to stop work before it starts if the design is not clear.
-4. A single instance with SQLite may not scale past a few hundred concurrent matches. Acceptable for a first release.
+1. Child data law (COPPA). Slow and costly to fix late.
+2. iPad Safari drops connections when the screen sleeps.
+3. Small-screen readability of the current art on the iPad mini.
+4. Question quality and age fit for K to 8.
 
 ## Suggested order
 
-Phase 0, then Phase 1 (useful even if the game never ships), then 2, 3, 4, 5, 6. Phase 3 with friend codes is the first point where the owner can play on two iPads.
+0, 1, 2, then 3, 4. Phase 4 with codes is the first time two iPads can play each other. Bot and matchmaking come after.
